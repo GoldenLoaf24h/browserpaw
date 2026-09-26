@@ -8,7 +8,7 @@
 
 ## 1. 架构速览与工作机制
 
-`BrowserClaw` 是一套基于 **模型上下文协议 (Model Context Protocol, MCP)** 的现代化工业级本地浏览器控制系统：
+`BrowserPaw` 是一套基于 **模型上下文协议 (Model Context Protocol, MCP)** 的现代化工业级本地浏览器控制系统：
 
 - **浏览器扩展 (Chrome Extension)**：运行在本地 Chrome 中，通过 Chrome DevTools Protocol (CDP) 注入原生物理级事件（`isTrusted: true`），维护纯内存弱引用 DOM 索引树。
 - **本地网桥服务 (Native Server)**：运行在本地 `127.0.0.1:12306`（或自定义端口），提供标准的 MCP JSON-RPC 接口（支持 Streamable HTTP、SSE 与 stdio 传输）。
@@ -22,21 +22,20 @@
 
 ### 步骤 1：注册 Chrome Native Messaging Host
 
-编译产物中自带全自动注册脚本，只需在宿主机执行一次：
+执行注册脚本将 Native Messaging 宿主配置绑定至你的本地浏览器（仅需执行一次）：
 
-- **Windows (PowerShell / CMD)**：
-  ```cmd
-  cd <repo-root>\app\native-server\dist
-  run_host.bat
-  ```
-- **macOS / Linux (Bash / Zsh)**：
+- **通过仓库 CLI 执行（跨平台通用）**：
   ```bash
-  cd app/native-server/dist
-  chmod +x run_host.sh
-  ./run_host.sh
+  node bin/browserpaw.cjs register
+  # 或直接在服务端目录执行：
+  cd app/native-server && node dist/scripts/register-dev.js
+  ```
+- **若通过 npm 全局安装或使用 npx**：
+  ```bash
+  npx browserpaw register
   ```
 
-_脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mcp_chrome.bridge`）或系统目录写入清单配置。_
+_脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.chromemcp.nativehost`）或 macOS/Linux 系统对应目录写入宿主清单配置。_
 
 ### 步骤 2：在 Chrome 中加载扩展
 
@@ -60,12 +59,15 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 
 根据你所使用的 Agent 平台，将以下配置片段复制到对应的 MCP 配置文件中。
 
-### 3.1 获取认证 Token
+### 3.1 获取认证 Token 与核心环境变量
 
-本服务具备严格的安全防护，要求所有连接均携带本地高熵 Token：
+本服务具备严格的安全防护，要求所有连接均携带本地高熵 Token，并支持通过环境变量控制暴露工具面与前缀：
 
 - **Token 文件路径**：`~/.chrome-mcp/bridge-token`（Windows 下为 `C:\Users\<用户名>\.chrome-mcp\bridge-token`）
-- **环境变量自定义**：可在启动环境设置 `export CHROME_MCP_TOKEN="your_secure_token"`。
+- **核心环境变量**：
+  - `CHROME_MCP_TOKEN`：自定义鉴权 Token 字符串（覆盖自动生成的文件）。
+  - `CHROME_MCP_TOOL_PROFILE`：工具暴露分层 Profile。可选值：`core`（默认 14 个核心高频工具，~11.5k tokens）、`crawl`（12 个高速抓取抽取工具，~5.8k tokens）、`full`（全量 50 个工具，~19.5k tokens）。
+  - `BROWSERPAW_TOOL_PREFIX`：工具命名空间前缀（`browserpaw_` 或 `chrome_`）。
 
 > **提示**：若使用 `stdio` 模式，Native Server 会自动读取或生成该 Token，并在内部完成与 Chrome 扩展的握手。
 
@@ -80,7 +82,7 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "url": "http://127.0.0.1:12306/sse",
       "headers": {
         "Authorization": "Bearer <从 ~/.chrome-mcp/bridge-token 读取的内容>"
@@ -95,7 +97,7 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -112,7 +114,7 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -129,7 +131,7 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -232,7 +234,7 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 | `chrome_batch_actions`              | `actions: [...]`, `waitForSettle: true`      | 在单次调用中按序编排多个点击、填充、按键与等待（含跨域 iframe 坐标转换）              | **多表单填充、连续复合操作的首选 (1 回合)** |
 | `chrome_screenshot`                 | `grid: true`, `targetIndex`, `format`        | 纯内存直通 base64 截取视口图像，绝不污染用户 Downloads 目录；可选叠加半透明坐标标尺   | Canvas 画布、复杂验证码或无 DOM 节点图形    |
 | `chrome_upload_file`                | `index` 或 `clickTargetIndex`, `filePath`    | 动态拦截弹窗或直接向文件输入框注入本地绝对路径                                        | 网页文件上传、头像更换                      |
-| `chrome_get_markdown`               | 无                                           | 提取页面的清晰结构化 Markdown 内容                                                    | 网页内容阅读、文献资料总结                  |
+| `chrome_get_markdown`               | `includeLinks: true`                         | 提取页面的清晰结构化 Markdown 内容                                                    | 网页内容阅读、文献资料总结                  |
 | `chrome_grep`                       | `query`, `searchType`                        | 毫秒级正则/文本定向检索，支持多 Frame 索引重映射与 placeholder/aria-label 检索        | 长列表或大页面极速定位目标元素              |
 | `chrome_inspect_media`              | `index` 或 `selector`                        | 无损内存提取图片原始高画质 Data URL 或局部超采样截图                                  | 验证码、图表、商品原图精准识别              |
 | `chrome_request_human_intervention` | `reason`, `timeoutMs`                        | 纯 DOM 安全构建（免疫 DOM XSS）唤起毛玻璃顶栏挂起流程并让渡控制权给用户               | 遭遇滑块验证、2FA 或安全支付时              |

@@ -1,8 +1,8 @@
-# BrowserClaw 故障排查与自愈手册 (Troubleshooting Guide)
+# BrowserPaw 故障排查与自愈手册 (Troubleshooting Guide)
 
 [English Version](./TROUBLESHOOTING.md)
 
-BrowserClaw 由本地协同运行的三部分组成：
+BrowserPaw 由本地协同运行的三部分组成：
 
 1. **Chrome 扩展 (MV3)**：运行于日常使用的 Google Chrome 中，负责执行底层 CDP 指令与 DOM 树索引解析。
 2. **原生宿主进程 (Native Messaging Host)**：由 Chrome 扩展通过 Native Messaging 协议按需拉起，桥接本地指令。
@@ -17,8 +17,11 @@ BrowserClaw 由本地协同运行的三部分组成：
 遇到任何连接或操作异常，请优先在项目根目录运行自动化诊断脚本：
 
 ```bash
-# 仅执行健康检查
+# 仅执行健康检查（通过 doctor 脚本或 CLI）
 node skill/config/doctor.mjs
+# 或通过 CLI 执行：
+node bin/browserpaw.cjs doctor
+# （若已安装全局或发布包，可直接执行：npx browserpaw doctor）
 
 # 执行诊断并自动修复（创建丢失的 Token、修复注册表、同步构建产物）
 node skill/config/doctor.mjs --fix
@@ -36,12 +39,12 @@ Agent 客户端在调用工具或初始化连接时报错：`fetch failed: ECONN
 
 ### 根本原因
 
-本地 Native Bridge 服务尚未启动。BrowserClaw 的架构是**按需自启**的：当 Chrome 浏览器启动且扩展激活时，扩展通过 Native Messaging Host 自动拉起 Native Bridge。若 Chrome 未运行，则宿主服务不存在。
+本地 Native Bridge 服务尚未启动。BrowserPaw 的架构是**按需自启**的：当 Chrome 浏览器启动且扩展激活时，扩展通过 Native Messaging Host 自动拉起 Native Bridge。若 Chrome 未运行，则宿主服务不存在。
 
 ### 解决步骤
 
 1. **打开 Chrome 浏览器**：确保日常 Chrome 处于运行状态；
-2. **确认扩展已启用**：在 `chrome://extensions/` 中确认已启用 BrowserClaw（或加载了 `app/chrome-extension/.output/chrome-mv3`）；
+2. **确认扩展已启用**：在 `chrome://extensions/` 中确认已启用 BrowserPaw（或加载了 `app/chrome-extension/.output/chrome-mv3`）；
 3. **查看 Popup 面板状态**：点击浏览器右上角扩展图标，观察 200px×80px 极简面板中的状态指示点是否变为**绿色**；
 4. **排查端口监听**：
    ```powershell
@@ -113,7 +116,7 @@ MCP 客户端发送请求，收到 HTTP 401 报错：`Unauthorized: Missing or i
    ```json
    {
      "mcpServers": {
-       "browserclaw": {
+       "browserpaw": {
          "url": "http://127.0.0.1:12306/mcp",
          "headers": {
            "x-mcp-token": "粘贴上方读取到的Token",
@@ -154,7 +157,7 @@ Agent 必须立即调用一次 `chrome_read_dom` 获取最新的 1-based 索引�
 
 ### 底层机制与保障
 
-BrowserClaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 $W_{viewport} \times H_{viewport}$）。
+BrowserPaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 $W_{viewport} \times H_{viewport}$）。
 
 ### 注意事项
 
@@ -170,7 +173,7 @@ Agent 在计算或下发坐标时，**切勿手动乘以设备像素比（DPR）
 
 ### 自愈机制
 
-BrowserClaw 内置了瞬态 Dialog 中断捕获。当弹窗出现时，动作会立刻返回带有 `requiresDialogAction: true` 的结构化提示：
+BrowserPaw 内置了瞬态 Dialog 中断捕获。当弹窗出现时，动作会立刻返回带有 `requiresDialogAction: true` 的结构化提示：
 
 ```json
 {
@@ -225,7 +228,7 @@ Agent 调用 `chrome_close_tabs({})` 报错：
 
 ### 核心架构
 
-对于非激活标签页（`active: false`），BrowserClaw 强制采用 CDP `Page.captureScreenshot`（`fromSurface: true`），**严禁使用** Chrome 扩展默认的 `chrome.tabs.captureVisibleTab`。
+对于非激活标签页（`active: false`），BrowserPaw 强制采用 CDP `Page.captureScreenshot`（`fromSurface: true`），**严禁使用** Chrome 扩展默认的 `chrome.tabs.captureVisibleTab`。
 
 ### 核心收益
 
@@ -269,7 +272,7 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
 | `CDP_DISPATCH_TIMEOUT`                                     | 目标 Tab 处于后台深度节流状态。                         | 重试调用，或临时将 Tab 切换至前台执行。                                             |
 | `Security check failed: Domain changed`                    | 截图后页面发生跨域跳转，坐标失效。                      | 重新调用 `chrome_read_dom` 或 `chrome_take_screenshot` 重新对齐。                   |
 | `Tool X is not exposed under the ... profile`              | 当前 profile 隐藏了该工具。                             | 调用 `chrome_tool_docs({ category: "<cat>", activateForSession: true })` 动态激活。 |
-| `Tool X is not a BrowserClaw tool`                         | 请求了不存在的工具名。                                  | 查阅 `tools/list`（全量包含 49 个规范工具）。                                       |
+| `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                                  | 查阅 `tools/list`（全量包含 49 个规范工具）。                                       |
 | `captureScreenshot returned empty data for background tab` | 后台 Tab 已被关闭或被系统内存冻结 (Discarded)。         | 重新打开或导航至目标页面。                                                          |
 | `Failed to ... index [X] in cross-origin frame`            | 跨域子 iframe 已被卸载或受到严格沙箱 sandbox 属性限制。 | 使用 `chrome_read_dom({ filter: "interactive" })` 检查 frame 活性。                 |
 | `Message sender rejected / unauthenticated content script` | 扩展安全加固：拦截了非受信渠道的未授权调用。            | 确保请求源自 Native Bridge 合法管道。                                               |
@@ -295,15 +298,15 @@ pnpm build
 
 ### 单组件构建命令
 
-- **单独构建扩展**：`pnpm --filter @browserclaw/extension build`（产物位于 `app/chrome-extension/.output/chrome-mv3`）
-- **单独构建 Native Server**：`pnpm --filter @browserclaw/native-server build`
+- **单独构建扩展**：`pnpm --filter @browserpaw/extension build`（产物位于 `app/chrome-extension/.output/chrome-mv3`）
+- **单独构建 Native Server**：`pnpm --filter @browserpaw/native-server build`
 
 ---
 
 ## 14. 日志位置与调试
 
 - **扩展 Service Worker 日志**：
-  进入 `chrome://extensions/` → 点击 BrowserClaw 下方的“Service Worker”链接 → 观察带有 `[NativeHost]` 或 `[Screenshot Tool]` 前缀的日志。
+  进入 `chrome://extensions/` → 点击 BrowserPaw 下方的“Service Worker”链接 → 观察带有 `[NativeHost]` 或 `[Screenshot Tool]` 前缀的日志。
 - **Native 宿主日志**：
   直接输出至运行进程的控制台终端 stdout/stderr。
 - **性能追踪 Trace 文件**：

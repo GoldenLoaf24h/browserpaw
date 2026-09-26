@@ -1,11 +1,11 @@
 /**
- * BrowserClaw Version & Update Checker
+ * BrowserPaw Version & Update Checker
  * Provides SemVer parsing/comparison, sliding-TTL/ETag GitHub releases caching,
  * and single-turn agent notification formatting.
  */
 
 export const GITHUB_REPO_OWNER = 'GoldenLoaf24h';
-export const GITHUB_REPO_NAME = 'browserclaw';
+export const GITHUB_REPO_NAME = 'browserpaw';
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
 export const GITHUB_API_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`;
 export const CURRENT_VERSION = '3.1.0';
@@ -280,7 +280,7 @@ export async function checkVersionUpdate(
     };
     // GitHub API requires User-Agent in Node.js runtime. In browsers, User-Agent is a forbidden header.
     if (typeof window === 'undefined') {
-      headers['User-Agent'] = 'BrowserClaw';
+      headers['User-Agent'] = 'BrowserPaw';
     }
     if (cached?.etag) {
       headers['If-None-Match'] = cached.etag;
@@ -424,7 +424,7 @@ export function formatAgentUpdateNotice(latestVersion: string, releaseUrl: strin
     latestVersion.startsWith('v') || latestVersion.startsWith('V')
       ? latestVersion
       : `v${latestVersion}`;
-  return `[System Notice: A new version of BrowserClaw is available (${cleanVer}). It is recommended to update to the latest release for new features and improvements: ${releaseUrl}]`;
+  return `[System Notice: A new version of BrowserPaw is available (${cleanVer}). It is recommended to update to the latest release for new features and improvements: ${releaseUrl}]`;
 }
 
 /**

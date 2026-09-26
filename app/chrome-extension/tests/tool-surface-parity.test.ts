@@ -28,9 +28,11 @@ describe('tool surface parity', () => {
       (sources.match(/TOOL_NAMES\.BROWSER\.[A-Z_]+/g) || []).map((s) => s.split('.').pop()),
     );
     const schemaConstants = new Set(
-      (fs.readFileSync('../../packages/shared/src/tools.ts', 'utf-8').match(
-        /name: TOOL_NAMES\.BROWSER\.[A-Z_]+/g,
-      ) || []).map((s) => s.split('.').pop()),
+      (
+        fs
+          .readFileSync('../../packages/shared/src/tools.ts', 'utf-8')
+          .match(/name: TOOL_NAMES\.BROWSER\.[A-Z_]+/g) || []
+      ).map((s) => s.split('.').pop()),
     );
 
     const missing = [...schemaConstants].filter((c) => !constantsUsed.has(c));
@@ -46,7 +48,7 @@ describe('tool surface parity', () => {
     expect(src).toContain('declaredToolNames.has(tool.name)');
   });
 
-  it('unknown tool names get a "not a BrowserClaw tool" message, not a profile hint', async () => {
+  it('unknown tool names get a "not a BrowserPaw tool" message, not a profile hint', async () => {
     const fs = await import('node:fs');
     for (const path of [
       '../../app/native-server/src/mcp/register-tools.ts',
@@ -54,7 +56,7 @@ describe('tool surface parity', () => {
     ]) {
       const src = fs.readFileSync(path, 'utf-8');
       expect(src, `${path} must distinguish unknown from profile-hidden`).toContain(
-        'is not a BrowserClaw tool',
+        'is not a BrowserPaw tool',
       );
       expect(src).toContain('const known = TOOL_SCHEMAS.some');
     }

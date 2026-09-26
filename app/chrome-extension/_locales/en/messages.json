@@ -1,10 +1,10 @@
 {
   "extensionName": {
-    "message": "browserclaw",
+    "message": "browserpaw",
     "description": "Extension name"
   },
   "extensionDescription": {
-    "message": "browserclaw - Clean browser control engine for AI Agents",
+    "message": "browserpaw - Clean browser control engine for AI Agents",
     "description": "Extension description"
   },
   "nativeServerConfigLabel": {

@@ -1,14 +1,14 @@
 {
-  "name": "browserclaw",
+  "name": "browserpaw",
   "interface": {
-    "displayName": "BrowserClaw Marketplace"
+    "displayName": "BrowserPaw Marketplace"
   },
   "plugins": [
     {
-      "name": "browserclaw",
+      "name": "browserpaw",
       "source": {
         "source": "local",
-        "path": "./plugins/browserclaw"
+        "path": "./plugins/browserpaw"
       },
       "policy": {
         "installation": "AVAILABLE",

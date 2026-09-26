@@ -1,8 +1,8 @@
 /**
- * BrowserClaw Ultrafast Atomic DOM Snapshot & Perception Engine
+ * BrowserPaw Ultrafast Atomic DOM Snapshot & Perception Engine
  *
  * Single-pass TreeWalker traversal, WeakMap metric caching, native checkVisibility,
- * and code-owned WeakMap/Map node identity registry (`window.__clawFast`).
+ * and code-owned WeakMap/Map node identity registry (`window.__pawFast` / `window.__clawFast`).
  *
  * Execution target: 10-30ms, payload budget <=15KB, <=250 actions, <=6000 text chars.
  */
@@ -40,7 +40,7 @@ export interface FastSnapshotResult {
   omitted_actions: number;
 }
 
-export interface ClawFastCache {
+export interface PawFastCache {
   ids: WeakMap<Element, number>;
   nodes: Map<number, Element>;
   actionElements?: Map<string | number, Element>;
@@ -50,21 +50,31 @@ export interface ClawFastCache {
   snapshot?: (options?: FastSnapshotOptions) => FastSnapshotResult | null;
 }
 
-export function getClawFastCache(): ClawFastCache {
+export type ClawFastCache = PawFastCache;
+
+export function getPawFastCache(): PawFastCache {
   const g = globalThis as any;
-  if (!g.__clawFast) {
-    g.__clawFast = {
+  if (!g.__pawFast && !g.__clawFast) {
+    const cache: PawFastCache = {
       ids: new WeakMap<Element, number>(),
       nodes: new Map<number, Element>(),
       actionElements: new Map<string | number, Element>(),
       next: 1,
     };
+    g.__pawFast = cache;
+    g.__clawFast = cache;
+  } else if (!g.__pawFast && g.__clawFast) {
+    g.__pawFast = g.__clawFast;
+  } else if (g.__pawFast && !g.__clawFast) {
+    g.__clawFast = g.__pawFast;
   }
-  if (!g.__clawFast.actionElements) {
-    g.__clawFast.actionElements = new Map<string | number, Element>();
+  if (!g.__pawFast.actionElements) {
+    g.__pawFast.actionElements = new Map<string | number, Element>();
   }
-  return g.__clawFast;
+  return g.__pawFast;
 }
+
+export const getClawFastCache = getPawFastCache;
 
 // Module-scoped ephemeral DOM cache for single snapshot pass (Nanobrowser pattern)
 const DOM_CACHE = {
@@ -483,7 +493,7 @@ export function inPageCheckOcclusion(action: {
   if (typeof document === 'undefined') return null;
 
   const g = globalThis as any;
-  const cache = g.__clawFast;
+  const cache = g.__pawFast || g.__clawFast;
 
   let targetId: number | undefined;
   if (typeof action.node === 'number') {

@@ -17,7 +17,7 @@ _Rule: Never use visual fallback when a numeric index from `chrome_read_dom` is 
 
 ## 2. DPR 1:1 Viewport Normalization
 
-BrowserClaw automatically resamples all screenshots using `OffscreenCanvas` to exact CSS viewport dimensions ($W_{img} \equiv W_{viewport}, H_{img} \equiv H_{viewport}$):
+BrowserPaw automatically resamples all screenshots using `OffscreenCanvas` to exact CSS viewport dimensions ($W_{img} \equiv W_{viewport}, H_{img} \equiv H_{viewport}$):
 
 - Completely eliminates coordinate drift caused by Windows display scaling (125%, 150%, 200%) or Retina displays.
 - Every coordinate label `(x, y)` visible on the screenshot maps 1:1 with mathematical fidelity to CDP physical pointer events and `getBoundingClientRect()`.
@@ -76,7 +76,7 @@ BrowserClaw automatically resamples all screenshots using `OffscreenCanvas` to e
 
 ## 4. Multimodal Coordinate Actions (`chrome_computer`)
 
-For visual clicks and typing, BrowserClaw supports Polymorphic Coordinate Input (PCIE):
+For visual clicks and typing, BrowserPaw supports Polymorphic Coordinate Input (PCIE):
 
 - **Object Format**: `{ "action": "left_click", "coordinates": { "x": 450, "y": 320 } }`
 - **Array Format**: `{ "action": "left_click", "coordinates": [450, 320] }`

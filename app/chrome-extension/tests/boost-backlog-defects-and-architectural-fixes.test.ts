@@ -19,7 +19,7 @@ import { javascriptTool } from '../entrypoints/background/tools/browser/javascri
 import { TOOL_NAMES, TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import { scrollUntilFoundTool } from '../entrypoints/background/tools/browser/scroll-until-found';
 
-describe('BrowserClaw Backlog Defects & Universal Architectural Fixes', () => {
+describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     getIsolatedIndexMap().clear();

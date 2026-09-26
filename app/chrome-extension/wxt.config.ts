@@ -34,7 +34,7 @@ export default defineConfig({
   manifest: {
     // Use environment variable for the key, fallback to undefined if not set
     key: CHROME_EXTENSION_KEY,
-    name: 'browserclaw',
+    name: 'browserpaw',
     description: 'Control your own browser with Agent.',
     permissions: [
       'nativeMessaging',
@@ -54,7 +54,7 @@ export default defineConfig({
     host_permissions: ['<all_urls>'],
     action: {
       default_popup: 'popup.html',
-      default_title: 'browserclaw',
+      default_title: 'browserpaw',
       default_icon: {
         '16': 'icon/16.png',
         '32': 'icon/32.png',

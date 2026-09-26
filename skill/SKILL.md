@@ -1,13 +1,13 @@
 ---
-name: browserclaw
-description: High-efficiency, zero-hallucination Chrome browser control and automation via BrowserClaw MCP server. Hierarchical Dual-Brain architecture (Macro Planner System 2 + Fast Semantic Micro-Loop System 1 Jev) with dual-engine perception (DOM-First 1-based indexing + Visual-Fallback PCIE). Dispatches native CDP events (isTrusted=true) with full support for React/Vue/Angular, Shadow DOM, and background tab isolation.
+name: browserpaw
+description: High-efficiency, zero-hallucination Chrome browser control and automation via BrowserPaw MCP server. Hierarchical Dual-Brain architecture (Macro Planner System 2 + Fast Semantic Micro-Loop System 1 Jev) with dual-engine perception (DOM-First 1-based indexing + Visual-Fallback PCIE). Dispatches native CDP events (isTrusted=true) with full support for React/Vue/Angular, Shadow DOM, and background tab isolation.
 ---
 
-# BrowserClaw Browser Control Skill
+# BrowserPaw Browser Control Skill
 
 Operates directly inside user's active Chrome session via native CDP (`isTrusted: true`), preserving cookies, logins, and extensions. React/Vue/Angular and deep Shadow DOM supported.
 
-> **Tool Prefix**: Canonical tool names use `chrome_*` (46), `performance_*` (3), and `get_windows_and_tabs`. In Stdio mode, call canonical names directly; `browserclaw_*` is an HTTP/SSE convenience alias.
+> **Tool Prefix**: Canonical tool names use `chrome_*` (46), `performance_*` (3), and `get_windows_and_tabs`. In Stdio mode, call canonical names directly; `browserpaw_*` is an HTTP/SSE convenience alias.
 
 ---
 

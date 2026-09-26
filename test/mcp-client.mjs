@@ -1,4 +1,4 @@
-// Minimal MCP Streamable-HTTP client for BrowserClaw (127.0.0.1:12306).
+// Minimal MCP Streamable-HTTP client for BrowserPaw (127.0.0.1:12306).
 // Usage: node test/mcp-client.mjs <toolName> '<json-args>'  |  node test/mcp-client.mjs --list
 import fs from 'node:fs';
 import os from 'node:os';

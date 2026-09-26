@@ -1,4 +1,4 @@
-# BrowserClaw 决策层 (Jev & Heuristic) 专项审查报告
+# BrowserPaw 决策层 (Jev & Heuristic) 专项审查报告
 
 - **审查对象**：
   - `app/native-server/src/jev/types.ts`
@@ -9,16 +9,17 @@
   - 对应的 `*.test.ts` 测试套件 (`fast-decision-engine.test.ts`, `heuristic-engine.test.ts`, `jev-client.test.ts`)
   - `app/native-server/src/mcp/register-tools.ts` (`chrome_act_toward_goal` 集成及相关工具)
 - **审查日期**：2026-09-20
-- **审查基线**：BrowserClaw v2.9.2 / Native Server Jev System One
+- **审查基线**：BrowserPaw v2.9.2 / Native Server Jev System One
 - **报告落盘**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\docs\review-2026-09\by-module\jev.md`
 
 ---
 
 ## 1. 模块架构与流程概述
 
-BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)** 在 Native Server 本地实现了一个自主语义微循环 (`chrome_act_toward_goal`)，旨在以 200~400ms/步的高帧率执行网页交互（感知 → 决策 → 执行），免去外层通用大模型 (System 2 / Macro Planner) 频繁的 MCP 协议往返。
+BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)** 在 Native Server 本地实现了一个自主语义微循环 (`chrome_act_toward_goal`)，旨在以 200~400ms/步的高帧率执行网页交互（感知 → 决策 → 执行），免去外层通用大模型 (System 2 / Macro Planner) 频繁的 MCP 协议往返。
 
 ### 核心组件职责
+
 1. **JevClientWrapper (`jev-client.ts`)**：封装 `@typesafe-ai/sdk`，负责与 TypeSafe Jev System One 极速推理 API 交互。构造 7 个并行结构化问题 (`action`, `click_target`, `type_target`, `select_target`, `goal_done`, `stuck`, `destructive`)，并处理错误分类与鉴权熔断 (Latch)。
 2. **HeuristicEngine (`heuristic-engine.ts`)**：零依赖确定性回退打分引擎。基于目标分词 (Tokenization)、子串包含、角色加权 (Role Bonus) 评估页面候选项，并提供规则式卡死判定与目标达成近似检测。
 3. **FastDecisionEngine (`fast-decision-engine.ts`)**：微循环控制器与状态机。负责串联 `chrome_read_dom` 页面感知、调用 Jev 或 Heuristic 做出动作决策、安全敏感词拦截 (Safety Breakpoint Guard)、通过内部调度执行动作 (`chrome_interact_index`, `chrome_fill_index`, `chrome_smart_scroll` 等)，并记录历史步。
@@ -31,6 +32,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ### 【P0 级别：确定性 Bug / 破坏性操作 / 状态损坏】
 
 #### 1. `HeuristicEngine.evaluate` 意图词覆盖元素原生角色，导致对按钮错误触发输入 (Type) 动作
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:130-136, 236-248`
 - **严重度**：P0（确定性逻辑缺陷 / 导致基本操作失败）
 - **问题描述**：
@@ -65,6 +67,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 2. `isDestructiveTarget` 全局子串匹配无词边界，导致常规字段 (如 postal_code) 产生破坏性误判阻断
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:25-41, 256-260`
 - **严重度**：P0（功能阻断 / 高误报阻断正常填表）
 - **问题描述**：
@@ -73,8 +76,20 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
   ```typescript
   // jev-client.ts:25-41
   export const DESTRUCTIVE_KEYWORDS: readonly string[] = [
-    'pay', '支付', '付款', '删除', 'delete', 'purchase', 'buy',
-    'submit', '提交', '发送', 'post', '发布', 'confirm', '确认',
+    'pay',
+    '支付',
+    '付款',
+    '删除',
+    'delete',
+    'purchase',
+    'buy',
+    'submit',
+    '提交',
+    '发送',
+    'post',
+    '发布',
+    'confirm',
+    '确认',
   ];
 
   // jev-client.ts:256-260
@@ -110,6 +125,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ### 【P1 级别：高概率异常路径 / 架构硬伤 / 显著性能瓶颈】
 
 #### 3. `isKeyInvalidLatched` 为进程级全局单例且生产代码中无任何复位机制 (永不解开的锁)
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:31-45`
 - **严重度**：P1（架构硬伤 / 状态无法自愈）
 - **问题描述**：
@@ -119,9 +135,15 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
   // jev-client.ts:31-45
   let isKeyInvalidLatched = false;
 
-  export function isSessionKeyInvalid(): boolean { return isKeyInvalidLatched; }
-  export function latchInvalidKey(): void { isKeyInvalidLatched = true; }
-  export function resetInvalidKeyLatch(): void { isKeyInvalidLatched = false; }
+  export function isSessionKeyInvalid(): boolean {
+    return isKeyInvalidLatched;
+  }
+  export function latchInvalidKey(): void {
+    isKeyInvalidLatched = true;
+  }
+  export function resetInvalidKeyLatch(): void {
+    isKeyInvalidLatched = false;
+  }
   ```
   全局代码检索表明，`resetInvalidKeyLatch()` 仅在单元测试 (`*.test.ts`) 的 `beforeEach` 中被引用，生产环境零引用。
   **触发推演**：
@@ -135,6 +157,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 4. `JevClientWrapper` 单例静态初始化，运行时后补或更新 `TYPESAFE_API_KEY` 无法生效
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\register-tools.ts:98`, `app/native-server/src/jev/jev-client.ts:285-298`
 - **严重度**：P1（配置迟钝 / 状态不一致）
 - **问题描述**：
@@ -172,6 +195,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 5. `tokenizeGoal` 中英文混排处理缺陷，无空格的字母数字直接丢失且产生错误拼接 bigram
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:89-106`
 - **严重度**：P1（分词损坏 / 候选元素打分失真）
 - **问题描述**：
@@ -197,7 +221,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
   1. `rawWords` 为 `["搜索iphone15购买"]`；
   2. `cjkChars` 匹配得到 `["搜", "索", "购", "买"]`（长度为 4 >= 2）；
   3. 生成 token 为：`["搜索", "索购", "购买"]`。
-  **致命后果**：
+     **致命后果**：
   - 关键实体词 `"iphone15"` 在 token 列表中**彻底蒸发**，页面上含有 `"iPhone 15"` 的商品卡片无法获得任何 token 重合得分；
   - 虚构了荒谬的跨词连接词 `"索购"`。
 - **一句话净收益**：先对 CJK 与 Latin 字符按边界拆分再分词，保证混合关键词 100% 被捕获，提升启发式打分命中率。
@@ -205,6 +229,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 6. `HeuristicEngine.isGoalDone` 基于静态页面文本简单包含，极易在第 2 步产生假阳性导致任务早退
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:261-274`, `fast-decision-engine.ts:282-299`
 - **严重度**：P1（任务假死 / 提前早退未完成目标）
 - **问题描述**：
@@ -252,6 +277,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 7. `isSensitiveElement` 粗暴过滤 `"password"` 子串，导致正常找回密码/辅助操作对 Jev 隐形
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:47-59`
 - **严重度**：P1（感知缺失 / 误杀无害元素）
 - **问题描述**：
@@ -281,6 +307,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 8. `extractTextPayload` 尾随词提取在未加引号时遇首个空格即截断，丢失多词输入
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:241-248`
 - **严重度**：P1（输入截断 / 意图偏离）
 - **问题描述**：
@@ -302,6 +329,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 9. 语义误用：在下拉选项选择中滥用 TypeSafe SDK 的 `score` 标尺，强行引入有序评分与截断
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:365-420`
 - **严重度**：P1（SDK 语义违背 / 人工截断）
 - **问题描述**：
@@ -327,6 +355,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 10. `validateChoice` 浮点公差过严与硬性键数量检查，导致偶发合法响应被判为失败并直接升级中断
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:182-220`, `fast-decision-engine.ts:348-356, 386-394`
 - **严重度**：P1（脆弱的校验防御 / 错误升级）
 - **问题描述**：
@@ -365,6 +394,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 11. 单步 Prompt 结构膨胀：3 份全量备选元素副本（单步 300+ 选项）推高 Token 成本与网络延迟
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:133-166`
 - **严重度**：P1（性能瓶颈 / 成本浪费）
 - **问题描述**：
@@ -389,6 +419,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 12. 零 DOM 缓存与感知增量复用，每步微循环均进行全量 `chrome_read_dom` 跨进程往返
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.ts:241-268`
 - **严重度**：P1（性能瓶颈 / 违背 200~400ms 设计指标）
 - **问题描述**：
@@ -405,6 +436,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ### 【P2 级别：中低概率缺陷 / 可维护性 / 代码质量】
 
 #### 13. `HeuristicEngine` 置信度公式缺陷：单一候选时恒为 1.0，低分劣质项被盲目采纳
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:210-212`
 - **严重度**：P2
 - **问题描述**：
@@ -415,6 +447,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 14. `HeuristicEngine` 内部写死置信度阈值 0.30，忽视外部参数 `confidenceThreshold`
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:227`, `fast-decision-engine.ts:153`
 - **严重度**：P2
 - **问题描述**：
@@ -424,6 +457,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 15. 循环内重复计算 `cleanGoal` 与重复分词，O(N) 冗余正则开销
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:151, 183`
 - **严重度**：P2
 - **问题描述**：
@@ -435,6 +469,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ---
 
 #### 16. 循环硬编码 `wait` 休眠 1000ms，缺乏自适应 settle 机制
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.ts:634-637`
 - **严重度**：P2
 - **问题描述**：
@@ -446,6 +481,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ### 【P3 级别：轻微瑕疵 / 统计口径】
 
 #### 17. `estCostUsd` 仅统计 `input_tokens` 并写死 0.042/1M，未包含 `output_tokens` 且费率硬编码
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.ts:896`
 - **严重度**：P3
 - **问题描述**：
@@ -453,6 +489,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 - **一句话净收益**：规范用量统计模型，提供动态单价配置。
 
 #### 18. `fast-decision-engine.test.ts` 存在未关闭的定时器资源泄露
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.test.ts:1`
 - **严重度**：P3
 - **问题描述**：
@@ -464,6 +501,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ## 3. 死代码 / 重复实现 / 过度设计
 
 ### 3.1 绝对死代码：第 3 处 Safety Breakpoint Guard 完全多余
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.ts:579-610`
 - **代码片段**：
   ```typescript
@@ -489,9 +527,10 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
   在进入该块之前，系统必须走过 `if (engine === 'jev')` 或 `if (engine === 'heuristic')`。
   - 在 Jev 分支内（第 445-479 行），已经对 `pauseBeforeKeywords` 做了完全一样的检查，若匹配则已直接 `return formatResult('paused')`；
   - 在 Heuristic 分支内（第 520-573 行），也对 `pauseBeforeKeywords` 做了完全一样的检查，若匹配同样已直接 `return formatResult('paused')`；
-  因此，当代码流转至第 579 行时，如果存在匹配关键词，早就在上述两个分支中返回了；若不匹配，第 580 行使用完全相同的参数与目标再次调用 `findMatchingPauseKeyword`，结果必定为 `null`。此段代码 100% 无法被命中，属于典型的补丁复制粘贴遗留死代码（共 32 行）。
+    因此，当代码流转至第 579 行时，如果存在匹配关键词，早就在上述两个分支中返回了；若不匹配，第 580 行使用完全相同的参数与目标再次调用 `findMatchingPauseKeyword`，结果必定为 `null`。此段代码 100% 无法被命中，属于典型的补丁复制粘贴遗留死代码（共 32 行）。
 
 ### 3.2 冗余的状态字符预算裁剪 O(N * M) 循环
+
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:94-96`
 - **代码片段**：
   ```typescript
@@ -508,19 +547,22 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ## 4. 性能观察 (量化分析)
 
 ### 4.1 每步调用往返次数 (IPC 与网络 RTT)
+
 以执行一次普通的输入或点击微操作为例：
-| 调用层级 | 阶段 | 操作 | 耗时估计 |
-| :--- | :--- | :--- | :--- |
-| **Native ↔ Chrome IPC** | 感知 | `chrome_read_dom` (全量树重建 + 序列化) | **80 ~ 250 ms** |
-| **Native ↔ TypeSafe API** | 决策 | Jev `systemOne` (HTTPS RTT + 推理) | **120 ~ 300 ms** |
-| **Native ↔ Chrome IPC** | 执行 | `chrome_interact_index` / `chrome_fill_index` | **50 ~ 120 ms** |
-| **单步总延迟 (Click/Type)** | - | **2 次 Native IPC + 1 次公网 HTTPS** | **250 ~ 670 ms** |
-| **若为 Select 下拉操作** | - | **3 次 Native IPC + 2 次公网 HTTPS** | **450 ~ 1100 ms** |
+
+| 调用层级                    | 阶段 | 操作                                          | 耗时估计          |
+| :-------------------------- | :--- | :-------------------------------------------- | :---------------- |
+| **Native ↔ Chrome IPC**     | 感知 | `chrome_read_dom` (全量树重建 + 序列化)       | **80 ~ 250 ms**   |
+| **Native ↔ TypeSafe API**   | 决策 | Jev `systemOne` (HTTPS RTT + 推理)            | **120 ~ 300 ms**  |
+| **Native ↔ Chrome IPC**     | 执行 | `chrome_interact_index` / `chrome_fill_index` | **50 ~ 120 ms**   |
+| **单步总延迟 (Click/Type)** | -    | **2 次 Native IPC + 1 次公网 HTTPS**          | **250 ~ 670 ms**  |
+| **若为 Select 下拉操作**    | -    | **3 次 Native IPC + 2 次公网 HTTPS**          | **450 ~ 1100 ms** |
 
 > **关键观察**：
 > 宣称的 `200~400ms/step` 仅在公网网络延迟极低且页面元素较少时才能勉强触达。其主要瓶颈不是 Jev 推理，而是**每步强制全量重新运行 `chrome_read_dom`**。
 
 ### 4.2 Jev Prompt 体积膨胀与网络传输
+
 - **输入状态**：最多 250 个元素，上限 24,000 字符 (~6,000 tokens)。
 - **问题分支膨胀**：
   - `action`：9 个选项
@@ -528,36 +570,36 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
   - `type_target`：最多 251 个选项
   - `select_target`：最多 251 个选项
   - 3 个 `noul` 问题
-- 单步发送给 Jev API 的选择项定义多达 **762 项**。这些选项定义随着每个 HTTP 请求传输，造成高达 ~8,000~12,000 tokens 的输入体积，单次请求吞吐负担沉重。
+- 单步发送给 Jev API 的选择项定义多达 **762 项**。这些选项定义随着每个 HTTP 请求传输，造成高达 ~~8,000~~12,000 tokens 的输入体积，单次请求吞吐负担沉重。
 
 ---
 
 ## 5. LLM / 决策点清单 (供主控专项参考)
 
-以下为当前 BrowserClaw 中全部基于 Jev / 规则引擎的决策点及其位置：
+以下为当前 BrowserPaw 中全部基于 Jev / 规则引擎的决策点及其位置：
 
-| 决策点编号 | 文件绝对路径与行号 | 决策性质 | 决策输入与算子类型 | 说明 |
-| :--- | :--- | :--- | :--- | :--- |
-| **DEC-01** | `app/native-server/src/jev/jev-client.ts:143-154` | 动作类型决策 | `choice` (9 选 1) | 决策下一步动作是 click, type, select, scroll, wait, done 等 |
-| **DEC-02** | `app/native-server/src/jev/jev-client.ts:155-158` | 点击目标元素决策 | `choice` (N+1 选 1) | 从页面所有元素索引中推选最贴合的点击目标 |
-| **DEC-03** | `app/native-server/src/jev/jev-client.ts:159-162` | 文本输入目标决策 | `choice` (N+1 选 1) | 从页面所有元素索引中推选输入框目标 |
-| **DEC-04** | `app/native-server/src/jev/jev-client.ts:163-166` | 下拉选择目标决策 | `choice` (N+1 选 1) | 从页面所有元素索引中推选下拉菜单目标 |
-| **DEC-05** | `app/native-server/src/jev/jev-client.ts:167-169` | 目标达成判定 | `noul` (二值概率) | 判定任务是否在当前页面状态下已彻底完成 |
-| **DEC-06** | `app/native-server/src/jev/jev-client.ts:170` | 卡顿死循环判定 | `noul` (二值概率) | 判定连续执行是否陷入零进展死循环 |
-| **DEC-07** | `app/native-server/src/jev/jev-client.ts:171-173` | 破坏性风险判定 | `noul` (二值概率) | 判定动作是否涉及支付、删除、提交等不可逆风险 |
-| **DEC-08** | `app/native-server/src/jev/jev-client.ts:370` | 下拉菜单选项判定 | `score` (误用，应为 choice) | 为 `<select>` 的 options 挑选最佳匹配项 |
-| **DEC-09** | `app/native-server/src/jev/heuristic-engine.ts:124-211` | 规则候选元素优选 | 启发式综合打分 | 子串加权(+2.0)、Token重合比例、Role加权(+0.5) |
-| **DEC-10** | `app/native-server/src/jev/heuristic-engine.ts:236-248` | 规则动作映射 | 启发式规则判定 | 映射为 click, type, select, scroll_down |
-| **DEC-11** | `app/native-server/src/jev/heuristic-engine.ts:261-274` | 规则目标达成推断 | 词汇覆盖率 (>=0.8) | 粗糙的页面静态文案重合判定 |
-| **DEC-12** | `app/native-server/src/jev/heuristic-engine.ts:279-305` | 规则卡滞推断 | 3 次连续结果比对 | 比对 urlChanged, mutated, visualDiff 判定卡顿 |
-| **DEC-13** | `app/native-server/src/jev/fast-decision-engine.ts:35-64` | 安全中断词识别 | 词边界正则提取 | 检查目标是否匹配用户自定义暂停词 |
-| **DEC-14** | `app/native-server/src/mcp/register-tools.ts:189` | 架构路由分流点 | 工具名称分发 | 拦截 `chrome_act_toward_goal` 本地闭环 |
+| 决策点编号 | 文件绝对路径与行号                                        | 决策性质         | 决策输入与算子类型          | 说明                                                        |
+| :--------- | :-------------------------------------------------------- | :--------------- | :-------------------------- | :---------------------------------------------------------- |
+| **DEC-01** | `app/native-server/src/jev/jev-client.ts:143-154`         | 动作类型决策     | `choice` (9 选 1)           | 决策下一步动作是 click, type, select, scroll, wait, done 等 |
+| **DEC-02** | `app/native-server/src/jev/jev-client.ts:155-158`         | 点击目标元素决策 | `choice` (N+1 选 1)         | 从页面所有元素索引中推选最贴合的点击目标                    |
+| **DEC-03** | `app/native-server/src/jev/jev-client.ts:159-162`         | 文本输入目标决策 | `choice` (N+1 选 1)         | 从页面所有元素索引中推选输入框目标                          |
+| **DEC-04** | `app/native-server/src/jev/jev-client.ts:163-166`         | 下拉选择目标决策 | `choice` (N+1 选 1)         | 从页面所有元素索引中推选下拉菜单目标                        |
+| **DEC-05** | `app/native-server/src/jev/jev-client.ts:167-169`         | 目标达成判定     | `noul` (二值概率)           | 判定任务是否在当前页面状态下已彻底完成                      |
+| **DEC-06** | `app/native-server/src/jev/jev-client.ts:170`             | 卡顿死循环判定   | `noul` (二值概率)           | 判定连续执行是否陷入零进展死循环                            |
+| **DEC-07** | `app/native-server/src/jev/jev-client.ts:171-173`         | 破坏性风险判定   | `noul` (二值概率)           | 判定动作是否涉及支付、删除、提交等不可逆风险                |
+| **DEC-08** | `app/native-server/src/jev/jev-client.ts:370`             | 下拉菜单选项判定 | `score` (误用，应为 choice) | 为 `<select>` 的 options 挑选最佳匹配项                     |
+| **DEC-09** | `app/native-server/src/jev/heuristic-engine.ts:124-211`   | 规则候选元素优选 | 启发式综合打分              | 子串加权(+2.0)、Token重合比例、Role加权(+0.5)               |
+| **DEC-10** | `app/native-server/src/jev/heuristic-engine.ts:236-248`   | 规则动作映射     | 启发式规则判定              | 映射为 click, type, select, scroll_down                     |
+| **DEC-11** | `app/native-server/src/jev/heuristic-engine.ts:261-274`   | 规则目标达成推断 | 词汇覆盖率 (>=0.8)          | 粗糙的页面静态文案重合判定                                  |
+| **DEC-12** | `app/native-server/src/jev/heuristic-engine.ts:279-305`   | 规则卡滞推断     | 3 次连续结果比对            | 比对 urlChanged, mutated, visualDiff 判定卡顿               |
+| **DEC-13** | `app/native-server/src/jev/fast-decision-engine.ts:35-64` | 安全中断词识别   | 词边界正则提取              | 检查目标是否匹配用户自定义暂停词                            |
+| **DEC-14** | `app/native-server/src/mcp/register-tools.ts:189`         | 架构路由分流点   | 工具名称分发                | 拦截 `chrome_act_toward_goal` 本地闭环                      |
 
 ---
 
 ## 6. 潜在可用 Jev 但尚未利用的工具/场景评估 (Jev 潜能专项)
 
-当前 BrowserClaw 中大量工具仍在等待外部通用大模型 (System 2) 逐回合慢速决策，或在 Chrome 扩展内部采用极为简陋的固定子串对比。以下工具具有极高的 Jev 改造潜能：
+当前 BrowserPaw 中大量工具仍在等待外部通用大模型 (System 2) 逐回合慢速决策，或在 Chrome 扩展内部采用极为简陋的固定子串对比。以下工具具有极高的 Jev 改造潜能：
 
 1. **`chrome_form_pipeline` (强烈推荐引入 Jev)**
    - **现状**：位于 `app/chrome-extension/entrypoints/background/tools/browser/form-pipeline.ts:256-296`，当前完全靠 `preSig?.question.toLowerCase().includes(f.query.toLowerCase())` 子串硬匹配。
@@ -581,6 +623,7 @@ BrowserClaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture
 ## 7. 模块依赖与被依赖关系清单
 
 ### 7.1 内部文件依赖树
+
 ```
 register-tools.ts
   └── import { FastDecisionEngine } from '../jev' (index.ts)
@@ -599,9 +642,9 @@ register-tools.ts
 ```
 
 ### 7.2 被依赖关系 (Consumers)
+
 1. **`app/native-server/src/mcp/register-tools.ts`**：
    - 唯一直接消费者。在启动时单例实例化 `FastDecisionEngine`，在 `handleToolCall` 中将 `chrome_act_toward_goal` 重定向至其 `run()` 方法。
 2. **外部宏规划模型 (Macro Planners / Skills / Plugins)**：
    - `packages/shared/src/tools.ts` 与 `packages/shared/src/tool-profiles.ts`：声明工具元数据并将其归入默认激活 Profile；
-   - `plugins/browserclaw/skills/browserclaw/SKILL.md`：将 `chrome_act_toward_goal` 设定为页面动作目标默认选择 (Tier 1 Default，承载 70% 网页交互)。
-
+   - `plugins/browserpaw/skills/browserpaw/SKILL.md`：将 `chrome_act_toward_goal` 设定为页面动作目标默认选择 (Tier 1 Default，承载 70% 网页交互)。

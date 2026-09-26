@@ -167,7 +167,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       const parsed = JSON.parse(res.content[0].text as string);
       expect(parsed.pipelineHint).toBeDefined();
       expect(parsed.pipelineHint).toContain('1-Turn Optimal Paradigm');
-      expect(parsed.pipelineHint).toMatch(/(browserclaw|chrome)_batch_actions/);
+      expect(parsed.pipelineHint).toMatch(/(browserpaw|browserclaw|chrome)_batch_actions/);
       expect(parsed.pipelineHint).toContain('pressEnter: true');
     });
   });

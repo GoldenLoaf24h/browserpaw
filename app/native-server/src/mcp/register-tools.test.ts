@@ -18,7 +18,7 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     const now = Date.now();
     storage.set({
       latestVersion: '2.10.0',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0',
       lastChecked: now,
       expiresAt: now + 3600_000,
     });
@@ -30,9 +30,9 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     });
 
     expect(notice1).not.toBeNull();
-    expect(notice1).toContain('System Notice: A new version of BrowserClaw is available');
+    expect(notice1).toContain('System Notice: A new version of BrowserPaw is available');
     expect(notice1).toContain('v2.10.0');
-    expect(notice1).toContain('https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0');
+    expect(notice1).toContain('https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0');
 
     // 2nd tool call: strictly forbidden from appearing again! Must return null!
     const notice2 = await notifier.maybeGetFirstCallNotice({
@@ -53,7 +53,7 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     const now = Date.now();
     storage.set({
       latestVersion: '2.9.3',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.9.3',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.3',
       lastChecked: now,
       expiresAt: now + 3600_000,
     });
@@ -77,7 +77,7 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     const now = Date.now();
     storage.set({
       latestVersion: 'not-a-valid-version',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases',
       lastChecked: now,
       expiresAt: now + 3600_000,
     });
@@ -93,10 +93,10 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
   it('formatAgentUpdateNotice formats a clean, informative system prompt', () => {
     const formatted = formatAgentUpdateNotice(
       '2.11.0',
-      'https://github.com/GoldenLoaf24h/browserclaw/releases/latest',
+      'https://github.com/GoldenLoaf24h/browserpaw/releases/latest',
     );
     expect(formatted).toBe(
-      '[System Notice: A new version of BrowserClaw is available (v2.11.0). It is recommended to update to the latest release for new features and improvements: https://github.com/GoldenLoaf24h/browserclaw/releases/latest]',
+      '[System Notice: A new version of BrowserPaw is available (v2.11.0). It is recommended to update to the latest release for new features and improvements: https://github.com/GoldenLoaf24h/browserpaw/releases/latest]',
     );
   });
 
@@ -106,18 +106,18 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     // 1. Without key & with purge flag -> chrome_act_toward_goal is completely purged
     const prevKey = process.env.TYPESAFE_API_KEY;
     const prevJevKey = process.env.JEV_API_KEY;
-    const prevPurge = process.env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY;
+    const prevPurge = process.env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY;
     const prevPromote = process.env.CHROME_MCP_AUTO_PROMOTE_JEV;
 
     delete process.env.TYPESAFE_API_KEY;
     delete process.env.JEV_API_KEY;
-    process.env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY = 'true';
+    process.env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY = 'true';
 
     const fullPurged = filterToolSchemas(TOOL_SCHEMAS, 'full');
     expect(fullPurged.some((t) => t.name === 'chrome_act_toward_goal')).toBe(false);
 
     // 2. With key & with auto-promote flag -> chrome_act_toward_goal is in core profile
-    delete process.env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY;
+    delete process.env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY;
     process.env.TYPESAFE_API_KEY = 'test-typesafe-key';
     process.env.CHROME_MCP_AUTO_PROMOTE_JEV = 'true';
 
@@ -129,8 +129,8 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     else delete process.env.TYPESAFE_API_KEY;
     if (prevJevKey !== undefined) process.env.JEV_API_KEY = prevJevKey;
     else delete process.env.JEV_API_KEY;
-    if (prevPurge !== undefined) process.env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY = prevPurge;
-    else delete process.env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY;
+    if (prevPurge !== undefined) process.env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY = prevPurge;
+    else delete process.env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY;
     if (prevPromote !== undefined) process.env.CHROME_MCP_AUTO_PROMOTE_JEV = prevPromote;
     else delete process.env.CHROME_MCP_AUTO_PROMOTE_JEV;
   });

@@ -35,6 +35,7 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   const getMap = () => (
     (typeof globalThis !== 'undefined' && (
       globalThis[Symbol.for('__browser_use_isolated_index_map__')] ||
+      globalThis[Symbol.for('BROWSERPAW_ISOLATED_INDEX_MAP')] ||
       globalThis[Symbol.for('BROWSERCLAW_ISOLATED_INDEX_MAP')] ||
       globalThis.__MCP_INDEX_MAP__
     )) || new Map()

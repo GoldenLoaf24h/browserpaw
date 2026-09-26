@@ -1,8 +1,8 @@
-# BrowserClaw Native Bridge Installation Guide
+# BrowserPaw Native Bridge Installation Guide
 
 The native server bridges Chrome Native Messaging (stdio) and AI Agent MCP clients (HTTP/SSE on port 12306 or stdio).
 
-For the complete, step-by-step onboarding guide across the full BrowserClaw stack, see the root **[INSTALL.md](../../INSTALL.md)**.
+For the complete, step-by-step onboarding guide across the full BrowserPaw stack, see the root **[INSTALL.md](../../INSTALL.md)**.
 
 ---
 
@@ -11,6 +11,7 @@ For the complete, step-by-step onboarding guide across the full BrowserClaw stac
 ### 1. Build Native Bridge
 
 From the repository root:
+
 ```bash
 pnpm --filter mcp-chrome-bridge build
 ```

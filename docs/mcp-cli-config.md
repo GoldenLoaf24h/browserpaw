@@ -1,12 +1,12 @@
 # CLI & Agent MCP Configuration Guide 🔌
 
-This guide explains how to configure AI Agent CLIs (Claude Desktop, Claude Code, Codex CLI, Cursor, Windsurf, Cline, Roo Code) to connect to BrowserClaw via Model Context Protocol (MCP).
+This guide explains how to configure AI Agent CLIs (Claude Desktop, Claude Code, Codex CLI, Cursor, Windsurf, Cline, Roo Code) to connect to BrowserPaw via Model Context Protocol (MCP).
 
 ---
 
 ## 1. Overview & Connection Architecture
 
-BrowserClaw exposes two primary MCP transport modes:
+BrowserPaw exposes two primary MCP transport modes:
 
 1. **HTTP / SSE Transport (Recommended for high-concurrency & multi-client)**:
    - Endpoint: `http://127.0.0.1:12306/sse` (or `/mcp`)
@@ -19,7 +19,7 @@ BrowserClaw exposes two primary MCP transport modes:
 
 ## 2. Authentication Token
 
-To protect your local browser session against unauthorized local loopback exploitation, BrowserClaw strictly enforces token authentication:
+To protect your local browser session against unauthorized local loopback exploitation, BrowserPaw strictly enforces token authentication:
 
 - **Token Location**: `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`)
 - **Custom Token**: Set the `CHROME_MCP_TOKEN` environment variable prior to starting the service.
@@ -45,7 +45,7 @@ File: `~/.claude/claude_desktop_config.json`
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "url": "http://127.0.0.1:12306/sse",
       "headers": {
         "Authorization": "Bearer <TOKEN_FROM_~/.chrome-mcp/bridge-token>"
@@ -60,7 +60,7 @@ File: `~/.claude/claude_desktop_config.json`
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -80,7 +80,7 @@ File: `~/.codex/config.json`
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "url": "http://127.0.0.1:12306/sse",
       "headers": {
         "x-mcp-token": "<TOKEN_FROM_~/.chrome-mcp/bridge-token>"
@@ -99,7 +99,7 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -119,16 +119,16 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 Install directly from terminal into your active Hermes environment:
 
 ```bash
-hermes plugins install GoldenLoaf24h/browserclaw#plugins/browserclaw
-hermes plugins enable browserclaw
+hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
+hermes plugins enable browserpaw
 ```
 
 #### Option B: HTTP / SSE MCP Server Registration
 
-Connect Hermes to the running BrowserClaw HTTP bridge:
+Connect Hermes to the running BrowserPaw HTTP bridge:
 
 ```bash
-hermes mcp add browserclaw --url http://127.0.0.1:12306/mcp --auth header
+hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 ```
 
 ---

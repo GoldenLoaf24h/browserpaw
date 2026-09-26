@@ -1,8 +1,8 @@
-# BrowserClaw 故障排查与自愈手册 (Troubleshooting Guide)
+# BrowserPaw 故障排查与自愈手册 (Troubleshooting Guide)
 
 [English Version](./TROUBLESHOOTING.md)
 
-本文档汇总了 BrowserClaw 在接入各类 MCP Agent 客户端过程中可能遇到的典型问题、深层根因及标准修复方案。
+本文档汇总了 BrowserPaw 在接入各类 MCP Agent 客户端过程中可能遇到的典型问题、深层根因及标准修复方案。
 
 ---
 
@@ -29,10 +29,10 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 - **故障现象**：
   Agent 客户端在调用工具或初始化连接时报错：`fetch failed: ECONNREFUSED 127.0.0.1:12306`。
 - **根本原因**：
-  本地 Fastify Native Bridge 服务尚未启动。BrowserClaw 的架构是**按需自启**的：当 Chrome 浏览器启动且扩展激活时，扩展通过 Native Messaging Host 自动拉起 Native Bridge。
+  本地 Fastify Native Bridge 服务尚未启动。BrowserPaw 的架构是**按需自启**的：当 Chrome 浏览器启动且扩展激活时，扩展通过 Native Messaging Host 自动拉起 Native Bridge。
 - **解决步骤**：
   1. 打开本地 Chrome 浏览器；
-  2. 确认已在 `chrome://extensions/` 中启用 BrowserClaw；
+  2. 确认已在 `chrome://extensions/` 中启用 BrowserPaw；
   3. 点击浏览器右上角扩展图标，弹出 200px×80px 极简面板，观察状态指示点是否变为**绿色**；
   4. 若需独立后台运行，可在终端手动启动：
      ```bash
@@ -100,7 +100,7 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 - **故障现象**：
   在大模型视觉点击模式下，点击位置偏离目标。
 - **底层保障**：
-  BrowserClaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 $W_{viewport} \times H_{viewport}$）。
+  BrowserPaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 $W_{viewport} \times H_{viewport}$）。
 - **注意事项**：
   Agent 在计算或下发坐标时，**切勿手动乘以设备像素比（DPR）**！直接使用截图上的物理像素位置下发即可（引擎与视口 CSS 像素 1:1 严格对齐）。
 
@@ -111,7 +111,7 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 - **故障现象**：
   页面弹出原生 `alert()` 或 `confirm()`，导致后续 CDP 指令挂起。
 - **自愈机制**：
-  BrowserClaw 内置了瞬态 Dialog 中断捕获。当弹窗出现时，动作会立刻返回带有 `requiresDialogAction: true` 的提示：
+  BrowserPaw 内置了瞬态 Dialog 中断捕获。当弹窗出现时，动作会立刻返回带有 `requiresDialogAction: true` 的提示：
   ```json
   {
     "requiresDialogAction": true,
@@ -152,7 +152,7 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 ### 9. 后台 Tab 离屏截图与隐私隔离
 
 - **底层机制**：
-  对于非激活标签页（`active: false`），BrowserClaw 强制采用 CDP `Page.captureScreenshot`（`fromSurface: true`），严禁使用 Chrome 扩展默认的 `chrome.tabs.captureVisibleTab`。
+  对于非激活标签页（`active: false`），BrowserPaw 强制采用 CDP `Page.captureScreenshot`（`fromSurface: true`），严禁使用 Chrome 扩展默认的 `chrome.tabs.captureVisibleTab`。
 - **核心收益**：
   1. 彻底消除前台屏幕泄露隐患（避免后台 Agent 获取到用户当前前台私密屏幕）；
   2. 消除后台非激活标签页因 `requestAnimationFrame` 睡眠冻结导致的死锁。

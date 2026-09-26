@@ -102,7 +102,9 @@ describe('GitHub Issue #3: Dynamic Index Drift, Active Element Focus Guard & Ant
         return [{ result: { success: true } }] as any;
       });
 
-      vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _tag, fn) => fn());
+      vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _tag, fn) =>
+        fn(),
+      );
       vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({});
 
       const result = await fillCore.performPhysicalFill({
@@ -323,36 +325,38 @@ describe('GitHub Issue #3: Dynamic Index Drift, Active Element Focus Guard & Ant
 
       expect(data.selectorMatched).toBe(false);
       expect(data.message).toContain('No elements matching selector "form" found on page');
-      expect(data.suggestion).toContain("Modern div-based SPAs often do not use native <form> tags. Try targeting '[role=\"form\"]'");
+      expect(data.suggestion).toContain(
+        'Modern div-based SPAs often do not use native <form> tags. Try targeting \'[role="form"]\'',
+      );
       expect(data.diagnostic).toContain('Selector "form" matched 0 elements');
     });
   });
 
   describe('5. Hermes Plugin SKILL.md and Config Tool Names Alignment', () => {
-    it('confirms plugins/browserclaw/skills/browserclaw/SKILL.md has 0 chrome_* references', () => {
+    it('confirms plugins/browserpaw/skills/browserpaw/SKILL.md has 0 chrome_* references', () => {
       const skillMdPath = path.resolve(
         __dirname,
-        '../../../plugins/browserclaw/skills/browserclaw/SKILL.md',
+        '../../../plugins/browserpaw/skills/browserpaw/SKILL.md',
       );
       if (fs.existsSync(skillMdPath)) {
         const content = fs.readFileSync(skillMdPath, 'utf-8');
         const chromeMatches = content.match(/\bchrome_[a-z_]+/g) || [];
         expect(chromeMatches).toEqual([]);
-        expect(content).toContain('browserclaw_read_dom');
-        expect(content).toContain('browserclaw_fill_index');
+        expect(content).toContain('browserpaw_read_dom');
+        expect(content).toContain('browserpaw_fill_index');
       }
     });
 
-    it('confirms plugins/browserclaw/skills/browserclaw/config/mcp-config.json has 0 chrome_* references', () => {
+    it('confirms plugins/browserpaw/skills/browserpaw/config/mcp-config.json has 0 chrome_* references', () => {
       const configPath = path.resolve(
         __dirname,
-        '../../../plugins/browserclaw/skills/browserclaw/config/mcp-config.json',
+        '../../../plugins/browserpaw/skills/browserpaw/config/mcp-config.json',
       );
       if (fs.existsSync(configPath)) {
         const content = fs.readFileSync(configPath, 'utf-8');
         const chromeMatches = content.match(/"chrome_[a-z_]+"/g) || [];
         expect(chromeMatches).toEqual([]);
-        expect(content).toContain('browserclaw_read_dom');
+        expect(content).toContain('browserpaw_read_dom');
       }
     });
   });

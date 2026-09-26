@@ -176,7 +176,7 @@ const handleToolCallInner = async (
               type: 'text',
               text: known
                 ? profileBlockedMessage(backendName, TOOL_PROFILE)
-                : `Tool "${name}" is not a BrowserClaw tool. Call tools/list to see the ${EXPOSED_TOOLS.length} available tools.`,
+                : `Tool "${name}" is not a BrowserPaw tool. Call tools/list to see the ${EXPOSED_TOOLS.length} available tools.`,
             },
           ],
           isError: true,

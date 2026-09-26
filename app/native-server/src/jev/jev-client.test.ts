@@ -85,7 +85,7 @@ describe('Jev Client & Helper Unit Tests', () => {
   describe('3. Questions assembly (§5.2)', () => {
     test('builds 7 parallel questions with proper criteria', () => {
       const elements = ['[1] button "Submit"', '[12] textbox "Search"', '[25] link "Help"'];
-      const questions = buildQuestions(elements, 'Search BrowserClaw');
+      const questions = buildQuestions(elements, 'Search BrowserPaw');
 
       expect(questions).toHaveProperty('action');
       expect(questions).toHaveProperty('click_target');
@@ -212,7 +212,7 @@ describe('Jev Client & Helper Unit Tests', () => {
 
   describe('5. Text payload extraction (§5.4)', () => {
     test('extracts from quotes (English and Chinese)', () => {
-      expect(extractTextPayload('在搜索框中输入"BrowserClaw"')).toBe('BrowserClaw');
+      expect(extractTextPayload('在搜索框中输入"BrowserPaw"')).toBe('BrowserPaw');
       expect(extractTextPayload('输入“深度学习”并提交')).toBe('深度学习');
       expect(extractTextPayload('在输入框输入‘我的密码’')).toBe('我的密码');
       expect(extractTextPayload("search for 'TypeScript'")).toBe('TypeScript');
@@ -224,7 +224,7 @@ describe('Jev Client & Helper Unit Tests', () => {
     });
 
     test('extracts trailing phrase after keywords', () => {
-      expect(extractTextPayload('搜索 BrowserClaw 插件')).toBe('BrowserClaw 插件');
+      expect(extractTextPayload('搜索 BrowserPaw 插件')).toBe('BrowserPaw 插件');
       expect(extractTextPayload('type: hello_world into field')).toBe('hello_world');
       expect(extractTextPayload('输入 user@test.com 到邮箱')).toBe('user@test.com');
       expect(extractTextPayload('type mechanical keyboard into searchbox')).toBe(

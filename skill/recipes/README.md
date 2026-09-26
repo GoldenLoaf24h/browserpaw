@@ -1,4 +1,4 @@
-# BrowserClaw Web Automation Recipes (Playbooks)
+# BrowserPaw Web Automation Recipes (Playbooks)
 
 This directory is designed for **caching, persisting, and reusing proven interaction patterns** for complex or frequently visited websites.
 

@@ -52,7 +52,7 @@ export class AttachTabTool extends BaseBrowserToolExecutor {
                 url: targetTab.url,
                 title: targetTab.title,
                 warning:
-                  "ATTACHED TO USER TAB: Chrome displays a yellow debugging banner ('browserclaw is debugging this browser'). Any navigation, DOM interaction, or closing of this tab directly affects the user's session.",
+                  "ATTACHED TO USER TAB: Chrome displays a yellow debugging banner ('browserpaw is debugging this browser'). Any navigation, DOM interaction, or closing of this tab directly affects the user's session.",
               },
               null,
               2,

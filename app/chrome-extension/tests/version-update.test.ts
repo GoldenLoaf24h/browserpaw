@@ -119,7 +119,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
       headers: new Headers({ etag: '"etag-12345"' }),
       json: async () => ({
         tag_name: 'v2.10.0',
-        html_url: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0',
+        html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0',
       }),
     });
 
@@ -133,7 +133,9 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.hasUpdate).toBe(true);
     expect(result.latestVersion).toBe('v2.10.0');
-    expect(result.releaseUrl).toBe('https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0');
+    expect(result.releaseUrl).toBe(
+      'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0',
+    );
     expect(result.isFromCache).toBe(false);
     expect(result.etag).toBe('"etag-12345"');
 
@@ -149,7 +151,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
     const now = Date.now();
     storage.set({
       latestVersion: 'v2.10.0',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0',
       etag: '"etag-123"',
       lastChecked: now - 1000,
       expiresAt: now + 500_000, // Still valid
@@ -177,7 +179,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
     const now = Date.now();
     storage.set({
       latestVersion: 'v2.9.4',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.9.4',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.4',
       etag: '"etag-abc"',
       lastChecked: now - 4000_000,
       expiresAt: now - 1000, // Expired
@@ -246,7 +248,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
     const maxWindow = 24 * 3600_000;
     storage.set({
       latestVersion: '2.9.3',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.9.3',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.3',
       etag: '"etag-old"',
       lastChecked: now - (maxWindow + 1000), // Exceeded max sliding window!
       expiresAt: now + 500_000, // Still within sliding TTL
@@ -257,7 +259,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
       headers: new Headers({ etag: '"etag-new"' }),
       json: async () => ({
         tag_name: 'v2.10.0',
-        html_url: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.10.0',
+        html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.10.0',
       }),
     });
 
@@ -282,7 +284,7 @@ describe('Version & Update Checker - Sliding TTL & ETag Caching', () => {
       headers: new Headers(),
       json: async () => ({
         tag_name: 'v2.9.3',
-        html_url: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.9.3',
+        html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.3',
       }),
     });
 
@@ -336,7 +338,7 @@ describe('Chrome Extension Storage Adapter & Popup Integration', () => {
   it('stores and retrieves cache via chrome.storage.local', async () => {
     const entry: VersionCacheEntry = {
       latestVersion: '2.9.4',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/latest',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/latest',
       etag: '"test-tag"',
       lastChecked: 1000,
       expiresAt: 2000,
@@ -351,7 +353,7 @@ describe('Chrome Extension Storage Adapter & Popup Integration', () => {
     const now = Date.now();
     await chromeVersionStorage.set({
       latestVersion: '2.9.4',
-      releaseUrl: 'https://github.com/GoldenLoaf24h/browserclaw/releases/tag/v2.9.4',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.4',
       lastChecked: now,
       expiresAt: now + 3600_000,
     });

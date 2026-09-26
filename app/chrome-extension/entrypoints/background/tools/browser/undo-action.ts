@@ -78,6 +78,7 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
               if (typeof targetIdx === 'number') {
                 const isolatedMap =
                   (window as any)[Symbol.for('__browser_use_isolated_index_map__')] ||
+                  (window as any)[Symbol.for('BROWSERPAW_ISOLATED_INDEX_MAP')] ||
                   (window as any)[Symbol.for('BROWSERCLAW_ISOLATED_INDEX_MAP')] ||
                   (window as any).__MCP_INDEX_MAP__;
                 const raw = isolatedMap?.get(targetIdx);

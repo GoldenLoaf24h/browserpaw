@@ -1,32 +1,32 @@
 <div align="center">
-  <img src="./docs/images/logo.png" width="100" alt="BrowserClaw Logo" />
-  <h1>BrowserClaw</h1>
+  <img src="./docs/images/logo.png" width="100" alt="BrowserPaw Logo" />
+  <h1>BrowserPaw</h1>
   <p><b>控制你自己的浏览器的一切。</b></p>
   <p>
     <a href="./docs/MAP.md">🗺️ 项目地图</a> ·
     <a href="./docs/TOOLS.md">工具参考 (50)</a> ·
-    <a href="./AGENT_CONFIG_GUIDE.md">客户端配置</a> ·
+    <a href="./AGENT_CONFIG_GUIDE.zh-CN.md">客户端配置</a> ·
     <a href="./README.md">📖 English</a> ·
-    <a href="https://github.com/GoldenLoaf24h/browserclaw/releases">Releases</a>
+    <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">Releases</a>
   </p>
 </div>
 
 ---
 
 <details>
-<summary><b>💡 项目背景：为什么需要 BrowserClaw？（点击展开）</b></summary>
+<summary><b>💡 项目背景：为什么需要 BrowserPaw？（点击展开）</b></summary>
 
 <br/>
 
 传统的浏览器自动化方案（Playwright、Puppeteer、browser-use）运行在孤立的无头沙盒中，完全丢失了你日常积累的登录凭证、Cookie 与扩展插件。在 Windows 平台下，试图复制用户数据目录会直接因文件排他共享锁崩溃抛出 `[WinError 32]`；而原生开启调试端口（`--remote-debugging-port`）则会遭遇 Chromium 强制弹窗警告，彻底破坏自动化的无人值守特性。
 
-**BrowserClaw** 从浏览器内部彻底破局：基于 MV3 Chrome 扩展与本地原生通信网桥，常驻于你的主力日常浏览器中 —— 零登录态丢失、零文件锁冲突、零抢占前台焦点，为 AI Agent 打造极速、安全、可信的原生操控环境。
+**BrowserPaw** 从浏览器内部彻底破局：基于 MV3 Chrome 扩展与本地原生通信网桥，常驻于你的主力日常浏览器中 —— 零登录态丢失、零文件锁冲突、零抢占前台焦点，为 AI Agent 打造极速、安全、可信的原生操控环境。
 
 </details>
 
 ---
 
-## ⚡ 什么是 BrowserClaw？
+## ⚡ 什么是 BrowserPaw？
 
 - 🧠 **分层双脑协同架构 (`chrome_act_toward_goal`)**：本地语义微循环以 200~400ms/步极速自主完成“感知 → 决策 → 交互”，**零中间 MCP 网络往返**。内置 TypeSafe Jev System One 并支持平滑降级至启发式规则打分与结构化交接。
 - 🔑 **日常会话与登录态无缝复用**：直接运行在日常 Chrome 浏览器中，完整继承 Google、GitHub、企业 SSO 登录凭证，杜绝文件锁冲突与登录丢失。
@@ -90,46 +90,36 @@
 
 直接复制以下一句话发送给你的 AI 编程助手（Claude Code、Cursor、Windsurf、Codex）：
 
-> _“帮我配置 BrowserClaw：https://github.com/GoldenLoaf24h/browserclaw ，阅读仓库中的 `INSTALL.md` 并按步骤自动安装。”_
+> _“帮我配置 BrowserPaw：https://github.com/GoldenLoaf24h/browserpaw ，阅读仓库中的 `INSTALL.md` 并按步骤自动安装。”_
 
-AI 将自动完成本仓库的编译与本地服务的注册。随后你只需打开 `chrome://extensions` 开启“开发者模式”，点击“加载已解压的扩展程序”，选择本仓库已生成的 `app/chrome-extension/.output/chrome-mv3` 目录即可。
+AI 将自动完成本仓库的编译与本地原生消息宿主的注册。随后你只需打开 `chrome://extensions` 开启“开发者模式”，点击“加载已解压的扩展程序”，选择本仓库已生成的 `app/chrome-extension/.output/chrome-mv3` 目录即可。
 
-### 方案二：通过 ChatGPT / Codex 插件市场添加
+### 方案二：免编译预构建包安装 (无需本地编译)
 
-在 ChatGPT 或 Codex 的插件中心，点击右上角的 **`+`**（添加市场），填入本仓库地址：
+1. 从 [Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest) 下载最新的 `browserpaw-extension-v*.zip` 与 `browserpaw-skill-v*.zip`。
+2. 将扩展解压到本地持久目录，打开 `chrome://extensions` 开启开发者模式，点击**加载已解压的扩展程序**。
+3. 一次性注册原生消息宿主：在服务端目录运行 `node dist/scripts/register-dev.js`。
+4. 将完整的 `skill/` 目录（含 `references/` 文件夹）复制到 Agent 的 skills 目录（如 Codex: `~/.codex/skills/browserpaw/`）。
 
-```text
-https://github.com/GoldenLoaf24h/browserclaw
-```
-
-添加成功后，点击安装 **BrowserClaw** 插件即可一键启用。_(注：插件模式需确保本地后台服务在线；对于 Codex Desktop 用户，若希望免手动开后台终端、实现随会话自动启停，强烈推荐在 `~/.codex/config.toml` 中配置 Stdio 模式，详见 [INSTALL.md](./INSTALL.md)。)_
-
-### 方案三：通过 Hermes Agent 安装
-
-在终端直接安装到你的 Hermes 环境：
+### 方案三：本地从源码编译安装
 
 ```bash
-hermes plugins install GoldenLoaf24h/browserclaw#plugins/browserclaw
-hermes plugins enable browserclaw
-```
-
-### 方案四：本地手动安装
-
-```bash
-git clone https://github.com/GoldenLoaf24h/browserclaw.git
-cd browserclaw && pnpm install && pnpm build
+git clone https://github.com/GoldenLoaf24h/browserpaw.git
+cd browserpaw && pnpm install && pnpm build
 cd app/native-server && node dist/scripts/register-dev.js
 ```
 
-随后在 `chrome://extensions` 中点击“加载已解压的扩展程序”，选择 `app/chrome-extension/.output/chrome-mv3` 目录即可。
+随后在 `chrome://extensions` 中加载 `app/chrome-extension/.output/chrome-mv3`。
 
 ### 一键验证安装状态
 
-在终端运行全链路内置体检脚本，显示 7 项全部 [PASS] 即代表全栈就绪：
+在终端运行全链路内置体检脚本，验证所有组件是否正常运作：
 
 ```bash
 node skill/config/doctor.mjs
 ```
+
+完整接入指引（Codex Stdio、Cursor、Claude Desktop、Hermes 插件、Jev API Key 配置等）请参阅 **[INSTALL.md](./INSTALL.md)**。
 
 ---
 
@@ -163,7 +153,7 @@ node skill/config/doctor.mjs
 </details>
 
 <details>
-<summary><b>📄 2. 内容感知、检索与数据提取 (6 个工具)</b></summary>
+<summary><b>📄 2. 内容感知、检索与数据提取 (7 个工具)</b></summary>
 
 <br/>
 
@@ -173,56 +163,46 @@ node skill/config/doctor.mjs
 - **`chrome_get_markdown`**：提取页面排版优美、纯净结构化的 Markdown 文本（支持 `includeLinks: true` 提取链接图谱），阅读长文与资料总结首选。
 - **`chrome_inspect_media`**：内存无损提取 `<img>` 与 `<canvas>` 原始图像 Data URL，支持 200%+ 超采样局部特写裁切。
 - **`chrome_get_dropdown_options`**：直接读取原生或自定义 `<select>` 下拉选择器的全部可用候选项。
+- **`chrome_console`**：捕获、实时监听并过滤页面中的 JavaScript Console 日志与未捕获异常。
 
 </details>
 
 <details>
-<summary><b>🖱️ 3. 页面交互、输入与流水线 (14 个工具)</b></summary>
+<summary><b>🖱️ 3. 页面交互、输入与流水线 (15 个工具)</b></summary>
 
 <br/>
 
 - **`chrome_interact_index`**：核心物理级点击/悬停/双击/连击序列（`points` 数组），原生支持 `includeDelta: true` 自动回传局部变动，并具备视觉回退动态滚动补偿（`alignVisualCoordinate`）。
 - **`chrome_fill_index`**：纯原生物理输入，支持清空重填、Enter 提交与 `includeDelta: true` 变动核验。
-- **`chrome_insert_media`**：针对现代 Web 富文本与聊天编辑器（如 ChatGPT、Claude、Twitter/X、Discord）的直接零拷贝媒体拖放注入，绕过原生文件选择框。
 - **`chrome_batch_actions`**：闭环批处理流水线，单次网络调用按序执行点击、填充、等待，内置 `assert` 断言与 `extract` 提取。
 - **`chrome_form_pipeline`**：确定性复杂表单/向导流水线，零模型调用，标准复杂表单填表最稳最快。
 - **`chrome_smart_scroll`**：智能自适应滚屏，具备视口溢出检测、像素精确滚动与剩余滚动页数（`pages_down`）感知反馈。
 - **`chrome_keyboard`**：派发单键（Enter/Tab/Esc）、组合快捷键（Ctrl+C/V）或指定元素文本聚焦输入。
 - **`chrome_upload_file`**：动态拦截本地文件选择对话框，或直接向 `<input type="file">` 注入绝对路径。
+- **`chrome_insert_media`**：针对现代 Web 富文本与聊天编辑器（如 ChatGPT、Claude、Twitter/X、Discord）的直接零拷贝媒体拖放注入，绕过原生文件选择框。
 - **`chrome_handle_dialog`**：响应或预设针对 JavaScript 原生弹窗（Alert / Confirm / Prompt）的自动处理策略。
 - **`chrome_handle_download`**：追踪、监听并管理浏览器底层正在进行的原生文件下载。
 - **`chrome_computer`**：兼容 Anthropic Computer Use 协议的统一光标与键盘物理控制接口。（_遗留兼容通道，新自主闭环优先推荐 `chrome_act_toward_goal`_）。
 - **`chrome_request_human_intervention`**：页面毛玻璃暗化并挂起，让渡控制权供人类完成滑块/2FA，完成后一键无缝恢复。
 - **`chrome_undo_last_action`**：5 步环形栈撤销引擎，单步回滚最近一次页面跳转或表单输入。
-
-</details>
-
-<details>
-<summary><b>👁️ 4. 视觉感知、控制台与底层执行 (3 个工具)</b></summary>
-
-<br/>
-
-- **`chrome_screenshot`**：捕获视口或整页截图，可选叠加高对比度半透明像素标尺网格（Visual Fallback 必备）。
-- **`chrome_console`**：捕获、实时监听并过滤页面中的 JavaScript Console 日志与未捕获异常。
-- **`chrome_cdp_execute`**：工业级底层 CDP 逃生通道，支持 Target 多态路由与超时防死锁自动脱离。
-
-</details>
-
-<details>
-<summary><b>📡 5. 网络拦截与存储管理 (5 个工具)</b></summary>
-
-<br/>
-
-- **`chrome_intercept_api`**：静默嗅探并解码匹配 URL 模式的后端接口返回，直接提取结构化 JSON 数据。
-- **`chrome_network_capture`**：开启或停止全链路网络请求录制（涵盖状态码、响应头与传输载荷）。
-- **`chrome_network_request`**：通过当前浏览器会话代理发送原生 HTTP 请求，继承当前站点的 Cookie 与会话头。
-- **`chrome_storage`**：读取、写入或清理当前站点的 `localStorage`、`sessionStorage` 与 Cookie 数据。
+- **`chrome_dismiss_overlay`**：一键精准清理各类营销弹窗、浮层、广告模态框与 Cookie 授权条。
 - **`chrome_javascript`**：在页面隔离环境中执行任意自定义 JavaScript 脚本（支持单行表达式自动 return）。
 
 </details>
 
 <details>
-<summary><b>🗂️ 6. 标签分组、书签、历史与系统诊断 (14 个工具)</b></summary>
+<summary><b>👁️ 4. 视觉感知与底层诊断 (3 个工具)</b></summary>
+
+<br/>
+
+- **`chrome_screenshot`**：捕获视口或整页截图，可选叠加高对比度半透明像素标尺网格（Visual Fallback 必备）。
+- **`chrome_cdp_execute`**：工业级底层 CDP 逃生通道，支持 Target 多态路由与超时防死锁自动脱离。
+- **`chrome_tool_docs`**：动态查询工具文档，支持在会话级按需解锁全量工具分类（`activateForSession: true`）。
+
+</details>
+
+<details>
+<summary><b>🗂️ 5. 浏览器管理与存储 (10 个工具)</b></summary>
 
 <br/>
 
@@ -233,8 +213,27 @@ node skill/config/doctor.mjs
 - **`chrome_tab_group_close`**：一键关闭组内所有标签并彻底销毁空分组（零孤儿残留）。
 - **`chrome_history`**：按关键词或自定义时间跨度检索浏览器历史访问记录。
 - **`chrome_bookmark_search`** / **`chrome_bookmark_add`** / **`chrome_bookmark_delete`**：检索、新增或删除 Chrome 收藏夹书签。
+- **`chrome_storage`**：读取、写入或清理当前站点的 `localStorage`、`sessionStorage` 与 Cookie 数据。
+
+</details>
+
+<details>
+<summary><b>📡 6. 网络拦截与请求 (3 个工具)</b></summary>
+
+<br/>
+
+- **`chrome_intercept_api`**：静默嗅探并解码匹配 URL 模式的后端接口返回，直接提取结构化 JSON 数据。
+- **`chrome_network_capture`**：开启或停止全链路网络请求录制（涵盖状态码、响应头与传输载荷）。
+- **`chrome_network_request`**：通过当前浏览器会话代理发送原生 HTTP 请求，继承当前站点的 Cookie 与会话头。
+
+</details>
+
+<details>
+<summary><b>🩺 7. 性能分析与健康检查 (4 个工具)</b></summary>
+
+<br/>
+
 - **`performance_start_trace`** / **`performance_stop_trace`** / **`performance_analyze_insight`**：录制并深入分析 Chromium 底层性能 Trace 指标。
-- **`chrome_tool_docs`**：动态查询工具文档，支持在会话级按需解锁全量工具分类（`activateForSession: true`）。
 - **`chrome_doctor`**：诊断运行环境健康状况、检查端口 12306、Native Messaging Host 与插件通信链路。
 
 </details>
@@ -266,7 +265,7 @@ Chrome MV3 扩展 (Service Worker + WXT + Vue 3)
 
 - **[项目地图导览](./docs/MAP.md)**：🗺️ 快速按角色导航、全工程 Monorepo 代码拓扑树与文档矩阵。
 - **[全量工具字典](./docs/TOOLS.md)**：自动化生成的 50 个工具完整参数输入输出参考手册。
-- **[Agent 交互实操心法](./AGENT_CONFIG_GUIDE.md)**：面向大模型的六大高能交互准则与主流客户端配置样例。
+- **[Agent 交互实操心法](./AGENT_CONFIG_GUIDE.zh-CN.md)**：面向大模型的六大高能交互准则与主流客户端配置样例。
 - **[深度系统架构](./docs/ARCHITECTURE.md)**：多进程拓扑、IPC 安全边界与设计决策记录 (ADR)。
 - **[故障排查指南](./docs/TROUBLESHOOTING.zh-CN.md)**：常见报错代码与连接异常秒级诊断排查。
 
@@ -274,7 +273,7 @@ Chrome MV3 扩展 (Service Worker + WXT + Vue 3)
 
 ## 💡 站在巨人的肩膀上（参考开源项目）
 
-BrowserClaw 在设计与实现中汲取了开源社区的卓越智慧：
+BrowserPaw 在设计与实现中汲取了开源社区的卓越智慧：
 
 - **[hangwin/mcp-chrome](https://github.com/hangwin/mcp-chrome)**：奠定坚实的 MV3 扩展 + Native Messaging 双向 IPC 底座。
 - **[browser-use/browser-use](https://github.com/browser-use/browser-use)**：启发极致省 Token 的 1-based DOM 索引理念。
@@ -290,4 +289,4 @@ BrowserClaw 在设计与实现中汲取了开源社区的卓越智慧：
 
 ---
 
-_说明与消歧义：BrowserClaw MCP 是一个面向 AI Agent 自动化操控日常真实浏览器的独立 Chrome 扩展与 Model Context Protocol 生态，与 npm 上的同名 Playwright 库互不关联。_
+_说明与消歧义：BrowserPaw MCP 是一个面向 AI Agent 自动化操控日常真实浏览器的独立 Chrome 扩展与 Model Context Protocol 生态，与 npm 上的同名 Playwright 库互不关联。_

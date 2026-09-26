@@ -8,7 +8,7 @@ export default defineContentScript({
 });
 
 // ============================================================================
-// BrowserClaw Virtual Mouse (Agent Cursor) - 1:1 ChatGPT Physics Replica
+// BrowserPaw Virtual Mouse (Agent Cursor) - 1:1 ChatGPT Physics Replica
 // ============================================================================
 
 interface Point {
@@ -288,6 +288,7 @@ function initAgentCursor() {
 
   const host = document.createElement('div');
   host.id = OVERLAY_ROOT_ID;
+  host.dataset.browserpawAgentOverlayRoot = 'true';
   host.dataset.browserclawAgentOverlayRoot = 'true';
   document.documentElement.appendChild(host);
 

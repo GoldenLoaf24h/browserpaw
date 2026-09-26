@@ -1016,9 +1016,9 @@ export function findIndexedElement(index: number | string): Element | null {
     }
   }
 
-  // Fast Snapshot lookup (__clawFast)
+  // Fast Snapshot lookup (__pawFast / __clawFast)
   const g = globalThis as any;
-  const clawFast = g.__clawFast;
+  const clawFast = g.__pawFast || g.__clawFast;
   if (clawFast) {
     const el =
       clawFast.actionElements?.get(index) ||
@@ -3386,9 +3386,10 @@ export function inPageDOMPruner(options?: {
     const assignedIndex = nextIndex++;
     isolatedMap.set(assignedIndex, wrapElement(cand.node));
     const gFast = globalThis as any;
-    if (gFast.__clawFast) {
-      gFast.__clawFast.nodes.set(assignedIndex, cand.node);
-      gFast.__clawFast.ids.set(cand.node, assignedIndex);
+    const pawFast = gFast.__pawFast || gFast.__clawFast;
+    if (pawFast) {
+      pawFast.nodes.set(assignedIndex, cand.node);
+      pawFast.ids.set(cand.node, assignedIndex);
     }
 
     // Detect visual geometric shape if styled or transformed (diamond, circle, hex, triangle, square)
@@ -7753,8 +7754,9 @@ export function inPageFindSmartScrollTarget(options?: {
         selector = `#${safeId}`;
       } else {
         try {
+          targetEl.setAttribute('data-browserpaw-scroll-target', 'true');
           targetEl.setAttribute('data-browserclaw-scroll-target', 'true');
-          selector = `${targetEl.tagName.toLowerCase()}[data-browserclaw-scroll-target="true"]`;
+          selector = `${targetEl.tagName.toLowerCase()}[data-browserpaw-scroll-target="true"]`;
         } catch {
           selector = targetEl.tagName.toLowerCase();
         }

@@ -1,6 +1,6 @@
-# BrowserClaw Chrome Extension (MV3) 🧩
+# BrowserPaw Chrome Extension (MV3) 🧩
 
-This package contains the Google Chrome Manifest V3 extension for **BrowserClaw** (`chrome-mcp-server`), built with [WXT](https://wxt.dev/) and Vue 3. It runs directly inside the user's everyday Chrome browser, executing automation commands via the Chrome DevTools Protocol (CDP) and isolated-world content scripts.
+This package contains the Google Chrome Manifest V3 extension for **BrowserPaw** (`chrome-mcp-server`), built with [WXT](https://wxt.dev/) and Vue 3. It runs directly inside the user's everyday Chrome browser, executing automation commands via the Chrome DevTools Protocol (CDP) and isolated-world content scripts.
 
 ---
 
@@ -12,7 +12,7 @@ app/chrome-extension/
 │   ├── background/             # MV3 Service Worker & 48 Tool Executors
 │   │   ├── native-host.ts      # Native Messaging pipe listener & sender authentication guard
 │   │   ├── index.ts            # Extension initialization, keepalive, and error reporting
-│   │   └── tools/browser/      # Executors for all 48 BrowserClaw extension tools (49 total with Native loop)
+│   │   └── tools/browser/      # Executors for all 48 BrowserPaw extension tools (49 total with Native loop)
 │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay with spring physics
 │   ├── inpage-engine.ts        # Isolated-world DOM indexing, 1-based indexing, WeakRef mapping
 │   └── popup/                  # Extension popup UI (agent toggle and connection monitor)

@@ -1,0 +1,50 @@
+manifest_version: 1
+name: browserpaw
+version: '3.1.0'
+description: 'BrowserPaw — High-speed, dual-brain Chrome browser automation with 1-based DOM indexing, visual fallbacks, Jev System 1 micro-loop, and local MCP bridge.'
+author: GoldenLoaf24h
+license: AGPL-3.0
+homepage: https://github.com/GoldenLoaf24h/browserpaw
+provides_tools:
+  - browserpaw_act_toward_goal
+  - browserpaw_navigate
+  - browserpaw_read_dom
+  - browserpaw_interact_index
+  - browserpaw_fill_index
+  - browserpaw_batch_actions
+  - browserpaw_screenshot
+  - browserpaw_smart_scroll
+  - browserpaw_scroll_until_found
+  - browserpaw_inspect_media
+  - browserpaw_grep
+  - browserpaw_get_markdown
+  - browserpaw_switch_tab
+  - browserpaw_close_tabs
+  - browserpaw_get_windows_and_tabs
+  - browserpaw_tool_docs
+provides_hooks: []
+provides_middleware: []
+requires_env: []
+
+config_schema:
+  native_server_port:
+    type: number
+    default: 12306
+    description: 'Port where the BrowserPaw Native Server is listening (default: 12306)'
+  auth_token:
+    type: secret
+    env: BROWSERPAW_MCP_TOKEN
+    description: 'Authentication token for connecting to BrowserPaw native server'
+  isolate_modal:
+    type: boolean
+    default: false
+    description: 'When true, automatically isolates active modal dialogs in browserpaw_read_dom'
+  typesafe_api_key:
+    type: secret
+    env: TYPESAFE_API_KEY
+    description: 'API key for TypeSafe Jev System 1 autonomous micro-loop (enables 200-400ms ultra-fast local actions)'
+  disable_jev_without_key:
+    type: boolean
+    default: false
+    env: BROWSERPAW_DISABLE_JEV_WITHOUT_KEY
+    description: 'When true, automatically hides chrome_act_toward_goal if no Jev API key is configured'

@@ -1,5 +1,5 @@
 /**
- * BrowserClaw Tab Favicon State Manager
+ * BrowserPaw Tab Favicon State Manager
  *
  * Implements 1:1 parity with OpenAI/ChatGPT extension tab state signaling:
  * - When an Agent starts automating a tab, replace its Favicon with a glowing blue dot.
@@ -150,11 +150,19 @@ export class TabFaviconManager {
               ),
             );
             for (const link of links) {
-              if (link.getAttribute('data-browserclaw-injected') === 'true') {
+              if (
+                link.getAttribute('data-browserpaw-injected') === 'true' ||
+                link.getAttribute('data-browserclaw-injected') === 'true'
+              ) {
                 link.remove();
                 continue;
               }
-              if (!link.dataset.browserclawOriginalFavicon) {
+              if (
+                !link.dataset.browserpawOriginalFavicon &&
+                !link.dataset.browserclawOriginalFavicon
+              ) {
+                link.dataset.browserpawOriginalFavicon = link.href;
+                link.dataset.browserpawOriginalRel = link.rel;
                 link.dataset.browserclawOriginalFavicon = link.href;
                 link.dataset.browserclawOriginalRel = link.rel;
               }
@@ -163,6 +171,7 @@ export class TabFaviconManager {
             const link = document.createElement('link');
             link.rel = 'icon';
             link.type = 'image/svg+xml';
+            link.setAttribute('data-browserpaw-injected', 'true');
             link.setAttribute('data-browserclaw-injected', 'true');
             link.href = dataUrl;
             if (head.firstChild) {
@@ -205,7 +214,9 @@ export class TabFaviconManager {
         target: { tabId },
         func: (originalHref: string | null) => {
           try {
-            const injected = document.querySelectorAll('link[data-browserclaw-injected="true"]');
+            const injected = document.querySelectorAll(
+              'link[data-browserpaw-injected="true"], link[data-browserclaw-injected="true"]',
+            );
             injected.forEach((el) => el.remove());
             const links = Array.from(
               document.querySelectorAll<HTMLLinkElement>(
@@ -213,12 +224,18 @@ export class TabFaviconManager {
               ),
             );
             for (const link of links) {
-              if (link.dataset.browserclawOriginalRel) {
-                link.rel = link.dataset.browserclawOriginalRel;
+              const origRel =
+                link.dataset.browserpawOriginalRel || link.dataset.browserclawOriginalRel;
+              if (origRel) {
+                link.rel = origRel;
+                delete link.dataset.browserpawOriginalRel;
                 delete link.dataset.browserclawOriginalRel;
               }
-              if (link.dataset.browserclawOriginalFavicon) {
-                link.href = link.dataset.browserclawOriginalFavicon;
+              const origFav =
+                link.dataset.browserpawOriginalFavicon || link.dataset.browserclawOriginalFavicon;
+              if (origFav) {
+                link.href = origFav;
+                delete link.dataset.browserpawOriginalFavicon;
                 delete link.dataset.browserclawOriginalFavicon;
               } else if (originalHref) {
                 link.href = originalHref;

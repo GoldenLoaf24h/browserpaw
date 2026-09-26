@@ -1,4 +1,4 @@
-# BrowserClaw README 事实与性能基准核查报告
+# BrowserPaw README 事实与性能基准核查报告
 
 > 审计依据：代码实现、单元与 E2E 测试、共享契约及基准文件（严禁无依据推断与宣传粉饰）。
 
@@ -22,7 +22,7 @@
     - `crawl`：**12 个工具**（面向页面抓取、正文提取、滚动与网络请求）。
     - `full`：**49 个工具**（全量暴露）。
 - **README 客观表述建议**：
-  > "BrowserClaw exposes 49 tools partitioned into 7 categories, with a minimal 14-tool Core profile for common agent sessions."
+  > "BrowserPaw exposes 49 tools partitioned into 7 categories, with a minimal 14-tool Core profile for common agent sessions."
 - **改动要求**：修正 README 中遗留的“45”、“47”或“48”说法，统一为 **49 个工具（Core: 14 / Crawl: 12 / Full: 49）**。
 
 ---
@@ -112,7 +112,7 @@
      - **代码**：`dom-indexer.ts:inPageSnapCoordinate`。
      - **实证**：在目标边缘 24px 范围内自动吸附到中心点；针对 fullpage 截图在文档坐标系下准确缩放。测试覆盖在 `deep-shadow-and-visual-drift.test.ts:450`。
 - **README 客观表述建议**：
-  > "BrowserClaw recursively penetrates open Shadow DOM, tags closed shadow hosts, extracts accessible names from icon-only buttons, and snaps coordinates within 24px."
+  > "BrowserPaw recursively penetrates open Shadow DOM, tags closed shadow hosts, extracts accessible names from icon-only buttons, and snaps coordinates within 24px."
 
 ---
 
@@ -136,6 +136,6 @@
 - **作者 (Author)**：
   - `package.json` 明确标注为 **`hangye`**。
 - **免责声明 (Disambiguation)**：
-  - 与 npm 上已有的同名/相似 Playwright 封装库 `browserclaw` **无任何隶属关联**，README 必须保留此项说明。
+  - 与 npm 上已有的同名/相似 Playwright 封装库 `browserpaw` **无任何隶属关联**，README 必须保留此项说明。
 - **README 客观表述建议**：
-  > "Licensed under AGPL-3.0. Authored by hangye. Not affiliated with the standalone browserclaw package on npm."
+  > "Licensed under AGPL-3.0. Authored by hangye. Not affiliated with the standalone browserpaw package on npm."

@@ -115,7 +115,7 @@ describe('Heuristic Decision Engine Tests (§4.3)', () => {
   describe('3. Goal done approximation', () => {
     test('requires a navigation/mutation signal plus keyword coverage', () => {
       const elements = [
-        '[1] text "欢迎使用 BrowserClaw 自动化系统"',
+        '[1] text "欢迎使用 BrowserPaw 自动化系统"',
         '[2] text "操作成功，已保存数据"',
       ];
       // Static keyword coverage alone must NOT declare success (false positive).

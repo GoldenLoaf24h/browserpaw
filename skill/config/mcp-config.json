@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/mcp-config.json",
-  "description": "BrowserClaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserClaw over HTTP (recommended) or stdio.",
+  "description": "BrowserPaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserPaw over HTTP (recommended) or stdio.",
   "configurations": {
     "desktop_client_a": {
       "filePath": {
@@ -10,7 +10,7 @@
       },
       "config_http": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "url": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
@@ -20,11 +20,9 @@
       },
       "config_stdio": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "command": "node",
-            "args": [
-              "<PATH_TO_BROWSERCLAW>/app/native-server/dist/mcp/mcp-server-stdio.js"
-            ],
+            "args": ["<PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"],
             "env": {
               "CHROME_MCP_HOST": "127.0.0.1",
               "_comment_profile": "CHROME_MCP_TOOL_PROFILE: core (14 tools) | crawl (12 tools) | full (49 tools). Omit for full.",
@@ -38,7 +36,7 @@
       "filePath": "<project>/.<client>/mcp.json or ~/.<client>/mcp.json",
       "config": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "url": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
@@ -51,7 +49,7 @@
       "filePath": "~/.<client>/mcp_config.json",
       "config": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "serverUrl": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
@@ -64,7 +62,7 @@
       "filePath": "%APPDATA%\\<EDITOR>\\User\\globalStorage\\<vendor.extension>\\settings\\<mcp-settings>.json",
       "config": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "url": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
@@ -88,7 +86,7 @@
       "filePath": "~/.<cli-agent>/mcp_config.json",
       "config": {
         "mcpServers": {
-          "browserclaw": {
+          "browserpaw": {
             "url": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"

@@ -1,6 +1,6 @@
-# 🗺️ BrowserClaw Project Map & Documentation Index
+# 🗺️ BrowserPaw Project Map & Documentation Index
 
-Welcome to the **BrowserClaw** Project Map. Whether you are an end-user, an AI agent developer, a prompt engineer, or a core contributor, this document serves as your single source of truth for navigating the architecture, code topology, tools, and documentation.
+Welcome to the **BrowserPaw** Project Map. Whether you are an end-user, an AI agent developer, a prompt engineer, or a core contributor, this document serves as your single source of truth for navigating the architecture, code topology, tools, and documentation.
 
 ---
 
@@ -22,11 +22,11 @@ Welcome to the **BrowserClaw** Project Map. Whether you are an end-user, an AI a
 
 - **I just want my AI to drive my browser**:
   1. Read the **[Quick Start in README.md](../README.md#quick-start-let-ai-do-the-work)** or the **[Chinese Quick Start](../README.zh-CN.md)**.
-  2. Download the prebuilt clean extension from **[Releases](https://github.com/GoldenLoaf24h/browserclaw/releases)** and load it in `chrome://extensions`.
+  2. Download the prebuilt clean extension from **[Releases](https://github.com/GoldenLoaf24h/browserpaw/releases)** and load it in `chrome://extensions`.
   3. Copy your client JSON from **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** into Cursor, Claude, or Codex.
-- **I am an AI Agent / Prompt Engineer integrating BrowserClaw**:
+- **I am an AI Agent / Prompt Engineer integrating BrowserPaw**:
   1. Study **[skill/SKILL.md](../skill/SKILL.md)**: Encodes dual-engine workflows (DOM-First vs Visual Fallback), the Escalation Ladder, and recovery patterns.
-  2. Consult **[docs/TOOLS.md](./TOOLS.md)**: Auto-generated parameter references for all 49 canonical tools across Core (14), Crawl (12), and Full (49) profiles.
+  2. Consult **[docs/TOOLS.md](./TOOLS.md)**: Auto-generated parameter references for all 50 canonical tools across Core (14), Crawl (12), and Full (50) profiles.
   3. Follow the 6 interaction rules in **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** (especially `includeDelta: true` and `chrome_grep`).
 - **I want to contribute or audit the architecture**:
   1. Inspect **[docs/ARCHITECTURE.md](./ARCHITECTURE.md)**: Complete system topology, IPC buffer guards, and sequence diagrams.
@@ -42,8 +42,8 @@ mcp-chrome-master/
 ├── packages/
 │   └── shared/                  # 🌟 Single Source of Truth
 │       └── src/
-│           ├── tools.ts         # All 49 canonical tool schemas, tool names
-│           ├── tool-profiles.ts # Profile definitions (Core 14, Crawl 12, Full 49)
+│           ├── tools.ts         # All 50 canonical tool schemas, tool names
+│           ├── tool-profiles.ts # Profile definitions (Core 14, Crawl 12, Full 50)
 │           ├── types.ts         # Universal coordinate, batch item & diff result types
 │           └── error-format.ts  # Standardized error reporting with stack control
 │
@@ -78,7 +78,7 @@ mcp-chrome-master/
 | **[README.md](../README.md)**                                                                     |      English      |    All Users / Community    | Project homepage, architectural benefits, quick start, and feature overview         | Maintained manually                            |
 | **[README.zh-CN.md](../README.zh-CN.md)**                                                         |      Chinese      |     Chinese Developers      | Complete Chinese homepage, Windows file lock resolutions & quickstart guide         | Kept in sync with README.md                    |
 | **[docs/MAP.md](./MAP.md)**                                                                       |      English      |    All Users / AI Agents    | **Master Navigation Hub**: repository topology, reading paths, and capability radar | This document                                  |
-| **[docs/TOOLS.md](./TOOLS.md)**                                                                   |      English      |     Agents / Developers     | Parameter dictionary for all 49 canonical tools across profiles                     | Auto-generated via `scripts/gen-tools-doc.mjs` |
+| **[docs/TOOLS.md](./TOOLS.md)**                                                                   |      English      |     Agents / Developers     | Parameter dictionary for all 50 canonical tools across profiles                     | Auto-generated via `scripts/gen-tools-doc.mjs` |
 | **[docs/ARCHITECTURE.md](./ARCHITECTURE.md)**                                                     |      English      |    Architects / Auditors    | 3-tier architecture topology, Native Messaging protocols, and ADR records           | Updated on architecture changes                |
 | **[docs/TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** ([Chinese](./TROUBLESHOOTING.zh-CN.md))       | English / Chinese | Operators / Troubleshooters | Diagnostic checklist for connection errors, tokens, CDP detachment, etc.            | Updated on issue discovery                     |
 | **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** ([Chinese](../AGENT_CONFIG_GUIDE.zh-CN.md)) | English / Chinese |     Agents / Developers     | Client configurations (Claude, Cursor, Windsurf) and 6 interaction rules            | Updated on client updates                      |
@@ -88,13 +88,13 @@ mcp-chrome-master/
 
 ---
 
-## 🛠️ 4. 49 Canonical Tools Capability Radar
+## 🛠️ 4. 50 Canonical Tools Capability Radar
 
-BrowserClaw supports **Dynamic Profile Layering**, balancing prompt token consumption for smaller models while providing full low-level control for advanced agents:
+BrowserPaw supports **Dynamic Profile Layering**, balancing prompt token consumption for smaller models while providing full low-level control for advanced agents:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                              49 MCP TOOLS                              │
+│                              50 MCP TOOLS                              │
 ├────────────────────────────────────────────────────────────────────────┤
 │ 🟢 CORE (14 Tools) - High-Frequency Semantic & Visual Interaction     │
 │   • Navigate (4): navigate, switch_tab, close_tabs, get_windows_and_tabs
@@ -108,7 +108,7 @@ BrowserClaw supports **Dynamic Profile Layering**, balancing prompt token consum
 │   • Navigation & Storage: navigate, smart_scroll, storage...           │
 │   • Network & Low-level: cdp_execute, network_request, screenshot...   │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🟣 FULL (49 Tools) - Comprehensive Low-Level & Enterprise Control      │
+│ 🟣 FULL (50 Tools) - Comprehensive Low-Level & Enterprise Control      │
 │   • Autonomous Micro-Loop: chrome_act_toward_goal (Fast Jev Engine)    │
 │   • Advanced CDP: cdp_execute (Target polymorphic routing + Anti-Hang) │
 │   • Human-in-the-Loop: request_human_intervention, undo_last_action   │
@@ -149,7 +149,7 @@ AI Agent                Native Server             Chrome SW             Page (Is
 ### 5.2 Human-in-the-Loop Takeover Pipeline for Captchas & 2FA (`chrome_request_human_intervention`)
 
 ```text
-AI Agent                            BrowserClaw Extension                     User (Human)
+AI Agent                            BrowserPaw Extension                     User (Human)
    │                                          │                                     │
    │── request_human_intervention ───────────▶│                                     │
    │   "Please solve slider captcha"          │── Mount Frosted Glass Top Banner ──▶│ (Screen dims softly)
@@ -188,4 +188,4 @@ AI Agent                            BrowserClaw Extension                     Us
 
 ---
 
-_Need quick help? Check the [Troubleshooting Guide](./TROUBLESHOOTING.md) or open an issue on [GitHub](https://github.com/GoldenLoaf24h/browserclaw/issues)._
+_Need quick help? Check the [Troubleshooting Guide](./TROUBLESHOOTING.md) or open an issue on [GitHub](https://github.com/GoldenLoaf24h/browserpaw/issues)._

@@ -1,13 +1,18 @@
 import { type Tool } from '@modelcontextprotocol/sdk/types.js';
 
-export type ToolNamespacePrefix = 'browserclaw_' | 'chrome_';
+export type ToolNamespacePrefix = 'browserpaw_' | 'browserclaw_' | 'chrome_';
 
-// Default canonical prefix aligned with current environment prefix (browserclaw_)
-let activePrefix: ToolNamespacePrefix = 'browserclaw_';
+// Default canonical prefix aligned with current environment prefix (browserpaw_)
+let activePrefix: ToolNamespacePrefix = 'browserpaw_';
 
 // Check environment variables if available (e.g. Node.js runtime)
 if (typeof process !== 'undefined' && process?.env) {
-  if (process.env.BROWSERCLAW_TOOL_PREFIX) {
+  if (process.env.BROWSERPAW_TOOL_PREFIX) {
+    const envPfx = process.env.BROWSERPAW_TOOL_PREFIX.endsWith('_')
+      ? process.env.BROWSERPAW_TOOL_PREFIX
+      : `${process.env.BROWSERPAW_TOOL_PREFIX}_`;
+    activePrefix = envPfx as ToolNamespacePrefix;
+  } else if (process.env.BROWSERCLAW_TOOL_PREFIX) {
     const envPfx = process.env.BROWSERCLAW_TOOL_PREFIX.endsWith('_')
       ? process.env.BROWSERCLAW_TOOL_PREFIX
       : `${process.env.BROWSERCLAW_TOOL_PREFIX}_`;
@@ -36,10 +41,13 @@ export function setActiveToolPrefix(prefix: ToolNamespacePrefix | string): void 
 }
 
 /**
- * Extract the base name from any tool name (e.g. 'chrome_read_dom' -> 'read_dom', 'browserclaw_read_dom' -> 'read_dom').
+ * Extract the base name from any tool name (e.g. 'chrome_read_dom' -> 'read_dom', 'browserpaw_read_dom' -> 'read_dom', 'browserclaw_read_dom' -> 'read_dom').
  */
 export function getBaseToolName(toolIdentifier: string): string {
   if (!toolIdentifier || typeof toolIdentifier !== 'string') return toolIdentifier;
+  if (toolIdentifier.startsWith('browserpaw_')) {
+    return toolIdentifier.slice('browserpaw_'.length);
+  }
   if (toolIdentifier.startsWith('browserclaw_')) {
     return toolIdentifier.slice('browserclaw_'.length);
   }
@@ -52,9 +60,9 @@ export function getBaseToolName(toolIdentifier: string): string {
 /**
  * Resolve a tool's canonical runtime name based on active namespace prefix.
  * Examples:
- *   resolveToolName('read_dom') => 'browserclaw_read_dom'
- *   resolveToolName('chrome_read_dom') => 'browserclaw_read_dom'
- *   resolveToolName('get_windows_and_tabs') => 'browserclaw_get_windows_and_tabs'
+ *   resolveToolName('read_dom') => 'browserpaw_read_dom'
+ *   resolveToolName('chrome_read_dom') => 'browserpaw_read_dom'
+ *   resolveToolName('get_windows_and_tabs') => 'browserpaw_get_windows_and_tabs'
  */
 export function resolveToolName(toolIdentifier: string, prefixOverride?: string): string {
   const prefix =
@@ -83,6 +91,15 @@ export function normalizeIncomingToolName(name: string): {
   if (!name || typeof name !== 'string') {
     return { canonicalBackendName: name, prefix: '' };
   }
+  if (name.startsWith('browserpaw_')) {
+    if (name === 'browserpaw_get_windows_and_tabs') {
+      return { canonicalBackendName: 'get_windows_and_tabs', prefix: 'browserpaw_' };
+    }
+    return {
+      canonicalBackendName: 'chrome_' + name.slice('browserpaw_'.length),
+      prefix: 'browserpaw_',
+    };
+  }
   if (name.startsWith('browserclaw_')) {
     if (name === 'browserclaw_get_windows_and_tabs') {
       return { canonicalBackendName: 'get_windows_and_tabs', prefix: 'browserclaw_' };
@@ -109,7 +126,7 @@ export function alignToolReferences(text: string, targetPrefix: string = activeP
   const pfx = targetPrefix.endsWith('_') ? targetPrefix : `${targetPrefix}_`;
 
   if (pfx === 'chrome_') {
-    return text.replace(/\bbrowserclaw_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
+    return text.replace(/\b(browserpaw|browserclaw)_([a-zA-Z0-9_]+)\b/g, (_match, _ns, tool) => {
       if (tool === 'get_windows_and_tabs') {
         return 'get_windows_and_tabs';
       }
@@ -119,6 +136,9 @@ export function alignToolReferences(text: string, targetPrefix: string = activeP
 
   return text
     .replace(/\bchrome_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
+      return `${pfx}${tool}`;
+    })
+    .replace(/\b(browserpaw|browserclaw)_([a-zA-Z0-9_]+)\b/g, (_match, _ns, tool) => {
       return `${pfx}${tool}`;
     })
     .replace(/\bget_windows_and_tabs\b/g, () => {
@@ -2525,7 +2545,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: true,
     },
     description:
-      "Explicitly attach CDP debugger and session affinity to a specific tab (by tabId) or the user's currently active tab. WARNING / SIDE EFFECT: Attaching to the user's active tab displays Chrome's debugger warning banner ('browserclaw is debugging this browser') and directly shares execution state with the user. Avoid calling unless interaction with the user's active tab is explicitly requested.",
+      "Explicitly attach CDP debugger and session affinity to a specific tab (by tabId) or the user's currently active tab. WARNING / SIDE EFFECT: Attaching to the user's active tab displays Chrome's debugger warning banner ('browserpaw is debugging this browser') and directly shares execution state with the user. Avoid calling unless interaction with the user's active tab is explicitly requested.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -2836,7 +2856,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Return compact parameter documentation for a category of BrowserClaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.',
+      'Return compact parameter documentation for a category of BrowserPaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2954,7 +2974,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Diagnose BrowserClaw environment, Native Host connectivity, Chrome silent-debugger flags, port availability, and token security.',
+      'Diagnose BrowserPaw environment, Native Host connectivity, Chrome silent-debugger flags, port availability, and token security.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3274,6 +3294,10 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           type: 'boolean',
           description: 'Wait for DOM settle after dismissal (default: true)',
         },
+        settleTimeoutMs: {
+          type: 'number',
+          description: 'Maximum time in milliseconds to wait for page settle (default: 1500)',
+        },
         sessionId: { type: 'string', description: 'Session ID for tab affinity routing' },
         sessionContext: { type: 'string', description: 'Session context alias' },
       },
@@ -3327,7 +3351,17 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         scrollDelayMs: {
           type: 'number',
           description:
-            'Pause duration in ms after each step to allow virtual list rendering (default: 250ms).',
+            'Pause duration in ms after each step to allow virtual list rendering (default: 250ms). Alias for settleMs.',
+        },
+        settleMs: {
+          type: 'number',
+          description:
+            'Pause duration in ms after each step to allow virtual list rendering (default: 150ms).',
+        },
+        timeoutMs: {
+          type: 'number',
+          description:
+            'Total maximum time in milliseconds to scroll before stopping (default: 15000, max: 60000).',
         },
         containerSelector: {
           type: 'string',

@@ -1,6 +1,7 @@
-# BrowserClaw 架构审查报告：Native-Server MCP/HTTP 层与 Native Messaging 层
+# BrowserPaw 架构审查报告：Native-Server MCP/HTTP 层与 Native Messaging 层
 
 **审查范围**：
+
 - `app/native-server/src/index.ts`
 - `app/native-server/src/cli.ts`
 - `app/native-server/src/native-messaging-host.ts`
@@ -12,6 +13,7 @@
 - `app/native-server/src/server/` 全部 (`index.ts`, `token.ts`)
 
 **审查重点维度**：
+
 1. 安全（Token生成/校验、Bridge Token、越权、注入、路径穿越、SSRF）
 2. 并发与状态共享（Session 管理、多客户端同时连接）
 3. 协议正确性（MCP initialize/tools-call 生命周期、Streamable HTTP/SSE 细节、Content-Length、JSON-RPC id 处理）
@@ -24,6 +26,7 @@
 ## 一、核心问题详表
 
 ### [P0] 安全漏洞：`readMediaFile` 无目录沙箱限制导致宿主机任意文件读取
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\file-handler.ts:639-668`
 - **严重度**：P0（安全漏洞）
 - **问题描述**：`FileHandler.readMediaFile(filePath)` 直接接收外部传入的 `filePath` 参数，通过 `path.resolve(filePath)` 解析后未做任何目录沙箱约束（对比同文件的 `readBase64File` 和 `cleanupFile` 均强制检查是否位于 `tempDir` 沙箱内部），直接读取文件并转换为 Base64 或写入流式存储。若浏览器扩展受到 XSS 侵害或恶意第三方程序连接 Native Host，可任意读取宿主机敏感文件（如 `~/.ssh/id_rsa`、Chrome 凭证数据库、系统配置）。
@@ -44,7 +47,10 @@
   对比 `readBase64File`（行 716-724）：
   ```ts
   if (!normalizedPath.startsWith(normalizedTempDir + path.sep)) {
-    return { success: false, error: 'Access denied: filePath must be strictly within the temp directory' };
+    return {
+      success: false,
+      error: 'Access denied: filePath must be strictly within the temp directory',
+    };
   }
   ```
   触发路径：Chrome 扩展向 Native Host 发送 `{ action: 'readMediaFile', filePath: 'C:/Users/User/.ssh/id_rsa' }`，`native-messaging-host.ts:153` 直接将其交由 `handleFileRequest` 处理，无沙箱拦截，宿主机机密文件内容被直接打包回传。
@@ -53,6 +59,7 @@
 ---
 
 ### [P0] 确定性 Bug / 功能阻断：媒体流式端点未携带 Token 导致扩展端流式大图 100% 401 失败
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:121-155, 285-303`，`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\register-tools.ts:63`
 - **严重度**：P0（确定性 Bug / 功能完全损坏）
 - **问题描述**：Fastify 的全局 `preHandler` 钩子对除 `/ping` 和 OPTIONS 以外的所有 HTTP 请求执行严格的 Bridge Token 鉴权。然而在处理大于 650KB 的大媒体文件时，`register-tools.ts` 和 `file-handler.ts` 生成的下载 URL 为 `http://127.0.0.1:12306/media-asset/${assetId}`（未附带任何 token 参数）；而 Chrome 扩展端 `insert-media.ts` 直接通过原生 `fetch(mediaUrl)` 拉取数据（未设置 Authorization 头）。这导致所有通过流式传输的大图/视频在请求时 100% 被 401 Unauthorized 拦截，大文件媒体插入功能完全无法使用。
@@ -72,7 +79,9 @@
      ```ts
      const resp = await fetch(fetchTargetUrl);
      if (!resp.ok) {
-       return createErrorResponse(`Failed to stream media asset from server (${resp.status}): ${nativeRes.mediaUrl}`);
+       return createErrorResponse(
+         `Failed to stream media asset from server (${resp.status}): ${nativeRes.mediaUrl}`,
+       );
      }
      ```
   扩展发出的 GET 请求无 Token，返回 401，媒体插入任务必现中断。
@@ -81,6 +90,7 @@
 ---
 
 ### [P0] 协议致命错误：Native 消息长度异常时清空缓冲区导致后续通信帧永久错位
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:63-71`
 - **严重度**：P0（协议破坏与级联故障）
 - **问题描述**：当 Native Messaging Host 解析到非法的 `expectedLength`（<=0 或 > 1MB）时，代码执行 `expectedLength = -1; buffer = Buffer.alloc(0); break;` 试图“重新同步”流。然而在二进制流协议中，异常帧的后续主体字节此时正持续到达管道，清空本地缓冲并不能跳过管道中在途的字节，后续字节会被错误解释为下一条消息的长度前缀，导致通信帧边界永久错位，Native Messaging 管道永久瘫痪。
@@ -100,6 +110,7 @@
 ---
 
 ### [P0] 并发状态损坏：DevTools `engine` 模块级单例并发解析 Trace 导致状态相互覆写
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\trace-analyzer.ts:18, 26-38`
 - **严重度**：P0（并发状态竞争/报告损坏）
 - **问题描述**：`trace-analyzer.ts` 内部定义了单例 `const engine = TraceEngine.TraceModel.Model.createWithAllHandlers()`。在 `parseTrace` 中，每次解析直接操作该单例：`engine.resetProcessor()`、`await engine.parse(events)`、`engine.parsedTrace()`。当有两个并发请求（如多个标签页或并发测试）同时请求分析 Trace 时，后发请求的 `resetProcessor()` 会清空前一请求正在解析的内部状态，导致前一请求报告空数据或抛出 `No parsed trace returned by engine` 异常。
@@ -121,6 +132,7 @@
 ---
 
 ### [P1] 资源泄漏：`mediaAssetStore` 存储条目永不删除导致内存无限增长
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\media-asset-store.ts:10`
 - **严重度**：P1（内存泄漏）
 - **问题描述**：`mediaAssetStore` 是一个全局单一的 `Map<string, MediaAssetEntry>`。在文件处理与媒体插入过程中不断向其中 `.set(assetId, ...)`，但全库没有一处代码调用 `.delete(assetId)`，也没有配置任何 TTL 超时淘汰机制。长期运行的 Native Server 处理多次文件传输后，该 Map 及其引用的文件路径/Buffer 将永久滞留内存。
@@ -131,6 +143,7 @@
 ---
 
 ### [P1] 协议健壮性：Streamable HTTP 初始化请求带 `mcp-session-id` 时直接返回 404
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:366-385`
 - **严重度**：P1（协议异常处理缺陷）
 - **问题描述**：在 `POST /mcp` 路由中，初始化判断分支条件为 `if (!transport && !sessionId && isInit)`。当客户端因重试或代理透传了旧的（但本地已过期的）`mcp-session-id` 发起 `initialize` 请求时，由于 `sessionId` 存在，条件判定失败，代码直接落入 `else if (!transport)` 分支，向客户端返回 404 `INVALID_SESSION_ID`，阻止了合法的重初始化握手。
@@ -156,6 +169,7 @@
 ---
 
 ### [P1] 资源管理：GET `/mcp` (SSE Stream) 客户端断开连接不回收 Session
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:424-427`
 - **严重度**：P1（资源长期悬挂）
 - **问题描述**：在 Streamable HTTP 的 GET 长连接断开时，`request.socket.on('close')` 仅记录日志，并没有调用 `mcpSessionManager.closeSession(sessionId)`。只有等待全局 10 分钟定时器扫描且超过 10 分钟空闲时才会回收，若有短连接批量接入，内存中将堆积大量孤儿 Server 实例。
@@ -171,6 +185,7 @@
 ---
 
 ### [P1] 跨平台缺陷：Windows 平台 `startParentWatchdog` 依赖 `process.kill(pid, 0)` 面临 PID 复用致僵尸常驻
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:241-253`
 - **严重度**：P1（系统资源占用/僵尸进程）
 - **问题描述**：Stdio 看门狗每 500ms 通过 `process.kill(parentPid, 0)` 探测父进程存活性。在 Windows 操作系统中，PID 极易快速循环重用。父进程（如 Claude Desktop 或某终端）异常退出后，其 PID 极可能在极短时间内被操作系统重新赋予其他系统进程（如 svchost.exe），导致 `process.kill` 永远不抛出 `ESRCH`，使得 Stdio 子进程永久驻留后台不退出。
@@ -192,6 +207,7 @@
 ---
 
 ### [P1] 状态一致性：`clearBridgeTokenCache()` 未清理环境变量致 Token 无法重置
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\token.ts:25-28, 60-64`
 - **严重度**：P1（缓存状态不一致）
 - **问题描述**：`clearBridgeTokenCache()` 仅置空了 `cachedToken = null`，但在首次加载时代码已把 token 写入 `process.env.CHROME_MCP_TOKEN`。再次调用 `resolveBridgeToken()` 时，由于第一步优先读取该环境变量，旧 token 立即被重新装载回内存，使得清理缓存操作实质失效。
@@ -213,6 +229,7 @@
 ---
 
 ### [P1] 架构硬伤：Native Host 超时后未向扩展端发送取消信号致浏览器资源浪费
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:254-265`
 - **严重度**：P1（架构设计缺陷）
 - **问题描述**：当 `sendRequestToExtensionAndWait` 发生 120 秒超时后，本地 Promise 被 reject，从 `pendingRequests` 中剔除了该请求。但 Native Host 从未向 Chrome 扩展端发出任何取消命令（Abort）。扩展端仍在浏览器后台继续执行高开销的 CDP 操作（如全页面重排截屏、长轮询等待等），产生僵尸操作并阻塞后续请求队列。
@@ -223,6 +240,7 @@
 ---
 
 ### [P1] 双模式差异：Stdio 代理重连后导致 HTTP 端动态激活工具状态丢失
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:40, 195-212`
 - **严重度**：P1（双模式状态一致性）
 - **问题描述**：Stdio 模式下，动态工具通过 `dynamicExtraTools = new Set<string>()` 维护在本地内存中。当网络出现异常触发自动重连时，`mcpClient` 重新与 HTTP 服务端协商建立全新的 HTTP Session。然而 Stdio 代理并没有将之前已激活的工具分类同步给新的 HTTP Session，导致后续请求若需要 HTTP 校验 Session 权限时可能出现不一致或功能受阻。
@@ -231,6 +249,7 @@
 ---
 
 ### [P2] 状态维护错误：`native-messaging-host.ts` 访问不存在的 `Server.port` 属性
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:159`
 - **严重度**：P2（状态维护不一致）
 - **问题描述**：在处理 `get_server_info` 与 `get_token` 消息时，代码尝试读取 `(this.associatedServer as any)?.port || 12306`。但 `Server` 类（`server/index.ts`）中根本没有定义 `port` 属性或 getter，导致无论服务实际在哪个端口启动，返回给扩展的信息中端口号永远退化为硬编码的 12306。
@@ -241,6 +260,7 @@
 ---
 
 ### [P2] 协议错误处理：未捕获异常响应中错误类型被硬编码为 `file_operation_response`
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:84-88`
 - **严重度**：P2（协议语义混乱）
 - **问题描述**：在处理 Native 消息的全局 catch 块中，当捕获到异常且消息中携带 `requestId` 时，响应消息被写死为 `type: 'file_operation_response'`。如果异常发生于非文件操作请求（例如启动命令、系统设置等），扩展端会收到一个伪造的文件操作响应，破坏扩展端的消息路由协议。
@@ -249,6 +269,7 @@
 ---
 
 ### [P2] 安全审计：Fastify 全局开放 Query 参数传递 Token
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:145-147`
 - **严重度**：P2（安全规范缺陷）
 - **问题描述**：Fastify 全局认证钩子对所有路由（包括敏感的 `POST /mcp`, `GET /agent-control`, `POST /reload-extension`）无差别支持通过 `?token=...` 认证。Query 参数极易被浏览器历史、服务器日志记录外泄。
@@ -257,6 +278,7 @@
 ---
 
 ### [P2] 协议冗余：SSE `/sse` 端点挂载三重 close 监听器
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:323-329`
 - **严重度**：P2（代码冗余与重复清理）
 - **问题描述**：在 `/sse` 路由中，在 `mcpSessionManager.createSession` 内部已经通过 `transport.onclose` 挂载了清理逻辑，外部又同时对 `reply.raw.on('close')` 和 `req.raw.on('close')` 绑定了清理回调，造成同一个底层 socket 关闭时触发多达 3 次销毁逻辑。
@@ -265,6 +287,7 @@
 ---
 
 ### [P2] 协议功能缺失：Stdio 模式未中继 MCP Notifications 与进度事件
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:68-105`
 - **严重度**：P2（功能完整性）
 - **问题描述**：Stdio 代理端仅实现了对工具请求与列表的单向转发，未挂载从底层 HTTP 服务传回的 MCP notifications（如 `notifications/progress`、`notifications/message`）。导致后台 Jev 决策微循环或长任务向客户端推送的实时进度被静默丢弃，Claude Desktop 端体验退化为长时间无响应等待。
@@ -273,6 +296,7 @@
 ---
 
 ### [P3] 超时常量分散且存在硬编码
+
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\constant\index.ts:16-20`，`app\native-server\src\mcp\register-tools.ts:228`，`app\native-server\src\mcp\mcp-server-stdio.ts:173`
 - **严重度**：P3（代码规范与维护性）
 - **问题描述**：`TIMEOUTS.DEFAULT_REQUEST_TIMEOUT` 定义为 15000ms，但工具调用在 `register-tools.ts` 中硬编码为 120000ms，在 `mcp-server-stdio.ts` 中硬编码为 `2 * 60 * 1000`。常量分散在多处未统一从 `constant` 模块引用。
@@ -317,13 +341,14 @@
 
 3. **双层反向代理调用链与往返延迟**：
    - **路径**：`MCP 客户端 (Stdio) -> Stdio 代理进程 (mcp-server-stdio.ts) -> 本地 HTTP 服务 (Fastify 12306) -> Native Messaging Host -> Chrome Extension -> CDP Target`
-   - **分析**：每次工具调用经历 4 层进程间通信（IPC）与 2 次 HTTP 握手。单次工具调用基线 IPC 开销在 10~25ms，若能在支持 Stdio 的场景下减少一层代理或支持本地直连，可进一步削减 5~10ms 网络开销。
+   - **分析**：每次工具调用经历 4 层进程间通信（IPC）与 2 次 HTTP 握手。单次工具调用基线 IPC 开销在 10~~25ms，若能在支持 Stdio 的场景下减少一层代理或支持本地直连，可进一步削减 5~~10ms 网络开销。
 
 ---
 
 ## 四、模块依赖与被依赖关系清单
 
 ### 1. 本模块内部层次依赖关系
+
 ```
 cli.ts / index.ts
   └── native-messaging-host.ts
@@ -338,6 +363,7 @@ cli.ts / index.ts
 ```
 
 ### 2. 外部直接依赖（上游）
+
 - `@modelcontextprotocol/sdk` (`^1.30.0`): 提供 MCP 核心 Server、Client、Transport 与 JSON-RPC 协议解析。
 - `fastify` (`^4.x` / `^5.x`) + `@fastify/cors`: 提供高性能本地 HTTP 桥接与严格 Origin 校验。
 - `chrome-devtools-frontend`: 提供 Chrome 原生 Performance Trace 分析模型。
@@ -346,6 +372,7 @@ cli.ts / index.ts
 - `node-fetch`: 提供安全受限的 HTTP 文件下载。
 
 ### 3. 被依赖模块（下游消费方）
+
 - **`app/chrome-extension`**：通过 Chrome 原生 `chrome.runtime.connectNative` 建立全双工管道通信，并消费 `http://127.0.0.1:12306/media-asset/:assetId`。
 - **Claude Desktop / Cursor / 外部 Agent**：通过 `mcp-server-stdio.ts` 包装器执行标准 Stdio MCP 通信，或直接连接 HTTP `/mcp` 端点。
 - **`app/native-server/src/scripts`**：`register.ts`、`doctor.ts` 与 `report.ts` 依赖该模块的部署文件、端口配置与自检状态。

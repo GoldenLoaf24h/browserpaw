@@ -1,34 +1,34 @@
 <div align="center">
-  <img src="./docs/images/logo.png" width="100" alt="BrowserClaw Logo" />
-  <h1>BrowserClaw</h1>
+  <img src="./docs/images/logo.png" width="100" alt="BrowserPaw Logo" />
+  <h1>BrowserPaw</h1>
   <p><b>Control your everyday Chrome browser from AI agents, without losing logins or focus.</b></p>
   <p>
     <a href="./docs/MAP.md">Project Map</a> ·
     <a href="./docs/TOOLS.md">Tool Reference (49)</a> ·
     <a href="./AGENT_CONFIG_GUIDE.md">Client Config</a> ·
     <a href="./README.zh-CN.md">Chinese (zh-CN)</a> ·
-    <a href="https://github.com/GoldenLoaf24h/browserclaw/releases">Releases</a>
+    <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">Releases</a>
   </p>
 </div>
 
 ---
 
 <details>
-<summary><b>Background: Why BrowserClaw?</b></summary>
+<summary><b>Background: Why BrowserPaw?</b></summary>
 
 <br/>
 
 Browser automation frameworks that drive a separate browser instance (Playwright, Puppeteer, browser-use) start from a clean profile. They do not inherit your active logins, cookies, or extensions, and copying a live Chrome profile on Windows fails with file-sharing locks. Attaching to an existing Chrome via a debug port triggers security banners.
 
-BrowserClaw takes a different route: a Chrome MV3 extension plus a local Native Messaging bridge, running inside the Chrome you already use. Cookies, sessions, and extensions are preserved, and automation happens in background tabs without stealing focus.
+BrowserPaw takes a different route: a Chrome MV3 extension plus a local Native Messaging bridge, running inside the Chrome you already use. Cookies, sessions, and extensions are preserved, and automation happens in background tabs without stealing focus.
 
 </details>
 
 ---
 
-## ⚡ What is BrowserClaw?
+## ⚡ What is BrowserPaw?
 
-BrowserClaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 7 categories (navigation, perception, action, observation, management, diagnostics, network), with a minimal 14-tool core profile for everyday sessions.
+BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 7 categories (navigation, perception, action, observation, management, diagnostics, network), with a minimal 14-tool core profile for everyday sessions.
 
 Two execution paths are available:
 
@@ -91,22 +91,22 @@ The micro-loop is bounded: at most 60 steps in Jev mode (default 10), truncated 
 
 Paste this to your agent:
 
-> "Set up BrowserClaw: https://github.com/GoldenLoaf24h/browserclaw. Read INSTALL.md and follow the steps."
+> "Set up BrowserPaw: https://github.com/GoldenLoaf24h/browserpaw. Read INSTALL.md and follow the steps."
 
 Your agent will compile the project and register the OS native host automatically. Then simply open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `app/chrome-extension/.output/chrome-mv3`.
 
 ### Option 2: Prebuilt release (No build required)
 
-1. Download the latest `browserclaw-extension-v*.zip` and `browserclaw-skill-v*.zip` from [Releases](https://github.com/GoldenLoaf24h/browserclaw/releases/latest).
+1. Download the latest `browserpaw-extension-v*.zip` and `browserpaw-skill-v*.zip` from [Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest).
 2. Unzip the extension to a local persistent directory, open `chrome://extensions`, enable Developer mode, and click **Load unpacked**.
 3. Register the native host once: run `node dist/scripts/register-dev.js` inside the server directory.
-4. Copy the full `skill/` directory (including its `references/` folder) into your agent's skills directory (Codex: `~/.codex/skills/browserclaw/`).
+4. Copy the full `skill/` directory (including its `references/` folder) into your agent's skills directory (Codex: `~/.codex/skills/browserpaw/`).
 
 ### Option 3: Build from source
 
 ```bash
-git clone https://github.com/GoldenLoaf24h/browserclaw.git
-cd browserclaw && pnpm install && pnpm build
+git clone https://github.com/GoldenLoaf24h/browserpaw.git
+cd browserpaw && pnpm install && pnpm build
 cd app/native-server && node dist/scripts/register-dev.js
 ```
 
@@ -242,4 +242,4 @@ For details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ---
 
-BrowserClaw is an independent Chrome extension and MCP automation project. It is not affiliated with the standalone `browserclaw` package on npm.
+BrowserPaw is an independent Chrome extension and MCP automation project. It is not affiliated with the standalone `browserpaw` package on npm.

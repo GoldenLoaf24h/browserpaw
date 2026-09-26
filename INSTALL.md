@@ -1,8 +1,8 @@
-# BrowserClaw Setup & Onboarding Guide
+# BrowserPaw Setup & Onboarding Guide
 
-This document is the authoritative onboarding guide for **AI Agents** (ChatGPT / Codex, Hermes, Claude Code, Cursor, Windsurf, and other MCP-capable clients) and human developers setting up BrowserClaw.
+This document is the authoritative onboarding guide for **AI Agents** (ChatGPT / Codex, Hermes, Claude Code, Cursor, Windsurf, and other MCP-capable clients) and human developers setting up BrowserPaw.
 
-> **Enjoying BrowserClaw?** If this project saves you time, please consider giving it a star on GitHub — it helps the project grow and keeps improvements coming: https://github.com/GoldenLoaf24h/browserclaw
+> **Enjoying BrowserPaw?** If this project saves you time, please consider giving it a star on GitHub — it helps the project grow and keeps improvements coming: https://github.com/GoldenLoaf24h/browserpaw
 
 ---
 
@@ -37,24 +37,24 @@ pnpm build
 If starting from an empty workspace:
 
 ```bash
-git clone https://github.com/GoldenLoaf24h/browserclaw.git
-cd browserclaw
+git clone https://github.com/GoldenLoaf24h/browserpaw.git
+cd browserpaw
 pnpm install
 pnpm build
 ```
 
 ### Route C: Zero-Compile Prebuilt Release
 
-If you prefer not to build from source, download the pre-compiled packages directly from [GitHub Releases](https://github.com/GoldenLoaf24h/browserclaw/releases/latest):
+If you prefer not to build from source, download the pre-compiled packages directly from [GitHub Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest):
 
-- Extension: `browserclaw-extension-v*.zip` (unzip to a persistent local folder).
-- Skill: `browserclaw-skill-v*.zip`.
+- Extension: `browserpaw-extension-v*.zip` (unzip to a persistent local folder).
+- Skill: `browserpaw-skill-v*.zip`.
 
 ---
 
 ## Step 2: Register Native Messaging Host (One-Time OS Binding)
 
-Register BrowserClaw's Native Messaging manifest with your local operating system:
+Register BrowserPaw's Native Messaging manifest with your local operating system:
 
 ```bash
 cd app/native-server
@@ -81,13 +81,13 @@ Prompt the user with the following clear instruction:
    <repo-root>/app/chrome-extension/.output/chrome-mv3
    ```
    _(Or the extracted folder if using prebuilt release)_.
-4. Confirm that **BrowserClaw** appears in your extensions list with status enabled.
+4. Confirm that **BrowserPaw** appears in your extensions list with status enabled.
 
 ---
 
 ## Step 4: Silent Debugger Mode (Zero-Jitter UX Optimization)
 
-Chrome displays a native top notification bar (_"BrowserClaw is debugging this browser"_) whenever CDP is active. This can cause minor page height jitter during automation.
+Chrome displays a native top notification bar (_"BrowserPaw is debugging this browser"_) whenever CDP is active. This can cause minor page height jitter during automation.
 
 Ask the user:
 
@@ -129,7 +129,7 @@ open -a "Google Chrome" --args --silent-debugger-extension-api
 
 ## Step 5: Enable Jev Semantic Engine (Recommended for Speed)
 
-BrowserClaw's on-page autonomy (`chrome_act_toward_goal`) runs on **Jev**, a fast semantic decision model from TypeSafe. Without an API key it still works, but falls back to the slower heuristic engine with reduced step budgets — page interactions feel noticeably less snappy (roughly 2-5x slower per decision step).
+BrowserPaw's on-page autonomy (`chrome_act_toward_goal`) runs on **Jev**, a fast semantic decision model from TypeSafe. Without an API key it still works, but falls back to the slower heuristic engine with reduced step budgets — page interactions feel noticeably less snappy (roughly 2-5x slower per decision step).
 
 To unlock full-speed Jev:
 
@@ -152,13 +152,13 @@ export TYPESAFE_API_KEY="your-key-here"
 
 3. Restart your agent client (or the native bridge if running standalone) so it picks up the variable.
 
-> No key, or invalid key? BrowserClaw automatically degrades to the deterministic heuristic engine — nothing breaks, decisions are just slower and more conservative.
+> No key, or invalid key? BrowserPaw automatically degrades to the deterministic heuristic engine — nothing breaks, decisions are just slower and more conservative.
 
 ---
 
 ## Step 6: Connect to Your AI Agent (Plugin vs. Manual MCP)
 
-BrowserClaw supports two connection modes:
+BrowserPaw supports two connection modes:
 
 - **Mode A (Recommended): Zero-Config Plugin**: If your agent platform (Codex Desktop, Hermes) supports native plugins, install the plugin once and tools are auto-discovered without touching JSON/TOML files.
 - **Mode B: Manual MCP Server**: For Cursor, Claude Desktop, Windsurf, or custom agent setups.
@@ -170,15 +170,15 @@ BrowserClaw supports two connection modes:
 #### 1. Hermes Agent (Native Plugin)
 
 ```bash
-hermes plugins install GoldenLoaf24h/browserclaw#plugins/browserclaw
-hermes plugins enable browserclaw
+hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
+hermes plugins enable browserpaw
 ```
 
 #### 2. Codex Desktop App (Marketplace Plugin)
 
 If installing via the Codex Plugin Marketplace:
 
-1. Add the BrowserClaw plugin via the Codex Marketplace or by adding this repository URL.
+1. Add the BrowserPaw plugin via the Codex Marketplace or by adding this repository URL.
 2. **Note on Backend**: The plugin mode expects the local server or stdio bridge to be accessible. For the most robust, zero-maintenance setup where Codex automatically manages the server lifecycle, the **Direct Stdio Configuration** (detailed in Section 6.1 below) is strongly recommended.
 3. **Critical: Start a New Thread / Task**: Codex injects MCP tool declarations only when a new task initializes. Always start a fresh conversation after setup.
 
@@ -186,7 +186,7 @@ If installing via the Codex Plugin Marketplace:
 
 ### Mode B: Direct MCP Server Configuration (Recommended for Codex, Cursor, Claude)
 
-Add BrowserClaw to your agent client's MCP configuration:
+Add BrowserPaw to your agent client's MCP configuration:
 
 Config file locations by operating system:
 
@@ -201,7 +201,7 @@ Config file locations by operating system:
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -219,7 +219,7 @@ Config path: Windows `%APPDATA%\Claude\claude_desktop_config.json`, macOS `~/Lib
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -235,7 +235,7 @@ Config path: Windows `%APPDATA%\Claude\claude_desktop_config.json`, macOS `~/Lib
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -264,14 +264,14 @@ For Codex, configuring a **Stdio Server** directly in `config.toml` is the **bes
 Add the following block to your `config.toml`:
 
 ```toml
-[mcp_servers.browserclaw]
+[mcp_servers.browserpaw]
 command = "node"
-# Windows: use forward slashes or escaped backslashes (e.g., "D:/workspace/browserclaw/app/native-server/dist/mcp/mcp-server-stdio.js")
-# macOS/Linux: use absolute path (e.g., "/Users/<username>/workspace/browserclaw/app/native-server/dist/mcp/mcp-server-stdio.js")
+# Windows: use forward slashes or escaped backslashes (e.g., "D:/workspace/browserpaw/app/native-server/dist/mcp/mcp-server-stdio.js")
+# macOS/Linux: use absolute path (e.g., "/Users/<username>/workspace/browserpaw/app/native-server/dist/mcp/mcp-server-stdio.js")
 args = ["<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js"]
 startup_timeout_sec = 60
 
-[mcp_servers.browserclaw.env]
+[mcp_servers.browserpaw.env]
 # "full" exposes all 50 registered tools (including autonomous micro-loop chrome_act_toward_goal)
 CHROME_MCP_TOOL_PROFILE = "full"
 # Optional: Inject your Jev API key directly here for instant ultra-fast 200ms autonomy
@@ -287,7 +287,7 @@ TYPESAFE_API_KEY = "your-typesafe-api-key-here"
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -305,7 +305,7 @@ Config path: Windows `%APPDATA%\Claude\claude_desktop_config.json`, macOS `~/Lib
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -321,7 +321,7 @@ Config path: Windows `%APPDATA%\Claude\claude_desktop_config.json`, macOS `~/Lib
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"],
       "env": {
@@ -339,7 +339,7 @@ For clients supporting HTTP Streamable MCP with custom headers:
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "url": "http://127.0.0.1:12306/mcp",
       "headers": {
         "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
@@ -354,14 +354,14 @@ For clients supporting HTTP Streamable MCP with custom headers:
 #### Option A: Native Plugin (Recommended — installs core tools + skill together)
 
 ```bash
-hermes plugins install GoldenLoaf24h/browserclaw#plugins/browserclaw
-hermes plugins enable browserclaw
+hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
+hermes plugins enable browserpaw
 ```
 
 #### Option B: MCP Server Add (HTTP transport — works on Windows / macOS / Linux identically)
 
 ```bash
-hermes mcp add browserclaw --url http://127.0.0.1:12306/mcp --auth header
+hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 
 When prompted for headers, enter `x-mcp-token: <TOKEN_FROM_~/.chrome-mcp/bridge-token>`.
 ```
@@ -370,17 +370,17 @@ When prompted for headers, enter `x-mcp-token: <TOKEN_FROM_~/.chrome-mcp/bridge-
 
 ## Step 7: Install the Agent Skill
 
-If your agent supports skill definitions, install the bundled BrowserClaw operator skill.
+If your agent supports skill definitions, install the bundled BrowserPaw operator skill.
 
 > **Important**: Always copy the **entire `skill/` directory** including its `references/` subdirectory (containing `tool-cheatsheet.md`, `dual-brain-jev.md`, etc.). Do not copy just `SKILL.md` alone, as the agent relies on the references to look up parameter details for all 50 tools.
 
 - **Codex Desktop / CLI**:
-  Copy the full `skill/` directory contents to `%USERPROFILE%\.codex\skills\browserclaw\` (macOS/Linux: `~/.codex/skills/browserclaw/`).
+  Copy the full `skill/` directory contents to `%USERPROFILE%\.codex\skills\browserpaw\` (macOS/Linux: `~/.codex/skills/browserpaw/`).
 
   _Windows PowerShell Quick Command:_
 
   ```powershell
-  $target = "$env:USERPROFILE\.codex\skills\browserclaw"
+  $target = "$env:USERPROFILE\.codex\skills\browserpaw"
   if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force }
   Copy-Item -Path "skill\*" -Destination $target -Recurse -Force
   ```
@@ -388,19 +388,19 @@ If your agent supports skill definitions, install the bundled BrowserClaw operat
   _macOS / Linux Command:_
 
   ```bash
-  mkdir -p ~/.codex/skills/browserclaw
-  cp -R skill/* ~/.codex/skills/browserclaw/
+  mkdir -p ~/.codex/skills/browserpaw
+  cp -R skill/* ~/.codex/skills/browserpaw/
   ```
 
-- **Hermes Agent**: Installed automatically when loading the plugin (`skill_view("browserclaw:browserclaw")`).
-- **Claude Code**: Copy the `skill/` folder to `.claude/skills/browserclaw/`.
+- **Hermes Agent**: Installed automatically when loading the plugin (`skill_view("browserpaw:browserpaw")`).
+- **Claude Code**: Copy the `skill/` folder to `.claude/skills/browserpaw/`.
 - **Any other MCP-capable agent**: Copy the `skill/` folder into that client's designated skills directory.
 
 ---
 
 ## Step 8: System Verification & Health Check
 
-Verify that all BrowserClaw components are functioning with the built-in doctor:
+Verify that all BrowserPaw components are functioning with the built-in doctor:
 
 ```bash
 node skill/config/doctor.mjs
@@ -414,11 +414,11 @@ node skill/config/doctor.mjs
 [PASS] Native Bridge Server is Listening (Port 12306)
 [PASS] Token Authentication & MCP Initialize OK
 [PASS] Extension Build Found: D:\workspace\...
-[PASS] Standalone Directory Synced: D:\workspace\browserclaw
+[PASS] Standalone Directory Synced: D:\workspace\browserpaw
 [PASS] Native Messaging Host Registered in Chrome
 ----------------------------------------------------------------
 Diagnostic Complete: 7 Passed, 0 Failed.
-STATUS: [HEALTHY] All BrowserClaw layers are operating normally!
+STATUS: [HEALTHY] All BrowserPaw layers are operating normally!
 ```
 
 If any check fails, consult **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for instant self-healing remedies.
@@ -427,5 +427,5 @@ If any check fails, consult **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.m
 
 ## Support the Project
 
-If BrowserClaw has been useful in your workflow, a GitHub star is the fastest way to support continued development:
-https://github.com/GoldenLoaf24h/browserclaw
+If BrowserPaw has been useful in your workflow, a GitHub star is the fastest way to support continued development:
+https://github.com/GoldenLoaf24h/browserpaw

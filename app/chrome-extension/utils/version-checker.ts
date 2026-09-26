@@ -6,7 +6,7 @@ import {
   type VersionCheckResult,
 } from 'chrome-mcp-shared';
 
-export const VERSION_CACHE_STORAGE_KEY = 'browserclaw_version_cache';
+export const VERSION_CACHE_STORAGE_KEY = 'browserpaw_version_cache';
 
 export const chromeVersionStorage: VersionCacheStorage = {
   async get(): Promise<VersionCacheEntry | null> {

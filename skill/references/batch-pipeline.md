@@ -1,6 +1,6 @@
 # Pipelined Automation Reference (`chrome_batch_actions` & `chrome_form_pipeline`)
 
-This reference documents BrowserClaw's pipelined execution engines for multi-step workflows, atomic assertions, and zero-RTT form filling.
+This reference documents BrowserPaw's pipelined execution engines for multi-step workflows, atomic assertions, and zero-RTT form filling.
 
 ---
 

@@ -10,20 +10,27 @@ import { snapshotCacheManager } from '../utils/snapshot-cache-manager';
 import { ensureSnapshotBaseline, captureDeltaIfRequested } from '../utils/delta-helper';
 
 describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Alignment', () => {
-  it('resolves tool names dynamically and defaults to browserclaw_ prefix', () => {
-    expect(getActiveToolPrefix()).toBe('browserclaw_');
-    expect(resolveToolName('read_dom')).toBe('browserclaw_read_dom');
-    expect(resolveToolName('chrome_read_dom')).toBe('browserclaw_read_dom');
-    expect(resolveToolName('browserclaw_read_dom')).toBe('browserclaw_read_dom');
+  it('resolves tool names dynamically and defaults to browserpaw_ prefix', () => {
+    expect(getActiveToolPrefix()).toBe('browserpaw_');
+    expect(resolveToolName('read_dom')).toBe('browserpaw_read_dom');
+    expect(resolveToolName('chrome_read_dom')).toBe('browserpaw_read_dom');
+    expect(resolveToolName('browserpaw_read_dom')).toBe('browserpaw_read_dom');
+    expect(resolveToolName('browserclaw_read_dom')).toBe('browserpaw_read_dom');
     expect(resolveToolName('read_dom', 'chrome')).toBe('chrome_read_dom');
     expect(resolveToolName('batch_actions', 'chrome_')).toBe('chrome_batch_actions');
-    expect(resolveToolName('read_dom', 'browserclaw')).toBe('browserclaw_read_dom');
-    expect(resolveToolName('batch_actions', 'browserclaw_')).toBe('browserclaw_batch_actions');
-    expect(resolveToolName('get_windows_and_tabs', 'browserclaw')).toBe('browserclaw_get_windows_and_tabs');
+    expect(resolveToolName('read_dom', 'browserpaw')).toBe('browserpaw_read_dom');
+    expect(resolveToolName('batch_actions', 'browserpaw_')).toBe('browserpaw_batch_actions');
+    expect(resolveToolName('get_windows_and_tabs', 'browserpaw')).toBe(
+      'browserpaw_get_windows_and_tabs',
+    );
     expect(resolveToolName('get_windows_and_tabs', 'chrome')).toBe('get_windows_and_tabs');
   });
 
   it('normalizes incoming tool names from both namespaces to internal canonical backend names', () => {
+    expect(normalizeIncomingToolName('browserpaw_read_dom')).toEqual({
+      canonicalBackendName: 'chrome_read_dom',
+      prefix: 'browserpaw_',
+    });
     expect(normalizeIncomingToolName('browserclaw_read_dom')).toEqual({
       canonicalBackendName: 'chrome_read_dom',
       prefix: 'browserclaw_',
@@ -31,6 +38,10 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     expect(normalizeIncomingToolName('chrome_read_dom')).toEqual({
       canonicalBackendName: 'chrome_read_dom',
       prefix: 'chrome_',
+    });
+    expect(normalizeIncomingToolName('browserpaw_get_windows_and_tabs')).toEqual({
+      canonicalBackendName: 'get_windows_and_tabs',
+      prefix: 'browserpaw_',
     });
     expect(normalizeIncomingToolName('browserclaw_get_windows_and_tabs')).toEqual({
       canonicalBackendName: 'get_windows_and_tabs',
@@ -45,16 +56,16 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
   it('aligns legacy tool references in prompts, hints, and errors to requested target prefix', () => {
     const rawHint =
       'Delta truncated: showing 0/0 added, 25/143 modified, 1/1 removed. Call chrome_read_dom for full DOM tree. Prefer chrome_batch_actions over chrome_interact_index. Also check get_windows_and_tabs.';
-    const aligned = alignToolReferences(rawHint, 'browserclaw');
+    const aligned = alignToolReferences(rawHint, 'browserpaw');
 
-    expect(aligned).toContain('Call browserclaw_read_dom for full DOM tree.');
-    expect(aligned).toContain('Prefer browserclaw_batch_actions');
-    expect(aligned).toContain('browserclaw_interact_index');
-    expect(aligned).toContain('browserclaw_get_windows_and_tabs');
+    expect(aligned).toContain('Call browserpaw_read_dom for full DOM tree.');
+    expect(aligned).toContain('Prefer browserpaw_batch_actions');
+    expect(aligned).toContain('browserpaw_interact_index');
+    expect(aligned).toContain('browserpaw_get_windows_and_tabs');
 
-    // Bidirectional alignment: browserclaw_ -> chrome_
+    // Bidirectional alignment: browserpaw_ -> chrome_
     const modernHint =
-      'Call browserclaw_read_dom for full DOM tree. Prefer browserclaw_batch_actions over browserclaw_interact_index. Also check browserclaw_get_windows_and_tabs.';
+      'Call browserpaw_read_dom for full DOM tree. Prefer browserpaw_batch_actions over browserpaw_interact_index. Also check browserpaw_get_windows_and_tabs.';
     const alignedToChrome = alignToolReferences(modernHint, 'chrome');
     expect(alignedToChrome).toContain('Call chrome_read_dom for full DOM tree.');
     expect(alignedToChrome).toContain('Prefer chrome_batch_actions');
@@ -62,17 +73,22 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     expect(alignedToChrome).toContain('get_windows_and_tabs');
 
     // Ensure URLs and system paths containing "chrome" are never corrupted
-    const textWithUrls = 'Navigate to chrome://extensions or https://chrome.google.com via chrome_navigate';
-    const alignedUrls = alignToolReferences(textWithUrls, 'browserclaw');
+    const textWithUrls =
+      'Navigate to chrome://extensions or https://chrome.google.com via chrome_navigate';
+    const alignedUrls = alignToolReferences(textWithUrls, 'browserpaw');
     expect(alignedUrls).toContain('chrome://extensions');
     expect(alignedUrls).toContain('https://chrome.google.com');
-    expect(alignedUrls).toContain('browserclaw_navigate');
+    expect(alignedUrls).toContain('browserpaw_navigate');
   });
 
-  it('ensures snapshotCacheManager truncation summary emits browserclaw_read_dom', () => {
+  it('ensures snapshotCacheManager truncation summary emits browserpaw_read_dom', () => {
     snapshotCacheManager.clear(8888);
     const baseline = [{ index: 1, tagName: 'button', text: 'Checkout', isInteractive: true }];
-    snapshotCacheManager.setSnapshot(8888, { url: 'https://example.com', elementCount: 1, elements: baseline });
+    snapshotCacheManager.setSnapshot(8888, {
+      url: 'https://example.com',
+      elementCount: 1,
+      elements: baseline,
+    });
 
     // Generate elements exceeding maxDelta to trigger truncation
     const current = [
@@ -88,8 +104,8 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     const delta = snapshotCacheManager.diffWithPrevious(8888, current, { maxDelta: 5 });
     expect(delta.truncated).toBe(true);
     expect(delta.summary).toBeDefined();
-    // Verify it instructs calling browserclaw_read_dom, not legacy chrome_read_dom
-    expect(delta.summary).toContain('Call browserclaw_read_dom for full DOM tree.');
+    // Verify it instructs calling browserpaw_read_dom, not legacy chrome_read_dom
+    expect(delta.summary).toContain('Call browserpaw_read_dom for full DOM tree.');
     expect(delta.summary).not.toContain('chrome_read_dom');
   });
 });

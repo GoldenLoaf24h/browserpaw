@@ -1,24 +1,24 @@
-# BrowserClaw 项目工程规范说明
+# BrowserPaw 项目工程规范说明
 
 [English Version](./PROJECT.md)
 
 ## 定位与核心设计哲学
 
-BrowserClaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器。与传统的无头浏览器（Playwright、Puppeteer、Selenium）不同，它直接运行在用户日常使用的 Google Chrome 中，原生复用既有的登录态、Cookie、扩展插件及配置环境。通过 Native Messaging 与 Chrome DevTools Protocol (CDP)，将真实的浏览器控制能力暴露为 49 个严格校验 Schema 的规范 MCP 工具（48 个浏览器端工具 + 1 个本地自主微循环工具）。
+BrowserPaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器。与传统的无头浏览器（Playwright、Puppeteer、Selenium）不同，它直接运行在用户日常使用的 Google Chrome 中，原生复用既有的登录态、Cookie、扩展插件及配置环境。通过 Native Messaging 与 Chrome DevTools Protocol (CDP)，将真实的浏览器控制能力暴露为 50 个严格校验 Schema 的规范 MCP 工具（49 个浏览器端工具 + 1 个本地自主微循环工具）。
 
 ## Monorepo 模块架构 (pnpm)
 
 1. **`packages/shared`** (`chrome-mcp-shared`)：
-   - **唯一事实源**：集中维护全量 49 个规范 MCP 工具的 Schema（`TOOL_SCHEMAS`）、Profile 分层（`core`: 14, `crawl`: 12, `full`: 49）、`UnifiedLocatorOptions` 统一多态坐标契约以及标准化错误格式化模块。
+   - **唯一事实源**：集中维护全量 50 个规范 MCP 工具的 Schema（`TOOL_SCHEMAS`）、Profile 分层（`core`: 14, `crawl`: 12, `full`: 50）、`UnifiedLocatorOptions` 统一多态坐标契约以及标准化错误格式化模块。
 2. **`app/native-server`** (`mcp-chrome-bridge`)：
    - **Fastify 原生宿主服务**：提供 Stdio 与 HTTP/SSE（默认 `127.0.0.1:12306`）双协议传输、`McpSessionManager` 会话隔离机制（每会话独立 Server 实例，10 分钟空闲自动回收）、`bridge-token` 鉴权、本地自主语义微闭环执行（`chrome_act_toward_goal`）与 Chromium 性能追踪分析。
 3. **`app/chrome-extension`** (`chrome-mcp-server`)：
-   - **WXT + Vue 3 Manifest V3 扩展**：后台 Service Worker 承载 48 个工具底层执行器与 CDP 会话管理器。内嵌 1:1 物理虚拟光标、标签组自动归整与清理、微光 Favicon；`inpage-engine` 负责在隔离世界中进行 DOM 剪枝与 1-based 动态编号索引。
+   - **WXT + Vue 3 Manifest V3 扩展**：后台 Service Worker 承载 49 个工具底层执行器与 CDP 会话管理器。内嵌 1:1 物理虚拟光标、标签组自动归整与清理、微光 Favicon；`inpage-engine` 负责在隔离世界中进行 DOM 剪枝与 1-based 动态编号索引。
 
 ## 关键架构与工程特性
 
 - **工具面与 Schema 绝对对齐**：运行时 `toolsMap` 完全由 `TOOL_SCHEMAS` 声明推导生成，严禁调用未声明的内部执行器（通过 tool-surface-parity 测试严格锁定）。
-- **Profile 分层与动态发现**：内置三大核心 Profile（`core`: 14, `crawl`: 12, `full`: 49）及 8 大工具类别。隐藏工具支持通过 `chrome_tool_docs` 按需动态激活（`activateForSession: true`），在 HTTP/SSE 与 Stdio 下均无需重启服务即可即时生效。
+- **Profile 分层与动态发现**：内置三大核心 Profile（`core`: 14, `crawl`: 12, `full`: 50）及 8 大工具类别。隐藏工具支持通过 `chrome_tool_docs` 按需动态激活（`activateForSession: true`），在 HTTP/SSE 与 Stdio 下均无需重启服务即可即时生效。
 - **自驱 DOM Diff 回传**：交互类工具（`chrome_interact_index`、`chrome_fill_index`、`chrome_batch_actions`）支持 `includeDelta: true`，在动作返回中直接附带局部变动，降低 50% 往返网络消耗。
 - **定向秒搜与多 Frame 穿透**：`chrome_grep` 支持多层 iframe 结构穿透与只读检索，匹配文本、`placeholder`、`aria-label` 与 `value`，杜绝大页面全量倾倒 DOM 带来的 Token 浪费。
 - **闭环批处理流水线**：`chrome_batch_actions` 在单次网络往返中按序执行点击、输入、等待、断言（`assert`）与字段提取（`extract`），支持跨域 iframe 坐标自动重映射。
@@ -33,7 +33,7 @@ BrowserClaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器
 - **词元边界表单语义匹配器**：采用两阶段精确与词元边界语义分析，彻底根治如 `phone` 误匹配 `no`、`male` 误匹配 `female` 的子串穿透 Bug。
 - **通用零漂移标签组归整**：利用环视断言正则在剥离 CJK 分隔符的同时保护英文连字符专有名词（如 `COVID-19`、`Wi-Fi`），彻底移除特化域名硬编码字典。
 
-- **原子化极速 DOM 快照与感知管线**：`chrome_read_dom` 原生支持极速快照（`fast: true`），单次 `TreeWalker` 遍历结合原生 `checkVisibility` 与 `window.__clawFast` WeakMap 弱引用缓存。严格限制动作 $\le 250$、文本 $\le 6000$ 字符，抓取耗时压低至 10~30ms，输出体积 $\le 15$KB。
+- **原子化极速 DOM 快照与感知管线**：`chrome_read_dom` 原生支持极速快照（`fast: true`），单次 `TreeWalker` 遍历结合原生 `checkVisibility` 与 `window.__pawFast` WeakMap 弱引用缓存。严格限制动作 $\le 250$、文本 $\le 6000$ 字符，抓取耗时压低至 10~30ms，输出体积 $\le 15$KB。
 - **受控组件原生值设置穿透**：通过原型链直接获取原生描述符（`nativeSetter.call(el, val)`）并严格派发 `input` 与 `change` 合成事件序列，彻底穿透 React 16–19 与 Vue 3 受控组件拦截。
 - **执行前 1ms 防遮挡绝杀断路器**：在 CDP 物理事件派发前注入页内微任务进行靶心命中校验，支持递归穿透最多 3 层 `pointer-events: none` 浮层，遇遮挡立即熔断返回 `{ "error": "target_occluded", "retry": true }`。
 - **基于 rAF 与 ARIA 的智能微等待**：废除粗暴 `sleep`，默认 2 个 `requestAnimationFrame`（$\approx 32$ms）结合突变监听快速收敛，并为 `role="combobox"` 搜索候选框提供 $\le 200$ms 的选项可见性监听。

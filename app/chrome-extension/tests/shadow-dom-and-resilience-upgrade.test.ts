@@ -27,7 +27,7 @@ class TestBrowserTool extends BaseBrowserToolExecutor {
   }
 }
 
-describe('BrowserClaw Shadow DOM & Core Resilience Architectural Upgrade (Plan 2)', () => {
+describe('BrowserPaw Shadow DOM & Core Resilience Architectural Upgrade (Plan 2)', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     vi.restoreAllMocks();
@@ -299,7 +299,7 @@ describe('BrowserClaw Shadow DOM & Core Resilience Architectural Upgrade (Plan 2
       const text = res.content[0].text;
       expect(text).toContain('Browser Navigation / Network Error');
       expect(text).toContain('chrome-error://chromewebdata/');
-      expect(text).toContain('browserclaw_navigate');
+      expect(text).toContain('browserpaw_navigate');
     });
   });
 });

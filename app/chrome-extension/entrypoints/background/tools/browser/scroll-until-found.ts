@@ -17,6 +17,7 @@ export interface ScrollUntilFoundParams {
   timeoutMs?: number;
   containerSelector?: string;
   settleMs?: number;
+  scrollDelayMs?: number;
   tabId?: number;
   windowId?: number;
   sessionId?: string;
@@ -59,7 +60,7 @@ export class ScrollUntilFoundTool extends BaseBrowserToolExecutor {
         direction: args.direction,
         timeoutMs,
         containerSelector: args.containerSelector,
-        settleMs: args.settleMs,
+        settleMs: args.settleMs ?? args.scrollDelayMs,
       };
 
       const results = await executeInPage<ScrollUntilFoundResult>(

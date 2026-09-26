@@ -43,6 +43,14 @@ set "NODE_EXEC="
 set "NODE_EXEC_SOURCE="
 
 REM Priority -1: Direct standalone binary (zero Node.js dependency)
+if exist "%SCRIPT_DIR%\browserpaw-server.exe" (
+    echo [Priority -1] Found standalone binary: %SCRIPT_DIR%\browserpaw-server.exe >> "%WRAPPER_LOG%"
+    call "%SCRIPT_DIR%\browserpaw-server.exe" %* 2>> "%STDERR_LOG%"
+    set "EXIT_CODE=%ERRORLEVEL%"
+    echo Exit code: !EXIT_CODE! >> "%WRAPPER_LOG%"
+    endlocal
+    exit /B !EXIT_CODE!
+)
 if exist "%SCRIPT_DIR%\browserclaw-server.exe" (
     echo [Priority -1] Found standalone binary: %SCRIPT_DIR%\browserclaw-server.exe >> "%WRAPPER_LOG%"
     call "%SCRIPT_DIR%\browserclaw-server.exe" %* 2>> "%STDERR_LOG%"

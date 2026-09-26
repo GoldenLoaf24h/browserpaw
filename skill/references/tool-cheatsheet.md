@@ -1,4 +1,4 @@
-# BrowserClaw Tool Cheat Sheet
+# BrowserPaw Tool Cheat Sheet
 
 Per-tool parameters and gotchas for all 50 registered tools. The MCP server always delivers the authoritative JSON Schema at runtime; this sheet records usage contracts and pitfalls that schemas do not express. Tool availability depends on the active profile: `core` (14 tools, default), `crawl` (12), `full` (50). Hidden tools auto-unlock by category on first call, or via `chrome_tool_docs { category, activateForSession: true }`.
 

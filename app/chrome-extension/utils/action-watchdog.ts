@@ -81,11 +81,12 @@ export function inPageWaitForDOMSettle(
         typeof action.node === 'string' && action.node.startsWith('e')
           ? parseInt(action.node.slice(1), 10)
           : action.node;
+      const pawFast = g.__pawFast || g.__clawFast;
       field =
-        g.__clawFast?.actionElements?.get(action.node) ||
-        g.__clawFast?.actionElements?.get(targetId) ||
-        g.__clawFast?.nodes?.get(action.node) ||
-        g.__clawFast?.nodes?.get(targetId) ||
+        pawFast?.actionElements?.get(action.node) ||
+        pawFast?.actionElements?.get(targetId) ||
+        pawFast?.nodes?.get(action.node) ||
+        pawFast?.nodes?.get(targetId) ||
         isolatedMap?.get(targetId) ||
         isolatedMap?.get(action.node) ||
         (document.querySelector(`[data-mcp-idx="${action.node}"]`) as Element) ||
@@ -96,9 +97,11 @@ export function inPageWaitForDOMSettle(
     const isCombobox =
       action?.role === 'combobox' ||
       field?.getAttribute('role') === 'combobox' ||
-      (field?.tagName?.toUpperCase() === 'INPUT' && field?.getAttribute('aria-autocomplete') !== null) ||
       (field?.tagName?.toUpperCase() === 'INPUT' &&
-        (field?.getAttribute('aria-controls') !== null || field?.getAttribute('aria-owns') !== null));
+        field?.getAttribute('aria-autocomplete') !== null) ||
+      (field?.tagName?.toUpperCase() === 'INPUT' &&
+        (field?.getAttribute('aria-controls') !== null ||
+          field?.getAttribute('aria-owns') !== null));
 
     const isAutocomplete = action?.kind === 'fill' && isCombobox;
 
@@ -118,11 +121,7 @@ export function inPageWaitForDOMSettle(
     if (isAutocomplete && typeof requestAnimationFrame === 'function') {
       const checkCandidateOptions = () => {
         if (isDone) return;
-        const ids = (
-          field?.getAttribute('aria-controls') ||
-          field?.getAttribute('aria-owns') ||
-          ''
-        )
+        const ids = (field?.getAttribute('aria-controls') || field?.getAttribute('aria-owns') || '')
           .split(/\s+/)
           .filter(Boolean);
 
@@ -248,12 +247,17 @@ export async function waitForPageSettle(
       hasActiveNet,
       options?.action,
     ]);
-    const settleRes = results?.[0]?.result ?? { settled: true, durationMs: 0, mutationsObserved: 0 };
+    const settleRes = results?.[0]?.result ?? {
+      settled: true,
+      durationMs: 0,
+      mutationsObserved: 0,
+    };
     settleRes.networkSettled = !hasActiveNet;
 
     // Check for secondary confirmation traps (e.g. "Discard draft?", "放弃帖子？")
     try {
-      const trapRes = (await executeInPage({ tabId }, 'inPageDetectConfirmationTrap', []))?.[0]?.result;
+      const trapRes = (await executeInPage({ tabId }, 'inPageDetectConfirmationTrap', []))?.[0]
+        ?.result;
       if (trapRes?.detected) {
         settleRes.confirmationTrap = trapRes;
       }

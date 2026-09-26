@@ -3,7 +3,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 /**
  * Tool exposure profiles.
  *
- * The full tool list is 49 schemas (48 extension tools + 1 native loop tool) / ~59KB / ~16k tokens of fixed cost in every
+ * The full tool list is 50 schemas (49 browser/extension tools + 1 native loop tool) / ~59KB / ~16k tokens of fixed cost in every
  * session, and the agent pays it whether or not it ever touches tab groups or
  * performance traces. Profiles let a deployment expose only the tools a
  * browsing workflow actually needs.
@@ -51,7 +51,7 @@ CORE_TOOL_NAMES.add('chrome_tool_docs');
  * pass process.env.CHROME_MCP_TOOL_PROFILE directly.
  *
  * Default is now "core" to drastically reduce token overhead and avoid decision paralysis.
- * Set CHROME_MCP_TOOL_PROFILE=full to expose all 49 tools, or crawl for crawl workflows.
+ * Set CHROME_MCP_TOOL_PROFILE=full to expose all 50 tools, or crawl for crawl workflows.
  */
 export function resolveToolProfile(raw?: string | null): ToolProfile {
   const v = String(raw ?? '')
@@ -179,7 +179,12 @@ export function hasJevApiKey(): boolean {
 export function isJevDisabledWithoutKey(): boolean {
   const env = typeof process !== 'undefined' ? process.env : undefined;
   if (!env) return false;
-  const flag = (env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY || env.DISABLE_JEV_WITHOUT_KEY || '')
+  const flag = (
+    env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY ||
+    env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY ||
+    env.DISABLE_JEV_WITHOUT_KEY ||
+    ''
+  )
     .trim()
     .toLowerCase();
   return flag === 'true' || flag === '1';

@@ -6,21 +6,21 @@ const rootSkill = path.resolve('skill');
 const canonicalSkillMd = fs.readFileSync(path.join(rootSkill, 'SKILL.md'), 'utf-8');
 
 const targets = [
-  { dir: path.resolve('skills/browserclaw'), name: 'browserclaw' },
-  { dir: path.resolve('plugins/browserclaw/skills/browserclaw'), name: 'browserclaw', isPlugin: true },
-  { dir: 'D:/workspace/browserclaw/skill', name: 'browserclaw' },
-  { dir: 'D:/workspace/browserclaw/plugins/browserclaw/skills/browserclaw', name: 'browserclaw', isPlugin: true },
-  { dir: 'C:/Users/Lenovo/.codex/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.codex/plugins/cache/browserclaw/browserclaw/3.1.0/skills/browserclaw', name: 'browserclaw', isPlugin: true },
-  { dir: 'C:/Users/Lenovo/.codex/.tmp/marketplaces/browserclaw/skill', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.agents/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.claude/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.gemini/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.gemini/config/skills/browserclaw', name: 'browserclaw', managed: true },
+  { dir: path.resolve('skills/browserpaw'), name: 'browserpaw' },
+  { dir: path.resolve('plugins/browserpaw/skills/browserpaw'), name: 'browserpaw', isPlugin: true },
+  { dir: 'D:/workspace/browserpaw/skill', name: 'browserpaw' },
+  { dir: 'D:/workspace/browserpaw/plugins/browserpaw/skills/browserpaw', name: 'browserpaw', isPlugin: true },
+  { dir: 'C:/Users/Lenovo/.codex/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.codex/plugins/cache/browserpaw/browserpaw/3.1.0/skills/browserpaw', name: 'browserpaw', isPlugin: true },
+  { dir: 'C:/Users/Lenovo/.codex/.tmp/marketplaces/browserpaw/skill', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.agents/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.claude/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.gemini/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.gemini/config/skills/browserpaw', name: 'browserpaw', managed: true },
   { dir: 'C:/Users/Lenovo/.gemini/config/skills/mcp-chrome', name: 'mcp-chrome', managed: true },
-  { dir: 'C:/Users/Lenovo/.gemini/antigravity-cli/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/.config/opencode/skills/browserclaw', name: 'browserclaw' },
-  { dir: 'C:/Users/Lenovo/AppData/Local/hermes/plugins/browserclaw/skills/browserclaw', name: 'browserclaw', isPlugin: true },
+  { dir: 'C:/Users/Lenovo/.gemini/antigravity-cli/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/.config/opencode/skills/browserpaw', name: 'browserpaw' },
+  { dir: 'C:/Users/Lenovo/AppData/Local/hermes/plugins/browserpaw/skills/browserpaw', name: 'browserpaw', isPlugin: true },
 ];
 
 function copyDir(src, dest, isPlugin = false) {
@@ -37,8 +37,8 @@ function copyDir(src, dest, isPlugin = false) {
       if (isPlugin && (entry.name.endsWith('.md') || entry.name.endsWith('.json'))) {
         let text = fs.readFileSync(srcPath, 'utf-8');
         text = text
-          .replaceAll('chrome_', 'browserclaw_')
-          .replaceAll('get_windows_and_tabs', 'browserclaw_get_windows_and_tabs');
+          .replaceAll('chrome_', 'browserpaw_')
+          .replaceAll('get_windows_and_tabs', 'browserpaw_get_windows_and_tabs');
         fs.writeFileSync(destPath, text, 'utf-8');
       } else {
         fs.copyFileSync(srcPath, destPath);
@@ -59,19 +59,19 @@ for (const target of targets) {
     copyDir(rootSkill, target.dir, isPlugin);
     let content = canonicalSkillMd;
     if (target.name === 'mcp-chrome') {
-      content = content.replace(/^name:\s*browserclaw/m, 'name: mcp-chrome');
+      content = content.replace(/^name:\s*(browserpaw|browserclaw)/m, 'name: mcp-chrome');
     }
     if (isPlugin) {
       content = content
-        .replaceAll('chrome_', 'browserclaw_')
-        .replaceAll('get_windows_and_tabs', 'browserclaw_get_windows_and_tabs');
+        .replaceAll('chrome_', 'browserpaw_')
+        .replaceAll('get_windows_and_tabs', 'browserpaw_get_windows_and_tabs');
     }
     const destSkillMd = path.join(target.dir, 'SKILL.md');
     fs.writeFileSync(destSkillMd, content, 'utf-8');
 
     if (target.managed) {
       const hash = crypto.createHash('sha256').update(content).digest('hex');
-      const managedFile = path.join(target.dir, '.browserclaw-managed.json');
+      const managedFile = path.join(target.dir, '.browserpaw-managed.json');
       const managedData = {
         contentHash: hash,
         updatedAt: new Date().toISOString(),
@@ -85,9 +85,9 @@ for (const target of targets) {
 }
 
 // Additionally sync plugin definition files to Hermes plugin directory
-const hermesPluginDir = 'C:/Users/Lenovo/AppData/Local/hermes/plugins/browserclaw';
+const hermesPluginDir = 'C:/Users/Lenovo/AppData/Local/hermes/plugins/browserpaw';
 if (fs.existsSync(hermesPluginDir)) {
-  const pluginSrc = path.resolve('plugins/browserclaw');
+  const pluginSrc = path.resolve('plugins/browserpaw');
   const syncFiles = ['plugin.yaml', '__init__.py', 'core_schemas.json', '.codex-plugin/plugin.json'];
   for (const rel of syncFiles) {
     const src = path.join(pluginSrc, rel);

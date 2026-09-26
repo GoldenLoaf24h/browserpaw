@@ -11,7 +11,7 @@ const windowMode = ref<'tab' | 'window'>('tab');
 const currentVersion = ref(CURRENT_VERSION);
 const versionChecked = ref(false);
 const hasUpdate = ref(false);
-const latestReleaseUrl = ref('https://github.com/GoldenLoaf24h/browserclaw/releases/latest');
+const latestReleaseUrl = ref('https://github.com/GoldenLoaf24h/browserpaw/releases/latest');
 
 const openRelease = (url?: string) => {
   const target = url || latestReleaseUrl.value;
@@ -248,7 +248,8 @@ onMounted(async () => {
           target="_blank"
           rel="noopener noreferrer"
           @click.prevent="openRelease(latestReleaseUrl)"
-        >view</a>
+          >view</a
+        >
       </div>
     </div>
   </div>

@@ -1,0 +1,30 @@
+{
+  "name": "browserpaw",
+  "version": "3.1.0",
+  "description": "Control your own browser with Agent. High-efficiency Chrome browser automation MCP server and AI agent skill.",
+  "author": {
+    "name": "BrowserPaw Team",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
+  "repository": "https://github.com/GoldenLoaf24h/browserpaw",
+  "license": "AGPL-3.0",
+  "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "BrowserPaw",
+    "shortDescription": "Control your own browser with Agent",
+    "longDescription": "Turn your everyday Chrome into an ultra-fast, controllable, readable, and verifiable automation environment for AI agents with 100% session & auth reuse.",
+    "developerName": "BrowserPaw Team",
+    "category": "Productivity",
+    "capabilities": [
+      "Browser Automation",
+      "DOM Accessibility Tree",
+      "CDP Control",
+      "Session Reuse"
+    ],
+    "websiteURL": "https://github.com/GoldenLoaf24h/browserpaw",
+    "defaultPrompt": "Open Chrome and inspect my active webpage"
+  },
+  "mcpServers": "./.mcp.json"
+}

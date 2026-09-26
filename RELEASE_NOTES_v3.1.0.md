@@ -1,4 +1,4 @@
-# BrowserClaw v3.1.0 Release Notes
+# BrowserPaw v3.1.0 Release Notes
 
 **Release Date:** September 23, 2026  
 **Tag:** `v3.1.0`
@@ -7,7 +7,7 @@
 
 ## 🚀 Overview
 
-BrowserClaw **v3.1.0** represents a major architectural milestone. This release synthesizes the best design principles and engineering patterns from leading browser automation projects (`jev-ultrafast`, `browser-use`, `browser-harness`), implements full Deep Shadow DOM piercing, introduces client-side virtual DOM scroll resolution, hardens input commitment and anti-timeout protocols, expands the tool catalog to **50 canonical tools**, and brings the complete **Hermes 49-Tool Canonical Display & Rich Previews** specification.
+BrowserPaw **v3.1.0** represents a major architectural milestone. This release synthesizes the best design principles and engineering patterns from leading browser automation projects (`jev-ultrafast`, `browser-use`, `browser-harness`), implements full Deep Shadow DOM piercing, introduces client-side virtual DOM scroll resolution, hardens input commitment and anti-timeout protocols, expands the tool catalog to **50 canonical tools**, and brings the complete **Hermes 49-Tool Canonical Display & Rich Previews** specification.
 
 ---
 
@@ -15,7 +15,7 @@ BrowserClaw **v3.1.0** represents a major architectural milestone. This release 
 
 ### 1. 🎴 Hermes 49-Tool Canonical Display & Rich Card Previews
 
-- **Unified Tool Display Specs (`BROWSERCLAW_SPECS`)**: Injected native emoji icons, human-friendly action verbs, and concise input summaries across all canonical tools in `plugins/browserclaw/__init__.py`.
+- **Unified Tool Display Specs (`BROWSERPAW_SPECS`)**: Injected native emoji icons, human-friendly action verbs, and concise input summaries across all canonical tools in `plugins/browserpaw/__init__.py`.
 - **Intelligent Rich Previews**: Specialized extractors for interactive DOM trees, keyword grep results, element interactions, screenshot previews, Jev fast-decision loops, and CDP execution.
 - **Cross-Platform Parity**: Identical visual structure rendered in Hermes native card widgets and standard MCP web/chat surfaces.
 
@@ -62,13 +62,13 @@ BrowserClaw **v3.1.0** represents a major architectural milestone. This release 
 - **Unit Tests (`chrome-mcp-server`)**: 56 test files, 537/537 tests passed (100%).
 - **Bridge Tests (`mcp-chrome-bridge`)**: 6 test suites, 102/102 tests passed (100%).
 - **E2E Modern Test Runner**: 4 tiers (F01–F13, boundary cases, pairwise, real-world workflows), 153/153 tests passed (100%).
-- **Python Plugin Tests (`plugins/browserclaw`)**: 20/20 tests passed (100%).
+- **Python Plugin Tests (`plugins/browserpaw`)**: 20/20 tests passed (100%).
 - **TypeScript Typecheck (`pnpm typecheck`)**: 0 errors across all workspace packages.
-- **BrowserClaw Doctor Diagnostics**: 7/7 checks passed (Node environment, bridge token, bridge server, MCP initialization, extension build, standalone sync, native host registration).
+- **BrowserPaw Doctor Diagnostics**: 7/7 checks passed (Node environment, bridge token, bridge server, MCP initialization, extension build, standalone sync, native host registration).
 
 ---
 
 ## 📦 Release Assets
 
-- `browserclaw-extension-v3.1.0.zip`: Pre-built Chrome Extension (Manifest V3) ready for developer-mode unpacking or distribution.
-- `browserclaw-skill-v3.1.0.zip`: Standalone AI Agent skill package with full progressive disclosure references.
+- `browserpaw-extension-v3.1.0.zip`: Pre-built Chrome Extension (Manifest V3) ready for developer-mode unpacking or distribution.
+- `browserpaw-skill-v3.1.0.zip`: Standalone AI Agent skill package with full progressive disclosure references.

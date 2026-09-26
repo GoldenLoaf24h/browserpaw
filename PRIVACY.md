@@ -1,14 +1,14 @@
-# Privacy Policy for BrowserClaw
+# Privacy Policy for BrowserPaw
 
 **Last Updated**: September 12, 2026
 
-BrowserClaw ("we", "our", or "the extension") is an open-source browser automation bridge designed for AI agents via the Model Context Protocol (MCP). We are committed to protecting user privacy and ensuring full transparency regarding data handling.
+BrowserPaw ("we", "our", or "the extension") is an open-source browser automation bridge designed for AI agents via the Model Context Protocol (MCP). We are committed to protecting user privacy and ensuring full transparency regarding data handling.
 
 ---
 
 ## 1. Zero Data Collection & Local-Only Architecture
 
-- **No Remote Transmission**: BrowserClaw does **not** collect, track, store, or transmit your personal data, browsing history, form inputs, or credentials to any remote server or third-party cloud.
+- **No Remote Transmission**: BrowserPaw does **not** collect, track, store, or transmit your personal data, browsing history, form inputs, or credentials to any remote server or third-party cloud.
 - **Local Loopback Communication**: All communication occurs strictly within your local machine between the Chrome Extension and the local Native Messaging host on `127.0.0.1` (localhost).
 - **No Analytics / Telemetry**: The extension contains no tracking scripts, advertising libraries, or telemetry SDKs.
 
@@ -44,12 +44,12 @@ In accordance with the Chrome Web Store Minimum Permissions policy, each request
 
 ## 4. Open Source Transparency
 
-BrowserClaw is open-source software distributed under the GNU Affero General Public License v3.0 (AGPL-3.0). The complete source code is publicly auditable at:  
-[https://github.com/GoldenLoaf24h/browserclaw](https://github.com/GoldenLoaf24h/browserclaw)
+BrowserPaw is open-source software distributed under the GNU Affero General Public License v3.0 (AGPL-3.0). The complete source code is publicly auditable at:  
+[https://github.com/GoldenLoaf24h/browserpaw](https://github.com/GoldenLoaf24h/browserpaw)
 
 ---
 
 ## 5. Contact & Inquiries
 
 For questions, security disclosures, or concerns regarding this policy, please open an issue on GitHub:  
-[https://github.com/GoldenLoaf24h/browserclaw/issues](https://github.com/GoldenLoaf24h/browserclaw/issues)
+[https://github.com/GoldenLoaf24h/browserpaw/issues](https://github.com/GoldenLoaf24h/browserpaw/issues)

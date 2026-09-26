@@ -1,5 +1,5 @@
 /**
- * BrowserClaw Agent Tab Group Lifecycle Manager
+ * BrowserPaw Agent Tab Group Lifecycle Manager
  *
  * Implements 1:1 parity with industrial-grade Chrome Tab Grouping:
  * 1. Automatic grouping: places Agent tabs into a dedicated colored tab group.
@@ -59,7 +59,10 @@ export function cleanPageTitle(rawTitle: string): string {
   ];
   for (const d of delimiters) {
     if (trimmed.includes(d)) {
-      const parts = trimmed.split(d).map((p) => p.trim()).filter(Boolean);
+      const parts = trimmed
+        .split(d)
+        .map((p) => p.trim())
+        .filter(Boolean);
       // Prefer the first informative part (specific page title/topic)
       if (parts[0] && parts[0].length >= 2 && parts[0].length <= 30) {
         return parts[0];
@@ -318,9 +321,7 @@ export class TabGroupManager {
         options.title.trim() &&
         options.title.trim() !== TabGroupManager.DEFAULT_TITLE,
       );
-      const title = isExplicitTitle
-        ? options.title!.trim()
-        : deriveSmartGroupTitle(tab);
+      const title = isExplicitTitle ? options.title!.trim() : deriveSmartGroupTitle(tab);
       const color = options.color || TabGroupManager.DEFAULT_COLOR;
 
       // Find if there is an existing valid managed group in this window
@@ -473,7 +474,7 @@ export class TabGroupManager {
   }
 
   /**
-   * Check if a tab group ID is currently managed by BrowserClaw agent
+   * Check if a tab group ID is currently managed by BrowserPaw agent
    */
   public async isManagedGroup(groupId: number): Promise<boolean> {
     if (typeof groupId !== 'number' || groupId <= 0) return false;

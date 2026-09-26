@@ -1,6 +1,6 @@
 # Dual-Brain Semantic Micro-Loop Reference (`chrome_act_toward_goal`)
 
-This reference documents BrowserClaw's Fast/System 1 local autonomous loop powered by TypeSafe Jev with built-in heuristic fallback.
+This reference documents BrowserPaw's Fast/System 1 local autonomous loop powered by TypeSafe Jev with built-in heuristic fallback.
 
 ---
 

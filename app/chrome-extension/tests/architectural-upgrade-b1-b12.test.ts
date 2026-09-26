@@ -47,7 +47,7 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
     });
 
     it('preserves clean URLs unchanged', () => {
-      const cleanUrl = 'https://example.com/search?q=browserclaw&page=2';
+      const cleanUrl = 'https://example.com/search?q=browserpaw&page=2';
       expect(scrubUrl(cleanUrl)).toBe(cleanUrl);
     });
   });

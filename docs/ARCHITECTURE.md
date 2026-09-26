@@ -1,4 +1,4 @@
-# BrowserClaw (mcp-chrome) Architecture & System Design 🏗️
+# BrowserPaw (mcp-chrome) Architecture & System Design 🏗️
 
 > **Version**: 3.1.0 (Production Stable Release)  
 > **Target Runtime**: Chrome Extension Manifest V3, Chrome DevTools Protocol (CDP 1.3), Model Context Protocol (MCP 2024-11-05), Fastify HTTP/SSE, Chrome Native Messaging.
@@ -7,7 +7,7 @@
 
 ## 1. System Overview & Architecture Topology
 
-BrowserClaw connects AI Agents (Claude Desktop, Cursor, Cline, OpenManus, AutoGPT) directly to an active, authenticated Google Chrome instance through the **Model Context Protocol (MCP)**. Unlike traditional headless browser frameworks (Playwright, Puppeteer, Selenium), BrowserClaw operates inside the user's primary browser profile, preserving cookies, logins, session state, and extension capabilities without restarting the browser or exposing insecure remote debugging ports.
+BrowserPaw connects AI Agents (Claude Desktop, Cursor, Cline, OpenManus, AutoGPT) directly to an active, authenticated Google Chrome instance through the **Model Context Protocol (MCP)**. Unlike traditional headless browser frameworks (Playwright, Puppeteer, Selenium), BrowserPaw operates inside the user's primary browser profile, preserving cookies, logins, session state, and extension capabilities without restarting the browser or exposing insecure remote debugging ports.
 
 ```mermaid
 graph TB
@@ -152,9 +152,9 @@ sequenceDiagram
 
 ## 4. Deep Open Source Architectural Comparison
 
-Below is a systematic comparison between **BrowserClaw**, **browser-use**, and **midscene**:
+Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **midscene**:
 
-| Architecture Dimension         | BrowserClaw (`mcp-chrome`)                                                                                   | `browser-use`                                                | `midscene`                                           |
+| Architecture Dimension         | BrowserPaw (`mcp-chrome`)                                                                                    | `browser-use`                                                | `midscene`                                           |
 | :----------------------------- | :----------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------- | :--------------------------------------------------- |
 | **Primary Philosophy**         | Non-intrusive MCP copilot in user's live browser                                                             | Autonomous agent driving standalone Chromium                 | Visual AI & Multimodal UI Testing framework          |
 | **Runtime Topology**           | Chrome MV3 Extension + Native Messaging + Fastify SSE                                                        | Python script controlling Playwright / remote CDP            | Node.js / Puppeteer / Playwright / Web SDK           |
@@ -226,11 +226,12 @@ Below is a systematic comparison between **BrowserClaw**, **browser-use**, and *
 ### ADR-005: 1MB Physical Native Messaging Ceiling & Chunking Defense
 
 - **Status**: Implemented & Verified (P0)
-- **Context**: Chrome's Native Messaging host crashes immediately with `ERR_FAILED` or broken pipe when any single message payload exceeds $1024 \times 1024$ bytes.
+- **Context**: Chrome's Native Messaging host crashes immediately with `ERR_FAILED` or broken pipe when any single message payload exceeds 1,048,576 bytes (1MB).
 - **Decision**:
-  1. Check byte length on both ends (`safePostMessage` in Extension and `NativeMessageHost` in Node.js) before transmission.
-  2. Strictly block or truncate payloads exceeding 1000KB, returning structured error messages instead of terminating the pipe.
-- **Consequences**: Permanently eliminated native host disconnects and process crashes caused by large DOM snapshots or uncompressed images.
+  1. Enforce a 1000KB physical pre-send validation ceiling on both ends (`safePostMessage` in Extension and `NativeMessageHost` in Node.js) before transmission.
+  2. Implement transparent bi-directional chunking and reassembly: payloads exceeding 950KB are partitioned into <= 850KB chunks with frame headers (`chunkIndex`, `totalChunks`, `msgId`), streaming across the pipe and reassembling automatically in memory before dispatching to handlers.
+  3. Oversized payloads that exceed maximum allocation boundaries return structured error responses instead of terminating the pipe.
+- **Consequences**: Permanently eliminated native host disconnects and process crashes caused by large DOM snapshots or uncompressed images while supporting arbitrary multi-megabyte payloads transparently.
 
 ### ADR-006: High-Entropy Token Authentication for Local Fastify Bridge
 
@@ -316,7 +317,7 @@ Below is a systematic comparison between **BrowserClaw**, **browser-use**, and *
 ### ADR-014: Dynamic Profile Layering & Session-Level Tool Activation across Transports
 
 - **Status**: Implemented & Verified
-- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 49 tools consumes ~19.5k tokens on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
+- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 50 tools consumes ~19.5k tokens on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
 - **Decision**:
   1. Define 8 comprehensive tool categories in `TOOL_CATEGORIES` across `packages/shared`: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, and `crawl`.
   2. Retain `chrome_tool_docs` as an omni-present introspection tool across all profiles.
@@ -379,7 +380,7 @@ Below is a systematic comparison between **BrowserClaw**, **browser-use**, and *
 ### ADR-019: Full-Spectrum Drag Architecture & Background Tab Delivery Self-Healing (v2.3.0)
 
 - **Status**: Implemented & Verified
-- **Context**: Web automation encounters two fundamentally distinct drag paradigms: (1) HTML5 Native Drag-and-Drop (dragstart/dragover/drop) used in file wells, and (2) Pointer/Mouse Drags (pointerdown/pointermove/pointerup) used in canvas drawing, custom sliders, SVG corridors, and list reordering. Previously, BrowserClaw intercepted drags unconditionally, breaking pointer drags, while background tab throttling caused Chromium to drop CDP input when users were browsing other tabs.
+- **Context**: Web automation encounters two fundamentally distinct drag paradigms: (1) HTML5 Native Drag-and-Drop (dragstart/dragover/drop) used in file wells, and (2) Pointer/Mouse Drags (pointerdown/pointermove/pointerup) used in canvas drawing, custom sliders, SVG corridors, and list reordering. Previously, BrowserPaw intercepted drags unconditionally, breaking pointer drags, while background tab throttling caused Chromium to drop CDP input when users were browsing other tabs.
 - **Decision**:
   1. Decouple drag execution: route HTML5 drags through CDP Input.setInterceptDrags only when dnd: true; for pointer/gesture drags, execute uninterrupted pressed mouse movements with button: 'left', buttons: 1 along multi-point path sequences.
   2. Extend Click Probe Fallback to visual coordinates: when Chromium background tab throttling drops CDP events (probe reports delivered: false), automatically resolve the target element via document.elementFromPoint(x, y) and dispatch synthetic in-page clicks, ensuring 100% action delivery even on non-active background tabs.

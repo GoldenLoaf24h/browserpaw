@@ -8,7 +8,7 @@ This guide is specifically designed for **AI Agents (Claude Code, Cursor, Windsu
 
 ## 1. System Architecture & Mechanics
 
-`BrowserClaw` is an industrial-grade browser control platform operating over the **Model Context Protocol (MCP)**:
+`BrowserPaw` is an industrial-grade browser control platform operating over the **Model Context Protocol (MCP)**:
 
 - **Chrome MV3 Extension**: Runs directly inside your everyday Google Chrome. It injects native hardware-level events (`isTrusted: true`) via Chrome DevTools Protocol (CDP) and maintains an isolated, pure-memory WeakRef DOM index tree.
 - **Native Bridge Server**: Runs locally on `127.0.0.1:12306` (or a custom port), providing standard MCP JSON-RPC endpoints over Streamable HTTP, Server-Sent Events (SSE), and standard I/O (stdio).
@@ -22,21 +22,20 @@ Before connecting your agent client to the MCP server, complete these initial se
 
 ### Step 1: Register Chrome Native Messaging Host
 
-The build artifacts include automated registration scripts. Execute once on your host machine:
+Execute the registration script once to bind the Native Messaging manifest with your browser:
 
-- **Windows (PowerShell / CMD)**:
-  ```cmd
-  cd <repo-root>\app\native-server\dist
-  run_host.bat
-  ```
-- **macOS / Linux (Bash / Zsh)**:
+- **Via Repository CLI (Cross-Platform)**:
   ```bash
-  cd app/native-server/dist
-  chmod +x run_host.sh
-  ./run_host.sh
+  node bin/browserpaw.cjs register
+  # or from native server directory:
+  cd app/native-server && node dist/scripts/register-dev.js
+  ```
+- **If Globally Installed via npm / npx**:
+  ```bash
+  npx browserpaw register
   ```
 
-_The script registers the manifest in your operating system registry (`HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mcp_chrome.bridge` on Windows) or system application support directory._
+_The registration script creates the manifest pointing to the host runner and registers it in the OS registry (`HKCU\Software\Google\Chrome\NativeMessagingHosts\com.chromemcp.nativehost` on Windows) or Chrome Application Support / NativeMessagingHosts directory on macOS and Linux._
 
 ### Step 2: Load Extension in Google Chrome
 
@@ -47,7 +46,7 @@ _The script registers the manifest in your operating system registry (`HKCU\Soft
    ```
    <repo-root>/app/chrome-extension/.output/chrome-mv3
    ```
-5. The BrowserClaw icon will appear in Chrome's extension toolbar.
+5. The BrowserPaw icon will appear in Chrome's extension toolbar.
 
 ### Step 3: Verify Ready State
 
@@ -60,12 +59,15 @@ _The script registers the manifest in your operating system registry (`HKCU\Soft
 
 Copy the configuration snippet matching your agent platform into your MCP configuration file.
 
-### 3.1 Authentication Token
+### 3.1 Authentication Token & Environment Variables
 
-BrowserClaw enforces local token authentication to prevent unauthorized loopback access:
+BrowserPaw enforces local token authentication to prevent unauthorized loopback access:
 
 - **Token File Location**: `~/.chrome-mcp/bridge-token` (on Windows: `C:\Users\<username>\.chrome-mcp\bridge-token`)
-- **Environment Override**: You can define `export CHROME_MCP_TOKEN="your_secure_token"` before starting the server.
+- **Environment Variables**:
+  - `CHROME_MCP_TOKEN`: Custom auth token string (overrides the generated token file).
+  - `CHROME_MCP_TOOL_PROFILE`: Tool exposure profile. Values: `core` (14 tools, default ~11.5k tokens), `crawl` (12 tools, ~5.8k tokens), or `full` (all 50 tools, ~19.5k tokens).
+  - `BROWSERPAW_TOOL_PREFIX`: Namespace prefix for tool names (`browserpaw_` or `chrome_`).
 
 > **Note**: In `stdio` transport mode, the Native Server automatically generates or reads this token and completes internal handshakes with Chrome.
 
@@ -80,7 +82,7 @@ Configuration file: `~/.claude/claude_desktop_config.json` or project-level `mcp
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "url": "http://127.0.0.1:12306/sse",
       "headers": {
         "Authorization": "Bearer <TOKEN_FROM_BRIDGE_TOKEN_FILE>"
@@ -95,7 +97,7 @@ Configuration file: `~/.claude/claude_desktop_config.json` or project-level `mcp
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -112,7 +114,7 @@ In `.cursor/mcp.json` or Settings -> Features -> MCP Servers -> Add New MCP Serv
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -129,7 +131,7 @@ Configuration file: `~/.codeium/windsurf/mcp_config.json`:
 ```json
 {
   "mcpServers": {
-    "browserclaw": {
+    "browserpaw": {
       "command": "node",
       "args": ["<repo-root>/app/native-server/dist/mcp/mcp-server-stdio.js"]
     }
@@ -244,7 +246,7 @@ To minimize prompt token consumption, maximize responsiveness, and prevent click
 ## 6. Diagnostic Checklist
 
 1. **Connection Refused (`ECONNREFUSED 127.0.0.1:12306`)**:
-   - Ensure Google Chrome is running with the BrowserClaw extension enabled.
+   - Ensure Google Chrome is running with the BrowserPaw extension enabled.
    - Run `curl http://127.0.0.1:12306/ping` in terminal. A response of `{"status":"ok","message":"pong"}` confirms the service is listening.
 2. **401 Unauthorized**:
    - Verify your client config includes `Authorization: Bearer <token>` matching `~/.chrome-mcp/bridge-token`.

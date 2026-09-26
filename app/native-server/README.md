@@ -1,6 +1,6 @@
-# BrowserClaw Native Messaging Bridge & MCP Server 🔌
+# BrowserPaw Native Messaging Bridge & MCP Server 🔌
 
-This package (`mcp-chrome-bridge`) is the Node.js native bridge and Model Context Protocol (MCP) server for **BrowserClaw**. It connects AI Agent clients (Claude Desktop, Claude Code, Cursor, Windsurf, Codex) to the Chrome MV3 Extension via Chrome Native Messaging and CDP.
+This package (`mcp-chrome-bridge`) is the Node.js native bridge and Model Context Protocol (MCP) server for **BrowserPaw**. It connects AI Agent clients (Claude Desktop, Claude Code, Cursor, Windsurf, Codex) to the Chrome MV3 Extension via Chrome Native Messaging and CDP.
 
 ---
 
@@ -44,7 +44,9 @@ Provides high-concurrency Streamable HTTP and Server-Sent Events (SSE) interface
 Runs directly over standard I/O for clients managing child processes (e.g. Cursor, Claude Desktop):
 
 ```bash
-node app/native-server/dist/cli.js --stdio
+node app/native-server/dist/mcp/mcp-server-stdio.js
+# or via root CLI
+node bin/browserpaw.cjs
 ```
 
 ---
@@ -53,8 +55,8 @@ node app/native-server/dist/cli.js --stdio
 
 Configure the starting tool profile with the `CHROME_MCP_TOOL_PROFILE` environment variable:
 
-- **`core`** (default): 14 ultra-lean semantic navigation and DOM interaction tools (~5.8k tokens, cutting prompt tokens by >65% and eliminating decision paralysis).
-- **`full`**: All 49 tools exposed (~19.5k tokens).
+- **`core`** (default): 14 ultra-lean semantic navigation and DOM interaction tools (~11.5k tokens, cutting prompt tokens by >40% and eliminating decision paralysis).
+- **`full`**: All 50 tools exposed (~19.5k tokens).
 - **`crawl`**: 12 lightweight web scraping and content extraction tools (~5.8k tokens).
 
 ### Auto-Unlock on Call & Dynamic Activation
@@ -76,8 +78,8 @@ Supported across both **Fastify HTTP/SSE** and **Stdio** (`mcp-server-stdio.ts`)
 
 1. **Token Authentication (P0)**:
    All incoming HTTP and SSE connections require a valid token matching `~/.chrome-mcp/bridge-token`. Rejects unauthorized local loopback access, DNS rebinding, and cross-site requests.
-2. **1000KB Physical Native Messaging Buffer Ceiling**:
-   Chrome crashes if a Native Messaging payload exceeds 1MB. The host enforces strict pre-send size validation, blocking or gracefully truncating oversized payloads.
+2. **1000KB Physical Native Messaging Buffer Ceiling & Transparent Chunking**:
+   Chrome crashes if a Native Messaging payload exceeds 1MB. The host enforces a 1000KB pre-send validation ceiling paired with transparent bi-directional chunking and reassembly (950KB chunk threshold / 850KB slice size).
 3. **SSRF & Private IP Protection**:
    `assertSafeUrl` and `safeLookup` reject loopback, RFC1918, CGNAT, and link-local destinations on external network requests.
 4. **Path Traversal Defenses**:
@@ -90,18 +92,19 @@ Supported across both **Fastify HTTP/SSE** and **Stdio** (`mcp-server-stdio.ts`)
 Register the native host with Chrome:
 
 ```bash
-# Windows
-cd app/native-server/dist
-run_host.bat
+# From native server package directory:
+node dist/scripts/register-dev.js
 
-# macOS / Linux
-cd app/native-server/dist
-./run_host.sh
+# Or from repository root:
+node bin/browserpaw.cjs register
+
+# Or if globally installed:
+npx browserpaw register
 ```
 
 Manifest registration targets:
 
-- **Windows**: `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mcp_chrome.bridge`
+- **Windows**: `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.chromemcp.nativehost`
 - **macOS**: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`
 - **Linux**: `~/.config/google-chrome/NativeMessagingHosts/`
 

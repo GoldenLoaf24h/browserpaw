@@ -6,10 +6,11 @@ This document specifies the architecture, test harness, oracle derivation method
 
 The test suite validates the modernization and browser-use engine integration specified in `PROJECT.md` and `ORIGINAL_REQUEST.md`. It provides comprehensive, requirement-driven verification across all 13 core features, organized into 4 distinct verification tiers:
 
-- **Tier 1: Feature Coverage (>=5 tests per feature)**: Validates functional correctness, core behavior, and protocol conformance across all 13 features (minimum 65 tests).
-- **Tier 2: Boundary & Corner Cases (>=5 tests per feature)**: Exercises zero/extreme inputs, race conditions, disconnects, network anomalies, and format limits across all 13 features (minimum 65 tests).
-- **Tier 3: Cross-Feature Combinations**: Validates pairwise interactions and state coupling between distinct subsystem features (minimum 16 tests).
-- **Tier 4: Real-World Application Scenarios**: Simulates end-to-end, multi-step agent workflows on complex real-world web applications (minimum 5 scenarios).
+- **Tier 1: Feature Coverage (>=5 tests per feature)**: Validates functional correctness, core behavior, and protocol conformance across all 13 features (65 tests).
+- **Tier 2: Boundary & Corner Cases (>=5 tests per feature)**: Exercises zero/extreme inputs, race conditions, disconnects, network anomalies, and format limits across all 13 features (67 tests; F07 and F10 include specialized subframe synchronization and table extraction boundary coverage).
+- **Tier 3: Cross-Feature Combinations**: Validates pairwise interactions and state coupling between distinct subsystem features (16 tests).
+- **Tier 4: Real-World Application Scenarios**: Simulates end-to-end, multi-step agent workflows on complex real-world web applications (5 scenarios).
+- **Total E2E Tests**: 153 tests executed in ~10s with 100% compliance.
 
 ---
 
@@ -30,7 +31,8 @@ test/
 │   ├── fixtures/
 │   │   ├── dom-samples.ts        # Synthetic & realistic DOM trees (E-commerce, Admin, SPA 1500-node feed)
 │   │   ├── tool-inputs.ts        # Payloads for valid, edge-case, and adversarial inputs
-│   │   └── oracle-evaluators.ts  # Formal specifications and expected output derivation helpers
+│   │   ├── oracle-evaluators.ts  # Formal specifications and expected output derivation helpers
+│   │   └── mock-server.ts        # Unified E2ETestEnvironment scaffold bundling all mocks and tool schemas
 │   ├── mocks/
 │   │   ├── mock-mcp-server.ts    # Multi-session MCP server harness conforming to McpSessionManager
 │   │   ├── mock-extension.ts     # Mock Chrome Extension background worker & native port
@@ -223,6 +225,7 @@ Each test case derives its expected output from authoritative source requirement
   3. `test_f07_index_overflow_rejection`: Rejects index `99999` exceeding maximum assigned elements.
   4. `test_f07_detached_node_race_condition`: Target element removed from DOM immediately prior to click event.
   5. `test_f07_occluded_by_modal_race_condition`: Element covered by a dynamic modal between indexing and click.
+  6. `test_f07_subframe_index_reindex_synchronization`: Subframe index synchronization and dynamic re-indexing across nested frames.
 - **F8**:
   1. `test_f08_deeply_nested_dom_100_levels`: Correctly prunes DOM tree nested 100 levels deep without stack overflow.
   2. `test_f08_ten_thousand_text_nodes`: Handles page with 10,000 raw text nodes within memory limits.
@@ -241,6 +244,7 @@ Each test case derives its expected output from authoritative source requirement
   3. `test_f10_negative_viewport_coordinates`: Elements with negative scroll offsets have coordinates clamped properly.
   4. `test_f10_bounding_box_fullscreen`: Computes bounding boxes correctly when page is scrolled or in fullscreen mode.
   5. `test_f10_nested_overflow_scroll_containers`: Element inside internal scrolling container calculates correct relative position.
+  6. `test_f10_table_and_image_markdown_extraction`: Verifies HTML table structures and images with alt text extract into markdown syntax without corruption.
 - **F11**:
   1. `test_f11_strict_null_checks`: TS configuration enforces strict null safety across shared and native packages.
   2. `test_f11_missing_optional_peer_dep`: System operates without failure if optional peer dependencies are absent.
@@ -349,5 +353,58 @@ node --experimental-strip-types --test test/e2e/tier4-real-world-scenarios/*.tes
 The root package runner executes the full E2E test suite:
 
 ```bash
+pnpm test
+# or
 pnpm test:e2e
+```
+
+---
+
+## 6. Interactive DOM Challenge Testbed (NEXUS LAB)
+
+In addition to the opaque mock E2E suite, the repository includes a standalone React 19 + Vite 7 challenge testbed at `test/complex-html-testing/` (NEXUS LAB) featuring 12 interactive DOM obstacle challenges designed to benchmark AI agent browser automation:
+
+| Challenge | Module            | Obstacle & Validation Focus                                                 |
+| :-------- | :---------------- | :-------------------------------------------------------------------------- |
+| **C01**   | `C01Click.tsx`    | Click precision, event listeners, dynamic button states                     |
+| **C02**   | `C02Shadow.tsx`   | Open & closed Shadow DOM boundaries, nested component penetration           |
+| **C03**   | `C03Form.tsx`     | Complex forms, validation states, custom dropdowns, token boundary matching |
+| **C04**   | `C04Timing.tsx`   | Debounced buttons, delayed render elements, async animation settle          |
+| **C05**   | `C05Scroll.tsx`   | Infinite scroll feeds, virtualized list rendering, `scroll_until_found`     |
+| **C06**   | `C06Keyboard.tsx` | Keydown streams, modifier chords, platform shortcuts                        |
+| **C07**   | `C07Drag.tsx`     | HTML5 Drag-and-Drop interactions and dropzone boundaries                    |
+| **C08**   | `C08Modal.tsx`    | Modal dialog backdrop traps, modal auto-isolation, z-index overlays         |
+| **C09**   | `C09Visual.tsx`   | Canvas element rendering, visual fallback PCIE, icon recognition            |
+| **C10**   | `C10State.tsx`    | React state transitions, optimistic updates, async data fetching            |
+| **C11**   | `C11Grid.tsx`     | Responsive CSS Grid, dense auto-flow layout alignments                      |
+| **C12**   | `C12Omega.tsx`    | Multi-step combined omega scenario requiring all skills                     |
+
+### Running the Challenge Testbed
+
+```bash
+# Option A: Fast static server (zero external build dependencies)
+node test/complex-html-testing/serve.mjs
+
+# Option B: Interactive Vite dev server with Hot Module Reload
+cd test/complex-html-testing
+pnpm install
+pnpm dev
+# Opens at http://localhost:5173
+```
+
+---
+
+## 7. Package-Level Unit & Integration Suites
+
+For package-level development and fast feedback during refactoring:
+
+```bash
+# Chrome Extension Unit & Integration Tests (Vitest, 49+ suites)
+pnpm --filter chrome-mcp-server test
+
+# Native Messaging Bridge & MCP Server Tests (Jest)
+pnpm --filter mcp-chrome-bridge test
+
+# Monorepo Strict TypeScript Typecheck
+pnpm typecheck
 ```

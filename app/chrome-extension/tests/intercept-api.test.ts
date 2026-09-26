@@ -76,7 +76,7 @@ describe('InterceptApiTool (Structured API Sniffing)', () => {
   });
 
   it('correctly decodes base64 UTF-8 multibyte JSON payloads without mojibake', async () => {
-    const originalPayload = { message: '你好，世界！🚀 BrowserClaw', count: 42 };
+    const originalPayload = { message: '你好，世界！🚀 BrowserPaw', count: 42 };
     const jsonStr = JSON.stringify(originalPayload);
     const base64Str = Buffer.from(jsonStr, 'utf-8').toString('base64');
 
@@ -122,7 +122,7 @@ describe('InterceptApiTool (Structured API Sniffing)', () => {
     expect(res.isError).toBe(false);
     const parsed = JSON.parse((res.content[0] as any).text);
     expect(parsed.success).toBe(true);
-    expect(parsed.data.message).toBe('你好，世界！🚀 BrowserClaw');
+    expect(parsed.data.message).toBe('你好，世界！🚀 BrowserPaw');
     expect(parsed.data.count).toBe(42);
   });
 

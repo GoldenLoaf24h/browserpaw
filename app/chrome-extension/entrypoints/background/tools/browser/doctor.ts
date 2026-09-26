@@ -97,7 +97,7 @@ class DoctorTool extends BaseBrowserToolExecutor {
                 success: true,
                 healthy: allPassed,
                 summary: allPassed
-                  ? 'All BrowserClaw core components healthy'
+                  ? 'All BrowserPaw core components healthy'
                   : 'Some environment warnings detected',
                 checks,
                 ...(args?.verbose

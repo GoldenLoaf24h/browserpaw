@@ -1,8 +1,8 @@
-# BrowserClaw Troubleshooting & Self-Healing Guide
+# BrowserPaw Troubleshooting & Self-Healing Guide
 
 [Chinese Version (zh-CN)](./TROUBLESHOOTING.zh-CN.md)
 
-BrowserClaw consists of three locally coordinated tiers:
+BrowserPaw consists of three locally coordinated tiers:
 
 1. **Chrome Extension (MV3)**: Runs inside your everyday Google Chrome, executing CDP commands and DOM indexing.
 2. **Native Messaging Host (Node.js)**: Launched automatically by Chrome via Native Messaging, bridging protocol calls.
@@ -17,8 +17,11 @@ This guide provides definitive diagnostics, root cause explanations, and verifie
 Before manual troubleshooting, run the automated diagnostic script from the repository root:
 
 ```bash
-# Run read-only health checks
+# Run read-only health checks via doctor script or CLI
 node skill/config/doctor.mjs
+# or via CLI entry point:
+node bin/browserpaw.cjs doctor
+# (or if globally installed: npx browserpaw doctor)
 
 # Run automated diagnosis and self-healing (recreates tokens, repairs registry, syncs build artifacts)
 node skill/config/doctor.mjs --fix
@@ -36,13 +39,13 @@ Agent client reports: `fetch failed: ECONNREFUSED 127.0.0.1:12306` or `connect E
 
 ### Root Cause
 
-The local Native Bridge service is not currently running. BrowserClaw uses an **on-demand lifecycle**: Chrome automatically starts the Native Messaging Host when Chrome launches and the BrowserClaw extension is active. If Chrome is not open, the bridge does not run.
+The local Native Bridge service is not currently running. BrowserPaw uses an **on-demand lifecycle**: Chrome automatically starts the Native Messaging Host when Chrome launches and the BrowserPaw extension is active. If Chrome is not open, the bridge does not run.
 
 ### Resolution Steps
 
 1. **Launch Google Chrome**: Ensure Chrome is running on your desktop.
-2. **Verify Extension State**: Navigate to `chrome://extensions/` and verify BrowserClaw is enabled (or load unpacked from `app/chrome-extension/.output/chrome-mv3`).
-3. **Inspect Popup Status**: Click the BrowserClaw extension icon in Chrome's toolbar. The status dot in the 200px×80px panel should turn **Green** ("Connected").
+2. **Verify Extension State**: Navigate to `chrome://extensions/` and verify BrowserPaw is enabled (or load unpacked from `app/chrome-extension/.output/chrome-mv3`).
+3. **Inspect Popup Status**: Click the BrowserPaw extension icon in Chrome's toolbar. The status dot in the 200px×80px panel should turn **Green** ("Connected").
 4. **Inspect Port Listening**:
    ```powershell
    netstat -ano | findstr :12306
@@ -52,7 +55,7 @@ The local Native Bridge service is not currently running. BrowserClaw uses an **
    node app/native-server/dist/index.js
    ```
 6. **Windows Zombie Process Cleanup**:
-   In older versions, abrupt Chrome terminations could occasionally leave orphan Node processes holding port 12306. BrowserClaw v2.3.8+ includes `closeAllConnections()` and a 1000ms unreferenced watchdog. If an old zombie process still occupies the port:
+   In older versions, abrupt Chrome terminations could occasionally leave orphan Node processes holding port 12306. BrowserPaw v2.3.8+ includes `closeAllConnections()` and a 1000ms unreferenced watchdog. If an old zombie process still occupies the port:
    ```powershell
    taskkill /F /IM node.exe
    ```
@@ -63,7 +66,7 @@ The local Native Bridge service is not currently running. BrowserClaw uses an **
 
 ### Symptom
 
-Clicking the BrowserClaw extension icon displays a grey or yellow indicator, warning that the native bridge is unreachable.
+Clicking the BrowserPaw extension icon displays a grey or yellow indicator, warning that the native bridge is unreachable.
 
 ### Root Cause & Fixes
 
@@ -95,7 +98,7 @@ MCP client requests fail with `HTTP 401 Unauthorized: Missing or invalid token` 
 
 ### Root Cause
 
-To protect your active browser sessions from untrusted local websites or processes, BrowserClaw strictly enforces token authentication. The client configuration must match the token stored in `~/.chrome-mcp/bridge-token`.
+To protect your active browser sessions from untrusted local websites or processes, BrowserPaw strictly enforces token authentication. The client configuration must match the token stored in `~/.chrome-mcp/bridge-token`.
 
 ### Resolution Steps
 
@@ -113,7 +116,7 @@ To protect your active browser sessions from untrusted local websites or process
    ```json
    {
      "mcpServers": {
-       "browserclaw": {
+       "browserpaw": {
          "url": "http://127.0.0.1:12306/mcp",
          "headers": {
            "x-mcp-token": "<TOKEN_FROM_BRIDGE_TOKEN_FILE>",
@@ -154,12 +157,12 @@ When using visual clicking tools (`chrome_click_coordinate`), mouse clicks land 
 
 ### Architecture & Assurance
 
-BrowserClaw implements **1:1 Viewport CSS Geometric Normalization** inside `screenshot.ts`. Screenshots are resampled via `OffscreenCanvas` to exact standard CSS viewport dimensions ($W_{viewport} \times H_{viewport}$).
+BrowserPaw implements **1:1 Viewport CSS Geometric Normalization** inside `screenshot.ts`. Screenshots are resampled via `OffscreenCanvas` to exact standard CSS viewport dimensions ($W_{viewport} \times H_{viewport}$).
 
 ### Important Agent Guideline
 
 **Never manually multiply coordinates by the Device Pixel Ratio (DPR)!**
-Always dispatch coordinates directly as measured against the screenshot image. BrowserClaw's internal kinematics engine maps 1:1 CSS coordinates directly to CDP hardware events.
+Always dispatch coordinates directly as measured against the screenshot image. BrowserPaw's internal kinematics engine maps 1:1 CSS coordinates directly to CDP hardware events.
 
 ---
 
@@ -171,7 +174,7 @@ A web page triggers a synchronous browser `window.alert()`, `window.confirm()`, 
 
 ### Self-Healing Flow
 
-BrowserClaw automatically intercepts modal dialogs via `Page.javascriptDialogOpening`. When an action triggers a dialog, it immediately returns:
+BrowserPaw automatically intercepts modal dialogs via `Page.javascriptDialogOpening`. When an action triggers a dialog, it immediately returns:
 
 ```json
 {
@@ -218,7 +221,7 @@ If a target page crashes, navigates abruptly, or CDP commands exceed safety late
 
 ### Resolution
 
-Refresh the page or re-invoke the tool. BrowserClaw will automatically re-attach a fresh, clean CDP debugging session.
+Refresh the page or re-invoke the tool. BrowserPaw will automatically re-attach a fresh, clean CDP debugging session.
 
 ---
 
@@ -226,7 +229,7 @@ Refresh the page or re-invoke the tool. BrowserClaw will automatically re-attach
 
 ### Architecture
 
-For background tabs (`active: false`), BrowserClaw strictly dispatches CDP `Page.captureScreenshot` (`fromSurface: true`). It **strictly forbids** `chrome.tabs.captureVisibleTab`.
+For background tabs (`active: false`), BrowserPaw strictly dispatches CDP `Page.captureScreenshot` (`fromSurface: true`). It **strictly forbids** `chrome.tabs.captureVisibleTab`.
 
 ### Benefits
 
@@ -270,7 +273,7 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
 | `CDP_DISPATCH_TIMEOUT`                                     | Background tab execution timed out under heavy system throttling.          | Retry action or briefly switch tab to foreground.                         |
 | `Security check failed: Domain changed`                    | Navigation occurred between screenshot capture and coordinate action.      | Call `chrome_read_dom` or `chrome_take_screenshot` to re-align state.     |
 | `Tool X is not exposed under the ... profile`              | Tool is hidden under active profile (`core`/`crawl`).                      | Call `chrome_tool_docs({ category: "<cat>", activateForSession: true })`. |
-| `Tool X is not a BrowserClaw tool`                         | Non-existent tool name requested.                                          | Consult `tools/list` (49 canonical tools available).                      |
+| `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` (49 canonical tools available).                      |
 | `captureScreenshot returned empty data for background tab` | Background tab was closed or discarded by Chrome memory saver.             | Re-open or navigate to target URL.                                        |
 | `Failed to ... index [X] in cross-origin frame`            | Child iframe was unmounted or restricted by sandbox permissions.           | Inspect frame status using `chrome_read_dom({ filter: "interactive" })`.  |
 | `Message sender rejected / unauthenticated content script` | Security guard blocked unauthorized message sender (`_sender.tab`).        | Ensure requests originate from authentic native bridge channels.          |
@@ -296,15 +299,15 @@ pnpm build
 
 ### Component Build Shortcuts
 
-- **Extension only**: `pnpm --filter @browserclaw/extension build` (output: `app/chrome-extension/.output/chrome-mv3`)
-- **Native Bridge only**: `pnpm --filter @browserclaw/native-server build`
+- **Extension only**: `pnpm --filter @browserpaw/extension build` (output: `app/chrome-extension/.output/chrome-mv3`)
+- **Native Bridge only**: `pnpm --filter @browserpaw/native-server build`
 
 ---
 
 ## 14. Log Locations & Diagnostics
 
 - **Chrome Extension Service Worker**:
-  Open `chrome://extensions/` → Click **Service Worker** inspect link under BrowserClaw → Inspect console messages prefixed with `[NativeHost]` or `[Screenshot Tool]`.
+  Open `chrome://extensions/` → Click **Service Worker** inspect link under BrowserPaw → Inspect console messages prefixed with `[NativeHost]` or `[Screenshot Tool]`.
 - **Native Server Logs**:
   Output directly to the process `stdout`/`stderr` or your terminal console.
 - **Trace Files**:

@@ -88,9 +88,9 @@ export default defineUnlistedScript(() => {
   }
   g.__MCP_INPAGE_VERSION__ = ENGINE_VERSION;
 
-  // Initialize single-point global window.__clawFast
-  const clawFast = getClawFastCache();
-  clawFast.snapshot = fastSnapshot;
+  // Initialize single-point global window.__pawFast & window.__clawFast
+  const pawFast = getClawFastCache();
+  pawFast.snapshot = fastSnapshot;
 
   (globalThis as any).__MCP_INPAGE__ = {
     inPageDOMPruner,

@@ -1,5 +1,5 @@
 /**
- * BrowserClaw x Jev Type Definitions
+ * BrowserPaw x Jev Type Definitions
  * Strict contracts for System One state, questions, actions, and decision engines.
  */
 

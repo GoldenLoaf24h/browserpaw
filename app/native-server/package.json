@@ -7,6 +7,7 @@
     "mcp-chrome-bridge": "./dist/cli.js",
     "chrome-mcp-bridge": "./dist/cli.js",
     "mcp-chrome-stdio": "./dist/mcp/mcp-server-stdio.js",
+    "browserpaw": "./dist/cli.js",
     "browserclaw": "./dist/cli.js"
   },
   "scripts": {

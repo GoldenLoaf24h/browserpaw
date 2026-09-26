@@ -172,7 +172,7 @@ describe('Silent Background Operation, Intent Tab Grouping & Composite Card Flat
     it('cleanPageTitle removes noisy search suffixes and extracts clean entity title', () => {
       expect(cleanPageTitle('显示器 - 商品搜索 - 京东')).toBe('显示器');
       expect(cleanPageTitle('机械键盘 - 京东')).toBe('机械键盘');
-      expect(cleanPageTitle('Google 搜索 - BrowserClaw')).toBe('Google 搜索');
+      expect(cleanPageTitle('Google 搜索 - BrowserPaw')).toBe('Google 搜索');
       expect(cleanPageTitle('New Tab')).toBe('');
       expect(cleanPageTitle('about:blank')).toBe('');
     });
@@ -182,7 +182,9 @@ describe('Silent Background Operation, Intent Tab Grouping & Composite Card Flat
       expect(deriveSmartGroupTitle(null, 'https://detail.tmall.com/item.htm')).toBe('Tmall');
       expect(deriveSmartGroupTitle(null, 'https://github.com/torvalds/linux')).toBe('Github');
       expect(deriveSmartGroupTitle(null, 'https://x.com/home')).toBe('X');
-      expect(deriveSmartGroupTitle(null, 'https://news.ycombinator.com/item?id=123')).toBe('Ycombinator');
+      expect(deriveSmartGroupTitle(null, 'https://news.ycombinator.com/item?id=123')).toBe(
+        'Ycombinator',
+      );
       expect(deriveSmartGroupTitle(null, 'https://www.amazon.co.uk/dp/B08N5WRWNW')).toBe('Amazon');
     });
 

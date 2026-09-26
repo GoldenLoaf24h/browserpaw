@@ -1,10 +1,10 @@
 {
   "extensionName": {
-    "message": "browserclaw",
+    "message": "browserpaw",
     "description": "扩展名称"
   },
   "extensionDescription": {
-    "message": "browserclaw - AI Agent 现代化纯净浏览器控制引擎",
+    "message": "browserpaw - AI Agent 现代化纯净浏览器控制引擎",
     "description": "扩展描述"
   },
   "nativeServerConfigLabel": {

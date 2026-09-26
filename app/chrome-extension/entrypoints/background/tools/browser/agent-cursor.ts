@@ -1,5 +1,5 @@
 /**
- * BrowserClaw Agent Cursor Controller (Background)
+ * BrowserPaw Agent Cursor Controller (Background)
  *
  * Coordinates cursor movement animation in the target tab before physical
  * CDP input dispatch. Supports synchronization (waiting for arrival signal

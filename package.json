@@ -1,7 +1,7 @@
 {
-  "name": "browserclaw",
+  "name": "browserpaw",
   "version": "3.1.0",
-  "description": "BrowserClaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
+  "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
   "private": true,
   "author": "hangye",
   "type": "module",
@@ -9,7 +9,7 @@
     "build:shared": "pnpm --filter chrome-mcp-shared build",
     "build:native": "pnpm --filter mcp-chrome-bridge build",
     "build:extension": "pnpm --filter chrome-mcp-server build",
-    "build": "pnpm -r --filter=\"!browserclaw\" run build",
+    "build": "pnpm -r --filter=\"!browserpaw\" run build",
     "dev:shared": "pnpm --filter chrome-mcp-shared dev",
     "dev:native": "pnpm --filter mcp-chrome-bridge dev",
     "dev:extension": "pnpm --filter chrome-mcp-server dev",
@@ -22,7 +22,7 @@
     "clean:dist": "node scripts/clean.js dist",
     "clean:modules": "node scripts/clean.js modules",
     "clean": "node scripts/clean.js all",
-    "typecheck": "pnpm -r --filter=\"!browserclaw\" exec tsc --noEmit",
+    "typecheck": "pnpm -r --filter=\"!browserpaw\" exec tsc --noEmit",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -53,6 +53,7 @@
   },
   "license": "AGPL-3.0",
   "bin": {
-    "browserclaw": "./bin/browserclaw.cjs"
+    "browserpaw": "./bin/browserpaw.cjs",
+    "browserclaw": "./bin/browserpaw.cjs"
   }
 }

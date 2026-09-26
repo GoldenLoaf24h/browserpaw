@@ -43,7 +43,7 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
 
         if (!target || !(target instanceof Element)) {
           return {
-            error: `Element ref "${ref}" not found. Please call browserclaw_read_dom first and ensure the ref is still valid.`,
+            error: `Element ref "${ref}" not found. Please call browserpaw_read_dom first and ensure the ref is still valid.`,
           };
         }
 
@@ -366,7 +366,10 @@ if (window.__CLICK_HELPER_INITIALIZED__) {
           });
         });
       return true; // Indicates async response
-    } else if (request.action === 'chrome_click_element_ping' || String(request.action || '').startsWith('mcp_ping_')) {
+    } else if (
+      request.action === 'chrome_click_element_ping' ||
+      String(request.action || '').startsWith('mcp_ping_')
+    ) {
       sendResponse({ status: 'pong' });
       return false;
     }

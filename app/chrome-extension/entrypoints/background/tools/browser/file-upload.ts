@@ -266,160 +266,160 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
       try {
         // Use shared CDP session manager to attach/do work/detach safely
         await cdpSessionManager.withSession(tabId, 'file-upload', async () => {
-        // Enable necessary CDP domains
-        await cdpSessionManager.sendCommand(tabId, 'DOM.enable', {});
-        await cdpSessionManager.sendCommand(tabId, 'Runtime.enable', {});
+          // Enable necessary CDP domains
+          await cdpSessionManager.sendCommand(tabId, 'DOM.enable', {});
+          await cdpSessionManager.sendCommand(tabId, 'Runtime.enable', {});
 
-        // Get the document
-        const { root } = (await cdpSessionManager.sendCommand(tabId, 'DOM.getDocument', {
-          depth: -1,
-          pierce: true,
-        })) as { root: { nodeId: number } };
+          // Get the document
+          const { root } = (await cdpSessionManager.sendCommand(tabId, 'DOM.getDocument', {
+            depth: -1,
+            pierce: true,
+          })) as { root: { nodeId: number } };
 
-        // Find the file input element:
-        // If index is provided, resolve directly via Isolated World memory map with ephemeral attribute bridge to CDP
-        let targetNodeId = 0;
-        if (typeof index === 'number' && index > 0) {
-          const markerAttr = 'data-cdp-upload-' + Math.random().toString(36).slice(2, 10);
-          try {
-            const markScript = (targetIdx: number, marker: string) => {
-              const map = (globalThis as any)[Symbol.for('__browser_use_isolated_index_map__')];
-              const wrapped = map?.get(targetIdx);
-              const el = wrapped?.deref ? wrapped.deref() : wrapped;
-              if (el && el instanceof Element) {
-                el.setAttribute(marker, '1');
-                return true;
-              }
-              return false;
-            };
+          // Find the file input element:
+          // If index is provided, resolve directly via Isolated World memory map with ephemeral attribute bridge to CDP
+          let targetNodeId = 0;
+          if (typeof index === 'number' && index > 0) {
+            const markerAttr = 'data-cdp-upload-' + Math.random().toString(36).slice(2, 10);
+            try {
+              const markScript = (targetIdx: number, marker: string) => {
+                const map = (globalThis as any)[Symbol.for('__browser_use_isolated_index_map__')];
+                const wrapped = map?.get(targetIdx);
+                const el = wrapped?.deref ? wrapped.deref() : wrapped;
+                if (el && el instanceof Element) {
+                  el.setAttribute(marker, '1');
+                  return true;
+                }
+                return false;
+              };
 
-            const markRes = await this.safeExecuteScript(tabId, {
-              target: { tabId },
-              func: markScript,
-              args: [index, markerAttr],
-            });
-
-            let marked = markRes?.[0]?.result;
-            if (!marked) {
-              const frameMarkRes = await this.safeExecuteScript(tabId, {
-                target: { tabId, allFrames: true },
+              const markRes = await this.safeExecuteScript(tabId, {
+                target: { tabId },
                 func: markScript,
                 args: [index, markerAttr],
               });
-              marked = frameMarkRes.some((r) => r.result);
-            }
 
-            if (marked) {
+              let marked = markRes?.[0]?.result;
+              if (!marked) {
+                const frameMarkRes = await this.safeExecuteScript(tabId, {
+                  target: { tabId, allFrames: true },
+                  func: markScript,
+                  args: [index, markerAttr],
+                });
+                marked = frameMarkRes.some((r) => r.result);
+              }
+
+              if (marked) {
+                const direct = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
+                  nodeId: root.nodeId,
+                  selector: `[${markerAttr}="1"]`,
+                })) as { nodeId: number };
+                if (direct?.nodeId && direct.nodeId > 0) {
+                  targetNodeId = direct.nodeId;
+                }
+              }
+            } catch (evalErr) {
+              console.warn(`Failed to resolve index [${index}] to CDP nodeId:`, evalErr);
+            } finally {
+              // Clean up ephemeral marker immediately so DOM is not polluted
+              await this.safeExecuteScript(tabId, {
+                target: { tabId, allFrames: true },
+                func: (marker: string) => {
+                  document
+                    .querySelectorAll(`[${marker}="1"]`)
+                    .forEach((el) => el.removeAttribute(marker));
+                },
+                args: [markerAttr],
+              }).catch(() => {});
+            }
+          }
+
+          if ((!targetNodeId || targetNodeId === 0) && targetSelector) {
+            try {
               const direct = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
                 nodeId: root.nodeId,
-                selector: `[${markerAttr}="1"]`,
+                selector: targetSelector,
               })) as { nodeId: number };
               if (direct?.nodeId && direct.nodeId > 0) {
                 targetNodeId = direct.nodeId;
               }
-            }
-          } catch (evalErr) {
-            console.warn(`Failed to resolve index [${index}] to CDP nodeId:`, evalErr);
-          } finally {
-            // Clean up ephemeral marker immediately so DOM is not polluted
-            await this.safeExecuteScript(tabId, {
-              target: { tabId, allFrames: true },
-              func: (marker: string) => {
-                document
-                  .querySelectorAll(`[${marker}="1"]`)
-                  .forEach((el) => el.removeAttribute(marker));
-              },
-              args: [markerAttr],
-            }).catch(() => {});
+            } catch {}
           }
-        }
 
-        if ((!targetNodeId || targetNodeId === 0) && targetSelector) {
-          try {
-            const direct = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
-              nodeId: root.nodeId,
-              selector: targetSelector,
-            })) as { nodeId: number };
-            if (direct?.nodeId && direct.nodeId > 0) {
-              targetNodeId = direct.nodeId;
-            }
-          } catch {}
-        }
+          if (!targetNodeId && targetSelector) {
+            // Fallback: search for input[type="file"] inside or near selector
+            try {
+              const fallback = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
+                nodeId: root.nodeId,
+                selector: `${targetSelector} input[type="file"], input[type="file"]`,
+              })) as { nodeId: number };
+              if (fallback?.nodeId) {
+                targetNodeId = fallback.nodeId;
+              }
+            } catch {}
+          }
 
-        if (!targetNodeId && targetSelector) {
-          // Fallback: search for input[type="file"] inside or near selector
-          try {
-            const fallback = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
-              nodeId: root.nodeId,
-              selector: `${targetSelector} input[type="file"], input[type="file"]`,
-            })) as { nodeId: number };
-            if (fallback?.nodeId) {
-              targetNodeId = fallback.nodeId;
-            }
-          } catch {}
-        }
+          if (!targetNodeId || targetNodeId === 0) {
+            throw new Error(
+              `Element with ${index ? `index [${index}]` : `selector "${targetSelector}"`} not found. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
+            );
+          }
 
-        if (!targetNodeId || targetNodeId === 0) {
-          throw new Error(
-            `Element with ${index ? `index [${index}]` : `selector "${targetSelector}"`} not found. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-          );
-        }
-
-        // Verify it's an input element, or find child file input if it is a wrapper
-        let { node } = (await cdpSessionManager.sendCommand(tabId, 'DOM.describeNode', {
-          nodeId: targetNodeId,
-        })) as { node: { nodeName: string; attributes?: string[] } };
-
-        if (node.nodeName !== 'INPUT') {
-          try {
-            const childInput = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
-              nodeId: targetNodeId,
-              selector: 'input[type="file"]',
-            })) as { nodeId: number };
-            if (childInput?.nodeId && childInput.nodeId > 0) {
-              targetNodeId = childInput.nodeId;
-              const desc = (await cdpSessionManager.sendCommand(tabId, 'DOM.describeNode', {
-                nodeId: targetNodeId,
-              })) as { node: { nodeName: string; attributes?: string[] } };
-              if (desc?.node) node = desc.node;
-            }
-          } catch {}
-        }
-
-        // Set the files on the input element using CDP DOM.setFileInputFiles
-        await cdpSessionManager.sendCommand(tabId, 'DOM.setFileInputFiles', {
-          nodeId: targetNodeId,
-          files,
-        });
-
-        // Trigger input and change events directly on the target node via DOM.resolveNode
-        // to ensure isolated context, sub-frames, and shadow DOM receive events accurately
-        try {
-          const resolved = (await cdpSessionManager.sendCommand(tabId, 'DOM.resolveNode', {
+          // Verify it's an input element, or find child file input if it is a wrapper
+          let { node } = (await cdpSessionManager.sendCommand(tabId, 'DOM.describeNode', {
             nodeId: targetNodeId,
-          })) as { object?: { objectId?: string } };
+          })) as { node: { nodeName: string; attributes?: string[] } };
 
-          if (resolved?.object?.objectId) {
-            await cdpSessionManager.sendCommand(tabId, 'Runtime.callFunctionOn', {
-              objectId: resolved.object.objectId,
-              functionDeclaration: `function() {
+          if (node.nodeName !== 'INPUT') {
+            try {
+              const childInput = (await cdpSessionManager.sendCommand(tabId, 'DOM.querySelector', {
+                nodeId: targetNodeId,
+                selector: 'input[type="file"]',
+              })) as { nodeId: number };
+              if (childInput?.nodeId && childInput.nodeId > 0) {
+                targetNodeId = childInput.nodeId;
+                const desc = (await cdpSessionManager.sendCommand(tabId, 'DOM.describeNode', {
+                  nodeId: targetNodeId,
+                })) as { node: { nodeName: string; attributes?: string[] } };
+                if (desc?.node) node = desc.node;
+              }
+            } catch {}
+          }
+
+          // Set the files on the input element using CDP DOM.setFileInputFiles
+          await cdpSessionManager.sendCommand(tabId, 'DOM.setFileInputFiles', {
+            nodeId: targetNodeId,
+            files,
+          });
+
+          // Trigger input and change events directly on the target node via DOM.resolveNode
+          // to ensure isolated context, sub-frames, and shadow DOM receive events accurately
+          try {
+            const resolved = (await cdpSessionManager.sendCommand(tabId, 'DOM.resolveNode', {
+              nodeId: targetNodeId,
+            })) as { object?: { objectId?: string } };
+
+            if (resolved?.object?.objectId) {
+              await cdpSessionManager.sendCommand(tabId, 'Runtime.callFunctionOn', {
+                objectId: resolved.object.objectId,
+                functionDeclaration: `function() {
                 this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                 this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
               }`,
-              returnByValue: true,
-            });
-            try {
-              await cdpSessionManager.sendCommand(tabId, 'Runtime.releaseObject', {
-                objectId: resolved.object.objectId,
+                returnByValue: true,
               });
-            } catch {}
-          } else {
-            // Fallback to top-level querySelector if resolveNode failed
-            const selectorStr = targetSelector
-              ? targetSelector.replace(/'/g, "\\'")
-              : 'input[type="file"]';
-            await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-              expression: `
+              try {
+                await cdpSessionManager.sendCommand(tabId, 'Runtime.releaseObject', {
+                  objectId: resolved.object.objectId,
+                });
+              } catch {}
+            } else {
+              // Fallback to top-level querySelector if resolveNode failed
+              const selectorStr = targetSelector
+                ? targetSelector.replace(/'/g, "\\'")
+                : 'input[type="file"]';
+              await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
+                expression: `
                 (function() {
                   const element = document.querySelector('${selectorStr}') || document.querySelector('input[type="file"]');
                   if (element) {
@@ -428,18 +428,19 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
                   }
                 })()
               `,
-            });
+              });
+            }
+          } catch (evErr) {
+            console.warn('Failed to dispatch input/change events on file input:', evErr);
           }
-        } catch (evErr) {
-          console.warn('Failed to dispatch input/change events on file input:', evErr);
-        }
-      });
+        });
       } catch (cdpErr) {
         console.warn(
           'CDP file upload failed or debugger unavailable, falling back to HTML5 DataTransfer:',
           cdpErr,
         );
-        const dtFiles: Array<{ name: string; type?: string; base64?: string; content?: string }> = [];
+        const dtFiles: Array<{ name: string; type?: string; base64?: string; content?: string }> =
+          [];
         if (base64Data) {
           dtFiles.push({ name: fileName || 'uploaded-file', base64: base64Data });
         } else {
@@ -602,7 +603,9 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
           sel: string | undefined,
           fileList: Array<{ name: string; type?: string; base64?: string; content?: string }>,
         ) => {
-          const findFileInputInSubtree = (root: Element | DocumentFragment | Document): HTMLInputElement | null => {
+          const findFileInputInSubtree = (
+            root: Element | DocumentFragment | Document,
+          ): HTMLInputElement | null => {
             const direct = root.querySelector('input[type="file"]') as HTMLInputElement | null;
             if (direct) return direct;
             const elements = root.querySelectorAll('*');
@@ -620,11 +623,12 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
           if (idx !== undefined && idx !== null) {
             const g = window as any;
             const isolatedMap = g[Symbol.for('__browser_use_isolated_index_map__')];
+            const pawFast = g.__pawFast || g.__clawFast;
             el =
-              g.__clawFast?.actionElements?.get(idx) ||
-              g.__clawFast?.actionElements?.get(Number(idx)) ||
-              g.__clawFast?.nodes?.get(idx) ||
-              g.__clawFast?.nodes?.get(Number(idx)) ||
+              pawFast?.actionElements?.get(idx) ||
+              pawFast?.actionElements?.get(Number(idx)) ||
+              pawFast?.nodes?.get(idx) ||
+              pawFast?.nodes?.get(Number(idx)) ||
               isolatedMap?.get(Number(idx)) ||
               isolatedMap?.get(String(idx)) ||
               (document.querySelector(`[data-mcp-idx="${idx}"]`) as Element) ||
@@ -640,7 +644,9 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
 
           // If wrapper element, find nested input[type="file"] including in shadowRoot
           if (el.tagName !== 'INPUT' || el.getAttribute('type') !== 'file') {
-            const child = findFileInputInSubtree(el) || (el.shadowRoot ? findFileInputInSubtree(el.shadowRoot) : null);
+            const child =
+              findFileInputInSubtree(el) ||
+              (el.shadowRoot ? findFileInputInSubtree(el.shadowRoot) : null);
             if (child) el = child;
           }
 
@@ -659,7 +665,14 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
             if (typeof DataTransfer !== 'undefined') {
               dt = new DataTransfer();
             } else {
-              dt = { items: { add: (f: any) => { dt.files.push(f); } }, files: [] };
+              dt = {
+                items: {
+                  add: (f: any) => {
+                    dt.files.push(f);
+                  },
+                },
+                files: [],
+              };
             }
             for (const f of fileList) {
               let blob: Blob;
@@ -712,7 +725,9 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
         },
         args: [options.index, options.selector, options.files],
       });
-      return results?.[0]?.result || { success: false, error: 'Script injection returned no result' };
+      return (
+        results?.[0]?.result || { success: false, error: 'Script injection returned no result' }
+      );
     } catch (injErr) {
       return {
         success: false,

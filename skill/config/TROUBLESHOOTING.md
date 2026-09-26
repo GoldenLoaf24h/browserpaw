@@ -1,8 +1,8 @@
-# BrowserClaw Troubleshooting & Self-Healing Manual
+# BrowserPaw Troubleshooting & Self-Healing Manual
 
 [Chinese Version (zh-CN)](./TROUBLESHOOTING.zh-CN.md)
 
-This manual compiles typical connectivity, state, and permission issues encountered when MCP-capable agents connect to BrowserClaw, detailing root causes and standard recovery workflows.
+This manual compiles typical connectivity, state, and permission issues encountered when MCP-capable agents connect to BrowserPaw, detailing root causes and standard recovery workflows.
 
 ---
 
@@ -29,10 +29,10 @@ Windows users can also double-click [`skill/config/repair.bat`](./repair.bat) or
 - **Symptom**:
   Agent reports: `fetch failed: ECONNREFUSED 127.0.0.1:12306` when initializing connections or executing tools.
 - **Root Cause**:
-  The local Fastify Native Bridge service is not running. BrowserClaw follows an **on-demand lifecycle**: Chrome automatically spawns the Native Bridge through the Native Messaging Host when Chrome is running and the extension is active.
+  The local Fastify Native Bridge service is not running. BrowserPaw follows an **on-demand lifecycle**: Chrome automatically spawns the Native Bridge through the Native Messaging Host when Chrome is running and the extension is active.
 - **Resolution**:
   1. Open Google Chrome on your desktop;
-  2. Confirm BrowserClaw is enabled in `chrome://extensions/` (or loaded from unpacked extension directory);
+  2. Confirm BrowserPaw is enabled in `chrome://extensions/` (or loaded from unpacked extension directory);
   3. Click the extension toolbar icon, open the 200px×80px popup, and verify the status indicator is **Green**;
   4. For standalone terminal execution, start the bridge manually:
      ```bash
@@ -98,7 +98,7 @@ Windows users can also double-click [`skill/config/repair.bat`](./repair.bat) or
 - **Symptom**:
   Visual model clicks miss their target on high-resolution screens.
 - **Assurance**:
-  BrowserClaw normalizes all screenshots to **1:1 Viewport CSS Coordinates** ($W_{viewport} \times H_{viewport}$) inside `screenshot.ts`.
+  BrowserPaw normalizes all screenshots to **1:1 Viewport CSS Coordinates** ($W_{viewport} \times H_{viewport}$) inside `screenshot.ts`.
 - **Rule**:
   **Do NOT manually multiply coordinates by DPR!** Measure directly from the screenshot and pass raw CSS values.
 
@@ -109,7 +109,7 @@ Windows users can also double-click [`skill/config/repair.bat`](./repair.bat) or
 - **Symptom**:
   A native `alert()` or `confirm()` halts CDP commands.
 - **Handling**:
-  BrowserClaw intercepts the dialog and returns `requiresDialogAction: true`. Call `chrome_handle_dialog({ action: "accept" })` to dismiss and unfreeze execution.
+  BrowserPaw intercepts the dialog and returns `requiresDialogAction: true`. Call `chrome_handle_dialog({ action: "accept" })` to dismiss and unfreeze execution.
 
 ---
 

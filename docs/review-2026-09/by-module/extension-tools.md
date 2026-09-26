@@ -1,4 +1,4 @@
-# BrowserClaw 扩展 Background 工具层代码库审查报告
+# BrowserPaw 扩展 Background 工具层代码库审查报告
 
 - **审查模块**：Chrome Extension Background Script 及 Browser Tools 层
 - **仓库根目录**：`D:\workspace\mcp-chrome-master\mcp-chrome-master`
@@ -9,69 +9,69 @@
 
 ## 一、 模块概览与审查文件清单 (共 59 个文件)
 
-本模块承担 BrowserClaw 扩展的核心调度职责，包括与 Native Messaging Host 通信、保持 Service Worker 存活、CDP 会话管理、In-page 引擎分发，以及 53 个直接供 Agent 调用的浏览器控制与感知工具。
+本模块承担 BrowserPaw 扩展的核心调度职责，包括与 Native Messaging Host 通信、保持 Service Worker 存活、CDP 会话管理、In-page 引擎分发，以及 53 个直接供 Agent 调用的浏览器控制与感知工具。
 
-| 序号 | 相对路径 | 行数 | 字符大小 | 核心职责定位 |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | `index.ts` | 11 | 253 B | Background Service Worker 入口，初始化 Native Host 监听 |
-| 2 | `keepalive-manager.ts` | 85 | 2.3 KB | MV3 SW 存活保活管理器（heartbeat 定时器与 alarms 备份） |
-| 3 | `native-host.ts` | 806 | 27.2 KB | Native Messaging 端口连接、重连退避、消息分发与工具执行路由 |
-| 4 | `tools/base-browser.ts` | 346 | 11.7 KB | 所有浏览器工具执行器的抽象基类，封装脚本注入、标签页解析与消息通道 |
-| 5 | `tools/index.ts` | 120 | 4.5 KB | 工具注册表与执行分发中心，集成参数强制类型转换与开关拦截 |
-| 6 | `tools/browser/index.ts` | 60 | 2.7 KB | Browser 工具导出的总聚合索引 |
-| 7 | `tools/browser/dom-indexer.ts` | 6942 | 239 KB | DOM 树剪枝、紧凑化、Set-of-Mark 9点遮挡检测与全功能注入引擎（巨石模块） |
-| 8 | `tools/browser/batch-actions.ts` | 1813 | 79.4 KB | 批量多步骤动作执行器，支持点击、输入、等待、断言、抽取流水线 |
-| 9 | `tools/browser/computer.ts` | 1557 | 57.0 KB | Anthropic Computer Use 规范统一接口，实现鼠标移动、点击、缩放与按键操作 |
-| 10 | `tools/browser/screenshot.ts` | 1528 | 60.5 KB | 截图工具，支持视口截图、全页分片滚动拼接、元素截取、网格叠加与清晰度优化 |
-| 11 | `tools/browser/javascript.ts` | 1263 | 41.2 KB | JavaScript 代码执行器（优先 CDP Runtime.evaluate，降级 MAIN world executeScript） |
-| 12 | `tools/browser/interact-index.ts` | 1186 | 49.6 KB | 索引与坐标交互工具，调度真实 CDP 鼠标轨迹、点击、双击、右键与拖拽 |
-| 13 | `tools/browser/network-capture-debugger.ts` | 1143 | 43.9 KB | 基于 CDP Network 域的深度网络捕获引擎，支持 Response Body 与 WebSocket 帧记录 |
-| 14 | `tools/browser/network-capture-web-request.ts` | 1000 | 32.6 KB | 基于 chrome.webRequest API 的轻量网络请求监听器 |
-| 15 | `tools/browser/common.ts` | 992 | 35.7 KB | 页面导航（navigate）、标签页关闭（close_tabs）、标签页切换（switch_tab） |
-| 16 | `tools/browser/performance.ts` | 676 | 21.4 KB | 性能跟踪与分析工具，封装 CDP Tracing 启动、停止与事件分析 |
-| 17 | `tools/browser/fill-index.ts` | 659 | 27.6 KB | 单元素文本与表单值填充工具，支持原生 setter 穿透与提交触发 |
-| 18 | `tools/browser/console.ts` | 640 | 22.3 KB | 控制台日志读取工具，支持即时快照与持久缓冲读取 |
-| 19 | `tools/browser/bookmark.ts` | 603 | 20.0 KB | 浏览器书签搜索、新增与删除工具 |
-| 20 | `tools/browser/interaction.ts` | 591 | 22.4 KB | 传统选择器交互工具（clickTool 与 fillTool），基于 content script 消息通信 |
-| 21 | `tools/browser/form-pipeline.ts` | 558 | 21.2 KB | 表单流水线填写工具，支持多字段自动匹配、步进填写与提交 |
-| 22 | `tools/browser/file-upload.ts` | 524 | 19.9 KB | 文件上传工具，支持 CDP DOM.setFileInputFiles 与动态文件选择对话框拦截 |
-| 23 | `tools/browser/console-buffer.ts` | 451 | 13.5 KB | 控制台持久缓冲后台服务，持续捕获 Runtime.consoleAPICalled 与异常 |
-| 24 | `tools/browser/keyboard.ts` | 398 | 15.2 KB | 键盘物理按键与快捷键分发工具，调度 CDP Input.dispatchKeyEvent |
-| 25 | `tools/browser/read-dom.ts` | 369 | 14.9 KB | DOM 读取核心工具，调用 inPageDOMPruner 获取可见/交互元素紧凑树 |
-| 26 | `tools/browser/grep.ts` | 342 | 11.6 KB | 页面文本正规与关键词搜索定位工具 |
-| 27 | `tools/browser/intercept-api.ts` | 334 | 10.9 KB | API 响应拦截与快照监听工具 |
-| 28 | `tools/browser/scroll-to-text.ts` | 332 | 12.1 KB | 文本定位滚动工具，将匹配文字滚动至视口中央 |
-| 29 | `tools/browser/fill-form.ts` | 305 | 11.5 KB | 批量表单填充工具，通过统一定位器并发或串行填写多字段 |
-| 30 | `tools/browser/tab-group.ts` | 298 | 8.7 KB | Chrome 原生标签页分组管理工具（创建、更新、列表、解散、关闭） |
-| 31 | `tools/browser/scroll.ts` | 275 | 10.1 KB | 物理滚轮滚动工具，调度 CDP Input.dispatchMouseEvent (mouseWheel) |
-| 32 | `tools/browser/smart-scroll.ts` | 270 | 9.8 KB | 智能容器滚动工具，自动寻找页面最主要可滚动容器并执行滚动 |
-| 33 | `tools/browser/tab-favicon.ts` | 267 | 9.7 KB | Agent 状态图标管理器，高亮当前受控标签页并在释放时还原 Favicon |
-| 34 | `tools/browser/tab-group-manager.ts` | 255 | 8.3 KB | 自动化标签组生命周期管理器，防止遗留孤儿分组 |
-| 35 | `tools/browser/inspect-media.ts` | 245 | 8.8 KB | 页面多媒体资源提取与局部放大检查工具 |
-| 36 | `tools/browser/in-page-engine.ts` | 244 | 8.7 KB | 页面内嵌引擎分发器，解决 MV3 executeScript 无法直接调用模块函数的问题 |
-| 37 | `tools/browser/insert-media.ts` | 239 | 8.3 KB | 富文本编辑器多媒体剪贴板/拖拽模拟插入工具 |
-| 38 | `tools/browser/history.ts` | 233 | 7.3 KB | 浏览器历史记录搜索与范围过滤工具 |
-| 39 | `tools/browser/cdp-execute.ts` | 232 | 8.2 KB | 工业级原生 CDP 指令透传工具，支持全协议指令直接调用 |
-| 40 | `tools/browser/burst-interact.ts` | 229 | 7.3 KB | 连续点击与密集交互爆破工具 |
-| 41 | `tools/browser/web-fetcher.ts` | 227 | 9.0 KB | 网页可见文本与 HTML 内容快速提取工具 |
-| 42 | `tools/browser/download-waiter.ts` | 195 | 6.5 KB | 下载状态异步等待核心逻辑，支持文件名模糊匹配与完成感知 |
-| 43 | `tools/browser/network-capture.ts` | 159 | 5.2 KB | 统一网络捕获门面工具，根据需求自动切换 debugger 或 webRequest 后端 |
-| 44 | `tools/browser/storage.ts` | 150 | 6.1 KB | LocalStorage、SessionStorage 与 Cookies 读取工具 |
-| 45 | `tools/browser/undo-action.ts` | 144 | 5.1 KB | 动作撤销工具，基于 actionHistoryManager 逆向操作 |
-| 46 | `tools/browser/attach-tab.ts` | 133 | 4.0 KB | 显式附加/分离 CDP 调试器与 Session Affinity 工具 |
-| 47 | `tools/browser/doctor.ts` | 126 | 4.4 KB | 扩展运行健康度诊断工具，检查原生服务、端口延迟与配置 |
-| 48 | `tools/browser/agent-cursor.ts` | 122 | 3.2 KB | 虚拟 Agent 光标在页面上的视觉轨迹动画管理器 |
-| 49 | `tools/browser/network-request.ts` | 118 | 4.6 KB | 页面上下文 HTTP 请求发送工具（借助 content script 代理 fetch） |
-| 50 | `tools/browser/move-tab.ts` | 114 | 3.5 KB | 标签页跨窗口或同窗口位置移动工具 |
-| 51 | `tools/browser/human-intervention.ts` | 98 | 3.4 KB | 请求人类介入工具，暂停自动化并提示人工解验证码/登录 |
-| 52 | `tools/browser/dialog.ts` | 83 | 2.9 KB | 原生 JavaScript 对话框（alert/confirm/prompt）处理工具 |
-| 53 | `tools/browser/window.ts` | 71 | 2.3 KB | 获取全部窗口与标签页层级拓扑工具 |
-| 54 | `tools/browser/get-dropdown-options.ts` | 66 | 2.2 KB | 提取原生 select 与自定义 ARIA 下拉框选项工具 |
-| 55 | `tools/browser/get-links.ts` | 61 | 1.9 KB | 快速提取当前页面全部超链接工具 |
-| 56 | `tools/browser/get-markdown.ts` | 56 | 1.6 KB | 提取当前页面正文 Markdown 工具（基于 inPageExtractMarkdown） |
-| 57 | `tools/browser/tool-docs.ts` | 55 | 2.1 KB | 工具动态自省与文档检索工具 |
-| 58 | `tools/browser/download.ts` | 38 | 1.4 KB | 下载等待工具对外暴露的薄封装层 |
-| 59 | `tools/browser/unified-locator.ts` | 38 | 1.7 KB | Background 侧统一元素定位器封装（注入 dependencies） |
+| 序号 | 相对路径                                       | 行数 | 字符大小 | 核心职责定位                                                                      |
+| :--- | :--------------------------------------------- | :--- | :------- | :-------------------------------------------------------------------------------- |
+| 1    | `index.ts`                                     | 11   | 253 B    | Background Service Worker 入口，初始化 Native Host 监听                           |
+| 2    | `keepalive-manager.ts`                         | 85   | 2.3 KB   | MV3 SW 存活保活管理器（heartbeat 定时器与 alarms 备份）                           |
+| 3    | `native-host.ts`                               | 806  | 27.2 KB  | Native Messaging 端口连接、重连退避、消息分发与工具执行路由                       |
+| 4    | `tools/base-browser.ts`                        | 346  | 11.7 KB  | 所有浏览器工具执行器的抽象基类，封装脚本注入、标签页解析与消息通道                |
+| 5    | `tools/index.ts`                               | 120  | 4.5 KB   | 工具注册表与执行分发中心，集成参数强制类型转换与开关拦截                          |
+| 6    | `tools/browser/index.ts`                       | 60   | 2.7 KB   | Browser 工具导出的总聚合索引                                                      |
+| 7    | `tools/browser/dom-indexer.ts`                 | 6942 | 239 KB   | DOM 树剪枝、紧凑化、Set-of-Mark 9点遮挡检测与全功能注入引擎（巨石模块）           |
+| 8    | `tools/browser/batch-actions.ts`               | 1813 | 79.4 KB  | 批量多步骤动作执行器，支持点击、输入、等待、断言、抽取流水线                      |
+| 9    | `tools/browser/computer.ts`                    | 1557 | 57.0 KB  | Anthropic Computer Use 规范统一接口，实现鼠标移动、点击、缩放与按键操作           |
+| 10   | `tools/browser/screenshot.ts`                  | 1528 | 60.5 KB  | 截图工具，支持视口截图、全页分片滚动拼接、元素截取、网格叠加与清晰度优化          |
+| 11   | `tools/browser/javascript.ts`                  | 1263 | 41.2 KB  | JavaScript 代码执行器（优先 CDP Runtime.evaluate，降级 MAIN world executeScript） |
+| 12   | `tools/browser/interact-index.ts`              | 1186 | 49.6 KB  | 索引与坐标交互工具，调度真实 CDP 鼠标轨迹、点击、双击、右键与拖拽                 |
+| 13   | `tools/browser/network-capture-debugger.ts`    | 1143 | 43.9 KB  | 基于 CDP Network 域的深度网络捕获引擎，支持 Response Body 与 WebSocket 帧记录     |
+| 14   | `tools/browser/network-capture-web-request.ts` | 1000 | 32.6 KB  | 基于 chrome.webRequest API 的轻量网络请求监听器                                   |
+| 15   | `tools/browser/common.ts`                      | 992  | 35.7 KB  | 页面导航（navigate）、标签页关闭（close_tabs）、标签页切换（switch_tab）          |
+| 16   | `tools/browser/performance.ts`                 | 676  | 21.4 KB  | 性能跟踪与分析工具，封装 CDP Tracing 启动、停止与事件分析                         |
+| 17   | `tools/browser/fill-index.ts`                  | 659  | 27.6 KB  | 单元素文本与表单值填充工具，支持原生 setter 穿透与提交触发                        |
+| 18   | `tools/browser/console.ts`                     | 640  | 22.3 KB  | 控制台日志读取工具，支持即时快照与持久缓冲读取                                    |
+| 19   | `tools/browser/bookmark.ts`                    | 603  | 20.0 KB  | 浏览器书签搜索、新增与删除工具                                                    |
+| 20   | `tools/browser/interaction.ts`                 | 591  | 22.4 KB  | 传统选择器交互工具（clickTool 与 fillTool），基于 content script 消息通信         |
+| 21   | `tools/browser/form-pipeline.ts`               | 558  | 21.2 KB  | 表单流水线填写工具，支持多字段自动匹配、步进填写与提交                            |
+| 22   | `tools/browser/file-upload.ts`                 | 524  | 19.9 KB  | 文件上传工具，支持 CDP DOM.setFileInputFiles 与动态文件选择对话框拦截             |
+| 23   | `tools/browser/console-buffer.ts`              | 451  | 13.5 KB  | 控制台持久缓冲后台服务，持续捕获 Runtime.consoleAPICalled 与异常                  |
+| 24   | `tools/browser/keyboard.ts`                    | 398  | 15.2 KB  | 键盘物理按键与快捷键分发工具，调度 CDP Input.dispatchKeyEvent                     |
+| 25   | `tools/browser/read-dom.ts`                    | 369  | 14.9 KB  | DOM 读取核心工具，调用 inPageDOMPruner 获取可见/交互元素紧凑树                    |
+| 26   | `tools/browser/grep.ts`                        | 342  | 11.6 KB  | 页面文本正规与关键词搜索定位工具                                                  |
+| 27   | `tools/browser/intercept-api.ts`               | 334  | 10.9 KB  | API 响应拦截与快照监听工具                                                        |
+| 28   | `tools/browser/scroll-to-text.ts`              | 332  | 12.1 KB  | 文本定位滚动工具，将匹配文字滚动至视口中央                                        |
+| 29   | `tools/browser/fill-form.ts`                   | 305  | 11.5 KB  | 批量表单填充工具，通过统一定位器并发或串行填写多字段                              |
+| 30   | `tools/browser/tab-group.ts`                   | 298  | 8.7 KB   | Chrome 原生标签页分组管理工具（创建、更新、列表、解散、关闭）                     |
+| 31   | `tools/browser/scroll.ts`                      | 275  | 10.1 KB  | 物理滚轮滚动工具，调度 CDP Input.dispatchMouseEvent (mouseWheel)                  |
+| 32   | `tools/browser/smart-scroll.ts`                | 270  | 9.8 KB   | 智能容器滚动工具，自动寻找页面最主要可滚动容器并执行滚动                          |
+| 33   | `tools/browser/tab-favicon.ts`                 | 267  | 9.7 KB   | Agent 状态图标管理器，高亮当前受控标签页并在释放时还原 Favicon                    |
+| 34   | `tools/browser/tab-group-manager.ts`           | 255  | 8.3 KB   | 自动化标签组生命周期管理器，防止遗留孤儿分组                                      |
+| 35   | `tools/browser/inspect-media.ts`               | 245  | 8.8 KB   | 页面多媒体资源提取与局部放大检查工具                                              |
+| 36   | `tools/browser/in-page-engine.ts`              | 244  | 8.7 KB   | 页面内嵌引擎分发器，解决 MV3 executeScript 无法直接调用模块函数的问题             |
+| 37   | `tools/browser/insert-media.ts`                | 239  | 8.3 KB   | 富文本编辑器多媒体剪贴板/拖拽模拟插入工具                                         |
+| 38   | `tools/browser/history.ts`                     | 233  | 7.3 KB   | 浏览器历史记录搜索与范围过滤工具                                                  |
+| 39   | `tools/browser/cdp-execute.ts`                 | 232  | 8.2 KB   | 工业级原生 CDP 指令透传工具，支持全协议指令直接调用                               |
+| 40   | `tools/browser/burst-interact.ts`              | 229  | 7.3 KB   | 连续点击与密集交互爆破工具                                                        |
+| 41   | `tools/browser/web-fetcher.ts`                 | 227  | 9.0 KB   | 网页可见文本与 HTML 内容快速提取工具                                              |
+| 42   | `tools/browser/download-waiter.ts`             | 195  | 6.5 KB   | 下载状态异步等待核心逻辑，支持文件名模糊匹配与完成感知                            |
+| 43   | `tools/browser/network-capture.ts`             | 159  | 5.2 KB   | 统一网络捕获门面工具，根据需求自动切换 debugger 或 webRequest 后端                |
+| 44   | `tools/browser/storage.ts`                     | 150  | 6.1 KB   | LocalStorage、SessionStorage 与 Cookies 读取工具                                  |
+| 45   | `tools/browser/undo-action.ts`                 | 144  | 5.1 KB   | 动作撤销工具，基于 actionHistoryManager 逆向操作                                  |
+| 46   | `tools/browser/attach-tab.ts`                  | 133  | 4.0 KB   | 显式附加/分离 CDP 调试器与 Session Affinity 工具                                  |
+| 47   | `tools/browser/doctor.ts`                      | 126  | 4.4 KB   | 扩展运行健康度诊断工具，检查原生服务、端口延迟与配置                              |
+| 48   | `tools/browser/agent-cursor.ts`                | 122  | 3.2 KB   | 虚拟 Agent 光标在页面上的视觉轨迹动画管理器                                       |
+| 49   | `tools/browser/network-request.ts`             | 118  | 4.6 KB   | 页面上下文 HTTP 请求发送工具（借助 content script 代理 fetch）                    |
+| 50   | `tools/browser/move-tab.ts`                    | 114  | 3.5 KB   | 标签页跨窗口或同窗口位置移动工具                                                  |
+| 51   | `tools/browser/human-intervention.ts`          | 98   | 3.4 KB   | 请求人类介入工具，暂停自动化并提示人工解验证码/登录                               |
+| 52   | `tools/browser/dialog.ts`                      | 83   | 2.9 KB   | 原生 JavaScript 对话框（alert/confirm/prompt）处理工具                            |
+| 53   | `tools/browser/window.ts`                      | 71   | 2.3 KB   | 获取全部窗口与标签页层级拓扑工具                                                  |
+| 54   | `tools/browser/get-dropdown-options.ts`        | 66   | 2.2 KB   | 提取原生 select 与自定义 ARIA 下拉框选项工具                                      |
+| 55   | `tools/browser/get-links.ts`                   | 61   | 1.9 KB   | 快速提取当前页面全部超链接工具                                                    |
+| 56   | `tools/browser/get-markdown.ts`                | 56   | 1.6 KB   | 提取当前页面正文 Markdown 工具（基于 inPageExtractMarkdown）                      |
+| 57   | `tools/browser/tool-docs.ts`                   | 55   | 2.1 KB   | 工具动态自省与文档检索工具                                                        |
+| 58   | `tools/browser/download.ts`                    | 38   | 1.4 KB   | 下载等待工具对外暴露的薄封装层                                                    |
+| 59   | `tools/browser/unified-locator.ts`             | 38   | 1.7 KB   | Background 侧统一元素定位器封装（注入 dependencies）                              |
 
 ---
 
@@ -82,6 +82,7 @@
 ---
 
 #### 【问题 1】全局无脑自动确认所有 JavaScript 对话框，导致用户或 Agent 无法拒绝破坏性确认框，且导致 `dialog.ts` 的 dismiss 功能确定性失效
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\utils\cdp-session-manager.ts:41-52`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\dialog.ts:43-52`
@@ -119,6 +120,7 @@
 ---
 
 #### 【问题 2】Native Messaging 消息监听器使用并发 async 函数，无全局防踩踏互斥，多请求同时调用底层工具导致状态竞争破坏
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\native-host.ts:375-408`
 - **严重度**：`P0 状态损坏 / 竞态漏洞`
@@ -151,6 +153,7 @@
 ---
 
 #### 【问题 3】`sendMessageToTab` 在指定 `frameId` 时先执行了 `await chrome.tabs.sendMessage`，外层 5 秒超时竞态完全失效导致调用死锁
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\base-browser.ts:168-195`
 - **严重度**：`P0 确定性 Bug / 调用死锁`
@@ -199,11 +202,12 @@
 ---
 
 #### 【问题 4】In-Page 引擎每次调用均执行 3 次以上 `executeScript` 往返（Start->Poll->Retrieve 模式），IPC 瓶颈极高且 4s 循环超时与 15s 报错文案严重脱节
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\in-page-engine.ts:28-198`
 - **严重度**：`P1 性能瓶颈 / 架构缺陷 / 异常路径`
 - **问题描述**：
-  `executeInPage` 每次调用都必须经过 3 个阶段：① 发起执行并将结果 Promise 挂载到 `globalThis`，② 启动 10ms 间隔的 while 循环，每次循环都调用一次 `executeScript` 轮询 `box.settled`，③ 再次执行 `executeScript` 取出结果并清理。单次 `executeScript` 在 Chromium 中需要跨进程 IPC，耗时 15~35ms。一个简单的 `read_dom` 或 `interact_index` 操作包含 6~8 次 in-page 方法调用，累计产生 18~24 次 `executeScript` 往返，净增加 300~800ms 延迟。此外，轮询循环的 deadline 是当前时间 + 4000ms（`EXECUTE_TIMEOUT_MS = 4_000`），但在 Retrieve 阶段报错却硬编码为 `timeout: entrypoint did not settle in 15s`，对 Agent 提供了严重错误的超时诊断。
+  `executeInPage` 每次调用都必须经过 3 个阶段：① 发起执行并将结果 Promise 挂载到 `globalThis`，② 启动 10ms 间隔的 while 循环，每次循环都调用一次 `executeScript` 轮询 `box.settled`，③ 再次执行 `executeScript` 取出结果并清理。单次 `executeScript` 在 Chromium 中需要跨进程 IPC，耗时 15~~35ms。一个简单的 `read_dom` 或 `interact_index` 操作包含 6~~8 次 in-page 方法调用，累计产生 18~~24 次 `executeScript` 往返，净增加 300~~800ms 延迟。此外，轮询循环的 deadline 是当前时间 + 4000ms（`EXECUTE_TIMEOUT_MS = 4_000`），但在 Retrieve 阶段报错却硬编码为 `timeout: entrypoint did not settle in 15s`，对 Agent 提供了严重错误的超时诊断。
 - **证据与触发路径推演**：
   1. 源码证据 (`in-page-engine.ts:28, 142-178`):
   ```ts
@@ -236,6 +240,7 @@
 ---
 
 #### 【问题 5】`checkOcclusionGrid` 视口边界判定缺陷，部分越界元素直接跳过遮挡检测并返回可能位于视口外的点击坐标
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\dom-indexer.ts:1739-1744`
 - **严重度**：`P1 边界条件 / 逻辑缺陷`
@@ -258,6 +263,7 @@
 ---
 
 #### 【问题 6】`inPageDOMPruner` 遍历 Candidate 节点时嵌套子树 `querySelectorAll` 进行形状正则推断，退化为 O(N²) DOM 查询瓶颈
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\dom-indexer.ts:2291-2320`
 - **严重度**：`P1 性能瓶颈 / O(N²) 复杂度`
@@ -288,6 +294,7 @@
 ---
 
 #### 【问题 7】`console-buffer.ts` 与 `cdp-session-manager.ts` 缺少生命周期释放，导致物理 CDP 调试横条永久驻留及内存泄露
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\console-buffer.ts:285-305`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\utils\cdp-session-manager.ts:24-30, 240-275`
@@ -314,6 +321,7 @@
 ---
 
 #### 【问题 8】`network-capture-web-request.ts` 将监听器直接挂载在 `<all_urls>`，使全浏览器所有标签页的所有网络请求全部被迫唤醒 SW 处理
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\network-capture-web-request.ts:468-490`
 - **严重度**：`P1 性能损耗 / 全局事件污染`
@@ -336,6 +344,7 @@
 ---
 
 #### 【问题 9】`intercept-api.ts` 调用 `cdpSessionManager.sendCommand('Network.enable')` 未通过 `withSession` 声明属主，导致临时 Session 瞬间 detach 触发 100% 超时
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\intercept-api.ts:141-170`
 - **严重度**：`P1 确定性超时 / 逻辑硬伤`
@@ -362,6 +371,7 @@
 ---
 
 #### 【问题 10】`file-upload.ts` 超大 Base64 数据在向 Native Host 传输时被 `safePostMessage` 拦截，但错误信息误报为 `Native host not connected`
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\file-upload.ts:468-472`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\native-host.ts:320-335`
@@ -391,6 +401,7 @@
 ---
 
 #### 【问题 11】单次点击强制堆叠至少 280ms 固定 sleep（5次 move 125ms + prePress 110ms + hold 45ms），纯自动化场景无自适应降级
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\interact-index.ts:145-175, 360-390`
 - **严重度**：`P2 延迟累积 / 性能损耗`
@@ -401,6 +412,7 @@
 ---
 
 #### 【问题 12】全页截图分片在内存中大量累积，拼接时极易突破浏览器 Canvas 最大尺寸限制导致绘制黑图或崩溃
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\screenshot.ts:24-35, 1370-1440`
 - **严重度**：`P2 内存暴涨 / 边界溢出`
@@ -411,6 +423,7 @@
 ---
 
 #### 【问题 13】`SessionTabAffinityManager` 构造函数未等待异步存储加载，初期并发请求可能因读取未就绪而误判无绑定
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\utils\session-tab-affinity.ts:16-30, 85-95`
 - **严重度**：`P2 启动竞态 / 绑定丢失`
@@ -421,6 +434,7 @@
 ---
 
 #### 【问题 14】`keepalive-manager.ts` 使用 `Set<string>` 存储标签而非引用计数 Map，同名 Tag 并发调用提前释放保活
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\keepalive-manager.ts:10, 55-68`
 - **严重度**：`P2 状态竞争 / 意外终止`
@@ -431,6 +445,7 @@
 ---
 
 #### 【问题 15】`NavigateTool` 指定 `groupTitle` 时自动建组，但缺少防抖与复用检查，连续导航产生重名空组
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\common.ts:182-192`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\tab-group-manager.ts:50-80`
@@ -442,6 +457,7 @@
 ---
 
 #### 【问题 16】`javascript.ts` 内部硬编码冗长 `MCP_INPAGE_HELPERS` 字符串，与 `dom-indexer.ts` 的选择器解析逻辑完全重复
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\javascript.ts:40-220`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\dom-indexer.ts:1248-1440`
@@ -453,6 +469,7 @@
 ---
 
 #### 【问题 17】键盘按键与修饰键映射在 3 个工具文件中独立重复实现且规则存在分歧
+
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\batch-actions.ts:40-110`
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\computer.ts:80-160`
@@ -480,6 +497,7 @@
 在对 Background 工具层的全面审查中，发现了极其显著的**多重实现堆叠与架构过度设计**现象：
 
 ### 3.1 `scroll.ts` (275行) vs `smart-scroll.ts` (270行) 职责与实现严重重叠
+
 - **重复证据**：
   1. 两者均用于控制页面滚动，底层全部调度 CDP `Input.dispatchMouseEvent({ type: 'mouseWheel' })`，且都实现了在 CDP 失败时 fallback 到 `window.scrollBy`。
   2. 连防御背景标签页不响应的 `wheelSkipUntil` 逻辑、Map 数据结构以及绑定的 3 个标签页监听器（`onActivated`, `onUpdated`, `onRemoved`），在两个文件中一字不差地重复实现了一遍（`wheelSkipUntil` 与 `smartScrollWheelSkipUntil`）。
@@ -487,6 +505,7 @@
 - **治理收益**：将两者合并为单一的 `chrome_scroll` 工具，将智能容器查找作为可选项（如 `container: "auto" | "window"`），直接删除 `smart-scroll.ts` 及其配套的冗余监听器，削减约 270 行重复代码，并避免 Agent 在选工具时的认知困惑。
 
 ### 3.2 `unified-locator.ts` 两处平行存在与分工模糊
+
 - **重复证据**：
   1. `app/chrome-extension/entrypoints/background/tools/browser/unified-locator.ts` (38行)
   2. `app/chrome-extension/utils/unified-locator.ts` (260行)
@@ -495,6 +514,7 @@
 - **治理收益**：统一合并至一个入口，消除空壳转发文件。
 
 ### 3.3 网络捕获“三件套”职责过度拆分与硬编码规则克隆
+
 - **重复证据**：
   1. `network-capture.ts` (159行) 是一个纯转发调度器。
   2. `network-capture-debugger.ts` (1143行) 和 `network-capture-web-request.ts` (1000行) 重复定义了完全相同的静态资源过滤扩展名列表（`STATIC_RESOURCE_EXTENSIONS`）、广告与分析域名过滤列表（`AD_ANALYTICS_DOMAINS`）、静态资源与 API MIME 过滤列表。
@@ -503,6 +523,7 @@
 - **治理收益**：提取共享的网络过滤器与生命周期监听器；合并公用数据结构，将代码量缩减 40%。
 
 ### 3.4 表单与输入工具四重抽象重叠
+
 - 审查发现了 4 个用于表单输入的工具：
   1. `fill-index.ts` (659行) - 按单元素 index 填入并触发 setter。
   2. `fill-form.ts` (305行) - 按字段数组批量填表。
@@ -515,7 +536,9 @@
 ## 四、 性能观察专题 (量化指标与架构瓶颈)
 
 ### 4.1 单次点击（Click）执行链路量化
+
 以调用 `chrome_interact_index({ index: 5, action: "click" })` 为例，分析其一次调用的实际物理损耗：
+
 - **In-Page 跨进程 IPC 往返**：
   - `inPageDetectPerceptiveSignature` (前置感知快照)：3 次 `executeScript` (Start -> Poll -> Retrieve)。
   - `inPageGetElementCoordinates` (解析坐标)：3 次 `executeScript`。
@@ -536,12 +559,14 @@
 - **单步点击物理耗时总计**：**约 700ms ~ 1000ms**。如果开启了 `waitForNetworkQuiescence` 或 `waitForPageSettle`，总耗时将轻松突破 1.5s ~ 2.5s。
 
 ### 4.2 DOM 树索引与感知（chrome_read_dom）性能损耗
+
 - **9 点网格遮挡检测**：
   每个候选可见元素均执行 `checkOcclusionGrid`。每次检测进行 9 点坐标采样，调用 `document.elementFromPoint`。一个典型现代网页（如电商、社交平台）通常有 300~800 个交互元素，单次索引调用产生 **2700 ~ 7200 次 `elementFromPoint`**，频繁触发浏览器的渲染层命中测试（Hit-testing）与重排重绘，造成 500ms ~ 1200ms 的页面主线程卡顿（Jank）。
 - **形状推断的 O(N²) DOM 查询**：
   对所有 candidate 执行 `cand.node.querySelectorAll('span, div, i, svg, ...')`，在深层嵌套 DOM 结构下导致 DOM 节点访问次数呈平方级膨胀。
 
 ### 4.3 全页截图（FullPage Screenshot）资源开销
+
 - **耗时量化**：
   每个分片包含：滚动 -> 等待渲染（350ms） -> 预备分片样式 -> 等待合成（50ms） -> captureVisibleTab -> 还原样式 -> 图片解码。每个分片耗时至少 450ms。一个包含 10 个分片的页面，总截图耗时高达 **4.5 秒 ~ 6 秒**。
 - **内存量化**：
@@ -552,6 +577,7 @@
 ## 五、 模块依赖与被依赖关系清单
 
 ### 5.1 依赖关系（Background 工具层消费的底层基础设施）
+
 1. **Chrome MV3 扩展 API**：
    - `chrome.debugger` (核心 CDP 管道)
    - `chrome.scripting` (`executeScript` 注入引擎与执行通道)
@@ -569,6 +595,7 @@
    - `safe-post-message.ts`：Native Messaging 1MB 物理上限拦截与防护
 
 ### 5.2 被依赖关系（谁在调用 Background 工具层）
+
 1. **外部 MCP Client / Agent**：
    - 通过 Native Messaging Host 进程以 JSON-RPC / NativeMessage 格式发起工具调用，被 `native-host.ts` 接收并路由给 `tools/index.ts:handleCallTool`。
 2. **扩展自身 Popup / Options 页面**：
