@@ -29,7 +29,7 @@ const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
 const REPO_ROOT = resolve(process.cwd());
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
-const STANDALONE_EXT_DIR = 'D:\\workspace\\browserpaw';
+const STANDALONE_EXT_DIRS = ['D:\\workspace\\browserclaw', 'D:\\workspace\\browserpaw'];
 
 console.log('\n================================================================');
 console.log('         BrowserPaw System Healthcheck & Repair');
@@ -135,9 +135,21 @@ if (existsSync(join(EXT_SRC_OUTPUT, 'manifest.json')) && existsSync(join(EXT_SRC
   report(false, `Extension Build Missing at ${EXT_SRC_OUTPUT}`, 'Run: pnpm --filter chrome-mcp-server build');
 }
 
-// Check Standalone Load Directory (D:\workspace\browserpaw)
-if (existsSync(STANDALONE_EXT_DIR)) {
-  const standaloneBg = join(STANDALONE_EXT_DIR, 'background.js');
+// Check Standalone Load Directories
+for (const dir of STANDALONE_EXT_DIRS) {
+  if (!existsSync(dir)) {
+    if (AUTO_FIX && buildOk) {
+      try {
+        mkdirSync(dir, { recursive: true });
+        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+        report(true, `Created and Synced Standalone Directory: ${dir}`);
+      } catch (err) {
+        report(false, `Failed to create/sync ${dir}`, err.message);
+      }
+    }
+    continue;
+  }
+  const standaloneBg = join(dir, 'background.js');
   const srcBg = join(EXT_SRC_OUTPUT, 'background.js');
   let synced = false;
   if (existsSync(standaloneBg) && existsSync(srcBg)) {
@@ -146,15 +158,15 @@ if (existsSync(STANDALONE_EXT_DIR)) {
     synced = s1 === s2;
   }
   if (synced) {
-    report(true, `Standalone Directory Synced: ${STANDALONE_EXT_DIR}`, `Files matched perfectly.`);
+    report(true, `Standalone Directory Synced: ${dir}`, `Files matched perfectly.`);
   } else {
-    report(false, `Standalone Directory Out of Sync: ${STANDALONE_EXT_DIR}`);
+    report(false, `Standalone Directory Out of Sync: ${dir}`);
     if (AUTO_FIX && buildOk) {
       try {
-        cpSync(EXT_SRC_OUTPUT, STANDALONE_EXT_DIR, { recursive: true });
-        report(true, `Standalone Directory Synced via Auto-Fix`);
+        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+        report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
       } catch (err) {
-        report(false, `Failed to copy build to ${STANDALONE_EXT_DIR}`, err.message);
+        report(false, `Failed to copy build to ${dir}`, err.message);
       }
     }
   }
