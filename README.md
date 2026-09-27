@@ -14,13 +14,20 @@
 ---
 
 <details>
-<summary><b>Background: Why BrowserPaw?</b></summary>
+<summary><b>The Backstory: Why I Built BrowserPaw (Click to expand)</b></summary>
 
 <br/>
 
-Browser automation frameworks that drive a separate browser instance (Playwright, Puppeteer, browser-use) start from a clean profile. They do not inherit your active logins, cookies, or extensions, and copying a live Chrome profile on Windows fails with file-sharing locks. Attaching to an existing Chrome via a debug port triggers security banners.
+Traditional browser automation frameworks and LLM browser-use agents were designed for isolated sandbox testing, not for real daily desktop workflows. Every time I tried to let an AI agent assist me in my real browser, I kept hitting the same six frustrating roadblocks:
 
-BrowserPaw takes a different route: a Chrome MV3 extension plus a local Native Messaging bridge, running inside the Chrome you already use. Cookies, sessions, and extensions are preserved, and automation happens in background tabs without stealing focus.
+1. **Lost Logins, Cookies & Saved Sessions**: Standalone browsers launch from an empty profile. They do not inherit your active Google, GitHub, or enterprise SSO logins, cookies, or extensions. Logging in from scratch constantly triggers 2FA and anti-bot verification challenges.
+2. **Windows File-Sharing Locks (`[WinError 32]`)**: Attempting to reuse an active Chrome User Data directory on Windows immediately crashes because Chromium holds exclusive file-sharing locks on open profile databases.
+3. **Mandatory Manual Mouse-Click Approvals**: Whenever an agent attempts to control your local browser via raw CDP or remote debugging ports, Chromium frequently forces intrusive confirmation popups and security prompts. You must stop your work, locate the browser window, and physically click with your mouse to grant permission—completely defeating the purpose of unattended, autonomous automation.
+4. **Sluggish Execution & Astronomical Token Consumption**: Conventional AI browser agents upload full-page retina screenshots or massive raw DOM trees back to remote frontier LLMs for every single micro-action. Each step suffers a 6–12 second roundtrip latency and burns tens of thousands of tokens, making multi-step automation painfully slow and prohibitively expensive.
+5. **Intrusive Debugging Banners & Viewport Jitter**: Standard remote debugging injects a native top notification bar (_'BrowserPaw is debugging this browser'_), shifting the viewport downward by ~36px and causing visual layout jitter and misaligned coordinate clicks.
+6. **Foreground Focus Stealing**: Typical automation tools force the browser window into the foreground, hijacking your keyboard and mouse focus while you are attempting to perform other tasks.
+
+Frustrated by these roadblocks, I built BrowserPaw to solve all of these problems at their root. By pairing a Chrome MV3 extension directly with a local Native Messaging bridge, BrowserPaw operates seamlessly inside the Chrome you already use every day—automating workflows quietly in background tabs without losing logins, stealing focus, or demanding repetitive manual approvals.
 
 </details>
 
