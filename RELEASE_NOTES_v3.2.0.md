@@ -164,43 +164,28 @@ All **833 automated monorepo tests** (556 Vitest, 124 Jest, 153 E2E) pass with 1
 
 ---
 
-## 🚀 Installation & Upgrade
+## 🚀 Quick Installation (Zero-Compile, Ready-to-Use)
 
-### ⚡ Route A: Zero-Compile Prebuilt Release (Recommended for Most Users & AI Agents)
+### 1. Chrome Extension Installation (Direct Download)
+1. Download **`browserpaw-extension-v3.2.0.zip`** from the **Assets** section below.
+2. Unzip the downloaded file to a local directory (e.g. `C:\\browserpaw-extension` or `~/browserpaw-extension`).
+3. Open Google Chrome (or Edge/Brave/Chromium), navigate to `chrome://extensions/`.
+4. Turn on the **Developer mode** toggle in the top-right corner.
+5. Click **Load unpacked** in the top-left toolbar, and select the unzipped directory containing `manifest.json`.
+   *(If updating from an existing installation, simply replace the folder contents and click the Reload button on the extension card)*.
 
-**No compilation or Node.js development toolchain required!**
-
-1. **Browser Extension**:
-   - Download `browserpaw-extension-v3.2.0.zip` from [Assets](https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v3.2.0) below.
-   - Unzip to a local directory (e.g. `~/browserpaw-extension` or `C:\browserpaw-extension`).
-   - Open Chrome / Edge, navigate to `chrome://extensions/`, enable **Developer mode** in the top right.
-   - Click **Load unpacked** and select the unzipped directory. _(If updating an existing installation, simply replace the folder contents and click the **Reload** button on the extension card)_.
-
-2. **AI Agent Skill (Cursor / Claude / Windsurf / Codex / Hermes)**:
-   - Download `browserpaw-skill-v3.2.0.zip` from [Assets](https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v3.2.0) below and extract it into your agent's skills directory.
-
-3. **Native Host & Stdio Bridge**:
-   - Ensure Node.js 20+ is installed on your system.
-   - Register the native messaging host once:
-     ```bash
-     npx browserpaw
-     ```
-     _(Or clone/download and run `node dist/scripts/register-dev.js` inside `app/native-server`)_.
-   - Restart your MCP client (Cursor, Windsurf, Claude Desktop, or Hermes).
+### 2. Native Bridge Setup (One-Line Registration)
+Run once in your terminal to register the Native Messaging host (Node.js 20+ required):
+```bash
+npx browserpaw
+```
+Your MCP client (Claude Desktop, Cursor, Windsurf, Codex, or Hermes) will now connect automatically.
 
 ---
 
-### 🛠️ Route B: Developer Source Build (For Contributors)
-
-If you are cloning the source code to modify or contribute to BrowserPaw:
-
+### 🛠️ Developer Source Build (Optional)
+If building from the Git source repository:
 ```bash
-# 1. Install monorepo dependencies
 pnpm install
-
-# 2. Build full workspace
 pnpm build
-
-# 3. Reload extension in Chrome from app/chrome-extension/.output/chrome-mv3
-# 4. Restart your MCP client
 ```
