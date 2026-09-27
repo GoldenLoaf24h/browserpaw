@@ -69,14 +69,14 @@
             },
             "disabled": false,
             "autoApprove": [
-              "chrome_act_toward_goal",
-              "chrome_read_dom",
-              "chrome_interact_index",
-              "chrome_fill_index",
-              "chrome_batch_actions",
-              "chrome_screenshot",
-              "chrome_smart_scroll",
-              "chrome_dismiss_overlay"
+              "browserpaw_act_toward_goal",
+              "browserpaw_read_dom",
+              "browserpaw_interact_index",
+              "browserpaw_fill_index",
+              "browserpaw_batch_actions",
+              "browserpaw_screenshot",
+              "browserpaw_smart_scroll",
+              "browserpaw_dismiss_overlay"
             ]
           }
         }
