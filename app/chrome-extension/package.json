@@ -49,5 +49,5 @@
     "vue-tsc": "^2.2.8",
     "wxt": "^0.20.0"
   },
-  "license": "AGPL-3.0"
+  "license": "AGPL-3.0-or-later"
 }

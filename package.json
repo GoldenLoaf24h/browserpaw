@@ -59,7 +59,7 @@
       "prettier --write"
     ]
   },
-  "license": "AGPL-3.0",
+  "license": "AGPL-3.0-or-later",
   "bin": {
     "browserpaw": "./bin/browserpaw.cjs",
     "browserclaw": "./bin/browserpaw.cjs"

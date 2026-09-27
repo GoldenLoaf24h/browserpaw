@@ -248,6 +248,22 @@ For details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ---
 
-## 📄 License
+## 📄 Legal & License
 
-This project is licensed under the [AGPL-3.0 license](./LICENSE). Modifications and SaaS deployments must remain open-source.
+This project is licensed under the **[AGPL-3.0 license](./LICENSE)** (GNU Affero General Public License v3.0 or later).
+
+### ⚖️ Open Source & SaaS Copyleft (Section 13)
+
+Under the terms of AGPLv3, any modifications, forks, or derivative works—including those hosted remotely as a network service, cloud gateway, or SaaS platform interacting with users over a computer network—**must make their complete corresponding source code freely available under the same AGPL-3.0 license**.
+
+### 🛡️ Disclaimer of Warranties & Limitation of Liability
+
+This software is provided _"as is"_, without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. In no event shall the authors or copyright holders be liable for any claim, damages, account suspensions, data loss, or other liability arising from, out of, or in connection with the software or the use or other dealings in the software.
+
+### 🌐 Compliance with Third-Party Terms
+
+Users are solely responsible for ensuring that their automated browser workflows comply with all applicable local laws, regulations, and the Terms of Service (ToS) or `robots.txt` policies of any third-party websites or services accessed.
+
+### 🏷️ Trademarks & Non-Affiliation
+
+_Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of Microsoft Corporation. _OpenAI_ and _ChatGPT_ are trademarks of OpenAI, Inc. _TypeSafe_ is a trademark of TypeSafe, Inc. BrowserPaw is an independent open-source project and is not sponsored, endorsed, or affiliated with any of these entities. Third-party software attributions and licenses are documented in [NOTICE](./NOTICE).
