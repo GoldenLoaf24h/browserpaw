@@ -7,6 +7,7 @@
     <a href="./docs/TOOLS.md">工具参考 (50)</a> ·
     <a href="./AGENT_CONFIG_GUIDE.zh-CN.md">客户端配置</a> ·
     <a href="./README.md">📖 English</a> ·
+    <a href="./LICENSE">AGPL-3.0 开源协议</a> ·
     <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">Releases</a>
   </p>
 </div>
@@ -296,4 +297,4 @@ BrowserPaw 在设计与实现中汲取了开源社区的卓越智慧：
 
 ## 📄 开源许可协议
 
-采用 [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE) 协议。任何修改、衍生打包或提供网络 SaaS API 服务均须强制同等开源。
+本项目采用 [AGPL-3.0 license](./LICENSE) 协议开源。任何修改、衍生打包或提供网络 SaaS API 服务均须强制同等开源。

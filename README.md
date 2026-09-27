@@ -7,6 +7,7 @@
     <a href="./docs/TOOLS.md">Tool Reference (50)</a> ·
     <a href="./AGENT_CONFIG_GUIDE.md">Client Config</a> ·
     <a href="./README.zh-CN.md">Chinese (zh-CN)</a> ·
+    <a href="./LICENSE">AGPL-3.0 license</a> ·
     <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">Releases</a>
   </p>
 </div>
@@ -249,4 +250,4 @@ For details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ## 📄 License
 
-[AGPL-3.0](./LICENSE). Modifications and SaaS deployments must remain open-source.
+This project is licensed under the [AGPL-3.0 license](./LICENSE). Modifications and SaaS deployments must remain open-source.
