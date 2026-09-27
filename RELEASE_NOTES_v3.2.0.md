@@ -1,6 +1,6 @@
 # 📦 GitHub Release: BrowserPaw v3.2.0
 
-> **重要更名通知 / Notice**: **BrowserClaw 正式改名为 BrowserPaw** (BrowserClaw has officially been renamed to **BrowserPaw**). All tool names, schemas, skills, and documentation are now unified under the BrowserPaw namespace with backward-compatible aliases preserved.
+> **Important Notice**: **BrowserClaw has officially been renamed to BrowserPaw**. All tool names, schemas, skills, and documentation are now unified under the BrowserPaw namespace with backward-compatible aliases preserved.
 
 - **Tag:** `v3.2.0`
 - **Title:** `BrowserPaw v3.2.0: Physics Kinetic Cursor, Momentum Scrolling & Lockstep Lifecycle Binding`
@@ -103,7 +103,7 @@ All **842 automated monorepo tests** (561 Vitest, 128 Jest, 153 E2E) pass with 1
 2. Unzip the downloaded file to a local directory (e.g. `C:\\browserpaw-extension` or `~/browserpaw-extension`).
 3. Open Google Chrome (or Edge/Brave/Chromium), navigate to `chrome://extensions/`.
 4. Turn on the **Developer mode** toggle in the top-right corner.
-5. Click **Load unpacked** (加载已解压的扩展程序) in the top-left toolbar, and select the unzipped directory containing `manifest.json`.
+5. Click **Load unpacked** in the top-left toolbar, and select the unzipped directory containing `manifest.json`.
    *(If updating from an existing installation, simply replace the folder contents and click the Reload button on the extension card)*.
 
 ### 2. Connect Your AI Agent / MCP Client
