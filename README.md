@@ -250,7 +250,3 @@ For details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 ## 📄 License
 
 [AGPL-3.0](./LICENSE). Modifications and SaaS deployments must remain open-source.
-
----
-
-BrowserPaw is an independent Chrome extension and MCP automation project. It is not affiliated with the standalone `browserpaw` package on npm.

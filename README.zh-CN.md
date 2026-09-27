@@ -297,7 +297,3 @@ BrowserPaw 在设计与实现中汲取了开源社区的卓越智慧：
 ## 📄 开源许可协议
 
 采用 [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE) 协议。任何修改、衍生打包或提供网络 SaaS API 服务均须强制同等开源。
-
----
-
-_说明与消歧义：BrowserPaw MCP 是一个面向 AI Agent 自动化操控日常真实浏览器的独立 Chrome 扩展与 Model Context Protocol 生态，与 npm 上的同名 Playwright 库互不关联。_
