@@ -182,15 +182,16 @@ export function hasJevApiKey(): boolean {
  */
 export function isJevDisabledWithoutKey(): boolean {
   const env = typeof process !== 'undefined' ? process.env : undefined;
-  if (!env) return true; // Default Fail-Closed
-  // Explicit override only if test environment explicitly enables heuristic-only mode
-  if (
-    env.CHROME_MCP_ENABLE_JEV_HEURISTIC_TESTING === 'true' ||
-    env.CHROME_MCP_ENABLE_JEV_HEURISTIC_TESTING === '1'
-  ) {
-    return false;
-  }
-  return true; // Strict: Without valid key/model, Jev tool is completely purged
+  if (!env) return false;
+  const flag = String(
+    env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY ??
+      env.CHROME_MCP_DISABLE_JEV_WITHOUT_KEY ??
+      env.DISABLE_JEV_WITHOUT_KEY ??
+      '',
+  )
+    .trim()
+    .toLowerCase();
+  return flag === 'true' || flag === '1';
 }
 
 /** Filter the schema list for a profile. Unknown names are simply not exposed. */
