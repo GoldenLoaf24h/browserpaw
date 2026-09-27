@@ -4,7 +4,7 @@
   <p><b>Control your everyday Chrome browser from AI agents, without losing logins or focus.</b></p>
   <p>
     <a href="./docs/MAP.md">Project Map</a> ·
-    <a href="./docs/TOOLS.md">Tool Reference (49)</a> ·
+    <a href="./docs/TOOLS.md">Tool Reference (50)</a> ·
     <a href="./AGENT_CONFIG_GUIDE.md">Client Config</a> ·
     <a href="./README.zh-CN.md">Chinese (zh-CN)</a> ·
     <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">Releases</a>
@@ -28,12 +28,12 @@ BrowserPaw takes a different route: a Chrome MV3 extension plus a local Native M
 
 ## ⚡ What is BrowserPaw?
 
-BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 7 categories (navigation, perception, action, observation, management, diagnostics, network), with a minimal 14-tool core profile for everyday sessions.
+BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 8 categories (navigation, perception, action, observation, management, diagnostics, network, crawl), with a minimal 14-tool core profile for everyday sessions.
 
 Two execution paths are available:
 
 1. **Deterministic tools** – indexed clicks, fills, batch pipelines, form wizards, screenshots, network capture, etc. The calling agent plans each step.
-2. **`chrome_act_toward_goal`** – a local perception-action micro-loop. The native server perceives the page, decides the next action, and acts, without a network round-trip per step. It uses TypeSafe Jev System One inference when an API key is set, and falls back to a built-in heuristic engine otherwise.
+2. **`chrome_act_toward_goal`** – a local perception-action micro-loop (~200–400ms/step). The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
 
 ---
 
@@ -69,7 +69,7 @@ Two execution paths are available:
                             │ Native Messaging
                             ▼
 ┌─ Chrome MV3 Extension ─────────────────────────────────┐
-│  48 deterministic tools · CDP events · in-page engine  │
+│  49 browser tools · CDP events · in-page engine        │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +81,11 @@ Routing guideline:
 
 The micro-loop is bounded: at most 60 steps in Jev mode (default 10), truncated to 5 steps in heuristic fallback. It intercepts 14 destructive action keywords (pay, delete, submit, etc.) and escalates ambiguous or low-confidence decisions back to the calling agent with candidate elements.
 
-**Setup:** set the `TYPESAFE_API_KEY` environment variable to enable Jev inference. Without it, the micro-loop runs on the heuristic engine – always functional, slower, and more conservative.
+**Autonomous Jev Modes & Smart Gating:**
+
+- **Off**: Disabled by the user in the extension popup. `chrome_act_toward_goal` is automatically hidden from `tools/list`; if invoked directly, it is rejected and prompts for user authorization.
+- **Local**: Runs an offline, privacy-first decider model (`decider-2b`) locally on port 8009 with NVIDIA GPU acceleration (CUDA RTX) or CPU fallback. Hot-loads automatically on first use.
+- **Remote**: Uses TypeSafe Jev System One cloud inference. Set `TYPESAFE_API_KEY` (or configure via popup) with optional custom `Base URL` and custom fine-tuned `modelId`. Failing configurations return actionable diagnostic logs instead of silent heuristic fallback.
 
 ---
 

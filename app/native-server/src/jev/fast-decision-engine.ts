@@ -28,6 +28,7 @@ import {
   validateChoice,
 } from './jev-client';
 import { HeuristicEngine } from './heuristic-engine';
+import { jevModelManager } from '../server/jev-model-manager';
 
 /**
  * Match element text or action against configured safety breakpoints.
@@ -80,19 +81,36 @@ export class FastDecisionEngine {
     internalCaller: (toolName: string, args: any) => Promise<any>,
     server?: Server,
   ): Promise<ActTowardGoalResult> {
-    const hasKey = Boolean(this.jevClient.getClient());
-    let engine: DecisionEngineType = hasKey && !isSessionKeyInvalid() ? 'jev' : 'heuristic';
-    let fallbackReason: FallbackReason = hasKey
-      ? isSessionKeyInvalid()
-        ? 'invalid_key'
-        : null
-      : 'no_api_key';
+    jevModelManager.touchActivity();
+    const currentMode = params.mode || jevModelManager.getActiveMode();
+    let engine: DecisionEngineType = 'heuristic';
+    let fallbackReason: FallbackReason = null;
     let engineSwitched = false;
+
+    if (currentMode === 'off') {
+      engine = 'heuristic';
+      fallbackReason = 'jev_disabled';
+    } else if (currentMode === 'local') {
+      engine = 'jev';
+      fallbackReason = null;
+      // Auto-ensure local service is running (hot-load & resident)
+      const serviceRes = await jevModelManager.ensureLocalServiceRunning();
+      if (!serviceRes.success && !(await jevModelManager.isLocalServiceOnline(8009))) {
+        engine = 'heuristic';
+        fallbackReason = 'local_service_offline';
+        engineSwitched = true;
+      }
+    } else {
+      // Remote cloud mode
+      const hasKey = Boolean(this.jevClient.getRemoteClient());
+      engine = hasKey && !isSessionKeyInvalid() ? 'jev' : 'heuristic';
+      fallbackReason = hasKey ? (isSessionKeyInvalid() ? 'invalid_key' : null) : 'no_api_key';
+    }
 
     // Parameter bounds enforcement (§4.4)
     let maxSteps = typeof params.maxSteps === 'number' ? params.maxSteps : 10;
     maxSteps = Math.min(Math.max(1, maxSteps), 60);
-    if (engine === 'heuristic') {
+    if ((engine as DecisionEngineType) === 'heuristic') {
       maxSteps = Math.min(maxSteps, 5); // §4.3: heuristic mode maxSteps forced <= 5
     }
 
@@ -151,7 +169,9 @@ export class FastDecisionEngine {
         const domResult = await internalCaller('chrome_read_dom', {
           tabId: params.tabId,
           activeViewportOnly: true,
-          limit: 250,
+          limit: 100,
+          fast: true,
+          format: 'fast',
           sessionId: params.sessionId || params.sessionContext,
         });
         const textContent = domResult?.content?.[0]?.text;
@@ -245,7 +265,7 @@ export class FastDecisionEngine {
         );
         const questions = buildQuestions(state.elements, params.goal);
 
-        const queryRes = await this.jevClient.query(state, questions);
+        const queryRes = await this.jevClient.query(state, questions, currentMode);
         if (queryRes.errorReason || !queryRes.result) {
           // Runtime fallback (§4.2)
           engine = 'heuristic';
@@ -652,6 +672,7 @@ export class FastDecisionEngine {
             index: targetIndex,
             tabId: params.tabId,
             includeDelta: true,
+            settleTimeoutMs: 600,
             sessionId: params.sessionId || params.sessionContext,
           });
           outcome = this.parseOutcome(clickRes);
@@ -685,12 +706,17 @@ export class FastDecisionEngine {
               inputTokens,
             );
           }
+          const shouldPressEnter =
+            params.pressEnter === true ||
+            (params.pressEnter === undefined &&
+              /(search|搜索|submit|提交|回车|press enter)/i.test(params.goal));
           const fillRes = await internalCaller('chrome_fill_index', {
             index: targetIndex,
             text: textPayload,
             tabId: params.tabId,
-            pressEnter: true,
+            pressEnter: shouldPressEnter,
             includeDelta: true,
+            settleTimeoutMs: 800,
             sessionId: params.sessionId || params.sessionContext,
           });
           outcome = this.parseOutcome(fillRes);
@@ -737,7 +763,7 @@ export class FastDecisionEngine {
 
           let selectedVal = options[0].value;
           if (engine === 'jev') {
-            const scoreRes = await this.jevClient.scoreOptions(params.goal, options);
+            const scoreRes = await this.jevClient.scoreOptions(params.goal, options, currentMode);
             jevCalls++;
             inputTokens += scoreRes?.usage?.inputTokens || 0;
             if (!scoreRes || scoreRes.confidence < 0.4) {

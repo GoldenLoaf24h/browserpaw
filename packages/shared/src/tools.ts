@@ -57,6 +57,13 @@ export function getBaseToolName(toolIdentifier: string): string {
   return toolIdentifier;
 }
 
+export const NON_CHROME_TOOLS: ReadonlySet<string> = new Set([
+  'get_windows_and_tabs',
+  'performance_start_trace',
+  'performance_stop_trace',
+  'performance_analyze_insight',
+]);
+
 /**
  * Resolve a tool's canonical runtime name based on active namespace prefix.
  * Examples:
@@ -74,8 +81,8 @@ export function resolveToolName(toolIdentifier: string, prefixOverride?: string)
 
   const baseName = getBaseToolName(toolIdentifier);
 
-  if (baseName === 'get_windows_and_tabs') {
-    return prefix === 'chrome_' ? 'get_windows_and_tabs' : `${prefix}get_windows_and_tabs`;
+  if (NON_CHROME_TOOLS.has(baseName)) {
+    return prefix === 'chrome_' ? baseName : `${prefix}${baseName}`;
   }
 
   return `${prefix}${baseName}`;
@@ -92,30 +99,36 @@ export function normalizeIncomingToolName(name: string): {
     return { canonicalBackendName: name, prefix: '' };
   }
   if (name.startsWith('browserpaw_')) {
-    if (name === 'browserpaw_get_windows_and_tabs') {
-      return { canonicalBackendName: 'get_windows_and_tabs', prefix: 'browserpaw_' };
+    const raw = name.slice('browserpaw_'.length);
+    if (NON_CHROME_TOOLS.has(raw)) {
+      return { canonicalBackendName: raw, prefix: 'browserpaw_' };
     }
     return {
-      canonicalBackendName: 'chrome_' + name.slice('browserpaw_'.length),
+      canonicalBackendName: 'chrome_' + raw,
       prefix: 'browserpaw_',
     };
   }
   if (name.startsWith('browserclaw_')) {
-    if (name === 'browserclaw_get_windows_and_tabs') {
-      return { canonicalBackendName: 'get_windows_and_tabs', prefix: 'browserclaw_' };
+    const raw = name.slice('browserclaw_'.length);
+    if (NON_CHROME_TOOLS.has(raw)) {
+      return { canonicalBackendName: raw, prefix: 'browserclaw_' };
     }
     return {
-      canonicalBackendName: 'chrome_' + name.slice('browserclaw_'.length),
+      canonicalBackendName: 'chrome_' + raw,
       prefix: 'browserclaw_',
     };
   }
   if (name.startsWith('chrome_')) {
+    const raw = name.slice('chrome_'.length);
+    if (NON_CHROME_TOOLS.has(raw)) {
+      return { canonicalBackendName: raw, prefix: 'chrome_' };
+    }
     return { canonicalBackendName: name, prefix: 'chrome_' };
   }
-  if (name === 'get_windows_and_tabs') {
+  if (NON_CHROME_TOOLS.has(name)) {
     return { canonicalBackendName: name, prefix: '' };
   }
-  return { canonicalBackendName: name, prefix: '' };
+  return { canonicalBackendName: 'chrome_' + name, prefix: '' };
 }
 
 /**
@@ -123,27 +136,38 @@ export function normalizeIncomingToolName(name: string): {
  */
 export function alignToolReferences(text: string, targetPrefix: string = activePrefix): string {
   if (!text || typeof text !== 'string') return text;
-  const pfx = targetPrefix.endsWith('_') ? targetPrefix : `${targetPrefix}_`;
+  const pfx = !targetPrefix
+    ? activePrefix
+    : targetPrefix.endsWith('_')
+      ? targetPrefix
+      : `${targetPrefix}_`;
 
   if (pfx === 'chrome_') {
     return text.replace(/\b(browserpaw|browserclaw)_([a-zA-Z0-9_]+)\b/g, (_match, _ns, tool) => {
-      if (tool === 'get_windows_and_tabs') {
-        return 'get_windows_and_tabs';
+      if (NON_CHROME_TOOLS.has(tool)) {
+        return tool;
       }
       return `chrome_${tool}`;
     });
   }
 
-  return text
+  let result = text
     .replace(/\bchrome_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
       return `${pfx}${tool}`;
     })
     .replace(/\b(browserpaw|browserclaw)_([a-zA-Z0-9_]+)\b/g, (_match, _ns, tool) => {
       return `${pfx}${tool}`;
-    })
-    .replace(/\bget_windows_and_tabs\b/g, () => {
-      return `${pfx}get_windows_and_tabs`;
     });
+
+  for (const nonChromeTool of NON_CHROME_TOOLS) {
+    const regex = new RegExp(
+      `(?<!(?:browserpaw_|browserclaw_|chrome_))\\b${nonChromeTool}\\b`,
+      'g',
+    );
+    result = result.replace(regex, `${pfx}${nonChromeTool}`);
+  }
+
+  return result;
 }
 
 export const TOOL_NAMES = {
@@ -2158,6 +2182,11 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
                 description: 'Scroll direction (left/right dispatch horizontal wheel deltas)',
               },
               amount: { type: 'number', description: 'Scroll pixel amount' },
+              note: {
+                type: 'string',
+                description:
+                  'Optional intent note displayed on virtual agent cursor during execution',
+              },
               durationMs: { type: 'number', description: 'Wait duration in ms' },
               waitForSettle: {
                 type: 'boolean',
@@ -2770,6 +2799,11 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           type: 'number',
           description: 'Maximum settle wait timeout in ms (default: 1500)',
         },
+        note: {
+          type: 'string',
+          description:
+            'Optional intent note displayed on virtual agent cursor during scrolling (e.g. "Scrolling down timeline")',
+        },
       },
       required: [],
     },
@@ -3156,7 +3190,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: true,
     },
     description:
-      'Autonomous semantic micro-loop that perceives, decides, and acts toward a natural-language goal within a local Native Server loop (~200-400ms/step). Powered by TypeSafe Jev System One with seamless fallback to heuristic scoring when no API key is available or on quota/network degradation. Automatically escalates ambiguous, destructive, or complex actions back to the macro planner with pre-fetched page context.',
+      'Autonomous semantic micro-loop that perceives, decides, and acts toward a natural-language goal within a local Native Server loop (~200-400ms/step). Powered by TypeSafe Jev System One (Cloud or local resident CUDA GPU/MPS). Requires configured model; fails closed when unavailable. Automatically escalates ambiguous, destructive, or complex actions back to the macro planner with pre-fetched page context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3198,6 +3232,17 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         sessionContext: {
           type: 'string',
           description: 'Optional alias for sessionId',
+        },
+        pressEnter: {
+          type: 'boolean',
+          description:
+            'Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)',
+        },
+        mode: {
+          type: 'string',
+          enum: ['off', 'local', 'remote'],
+          description:
+            'Optional override for the Jev semantic execution engine mode ("off", "local", or "remote"). Defaults to the mode configured in the extension popup.',
         },
       },
       required: ['goal'],

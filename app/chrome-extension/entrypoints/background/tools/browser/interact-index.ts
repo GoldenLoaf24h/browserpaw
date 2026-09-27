@@ -239,8 +239,8 @@ async function dispatchMouseMovement(
   }
 
   const startPos = lastMousePosMap.get(tabId) || {
-    x: Math.max(0, targetX - (50 + Math.floor(Math.random() * 80))),
-    y: Math.max(0, targetY - (30 + Math.floor(Math.random() * 60))),
+    x: Math.max(0, targetX - (15 + Math.floor(Math.random() * 20))),
+    y: Math.max(0, targetY - (10 + Math.floor(Math.random() * 15))),
   };
 
   const steps = 3 + Math.floor(Math.random() * 3); // 3-5 steps
@@ -660,7 +660,24 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             : { tabId };
 
         // Animate virtual agent cursor to target position before physical interaction
-        void animateAgentCursor(tabId, x, y);
+        const actName = String(action);
+        const actNote =
+          (args as any).note ||
+          (args as any).actionNote ||
+          (actName === 'click'
+            ? `Clicking [${args.index ?? ''}]`
+            : actName === 'hover'
+              ? `Hovering [${args.index ?? ''}]`
+              : actName === 'double_click'
+                ? `Double clicking [${args.index ?? ''}]`
+                : actName === 'focus'
+                  ? `Focusing [${args.index ?? ''}]`
+                  : actName);
+        await animateAgentCursor(tabId, x, y, {
+          waitForArrival: true,
+          timeoutMs: 350,
+          actionNote: actNote,
+        });
 
         // Start inline network capture if requested
         const netCapture = startActionNetworkCapture(tabId, args.captureNetwork);
@@ -751,11 +768,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               const startY = hasPath ? Math.round(args.path![0].y) : y;
 
               await dispatchMouseMovement(tabId, startX, startY, modifierMask, false);
-              const prePressPauseMs = Math.max(
-                80,
-                Math.min(300, (args as any).prePressDelayMs ?? 110),
+              const dragPrePress = Math.max(
+                0,
+                Math.min(300, (args as any).prePressDelayMs ?? (args.humanize === true ? 80 : 0)),
               );
-              await new Promise((r) => setTimeout(r, prePressPauseMs));
+              if (dragPrePress > 0) {
+                await new Promise((r) => setTimeout(r, dragPrePress));
+              }
 
               await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                 type: 'mousePressed',
@@ -769,6 +788,14 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               if (holdMs > 0) {
                 await new Promise((r) => setTimeout(r, holdMs));
               }
+
+              // Concurrently animate virtual cursor to drag destination during physical drag
+              const dragCursorArrivalPromise = animateAgentCursor(tabId, endPoint.x, endPoint.y, {
+                immediate: false,
+                waitForArrival: true,
+                timeoutMs: 350,
+                actionNote: actNote,
+              });
 
               if (hasPath) {
                 for (let pi = 1; pi < args.path!.length; pi++) {
@@ -843,10 +870,8 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 });
                 dragOutcome.dndDispatched = true;
               }
-              void animateAgentCursor(tabId, endPoint.x, endPoint.y, {
-                immediate: false,
-                waitForArrival: false,
-              });
+              // Wait for concurrent visual cursor drag arrival before releasing
+              await dragCursorArrivalPromise;
               dragOutcome.dragIntercepted = Boolean(dragData);
               dragOutcome.dragSteps = dragSteps;
               // CDP-synthetic pointer drags: deliver one final pointermove to
@@ -913,8 +938,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               }
               const occRes = occResult?.result;
               if (occRes && typeof occRes.x === 'number' && typeof occRes.y === 'number') {
-                x = occRes.x;
-                y = occRes.y;
+                if (x !== occRes.x || y !== occRes.y) {
+                  x = occRes.x;
+                  y = occRes.y;
+                  await animateAgentCursor(tabId, x, y, {
+                    waitForArrival: true,
+                    timeoutMs: 350,
+                    immediate: false,
+                  });
+                }
               }
             }
 
@@ -926,12 +958,17 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 await dispatchMouseMovement(tabId, x, y, modifierMask, args.humanize === true);
 
                 if (action === 'click') {
-                  const prePressPauseMs = Math.max(
-                    80,
-                    Math.min(300, (args as any).prePressDelayMs ?? 110),
+                  const clickPrePress = Math.max(
+                    0,
+                    Math.min(
+                      300,
+                      (args as any).prePressDelayMs ?? (args.humanize === true ? 80 : 0),
+                    ),
                   );
-                  await new Promise((r) => setTimeout(r, prePressPauseMs));
-                  void animateAgentCursorClick(tabId, x, y);
+                  if (clickPrePress > 0) {
+                    await new Promise((r) => setTimeout(r, clickPrePress));
+                  }
+                  await animateAgentCursorClick(tabId, x, y, actNote);
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed',
                     x,
@@ -953,7 +990,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                     modifiers: modifierMask,
                   });
                 } else if (action === 'double_click') {
-                  void animateAgentCursorClick(tabId, x, y);
+                  await animateAgentCursorClick(tabId, x, y, actNote);
                   // First click
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed',
@@ -977,6 +1014,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   // Inter-click pause for OS double-click recognition
                   await new Promise((r) => setTimeout(r, 60));
                   // Second click with clickCount: 2
+                  await animateAgentCursorClick(tabId, x, y, actNote);
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed',
                     x,
@@ -997,12 +1035,17 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                     modifiers: modifierMask,
                   });
                 } else if (action === 'right_click') {
-                  void animateAgentCursorClick(tabId, x, y);
-                  const prePressPauseMs = Math.max(
-                    80,
-                    Math.min(300, (args as any).prePressDelayMs ?? 110),
+                  await animateAgentCursorClick(tabId, x, y, actNote);
+                  const rightPrePress = Math.max(
+                    0,
+                    Math.min(
+                      300,
+                      (args as any).prePressDelayMs ?? (args.humanize === true ? 80 : 0),
+                    ),
                   );
-                  await new Promise((r) => setTimeout(r, prePressPauseMs));
+                  if (rightPrePress > 0) {
+                    await new Promise((r) => setTimeout(r, rightPrePress));
+                  }
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                     type: 'mousePressed',
                     x,

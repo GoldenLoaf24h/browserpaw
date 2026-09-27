@@ -131,18 +131,9 @@ class NavigateTool extends BaseBrowserToolExecutor {
   }
 
   async execute(args: NavigateToolParams): Promise<ToolResult> {
-    const {
-      newWindow = false,
-      width,
-      height,
-      refresh = false,
-      tabId,
-      background,
-      windowId,
-    } = args;
+    const { newWindow = false, width, height, refresh = false, tabId, background, windowId } = args;
     const url =
-      args.url ||
-      (args.action === 'back' || args.action === 'forward' ? args.action : undefined);
+      args.url || (args.action === 'back' || args.action === 'forward' ? args.action : undefined);
 
     console.log(
       `Attempting to ${refresh ? 'refresh current tab' : `open URL: ${url}`} with options:`,
@@ -181,7 +172,11 @@ class NavigateTool extends BaseBrowserToolExecutor {
 
         if (args.dismissOverlays) {
           try {
-            const dismissRes = await executeInPage({ tabId: targetTabId }, 'inPageDismissOverlays', []);
+            const dismissRes = await executeInPage(
+              { tabId: targetTabId },
+              'inPageDismissOverlays',
+              [],
+            );
             const count = dismissRes?.[0]?.result?.dismissedCount ?? 0;
             if (count > 0) {
               await waitForPageSettle(targetTabId, { timeoutMs: 500 }).catch(() => {});
@@ -448,7 +443,9 @@ class NavigateTool extends BaseBrowserToolExecutor {
         }
       }
 
-      const existingTab = protectedPersonalTab ? null : (explicitTab || pickBestMatch(url, candidateTabs));
+      const existingTab = protectedPersonalTab
+        ? null
+        : explicitTab || pickBestMatch(url, candidateTabs);
       if (existingTab?.id !== undefined) {
         if (sessionId && typeof existingTab.id === 'number') {
           sessionTabAffinity.setAffinity(sessionId, existingTab.id);
@@ -477,7 +474,11 @@ class NavigateTool extends BaseBrowserToolExecutor {
 
           if (args.dismissOverlays) {
             try {
-              const dismissRes = await executeInPage({ tabId: existingTab.id }, 'inPageDismissOverlays', []);
+              const dismissRes = await executeInPage(
+                { tabId: existingTab.id },
+                'inPageDismissOverlays',
+                [],
+              );
               const count = dismissRes?.[0]?.result?.dismissedCount ?? 0;
               if (count > 0) {
                 await waitForPageSettle(existingTab.id, { timeoutMs: 500 }).catch(() => {});
@@ -547,6 +548,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
             sessionTabAffinity.setAffinity(sessionId, firstTab.id);
           }
           if (firstTab?.id) {
+            tabGroupManager.registerAgentTab(firstTab.id);
             if (args.autoGroup !== false) {
               await tabGroupManager
                 .ensureAgentTabGroup(firstTab.id, {
@@ -560,7 +562,11 @@ class NavigateTool extends BaseBrowserToolExecutor {
             await this.waitForTabNavigationComplete(firstTab.id);
             if (args.dismissOverlays) {
               try {
-                const dismissRes = await executeInPage({ tabId: firstTab.id }, 'inPageDismissOverlays', []);
+                const dismissRes = await executeInPage(
+                  { tabId: firstTab.id },
+                  'inPageDismissOverlays',
+                  [],
+                );
                 const count = dismissRes?.[0]?.result?.dismissedCount ?? 0;
                 if (count > 0) {
                   await waitForPageSettle(firstTab.id, { timeoutMs: 500 }).catch(() => {});
@@ -605,11 +611,17 @@ class NavigateTool extends BaseBrowserToolExecutor {
         if (targetWindow && targetWindow.id !== undefined) {
           console.log(`Found target Window ID: ${targetWindow.id}`);
 
-          const newTab = await chrome.tabs.create({
-            url: url,
-            windowId: targetWindow.id,
-            active: background === false,
-          });
+          tabGroupManager.beginAgentTabCreation();
+          let newTab: chrome.tabs.Tab;
+          try {
+            newTab = await chrome.tabs.create({
+              url: url,
+              windowId: targetWindow.id,
+              active: background === false,
+            });
+          } finally {
+            tabGroupManager.endAgentTabCreation((newTab! as any)?.id);
+          }
           if (newTab.id) {
             if (args.autoGroup !== false) {
               await tabGroupManager
@@ -624,7 +636,11 @@ class NavigateTool extends BaseBrowserToolExecutor {
             await this.waitForTabNavigationComplete(newTab.id);
             if (args.dismissOverlays) {
               try {
-                const dismissRes = await executeInPage({ tabId: newTab.id }, 'inPageDismissOverlays', []);
+                const dismissRes = await executeInPage(
+                  { tabId: newTab.id },
+                  'inPageDismissOverlays',
+                  [],
+                );
                 const count = dismissRes?.[0]?.result?.dismissedCount ?? 0;
                 if (count > 0) {
                   await waitForPageSettle(newTab.id, { timeoutMs: 500 }).catch(() => {});
@@ -900,6 +916,9 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
         }
         await chrome.tabs.remove(tabIdsToClose);
         await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+        setTimeout(() => {
+          tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+        }, 150);
 
         return {
           content: [
@@ -959,6 +978,9 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
         }
         await chrome.tabs.remove(validTabIds);
         await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+        setTimeout(() => {
+          tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+        }, 150);
 
         return {
           content: [
@@ -1000,6 +1022,9 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
         sessionTabAffinity.removeAffinity(sessionId);
       }
       await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+      setTimeout(() => {
+        tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+      }, 150);
 
       return {
         content: [

@@ -21,6 +21,7 @@ import {
   alignToolReferences,
   getActiveToolPrefix,
   resolveToolName,
+  getBaseToolName,
 } from 'chrome-mcp-shared';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -29,6 +30,7 @@ import { fileURLToPath } from 'url';
 import { mediaAssetStore } from '../media-asset-store';
 import { getChromeMcpPort, SERVER_CONFIG } from '../constant';
 import { FastDecisionEngine } from '../jev';
+import { jevModelManager } from '../server/jev-model-manager';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export async function prepareMediaArgsIfNeeded(name: string, args: any): Promise<void> {
@@ -110,11 +112,18 @@ export const setupTools = (server: Server, serverSessionId?: string) => {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const effectiveSessionId = serverSessionId || 'default';
     const extra = sessionExtraTools.get(effectiveSessionId);
-    if (!extra || extra.size === 0) return { tools: EXPOSED_TOOLS };
-    const combined = TOOL_SCHEMAS.filter(
-      (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || extra.has(t.name),
-    );
-    return { tools: combined };
+    let tools = EXPOSED_TOOLS;
+    if (extra && extra.size > 0) {
+      tools = TOOL_SCHEMAS.filter(
+        (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || extra.has(t.name),
+      );
+    }
+    // Gating check: If Jev mode is 'off' or neither local nor remote is available, hide chrome_act_toward_goal
+    const activeMode = jevModelManager.getActiveMode();
+    if (activeMode === 'off' || !jevModelManager.isAvailable()) {
+      tools = tools.filter((t) => getBaseToolName(t.name) !== 'act_toward_goal');
+    }
+    return { tools };
   });
 
   // Call tool handler
@@ -207,6 +216,48 @@ const handleToolCallInner = async (
 
     // Autonomous semantic micro-loop tool runs locally on Native Server
     if (backendName === 'chrome_act_toward_goal') {
+      const activeMode = args?.mode || jevModelManager.getActiveMode();
+
+      // 1. If Jev mode is off, intercept and prompt that explicit user authorization is required
+      if (activeMode === 'off') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: [
+                `[Jev Authorization Required]`,
+                `Autonomous semantic micro-loop (${resolveToolName('act_toward_goal', requestedPrefix)}) is currently disabled (mode: "off").`,
+                `The agent must obtain explicit user authorization before enabling Jev (Local or Remote mode) in the BrowserPaw extension popup.`,
+                `Remediation: Ask the user for permission to perform autonomous browser control. If granted, ask the user to switch Jev to "Local" or "Remote" in the extension popup. Otherwise, execute the task deterministically step-by-step using ${resolveToolName('read_dom', requestedPrefix)}, ${resolveToolName('interact_index', requestedPrefix)}, and ${resolveToolName('fill_index', requestedPrefix)}.`,
+              ].join('\n'),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // 2. Validate configuration (local weights downloaded or remote API key configured)
+      const configValidation = await jevModelManager.validateConfiguration(activeMode);
+      if (!configValidation.valid) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: [
+                `[Jev Configuration Error: ${configValidation.reason}]`,
+                `Message: ${configValidation.message}`,
+                configValidation.diagnostics ? `Diagnostics: ${configValidation.diagnostics}` : '',
+                `Remediation: ${configValidation.remediation}`,
+                `Do not silently fall back to heuristic. Please fix the configuration above or use standard deterministic tools (${resolveToolName('read_dom', requestedPrefix)}, ${resolveToolName('interact_index', requestedPrefix)}).`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const actResult = await fastDecisionEngine.run(
         args,
         async (toolName: string, toolArgs: any) => {
@@ -323,6 +374,9 @@ export const handleToolCall = async (
   sessionId?: string,
   server?: Server,
 ): Promise<CallToolResult> => {
+  // Preload local model and touch activity timer on any MCP tool invocation
+  jevModelManager.onToolInvocation();
+
   // Concurrently initiate the single-turn update check to overlap latency with tool execution.
   // In unit test environment, bypass unmocked remote network calls unless explicitly enabled.
   const shouldCheckUpdate =
@@ -351,6 +405,7 @@ export const callToolInternal = async (
   sessionId?: string,
   timeoutMs = 120000,
 ): Promise<any> => {
+  jevModelManager.onToolInvocation();
   await prepareMediaArgsIfNeeded(name, args);
   const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
     {

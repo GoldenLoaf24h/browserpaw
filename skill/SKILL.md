@@ -1,13 +1,25 @@
 ---
 name: browserpaw
-description: High-efficiency, zero-hallucination Chrome browser control and automation via BrowserPaw MCP server. Hierarchical Dual-Brain architecture (Macro Planner System 2 + Fast Semantic Micro-Loop System 1 Jev) with dual-engine perception (DOM-First 1-based indexing + Visual-Fallback PCIE). Dispatches native CDP events (isTrusted=true) with full support for React/Vue/Angular, Shadow DOM, and background tab isolation.
+description: Control and automate the user's active Chrome browser via BrowserPaw MCP. Use when asked to browse the web, open URLs, search on Google/Bing/Baidu, fill out forms, click buttons, inspect or extract DOM/text/markdown, scrape web pages, handle logins/cookies, take screenshots, or automate complex multi-step browser tasks. Operates natively inside Chrome with 1-based numeric DOM indexing, autonomous on-page micro-loops (chrome_act_toward_goal), and background tab isolation.
 ---
 
 # BrowserPaw Browser Control Skill
 
-Operates directly inside user's active Chrome session via native CDP (`isTrusted: true`), preserving cookies, logins, and extensions. React/Vue/Angular and deep Shadow DOM supported.
+Operates directly inside the user's active Chrome session via native CDP (`isTrusted: true`), preserving cookies, logins, and extensions. React/Vue/Angular and deep Shadow DOM supported.
 
 > **Tool Prefix**: Canonical tool names use `chrome_*` (46), `performance_*` (3), and `get_windows_and_tabs`. In Stdio mode, call canonical names directly; `browserpaw_*` is an HTTP/SSE convenience alias.
+
+---
+
+## 5-Step Quickstart (快速接入流程)
+
+1. **Discover Tabs (查询标签页)**: Call `get_windows_and_tabs` to check existing tabs before opening duplicates.
+2. **Open / Focus Target (导航目标)**: Call `chrome_navigate { url, background: true }` (or `chrome_switch_tab { tabId }`). Use `background: true` to avoid stealing user focus.
+3. **Perceive or Automate (感知或微循环执行)**:
+   - For goal-directed multi-action chains: Call `chrome_act_toward_goal { goal: "..." }` directly (70% of UI tasks).
+   - For explicit inspection: Call `chrome_read_dom { format: "compact" }` for 1-based numeric indices or `chrome_get_markdown` for clean article text.
+4. **Interact Precisely (精准操作)**: Call `chrome_interact_index { index, action: "click" }` or `chrome_fill_index { index, text, pressEnter: true }`. Never guess CSS selectors when an index is known.
+5. **Verify & Clean Up (验证与收尾)**: Inspect return payload or delta. Close temporary task tabs via `chrome_close_tabs { tabIds: [...] }`.
 
 ---
 
@@ -83,6 +95,7 @@ Execute interactive on-page tasks in a single turn:
 
 ## 4. Operational Invariants
 
+0. **Jev Availability Default**: As long as chrome_act_toward_goal is available in the tool list, it represents the core autonomous decision engine. You must unconditionally prioritize dispatching multi-step browser interactions through Jev. It is strictly forbidden to prematurely fall back to manual single-step tool stacks (read_dom → interact_index) out of defensive or lazy tendencies. Only upon encountering definitive Jev call failures or a returned "escalate" state with insufficient candidate confidence, may you confidently initiate deterministic primitive tools.
 1. **Semantic Micro-Loop First**: For interactive workflows, call `chrome_act_toward_goal` first. Avoid manual `chrome_read_dom` → `chrome_interact_index` turn loops.
 2. **Numeric 1-Based Indices**: Target elements strictly by `[n]` index from `chrome_read_dom`, `chrome_grep`, or `currentElements`. Do not guess CSS selectors. For rich-text editors (Reddit, X), target `[composer]` directly with `chrome_fill_index`.
 3. **Zero-RTT Escalation Takeover**: When `chrome_act_toward_goal` escalates or pauses, consume attached `currentElements` immediately. Do not waste a turn on `chrome_read_dom`.

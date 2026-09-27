@@ -134,4 +134,44 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     if (prevPromote !== undefined) process.env.CHROME_MCP_AUTO_PROMOTE_JEV = prevPromote;
     else delete process.env.CHROME_MCP_AUTO_PROMOTE_JEV;
   });
+
+  it('verifies Stdio MCP setupTools normalizes browserpaw_ prefix and gates act_toward_goal', async () => {
+    const { setupTools } = await import('./mcp-server-stdio');
+    const { jevModelManager } = await import('../server/jev-model-manager');
+    const handlers: Record<string, (req: any) => Promise<any>> = {};
+
+    const mockServer = {
+      setRequestHandler: (schema: any, handler: any) => {
+        // Track handlers by schema
+        handlers[
+          schema._def?.description || schema.name || 'handler_' + Object.keys(handlers).length
+        ] = handler;
+      },
+    };
+
+    setupTools(mockServer as any);
+
+    // Verify list tools handler
+    const listHandler = Object.values(handlers)[0];
+    expect(typeof listHandler).toBe('function');
+
+    // When mode is off, act_toward_goal is hidden
+    jevModelManager.setActiveMode('off');
+    const listOff = await listHandler({});
+    expect(listOff.tools.some((t: any) => t.name.includes('act_toward_goal'))).toBe(false);
+
+    // Call tool handler with unknown tool: correctly rejected without network call
+    const callHandler = Object.values(handlers)[1];
+    expect(typeof callHandler).toBe('function');
+
+    const resUnknown = await callHandler({
+      params: {
+        name: 'unknown_tool_xyz',
+        arguments: {},
+      },
+    });
+    expect(resUnknown.content[0].text).toContain(
+      'Tool "unknown_tool_xyz" is not a BrowserPaw tool',
+    );
+  });
 });

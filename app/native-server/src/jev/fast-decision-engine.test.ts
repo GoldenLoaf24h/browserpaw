@@ -1,11 +1,13 @@
 import { describe, expect, test, beforeEach } from '@jest/globals';
 import { FastDecisionEngine, findMatchingPauseKeyword } from './fast-decision-engine';
 import { isSessionKeyInvalid, resetInvalidKeyLatch } from './jev-client';
+import { jevModelManager } from '../server/jev-model-manager';
 
 describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
   beforeEach(() => {
     resetInvalidKeyLatch();
     delete process.env.TYPESAFE_API_KEY;
+    jevModelManager.setActiveMode('remote');
   });
 
   const createMockInternalCaller = (pageData?: {
@@ -868,6 +870,67 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
         type: '15',
         select: '1',
       });
+    });
+  });
+
+  describe('3-Tier Seamless Routing Architecture (§1.1, §4.3)', () => {
+    test('Mode "off" immediately runs heuristic mode with jev_disabled fallbackReason', async () => {
+      jevModelManager.setActiveMode('off');
+      process.env.TYPESAFE_API_KEY = 'valid-key-mock';
+      const engine = new FastDecisionEngine();
+
+      const result = await engine.run(
+        { goal: '点击登录按钮', maxSteps: 3 },
+        createMockInternalCaller(),
+      );
+
+      expect(result.engine).toBe('heuristic');
+      expect(result.fallbackReason).toBe('jev_disabled');
+      expect(result.engineSwitched).toBe(false);
+      expect(result.steps.length).toBeGreaterThan(0);
+    });
+
+    test('Mode "local" routes to local decider and falls back gracefully if service is offline', async () => {
+      jevModelManager.setActiveMode('local');
+      delete process.env.TYPESAFE_API_KEY; // Local requires no cloud API key
+      const engine = new FastDecisionEngine();
+
+      // Simulate port 8009 offline in test environment
+      const onlineSpy = jest
+        .spyOn(jevModelManager, 'isLocalServiceOnline')
+        .mockResolvedValue(false);
+      const querySpy = jest.spyOn((engine as any).jevClient, 'query').mockResolvedValue({
+        result: null,
+        errorReason: 'local_service_offline',
+      });
+
+      const result = await engine.run(
+        { goal: '点击登录按钮', maxSteps: 3 },
+        createMockInternalCaller(),
+      );
+
+      onlineSpy.mockRestore();
+      querySpy.mockRestore();
+
+      // Falls back to heuristic without crashing
+      expect(result.engine).toBe('heuristic');
+      expect(result.fallbackReason).toBe('local_service_offline');
+      expect(result.engineSwitched).toBe(true);
+      expect(result.steps.length).toBeGreaterThan(0);
+    });
+
+    test('Mode "remote" respects cloud API key configuration', async () => {
+      jevModelManager.setActiveMode('remote');
+      delete process.env.TYPESAFE_API_KEY;
+      const engine = new FastDecisionEngine();
+
+      const result = await engine.run(
+        { goal: '点击登录按钮', maxSteps: 3 },
+        createMockInternalCaller(),
+      );
+
+      expect(result.engine).toBe('heuristic');
+      expect(result.fallbackReason).toBe('no_api_key');
     });
   });
 });

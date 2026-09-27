@@ -390,8 +390,12 @@ class BookmarkAddTool extends BaseBrowserToolExecutor {
       }
 
       if (!bookmarkUrl) {
-        // Should have been caught above, but as a safety measure
         return createErrorResponse('URL is required to create bookmark');
+      }
+      if (/^(?:chrome|chrome-extension|devtools|about|javascript):/i.test(bookmarkUrl)) {
+        return createErrorResponse(
+          `Cannot bookmark browser internal or restricted protocol URL: ${bookmarkUrl}`,
+        );
       }
 
       // Parse parentId (could be ID or path string)

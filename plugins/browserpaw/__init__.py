@@ -49,7 +49,7 @@ SESSION_ID_ENV_VARS = ('BROWSERPAW_MCP_SESSION_ID', 'BROWSERCLAW_MCP_SESSION_ID'
 MCP_PROTOCOL_VERSION = '2024-11-05'
 CLIENT_INFO = {
     'name': 'browserpaw-python-plugin',
-    'version': '3.1.0',
+    'version': '3.2.0',
 }
 
 _AUTH_HELP = (

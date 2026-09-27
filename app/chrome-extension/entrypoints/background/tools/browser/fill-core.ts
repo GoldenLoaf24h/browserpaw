@@ -212,12 +212,18 @@ export async function performPhysicalFill(
   }
 
   // 2. Special widget handling (select, custom combobox/listbox, color, date, range, time, checkbox, radio, file)
+  const isInput = coords?.tagName?.toLowerCase() === 'input';
+  const inputType = coords?.inputType || coords?.attributes?.type;
+  const isSearchInput =
+    isInput && (inputType === 'text' || inputType === 'search' || !inputType || coords?.isSearch);
+
   const isCustomCombobox =
-    coords?.role === 'combobox' ||
-    coords?.role === 'listbox' ||
-    coords?.attributes?.role === 'combobox' ||
-    coords?.attributes?.role === 'listbox' ||
-    coords?.attributes?.['aria-haspopup'] === 'listbox';
+    !isSearchInput &&
+    (coords?.role === 'combobox' ||
+      coords?.role === 'listbox' ||
+      coords?.attributes?.role === 'combobox' ||
+      coords?.attributes?.role === 'listbox' ||
+      coords?.attributes?.['aria-haspopup'] === 'listbox');
 
   const isSpecialWidget =
     coords?.tagName === 'select' ||
@@ -431,8 +437,15 @@ export async function performPhysicalFill(
   let fillMethod: 'cdp_native' | 'cdp_key_by_key' = 'cdp_native';
 
   if (coords?.success && typeof targetX === 'number' && typeof targetY === 'number') {
-    void animateAgentCursor(tabId, targetX, targetY);
-    void animateAgentCursorClick(tabId, targetX, targetY);
+    const fillVal = typeof textToFill === 'string' ? textToFill : String(textToFill ?? '');
+    const fillNote = fillVal
+      ? `Filling "${fillVal.length > 18 ? fillVal.slice(0, 15) + '...' : fillVal}"`
+      : 'Filling input';
+    await animateAgentCursor(tabId, targetX, targetY, {
+      waitForArrival: true,
+      timeoutMs: 350,
+      actionNote: fillNote,
+    });
 
     const isKnownEmpty =
       (typeof coords.value === 'string' && coords.value === '') ||
@@ -499,8 +512,17 @@ export async function performPhysicalFill(
       }
       const occRes = occResult?.result;
       if (occRes && typeof occRes.x === 'number' && typeof occRes.y === 'number') {
-        targetX = occRes.x;
-        targetY = occRes.y;
+        const occX: number = occRes.x;
+        const occY: number = occRes.y;
+        if (targetX !== occX || targetY !== occY) {
+          targetX = occX;
+          targetY = occY;
+          await animateAgentCursor(tabId, occX, occY, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            immediate: false,
+          });
+        }
       }
     } else if (effectiveSelector || selectorOrRef) {
       try {
@@ -510,8 +532,15 @@ export async function performPhysicalFill(
           preferComposer,
         });
         if (freshLoc.success && typeof freshLoc.x === 'number' && typeof freshLoc.y === 'number') {
-          targetX = freshLoc.x;
-          targetY = freshLoc.y;
+          if (targetX !== freshLoc.x || targetY !== freshLoc.y) {
+            targetX = freshLoc.x;
+            targetY = freshLoc.y;
+            await animateAgentCursor(tabId, targetX, targetY, {
+              waitForArrival: true,
+              timeoutMs: 350,
+              immediate: false,
+            });
+          }
           if (typeof freshLoc.index === 'number') numericIndex = freshLoc.index;
         }
       } catch {}
@@ -519,9 +548,9 @@ export async function performPhysicalFill(
 
     try {
       await cdpSessionManager.withSession(tabId, 'fill-core', async () => {
-        // Humanized micro-trajectory
-        const startX = Math.max(0, targetX! - (40 + Math.floor(Math.random() * 50)));
-        const startY = Math.max(0, targetY! - (25 + Math.floor(Math.random() * 40)));
+        // Humanized micro-trajectory (bounded tightly within proximity window)
+        const startX = Math.max(0, targetX! - (15 + Math.floor(Math.random() * 15)));
+        const startY = Math.max(0, targetY! - (10 + Math.floor(Math.random() * 12)));
         const points = computeHumanizedPoints(startX, startY, targetX!, targetY!, 3);
         for (const pt of points) {
           await raceCdp(tabId, 'Input.dispatchMouseEvent', {
@@ -533,6 +562,7 @@ export async function performPhysicalFill(
         }
 
         // Mouse click to focus
+        await animateAgentCursorClick(tabId, targetX, targetY, fillNote);
         await raceCdp(tabId, 'Input.dispatchMouseEvent', {
           type: 'mousePressed',
           x: targetX,

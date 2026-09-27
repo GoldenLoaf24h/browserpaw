@@ -95,7 +95,8 @@ export class StorageTool extends BaseBrowserToolExecutor {
       }
 
       if (types.includes('cookies')) {
-        const cookies = await chrome.cookies.getAll({ url: tab.url });
+        const isHttpUrl = tab.url && /^(?:https?|file):/i.test(tab.url);
+        const cookies = isHttpUrl ? await chrome.cookies.getAll({ url: tab.url }) : [];
         // S5: default to HIDING HttpOnly values. chrome.cookies can read them,
         // but echoing raw session cookie values into agent transcripts is an
         // unnecessary exfiltration channel; the metadata (name/domain/httpOnly

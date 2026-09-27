@@ -44,35 +44,11 @@ try {
 console.log('准备package.json...');
 const packageJson = require('../../package.json');
 
-// 创建安装说明
-const readmeContent = `# ${packageJson.name}
-
-本程序为Chrome扩展的Native Messaging主机端。
-
-## 安装说明
-
-1. 确保已安装Node.js
-2. 全局安装本程序:
-   \`\`\`
-   npm install -g ${packageJson.name}
-   \`\`\`
-3. 注册Native Messaging主机:
-   \`\`\`
-   # 用户级别安装（推荐）
-   ${packageJson.name} register
-
-   # 如果用户级别安装失败，可以尝试系统级别安装
-   ${packageJson.name} register --system
-   # 或者使用管理员权限
-   sudo ${packageJson.name} register
-   \`\`\`
-
-## 使用方法
-
-此应用程序由Chrome扩展自动启动，无需手动运行。
-`;
-
-fs.writeFileSync(path.join(distDir, 'README.md'), readmeContent);
+// 复制或生成安装说明
+const pkgReadme = path.join(__dirname, '..', '..', 'README.md');
+if (fs.existsSync(pkgReadme)) {
+  fs.copyFileSync(pkgReadme, path.join(distDir, 'README.md'));
+}
 
 console.log('复制包装脚本...');
 const scriptsSourceDir = path.join(__dirname, '.');

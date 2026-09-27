@@ -9,6 +9,11 @@ export interface MediaAssetEntry {
 const MEDIA_ASSET_TTL_MS = 10 * 60 * 1000; // 10 minutes TTL
 
 class MediaAssetStore extends Map<string, MediaAssetEntry> {
+  constructor() {
+    super();
+    const timer = setInterval(() => this.cleanup(), 5 * 60 * 1000);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
   override set(key: string, value: MediaAssetEntry): this {
     this.cleanup();
     return super.set(key, { ...value, createdAt: Date.now() });

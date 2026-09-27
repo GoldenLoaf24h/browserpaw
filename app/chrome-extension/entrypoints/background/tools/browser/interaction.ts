@@ -8,7 +8,7 @@ import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { executeInPage } from './in-page-engine';
 import type { PolymorphicCoordinate } from '@/utils/coordinate-parser';
-import { animateAgentCursor } from './agent-cursor';
+import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
 
 /**
  * D3 (TESTING-NOTES #19): resolveAffinityTab falls back to the user's ACTIVE
@@ -236,7 +236,23 @@ class ClickTool extends BaseBrowserToolExecutor {
         try {
           const probeArmed = await armDeliveryProbe(tabId, ['mousedown', 'mouseup', 'click']);
           // Animate virtual agent cursor before physical click
-          await animateAgentCursor(tabId, loc.x, loc.y, { waitForArrival: true, timeoutMs: 350 });
+          const clickNote =
+            (args as any).note ||
+            (args as any).actionNote ||
+            (args.double
+              ? 'Double click'
+              : button === 'right'
+                ? 'Right click'
+                : args.ref
+                  ? `Clicking ref ${args.ref}`
+                  : args.selector
+                    ? `Clicking ${args.selector.slice(0, 20)}`
+                    : 'Clicking');
+          await animateAgentCursor(tabId, loc.x, loc.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: clickNote,
+          });
           await cdpSessionManager.withSession(tabId, 'click-tool', async () => {
             await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
               type: 'mouseMoved',
@@ -254,6 +270,7 @@ class ClickTool extends BaseBrowserToolExecutor {
             // clickCount 1 then 2; a single pair with clickCount:2 fires click
             // alone on several renderers. Mirrors computer.ts double/triple path.
             for (let i = 1; i <= clickCount; i++) {
+              await animateAgentCursorClick(tabId, loc.x, loc.y, clickNote);
               await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
                 type: 'mousePressed',
                 x: loc.x,
@@ -263,6 +280,7 @@ class ClickTool extends BaseBrowserToolExecutor {
                 clickCount: i,
                 modifiers: modifierMask,
               });
+              await new Promise((r) => setTimeout(r, 35));
               await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
                 type: 'mouseReleased',
                 x: loc.x,
@@ -272,6 +290,9 @@ class ClickTool extends BaseBrowserToolExecutor {
                 clickCount: i,
                 modifiers: modifierMask,
               });
+              if (i < clickCount) {
+                await new Promise((r) => setTimeout(r, 50));
+              }
             }
             isTrusted = true;
           });
@@ -494,7 +515,18 @@ class FillTool extends BaseBrowserToolExecutor {
         try {
           const probeArmed = await armDeliveryProbe(tabId, ['focus', 'input', 'change']);
           // Animate virtual agent cursor before physical click-to-focus
-          await animateAgentCursor(tabId, loc.x, loc.y, { waitForArrival: true, timeoutMs: 350 });
+          const valStr = args.value !== undefined && args.value !== true ? String(args.value) : '';
+          const fillNote =
+            (args as any).note ||
+            (args as any).actionNote ||
+            (valStr
+              ? `Typing "${valStr.length > 18 ? valStr.slice(0, 15) + '...' : valStr}"`
+              : 'Focusing input');
+          await animateAgentCursor(tabId, loc.x, loc.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: fillNote,
+          });
           await cdpSessionManager.withSession(tabId, 'fill-tool', async () => {
             // Click to focus
             await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
@@ -502,6 +534,7 @@ class FillTool extends BaseBrowserToolExecutor {
               x: loc.x,
               y: loc.y,
             });
+            await animateAgentCursorClick(tabId, loc.x, loc.y, fillNote);
             await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
               type: 'mousePressed',
               x: loc.x,
@@ -509,6 +542,7 @@ class FillTool extends BaseBrowserToolExecutor {
               button: 'left',
               clickCount: 1,
             });
+            await new Promise((r) => setTimeout(r, 35));
             await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
               type: 'mouseReleased',
               x: loc.x,

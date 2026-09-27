@@ -135,7 +135,7 @@ MCP 客户端发送请求，收到 HTTP 401 报错：`Unauthorized: Missing or i
 
 ### 故障现象
 
-执行 `chrome_interact_index`、`chrome_fill_index` 或 `chrome_hover_index` 时返回：
+执行 `chrome_interact_index`、`chrome_fill_index` 或 `chrome_interact_index (action: 'hover')` 时返回：
 `ACTION REQUIRED: Element reference is stale. Please call 'chrome_read_dom' to refresh the index tree.`
 
 ### 根本原因

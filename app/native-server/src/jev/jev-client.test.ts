@@ -14,6 +14,7 @@ import {
   DESTRUCTIVE_KEYWORDS,
   JevClientWrapper,
 } from './jev-client';
+import { jevModelManager } from '../server/jev-model-manager';
 
 describe('Jev Client & Helper Unit Tests', () => {
   beforeEach(() => {
@@ -439,6 +440,14 @@ describe('Jev Client & Helper Unit Tests', () => {
       delete process.env.TYPESAFE_API_KEY;
       expect(wrapper.getClient()).toBeNull();
       expect(wrapper.isAvailable()).toBe(false);
+    });
+
+    test('reports availability accurately across Jev modes (off / local / remote)', () => {
+      const wrapper = new JevClientWrapper();
+      expect(wrapper.isAvailable('off')).toBe(false);
+
+      const isDownloaded = jevModelManager.isModelDownloaded();
+      expect(wrapper.isAvailable('local')).toBe(isDownloaded);
     });
   });
 });

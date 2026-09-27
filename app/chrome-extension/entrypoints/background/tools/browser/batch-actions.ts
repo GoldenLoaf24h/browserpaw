@@ -21,7 +21,7 @@ import { resolveTargetLocation } from './unified-locator';
 import { captureDeltaIfRequested, ensureSnapshotBaseline } from '@/utils/delta-helper';
 import { getSubframeViewportOffset } from './interact-index';
 import { tabFaviconManager } from './tab-favicon';
-import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
+import { animateAgentCursor, animateAgentCursorClick, setAgentCursorNote } from './agent-cursor';
 import { parseUnifiedCoordinate } from '@/utils/coordinate-parser';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { startActionNetworkCapture } from '@/utils/action-network-capture';
@@ -338,20 +338,23 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   }
                 }
 
-                void animateAgentCursor(tabId, targetX, targetY, {
-                  waitForArrival: false,
+                const batchActNote =
+                  item.type === 'click'
+                    ? `Clicking [${item.index ?? ''}]`
+                    : item.type === 'hover'
+                      ? `Hovering [${item.index ?? ''}]`
+                      : item.type === 'double_click'
+                        ? `Double clicking [${item.index ?? ''}]`
+                        : `${item.type}`;
+                await animateAgentCursor(tabId, targetX, targetY, {
+                  waitForArrival: true,
+                  timeoutMs: 350,
+                  actionNote: batchActNote,
                 });
-                if (
-                  item.type === 'click' ||
-                  item.type === 'double_click' ||
-                  item.type === 'right_click'
-                ) {
-                  void animateAgentCursorClick(tabId, targetX, targetY);
-                }
                 await cdpSessionManager.withSession(tabId, 'batch-actions-mouse', async () => {
-                  // Humanized micro-trajectory to bypass anti-bot path listeners
-                  const startX = Math.max(0, targetX - (40 + Math.floor(Math.random() * 50)));
-                  const startY = Math.max(0, targetY - (25 + Math.floor(Math.random() * 40)));
+                  // Humanized micro-trajectory (bounded tightly within proximity window)
+                  const startX = Math.max(0, targetX - (15 + Math.floor(Math.random() * 15)));
+                  const startY = Math.max(0, targetY - (10 + Math.floor(Math.random() * 12)));
                   const points = computeHumanizedPoints(startX, startY, targetX, targetY, 3);
                   for (const pt of points) {
                     await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
@@ -363,6 +366,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   }
 
                   if (item.type === 'click') {
+                    await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
                     await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
                       type: 'mousePressed',
                       x: targetX,
@@ -390,6 +394,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       } catch {}
                     }
                   } else if (item.type === 'double_click') {
+                    await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
                     await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
                       type: 'mousePressed',
                       x: targetX,
@@ -408,6 +413,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       clickCount: 1,
                     });
                     await new Promise((r) => setTimeout(r, 40));
+                    await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
                     await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
                       type: 'mousePressed',
                       x: targetX,
@@ -416,6 +422,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       buttons: 1,
                       clickCount: 2,
                     });
+                    await new Promise((r) => setTimeout(r, 35));
                     await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
                       type: 'mouseReleased',
                       x: targetX,
@@ -425,6 +432,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       clickCount: 2,
                     });
                   } else if (item.type === 'right_click') {
+                    await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
                     try {
                       const rightClickTarget =
                         targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId };
@@ -646,14 +654,40 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   const parsedCoord = rawCoord ? parseUnifiedCoordinate(rawCoord, { tabId }) : null;
                   const scrollX = parsedCoord?.x ?? 500;
                   const scrollY = parsedCoord?.y ?? 400;
+                  const scrollDir = item.direction || 'down';
+                  const scrollNote =
+                    (item as any).note ||
+                    (item as any).actionNote ||
+                    (scrollDir === 'up' ? 'Scrolling back up' : 'Scrolling down timeline');
+                  await animateAgentCursor(tabId, scrollX, scrollY, {
+                    waitForArrival: true,
+                    timeoutMs: 350,
+                    actionNote: scrollNote,
+                  });
                   await cdpSessionManager.withSession(tabId, 'batch-actions-scroll', async () => {
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mouseWheel',
-                      x: scrollX,
-                      y: scrollY,
-                      deltaX,
-                      deltaY,
-                    });
+                    const STEPS = Math.abs(deltaY || deltaX) > 400 ? 14 : 10;
+                    const stepDelayMs = 18;
+                    let accumulatedX = 0;
+                    let accumulatedY = 0;
+                    for (let s = 1; s <= STEPS; s++) {
+                      const progress = 0.5 * (1 - Math.cos((Math.PI * s) / STEPS));
+                      const targetX = Math.round(deltaX * progress);
+                      const targetY = Math.round(deltaY * progress);
+                      const stepX = targetX - accumulatedX;
+                      const stepY = targetY - accumulatedY;
+                      accumulatedX += stepX;
+                      accumulatedY += stepY;
+                      if (stepX !== 0 || stepY !== 0) {
+                        await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
+                          type: 'mouseWheel',
+                          x: scrollX,
+                          y: scrollY,
+                          deltaX: stepX,
+                          deltaY: stepY,
+                        });
+                      }
+                      if (s < STEPS) await new Promise((r) => setTimeout(r, stepDelayMs));
+                    }
                     cdpScrolled = true;
                   });
                 } catch (scrollErr) {
@@ -666,10 +700,13 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   await this.safeExecuteScript(tabId, {
                     target: { tabId },
                     func: (dx, dy) => {
-                      window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
+                      window.scrollBy({ left: dx, top: dy, behavior: 'smooth' });
                     },
                     args: [deltaX, deltaY],
                   });
+                  await new Promise((r) => setTimeout(r, 120));
+                } else {
+                  await new Promise((r) => setTimeout(r, 60));
                 }
                 stepOutput = {
                   scrolled: amount,
@@ -690,6 +727,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
 
               case 'key':
               case 'press_key': {
+                const keyNote =
+                  (item as any).note ||
+                  (item as any).actionNote ||
+                  `Pressing ${item.key || 'Enter'}`;
+                await setAgentCursorNote(tabId, keyNote);
                 const { keyDef, modifierDefs, modifiersMask } = parseKeyCombo(item.key || 'Enter');
                 const vk = virtualKeyCode(keyDef.key, keyDef.code);
                 await cdpSessionManager.withSession(tabId, 'batch-actions', async () => {

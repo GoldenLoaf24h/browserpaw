@@ -169,6 +169,8 @@ Autonomous semantic micro-loop that perceives, decides, and acts toward a natura
 - `pauseBeforeKeywords` — List of keywords (e.g. ["Post", "Submit", "Pay"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status "paused" with target element context for System 2 confirmation.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
+- `pressEnter` — Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)
+- `mode:off|local|remote` — Optional override for the Jev semantic execution engine mode ("off", "local", or "remote"). Defaults to the mode configured in the extension popup.
 
 ### `chrome_interact_index`
 
@@ -431,6 +433,7 @@ Intelligently detects and scrolls the most prominent scrollable container on the
 - `smooth` — Whether to use smooth scrolling behavior (default: true)
 - `waitForSettle` — Wait for DOM and network activity to settle after scroll completes (default: true)
 - `settleTimeoutMs` — Maximum settle wait timeout in ms (default: 1500)
+- `note` — Optional intent note displayed on virtual agent cursor during scrolling (e.g. "Scrolling down timeline")
 
 ### `chrome_scroll_until_found`
 

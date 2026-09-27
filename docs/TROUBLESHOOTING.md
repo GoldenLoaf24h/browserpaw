@@ -135,7 +135,7 @@ To protect your active browser sessions from untrusted local websites or process
 
 ### Symptom
 
-Calling `chrome_interact_index`, `chrome_fill_index`, or `chrome_hover_index` returns:
+Calling `chrome_interact_index`, `chrome_fill_index`, or `chrome_interact_index (action: 'hover')` returns:
 `ACTION REQUIRED: Element reference is stale. Please call 'chrome_read_dom' to refresh the index tree.`
 
 ### Root Cause

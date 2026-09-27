@@ -27,6 +27,10 @@ describe('tool profiles', () => {
     expect(resolveToolProfile('FULL')).toBe('full');
     expect(resolveToolProfile('  Full  ')).toBe('full');
     expect(resolveToolProfile('crawl')).toBe('crawl');
+    expect(resolveToolProfile('compact')).toBe('core');
+    expect(resolveToolProfile('COMPACT')).toBe('core');
+    expect(resolveToolProfile('minimal')).toBe('core');
+    expect(resolveToolProfile('MINIMAL')).toBe('core');
     expect(resolveToolProfile('garbage')).toBe('core');
   });
 

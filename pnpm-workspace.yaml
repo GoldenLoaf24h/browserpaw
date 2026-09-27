@@ -1,3 +1,6 @@
 packages:
   - 'app/*'
   - 'packages/*'
+allowBuilds:
+  esbuild: set this to true or false
+  spawn-sync: set this to true or false

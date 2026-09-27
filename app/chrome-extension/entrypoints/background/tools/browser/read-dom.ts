@@ -121,7 +121,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                   `- **Reason**: ${fastData?.error || 'Frame is showing error page'}`,
                   `- **Status**: Network unreachable, DNS failure, or page crashed.`,
                   ``,
-                  `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`browserpaw_navigate\`.*`,
+                  `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`${resolveToolName('navigate')}\`.*`,
                 ].join('\n'),
               },
             ],
@@ -151,6 +151,10 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           elements: snapshotElements,
         });
 
+        const treeString = snapshotElements
+          .map((e: any) => `[${e.index}] ${e.tagName}${e.text ? ' "' + e.text + '"' : ''}`)
+          .join('\n');
+
         return {
           content: [
             {
@@ -159,6 +163,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                 ...fastData,
                 url: scrubUrl(fastData.url || tab.url || ''),
                 snapshotId: snapshot.snapshotId,
+                treeString,
               }),
             },
           ],
@@ -214,7 +219,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                 `- **Reason**: ${errPayload?.error || 'Frame is showing error page'}`,
                 `- **Status**: Network unreachable, DNS failure, or page crashed.`,
                 ``,
-                `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`browserpaw_navigate\`.*`,
+                `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`${resolveToolName('navigate')}\`.*`,
               ].join('\n'),
             },
           ],

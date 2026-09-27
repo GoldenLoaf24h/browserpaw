@@ -128,6 +128,15 @@ export class NativeMessagingHost {
       const { chunkId, index, total, chunk } = message;
       let record = this.incomingChunks.get(chunkId);
       if (!record) {
+        // Enforce capacity cap to prevent memory exhaustion
+        if (this.incomingChunks.size >= 100) {
+          const oldestKey = this.incomingChunks.keys().next().value;
+          if (oldestKey) {
+            const stale = this.incomingChunks.get(oldestKey);
+            if (stale?.timer) clearTimeout(stale.timer);
+            this.incomingChunks.delete(oldestKey);
+          }
+        }
         record = {
           total,
           received: new Map(),

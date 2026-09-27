@@ -49,6 +49,7 @@ interface BezierPath {
   segments: BezierSegment[];
 }
 
+const CURSOR_BASE_SCALE = 0.9;
 const CURSOR_SIZE = 24;
 const HALF_SIZE = CURSOR_SIZE / 2;
 const ASSET_WIDTH = 23;
@@ -58,7 +59,7 @@ const ASSET_OFFSET_Y = -2.5;
 const ASSET_ROTATION_DEG = 44;
 const GLOW_CSS_VAR = '--browser-agent-cursor-glow-color';
 const GLOW_COLOR = '#339cff';
-const GLOW_FILTER = `drop-shadow(0 0 6px color-mix(in srgb, var(${GLOW_CSS_VAR}) 90%, transparent)) drop-shadow(0 0 15px color-mix(in srgb, var(${GLOW_CSS_VAR}) 48%, transparent))`;
+const GLOW_FILTER = `drop-shadow(0 2px 6px rgba(0, 0, 0, 0.32)) drop-shadow(0 0 3px color-mix(in srgb, var(${GLOW_CSS_VAR}) 40%, transparent))`;
 
 const DT_STEP = 1 / 240;
 const FRAME_DURATION = 1 / 60;
@@ -137,6 +138,19 @@ function dist(a: Point, b: Point): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function distToSegment(p1: Point, p2: Point, p: Point): number {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const l2 = dx * dx + dy * dy;
+  if (l2 === 0) return dist(p1, p);
+  const t = Math.max(0, Math.min(1, ((p.x - p1.x) * dx + (p.y - p1.y) * dy) / l2));
+  const projection = {
+    x: p1.x + t * dx,
+    y: p1.y + t * dy,
+  };
+  return dist(p, projection);
+}
+
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
@@ -203,8 +217,35 @@ function buildArcCandidates(
   const d = dist(start, end);
   const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   const normal = d > 0 ? { x: -(end.y - start.y) / d, y: (end.x - start.x) / d } : { x: 0, y: -1 };
-  const arcHeight = clamp(d * 0.25, 40, 220);
-  const arcPt = { x: mid.x + normal.x * arcHeight, y: mid.y + normal.y * arcHeight };
+  const naturalArcRatio = 0.18;
+  const maxArcForDist = Math.max(6, d * 0.28);
+  const minArc = Math.min(8, d * 0.2);
+  const arcHeight = clamp(d * naturalArcRatio, minArc, Math.min(160, maxArcForDist));
+  let arcPt = { x: mid.x + normal.x * arcHeight, y: mid.y + normal.y * arcHeight };
+
+  // Keep arc within viewport margins
+  const margin = 36;
+  if (
+    arcPt.x < margin ||
+    arcPt.x > bounds.width - margin ||
+    arcPt.y < margin ||
+    arcPt.y > bounds.height - margin
+  ) {
+    const invertedPt = { x: mid.x - normal.x * arcHeight, y: mid.y - normal.y * arcHeight };
+    if (
+      invertedPt.x >= margin &&
+      invertedPt.x <= bounds.width - margin &&
+      invertedPt.y >= margin &&
+      invertedPt.y <= bounds.height - margin
+    ) {
+      arcPt = invertedPt;
+    } else {
+      arcPt = {
+        x: clamp(arcPt.x, margin, bounds.width - margin),
+        y: clamp(arcPt.y, margin, bounds.height - margin),
+      };
+    }
+  }
 
   return {
     start,
@@ -362,50 +403,250 @@ function initAgentCursor() {
   clickRipple.style.opacity = '0';
   overlay.appendChild(clickRipple);
 
-  const triggerClickAnimation = (clickX?: number, clickY?: number) => {
-    const cx = typeof clickX === 'number' ? clickX : cursorState.positionXSpring.value;
-    const cy = typeof clickY === 'number' ? clickY : cursorState.positionYSpring.value;
-    if (cursorMode !== 'off') {
-      cursorState.visibilitySpring.value = 1;
-      cursorState.visibilitySpring.target = 1;
-      cursorState.point = { x: cx, y: cy };
-      resetSpring(cursorState.positionXSpring, cx);
-      resetSpring(cursorState.positionYSpring, cy);
-      renderCursor();
-      startAnimationLoop();
+  // Action Note Tooltip (1:1 with Reference Video pCfdTz2KS1i7qtOM.mp4)
+  const actionTooltip = document.createElement('div');
+  actionTooltip.className = 'codex-agent-tooltip';
+  actionTooltip.style.position = 'absolute';
+  actionTooltip.style.left = '0';
+  actionTooltip.style.top = '0';
+  actionTooltip.style.pointerEvents = 'none';
+  actionTooltip.style.userSelect = 'none';
+  actionTooltip.style.zIndex = '2147483647';
+  actionTooltip.style.display = 'flex';
+  actionTooltip.style.alignItems = 'center';
+  actionTooltip.style.gap = '6px';
+  actionTooltip.style.padding = '5px 12px';
+  actionTooltip.style.background = 'rgba(24, 24, 27, 0.94)';
+  actionTooltip.style.backdropFilter = 'blur(12px)';
+  actionTooltip.style.setProperty('-webkit-backdrop-filter', 'blur(12px)');
+  actionTooltip.style.border = '1px solid rgba(255, 255, 255, 0.14)';
+  actionTooltip.style.borderRadius = '8px';
+  actionTooltip.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2)';
+  actionTooltip.style.color = '#ffffff';
+  actionTooltip.style.fontFamily =
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  actionTooltip.style.fontSize = '12px';
+  actionTooltip.style.fontWeight = '500';
+  actionTooltip.style.lineHeight = '16px';
+  actionTooltip.style.whiteSpace = 'nowrap';
+  actionTooltip.style.opacity = '0';
+  actionTooltip.style.transform = 'translate3d(0, 0, 0) scale(0.92)';
+  actionTooltip.style.transformOrigin = 'center center';
+  actionTooltip.style.transition =
+    'opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
+  actionTooltip.style.willChange = 'transform, opacity';
+
+  const tooltipText = document.createElement('span');
+  tooltipText.style.overflow = 'hidden';
+  tooltipText.style.textOverflow = 'ellipsis';
+  tooltipText.style.maxWidth = '340px';
+  actionTooltip.appendChild(tooltipText);
+  overlay.appendChild(actionTooltip);
+
+  let tooltipHideTimer: number | null = null;
+  let typewriterTimer: number | null = null;
+  let caretRemoveTimer: number | null = null;
+  let currentNoteText = '';
+  let tooltipVisible = false;
+
+  const updateTooltipPosition = (scale = 1) => {
+    if (!tooltipVisible) return;
+    const tooltipWidth = actionTooltip.offsetWidth || 140;
+    const tooltipHeight = actionTooltip.offsetHeight || 28;
+    // Horizontally centered below cursor
+    let tx = Math.round(cursorState.point.x - tooltipWidth / 2 + 10);
+    tx = clamp(tx, 12, window.innerWidth - tooltipWidth - 12);
+
+    // Below cursor by default, flip above if near bottom edge
+    let ty = Math.round(cursorState.point.y + 24);
+    if (ty + tooltipHeight > window.innerHeight - 10) {
+      ty = Math.round(cursorState.point.y - tooltipHeight - 12);
     }
-    clickRipple.style.transition = 'none';
-    clickRipple.style.transform = 'scale(0.2)';
-    clickRipple.style.opacity = '0.95';
-    clickRipple.style.left = `${cx}px`;
-    clickRipple.style.top = `${cy}px`;
-    void clickRipple.offsetWidth;
-    clickRipple.style.transition =
-      'transform 0.35s cubic-bezier(0, 0, 0.2, 1), opacity 0.35s ease-out';
-    clickRipple.style.transform = 'scale(1.8)';
-    clickRipple.style.opacity = '0';
+    ty = clamp(ty, 8, window.innerHeight - tooltipHeight - 8);
+
+    actionTooltip.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`;
+  };
+
+  const showActionNote = (noteText: string, autoHideMs = 2800) => {
+    if (cursorMode === 'off') {
+      hideActionNote();
+      return;
+    }
+    const text = (noteText || '').trim();
+    if (!text) {
+      hideActionNote();
+      return;
+    }
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
+      tooltipHideTimer = null;
+    }
+
+    tooltipVisible = true;
+    agentActiveUntil = Math.max(agentActiveUntil, Date.now() + Math.max(3000, autoHideMs));
+    actionTooltip.style.opacity = '1';
+
+    if (text !== currentNoteText) {
+      currentNoteText = text;
+      if (typewriterTimer) {
+        clearInterval(typewriterTimer);
+        typewriterTimer = null;
+      }
+      if (caretRemoveTimer) {
+        clearTimeout(caretRemoveTimer);
+        caretRemoveTimer = null;
+      }
+
+      // Smooth typewriter reveal (1:1 with reference video pCfdTz2KS1i7qtOM.mp4)
+      if (text.length <= 40) {
+        let charIndex = 0;
+        tooltipText.textContent = '';
+        const caret = document.createElement('span');
+        caret.className = 'codex-agent-caret';
+        caret.textContent = '|';
+        caret.style.display = 'inline-block';
+        caret.style.marginLeft = '1px';
+        caret.style.opacity = '0.9';
+        caret.style.fontWeight = '300';
+        caret.style.color = '#93c5fd';
+
+        typewriterTimer = window.setInterval(() => {
+          charIndex++;
+          if (charIndex <= text.length) {
+            tooltipText.textContent = text.slice(0, charIndex);
+            tooltipText.appendChild(caret);
+            updateTooltipPosition(1);
+          } else {
+            if (typewriterTimer) {
+              clearInterval(typewriterTimer);
+              typewriterTimer = null;
+            }
+            if (caretRemoveTimer) {
+              clearTimeout(caretRemoveTimer);
+            }
+            caretRemoveTimer = window.setTimeout(() => {
+              caretRemoveTimer = null;
+              if (caret.parentNode) caret.remove();
+              updateTooltipPosition(1);
+            }, 500);
+          }
+        }, 20);
+      } else {
+        tooltipText.textContent = text;
+      }
+    }
+
+    updateTooltipPosition(1);
+
+    if (autoHideMs > 0) {
+      tooltipHideTimer = window.setTimeout(() => {
+        hideActionNote();
+      }, autoHideMs);
+    }
+  };
+
+  const hideActionNote = () => {
+    if (tooltipHideTimer) {
+      clearTimeout(tooltipHideTimer);
+      tooltipHideTimer = null;
+    }
+    if (typewriterTimer) {
+      clearInterval(typewriterTimer);
+      typewriterTimer = null;
+    }
+    if (caretRemoveTimer) {
+      clearTimeout(caretRemoveTimer);
+      caretRemoveTimer = null;
+    }
+    currentNoteText = '';
+    actionTooltip.style.opacity = '0';
+    updateTooltipPosition(0.92);
+    tooltipVisible = false;
+  };
+
+  const resetAutoIdleTimer = () => {
+    if (cursorMode !== 'auto') return;
+    if (autoIdleTimer) clearTimeout(autoIdleTimer);
+    // Attentive idle period: cursor stays visible in gentle standby for 3.5s
+    autoIdleTimer = window.setTimeout(() => {
+      if (!cursorState.motion) {
+        hideCursor();
+        hideActionNote();
+      }
+    }, 3500);
+  };
+
+  const triggerClickAnimation = (clickX?: number, clickY?: number, note?: string) => {
+    if (cursorMode === 'off') return;
+    const cx = typeof clickX === 'number' ? clickX : cursorState.point.x;
+    const cy = typeof clickY === 'number' ? clickY : cursorState.point.y;
+    const currentDist = dist(cursorState.point, { x: cx, y: cy });
+    agentActiveUntil = Math.max(agentActiveUntil, Date.now() + 2500);
+
+    cursorState.visibilitySpring.value = 1;
+    cursorState.visibilitySpring.target = 1;
+
+    // STRICTLY FORBID TELEPORTATION:
+    // If cursor is not yet at click point (>2px), target smoothly without snapping
+    if (currentDist > 2) {
+      cursorState.positionXSpring.target = cx;
+      cursorState.positionYSpring.target = cy;
+    } else {
+      cursorState.point = { x: cx, y: cy };
+      cursorState.positionXSpring.target = cx;
+      cursorState.positionYSpring.target = cy;
+    }
+    renderCursor();
+    startAnimationLoop();
+
+    if (note) {
+      showActionNote(note);
+    }
+    // Dynamic multi-ripple spawn (ensures rapid double/triple clicks render distinct concentric ripples)
+    const ripple = clickRipple.cloneNode(true) as HTMLDivElement;
+    ripple.style.left = `${cx}px`;
+    ripple.style.top = `${cy}px`;
+    ripple.style.transform = 'scale(0.2)';
+    ripple.style.opacity = '0.95';
+    ripple.style.transition = 'none';
+    overlay.appendChild(ripple);
+    void ripple.offsetWidth;
+    ripple.style.transition = 'transform 0.35s cubic-bezier(0, 0, 0.2, 1), opacity 0.35s ease-out';
+    ripple.style.transform = 'scale(1.8)';
+    ripple.style.opacity = '0';
+    setTimeout(() => {
+      ripple.remove();
+    }, 380);
 
     // Natural physiological dip on click
     assetImg.style.transition = 'transform 0.08s ease-out';
-    assetImg.style.transform = `rotate(${ASSET_ROTATION_DEG}deg) scale(0.82)`;
+    assetImg.style.transform = `rotate(${ASSET_ROTATION_DEG}deg) scale(0.84)`;
     setTimeout(() => {
       assetImg.style.transition = 'transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)';
       assetImg.style.transform = `rotate(${ASSET_ROTATION_DEG}deg) scale(1)`;
-    }, 90);
+    }, 85);
+
+    if (cursorMode === 'auto') {
+      resetAutoIdleTimer();
+    }
   };
 
   shadow.appendChild(overlay);
 
-  const cursorState = initCursorState({
+  let hasInteracted = false;
+  const initialPoint: Point = {
     x: Math.round(window.innerWidth * 0.5),
     y: Math.round(window.innerHeight * 0.5),
-  });
+  };
+
+  const cursorState = initCursorState(initialPoint);
 
   let isRunningAnimation = false;
   let lastFrameTime = performance.now();
   let pendingMoveSequence: number | null = null;
   let userTakeoverDetected = false;
-  let hasInteracted = false;
+  let agentActiveUntil = 0;
+  let autoIdleTimer: number | null = null;
   type CursorMode = 'off' | 'auto' | 'always';
   let cursorMode: CursorMode = 'always';
 
@@ -415,6 +656,7 @@ function initAgentCursor() {
     cursorState.thinkStartedAt = null;
     cursorContainer.style.opacity = '0';
     cursorContainer.style.visibility = 'hidden';
+    hideActionNote();
   };
 
   // Load and listen to user-configured cursor mode (off, auto, always)
@@ -489,7 +731,7 @@ function initAgentCursor() {
 
     transforms.push(
       `rotate(${normAngle(rotation + scootRot)}deg)`,
-      `scale(${stretch * scaleVis}, ${scaleVis})`,
+      `scale(${stretch * scaleVis * CURSOR_BASE_SCALE}, ${scaleVis * CURSOR_BASE_SCALE})`,
     );
 
     cursorContainer.style.transform = transforms.join(' ');
@@ -501,6 +743,10 @@ function initAgentCursor() {
     cursorContainer.style.visibility = 'visible';
     cursorContainer.style.opacity = `${vis}`;
     cursorContainer.style.filter = `blur(${Math.round(blurPx * 10) / 10}px)`;
+
+    if (tooltipVisible) {
+      updateTooltipPosition(1);
+    }
   };
 
   const tick = (time: number) => {
@@ -542,13 +788,16 @@ function initAgentCursor() {
       cursorState.rotation = cursorState.rotationSpring.value;
       cursorState.scootAxisRotation = cursorState.scootAxisSpring.value;
 
-      if (prg >= 0.98 || (prg >= 0.92 && dist(cursorState.point, motion.end) <= 4)) {
+      if (prg >= 0.99 && dist(cursorState.point, motion.end) <= 1.5) {
         cursorState.point = motion.end;
         resetSpring(cursorState.positionXSpring, motion.end.x);
         resetSpring(cursorState.positionYSpring, motion.end.y);
         cursorState.motion = null;
         cursorState.thinkStartedAt = time;
         arrivedThisFrame = true;
+      } else if (prg >= 0.98) {
+        cursorState.positionXSpring.target = motion.end.x;
+        cursorState.positionYSpring.target = motion.end.y;
       }
     } else if (motion?.mode === 'bezier') {
       cursorState.scootStretchSpring.target = 1;
@@ -580,7 +829,7 @@ function initAgentCursor() {
       const speed = dist(prevPt, cursorState.point) / dt;
       cursorState.stretchSpring.target = clamp(1 - speed / 5500, 0.65, 1);
 
-      if (prg >= 0.98 || (prg >= 0.94 && dist(cursorState.point, motion.path.end) <= 8)) {
+      if (prg >= 0.99 && dist(cursorState.point, motion.path.end) <= 1.5) {
         cursorState.point = motion.path.end;
         resetSpring(cursorState.positionXSpring, motion.path.end.x);
         resetSpring(cursorState.positionYSpring, motion.path.end.y);
@@ -588,6 +837,9 @@ function initAgentCursor() {
         cursorState.motion = null;
         cursorState.thinkStartedAt = time;
         arrivedThisFrame = true;
+      } else if (prg >= 0.98) {
+        cursorState.positionXSpring.target = motion.path.end.x;
+        cursorState.positionYSpring.target = motion.path.end.y;
       }
     } else {
       // Free spring settling
@@ -607,6 +859,7 @@ function initAgentCursor() {
       const seq = pendingMoveSequence;
       pendingMoveSequence = null;
       triggerArrivalCallback(seq);
+      resetAutoIdleTimer();
     }
 
     // Check if loop needs to keep ticking
@@ -636,12 +889,43 @@ function initAgentCursor() {
     targetY: number,
     moveSequence: number | null,
     immediate = false,
+    actionNote?: string,
+    fromX?: number,
+    fromY?: number,
   ) => {
-    if (cursorMode === 'off') return;
+    if (cursorMode === 'off') {
+      triggerArrivalCallback(moveSequence);
+      return;
+    }
+
+    // Smart user takeover guard: if user interacted very recently, yield peacefully
+    const now = Date.now();
+    if (userTakeoverDetected && now < userInteractingUntil) {
+      if (pendingMoveSequence !== null && pendingMoveSequence !== moveSequence) {
+        triggerArrivalCallback(pendingMoveSequence);
+        pendingMoveSequence = null;
+      }
+      setTimeout(() => triggerArrivalCallback(moveSequence), 80);
+      return;
+    }
+
     userTakeoverDetected = false;
+    if (pendingMoveSequence !== null && pendingMoveSequence !== moveSequence) {
+      triggerArrivalCallback(pendingMoveSequence);
+    }
     pendingMoveSequence = moveSequence;
+    agentActiveUntil = Math.max(agentActiveUntil, now + 3500);
     cursorState.visibilitySpring.target = 1;
     cursorState.thinkStartedAt = null;
+
+    if (autoIdleTimer) {
+      clearTimeout(autoIdleTimer);
+      autoIdleTimer = null;
+    }
+
+    if (actionNote) {
+      showActionNote(actionNote);
+    }
 
     const target: Point = {
       x: clamp(targetX, 0, window.innerWidth),
@@ -650,52 +934,64 @@ function initAgentCursor() {
 
     if (!hasInteracted) {
       hasInteracted = true;
-      cursorState.point = target;
-      resetSpring(cursorState.positionXSpring, target.x);
-      resetSpring(cursorState.positionYSpring, target.y);
-      resetSpring(cursorState.stretchSpring, 1);
-      cursorState.motion = null;
-      renderCursor();
-      triggerArrivalCallback(moveSequence);
-      return;
+      // If previous coordinate was supplied by background, resume from exact position
+      if (typeof fromX === 'number' && typeof fromY === 'number') {
+        cursorState.point = {
+          x: clamp(fromX, 0, window.innerWidth),
+          y: clamp(fromY, 0, window.innerHeight),
+        };
+        resetSpring(cursorState.positionXSpring, cursorState.point.x);
+        resetSpring(cursorState.positionYSpring, cursorState.point.y);
+        cursorState.visibilitySpring.value = 1;
+        cursorState.visibilitySpring.target = 1;
+      } else {
+        // Natural entrance trajectory without teleportation:
+        // Start smoothly from off-axis entry point with 0 opacity and glide in
+        const entryX = target.x > window.innerWidth / 2 ? target.x - 70 : target.x + 70;
+        const entryY = Math.min(window.innerHeight - 24, target.y + 55);
+        cursorState.point = {
+          x: clamp(entryX, 0, window.innerWidth),
+          y: clamp(entryY, 0, window.innerHeight),
+        };
+        resetSpring(cursorState.positionXSpring, cursorState.point.x);
+        resetSpring(cursorState.positionYSpring, cursorState.point.y);
+        cursorState.visibilitySpring.value = 0;
+        cursorState.visibilitySpring.target = 1;
+      }
     }
 
     const distance = dist(cursorState.point, target);
 
-    if (immediate || distance < 1) {
+    // STRICTLY FORBID TELEPORTATION:
+    // Only snap if distance < 1.5. Every movement between two points executes
+    // a natural Bezier curve trajectory with control point bias.
+    if (distance < 1.5) {
       cursorState.point = target;
       resetSpring(cursorState.positionXSpring, target.x);
       resetSpring(cursorState.positionYSpring, target.y);
       resetSpring(cursorState.stretchSpring, 1);
       cursorState.motion = null;
       renderCursor();
+      pendingMoveSequence = null;
       triggerArrivalCallback(moveSequence);
       return;
     }
 
-    if (distance <= DISTANCE_THRESHOLD_SCOOT) {
-      const dx = target.x - cursorState.point.x;
-      const dy = target.y - cursorState.point.y;
-      const axis = Math.atan2(dy, dx) * (180 / Math.PI);
-      cursorState.motion = {
-        mode: 'scoot',
-        start: { ...cursorState.point },
-        end: target,
-        axisRotation: axis,
-        rotationTarget: clamp((dx * 0.75 - dy * 0.62) / distance, -1, 1) * 70,
-        progressSpring: createSpring(0, 1, { dampingFraction: 0.94, response: 0.1 }),
-      };
-    } else {
-      const path = buildArcCandidates(cursorState.point, target, {
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
-      cursorState.motion = {
-        mode: 'bezier',
-        path,
-        progressSpring: createSpring(0, 1, { dampingFraction: 0.88, response: 0.14 }),
-      };
-    }
+    const path = buildArcCandidates(cursorState.point, target, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    cursorState.motion = {
+      mode: 'bezier',
+      path,
+      progressSpring: createSpring(
+        0,
+        1,
+        immediate
+          ? { dampingFraction: 0.95, response: 0.055 }
+          : { dampingFraction: 0.88, response: 0.13 },
+      ),
+    };
 
     startAnimationLoop();
   };
@@ -707,18 +1003,114 @@ function initAgentCursor() {
     startAnimationLoop();
   };
 
-  // Detect user takeover: when user interacts with mouse or keyboard, smoothly fade out
-  const onUserInteraction = (e: Event) => {
-    if (cursorMode === 'always') return; // in always mode, do not fade out on user movement
-    if (e.isTrusted && !userTakeoverDetected) {
-      userTakeoverDetected = true;
-      hideCursor();
+  let lastUserMousePos: Point | null = null;
+  let userMoveAccumulatedDist = 0;
+  let userTakeoverTimer: number | null = null;
+  let userInteractingUntil = 0;
+
+  const onUserMouseMove = (e: MouseEvent) => {
+    if (cursorMode === 'always' || !e.isTrusted) return;
+    const isAgentActive = Date.now() < agentActiveUntil || cursorState.motion !== null;
+    if (isAgentActive) {
+      // If mouse event is within 60px of the agent's current or target point, it's CDP movement
+      const dToCursor = dist(cursorState.point, { x: e.clientX, y: e.clientY });
+      const targetPt = cursorState.motion
+        ? cursorState.motion.mode === 'scoot'
+          ? cursorState.motion.end
+          : cursorState.motion.path.end
+        : cursorState.point;
+      const dToTarget = dist(targetPt, { x: e.clientX, y: e.clientY });
+      if (dToCursor < 60 || dToTarget < 60) {
+        lastUserMousePos = { x: e.clientX, y: e.clientY };
+        return;
+      }
+      // If cursor is in motion along a trajectory, verify proximity to motion corridor
+      if (cursorState.motion) {
+        const dToSeg = distToSegment(cursorState.point, targetPt, { x: e.clientX, y: e.clientY });
+        if (dToSeg < 60) {
+          lastUserMousePos = { x: e.clientX, y: e.clientY };
+          return;
+        }
+      }
     }
+    if (!lastUserMousePos) {
+      lastUserMousePos = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    const d = dist(lastUserMousePos, { x: e.clientX, y: e.clientY });
+    lastUserMousePos = { x: e.clientX, y: e.clientY };
+    userMoveAccumulatedDist += d;
+
+    // Filter sensor jitter; require deliberate movement (>18px)
+    if (userMoveAccumulatedDist > 18) {
+      userTakeoverDetected = true;
+      userInteractingUntil = Date.now() + 1500;
+      hideCursor();
+      hideActionNote();
+    }
+
+    if (userTakeoverTimer) clearTimeout(userTakeoverTimer);
+    userTakeoverTimer = window.setTimeout(() => {
+      userMoveAccumulatedDist = 0;
+      lastUserMousePos = null;
+      if (Date.now() >= userInteractingUntil) {
+        userTakeoverDetected = false;
+      }
+    }, 1500);
   };
 
-  window.addEventListener('mousemove', onUserInteraction, { passive: true });
-  window.addEventListener('mousedown', onUserInteraction, { passive: true });
-  window.addEventListener('keydown', onUserInteraction, { passive: true });
+  const onUserInteractionDirect = (e: Event) => {
+    if (cursorMode === 'always' || !e.isTrusted) return;
+    const isAgentActive = Date.now() < agentActiveUntil;
+    if (isAgentActive) {
+      if (e.type === 'mousedown') {
+        const me = e as MouseEvent;
+        const d = dist(cursorState.point, { x: me.clientX, y: me.clientY });
+        const targetPt = cursorState.motion
+          ? cursorState.motion.mode === 'scoot'
+            ? cursorState.motion.end
+            : cursorState.motion.path.end
+          : cursorState.point;
+        if (dist(targetPt, { x: me.clientX, y: me.clientY }) < 50) return;
+        if (d < 50) return; // CDP click at agent cursor location
+      } else if (e.type === 'wheel') {
+        const we = e as WheelEvent;
+        const d = dist(cursorState.point, { x: we.clientX, y: we.clientY });
+        if (d < 120) return; // CDP wheel scroll around target container
+      } else if (e.type === 'keydown') {
+        return; // Agent typing via CDP Input.dispatchKeyEvent
+      }
+    }
+    userTakeoverDetected = true;
+    userInteractingUntil = Date.now() + 1500;
+    hideCursor();
+    hideActionNote();
+    if (userTakeoverTimer) clearTimeout(userTakeoverTimer);
+    userTakeoverTimer = window.setTimeout(() => {
+      if (Date.now() >= userInteractingUntil) {
+        userTakeoverDetected = false;
+      }
+    }, 1500);
+  };
+
+  window.addEventListener('mousemove', onUserMouseMove, { passive: true });
+  window.addEventListener('mousedown', onUserInteractionDirect, { passive: true });
+  window.addEventListener('keydown', onUserInteractionDirect, { passive: true });
+  window.addEventListener('wheel', onUserInteractionDirect, { passive: true });
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (tooltipVisible) updateTooltipPosition(1);
+    },
+    { passive: true },
+  );
+  window.addEventListener(
+    'resize',
+    () => {
+      if (tooltipVisible) updateTooltipPosition(1);
+    },
+    { passive: true },
+  );
 
   let activeInterventionCleanup: (() => void) | null = null;
 
@@ -867,25 +1259,44 @@ function initAgentCursor() {
         if (banner) banner.remove();
       }
       sendResponse({ ok: true });
-      return true;
+      return false;
     }
 
     if (message.type === 'AGENT_CURSOR_MOVE') {
-      const { x, y, moveSequence, immediate } = message;
-      moveTo(x, y, typeof moveSequence === 'number' ? moveSequence : null, immediate === true);
+      const { x, y, moveSequence, immediate, actionNote, fromX, fromY } = message;
+      moveTo(
+        x,
+        y,
+        typeof moveSequence === 'number' ? moveSequence : null,
+        immediate === true,
+        actionNote,
+        fromX,
+        fromY,
+      );
       sendResponse({ ok: true });
       return false;
     }
 
     if (message.type === 'AGENT_CURSOR_CLICK') {
-      triggerClickAnimation(message.x, message.y);
+      triggerClickAnimation(message.x, message.y, message.actionNote);
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (message.type === 'AGENT_CURSOR_SET_NOTE') {
+      if (message.note) {
+        showActionNote(message.note, message.durationMs ?? 2600);
+      } else {
+        hideActionNote();
+      }
       sendResponse({ ok: true });
       return false;
     }
 
     if (message.type === 'AGENT_CURSOR_HIDE') {
-      if (cursorMode !== 'always') {
+      if (message.force || cursorMode !== 'always') {
         hideCursor();
+        hideActionNote();
       }
       sendResponse({ ok: true });
       return false;
@@ -899,7 +1310,7 @@ function initAgentCursor() {
         hideCursor();
       }
       sendResponse({ ok: true });
-      return true;
+      return false;
     }
 
     return false;

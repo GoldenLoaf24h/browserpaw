@@ -1,6 +1,7 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
+import { tabGroupManager } from './tab-group-manager';
 
 export interface TabGroupCreateParams {
   tabIds: number[];
@@ -59,6 +60,11 @@ export class TabGroupCreateTool extends BaseBrowserToolExecutor {
         if (args.collapsed !== undefined) updateProps.collapsed = args.collapsed;
 
         await chrome.tabGroups.update(groupId, updateProps);
+      }
+
+      await tabGroupManager.registerManagedGroup(groupId, args.title);
+      for (const tid of args.tabIds) {
+        tabGroupManager.registerAgentTab(tid);
       }
 
       const group = await chrome.tabGroups.get(groupId);
@@ -208,6 +214,10 @@ export class TabGroupUngroupTool extends BaseBrowserToolExecutor {
 
     try {
       await chrome.tabs.ungroup(args.tabIds);
+      await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+      setTimeout(() => {
+        tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+      }, 150);
 
       return {
         content: [
@@ -259,9 +269,10 @@ export class TabGroupCloseTool extends BaseBrowserToolExecutor {
       const tabs = await chrome.tabs.query({ groupId: args.groupId });
       const tabIds = tabs.map((t) => t.id).filter((id): id is number => typeof id === 'number');
 
-      if (tabIds.length > 0) {
-        await chrome.tabs.remove(tabIds);
-      }
+      await tabGroupManager.closeManagedGroup(args.groupId);
+      setTimeout(() => {
+        tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+      }, 150);
 
       return {
         content: [

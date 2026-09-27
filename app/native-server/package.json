@@ -1,7 +1,14 @@
 {
   "name": "mcp-chrome-bridge",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Chrome Native-Messaging host (Node)",
+  "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw.git",
+    "directory": "app/native-server"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "main": "dist/index.js",
   "bin": {
     "mcp-chrome-bridge": "./dist/cli.js",

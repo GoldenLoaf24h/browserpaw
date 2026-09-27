@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';
 
-describe('TabGroupManager (Industrial Grouping & Zero-Orphan Cleanup)', () => {
+describe('TabGroupManager (Industrial Grouping, Zero-Orphan Cleanup & User Tab Isolation)', () => {
   let manager: TabGroupManager;
   let mockTabs: any[];
   let mockGroups: Map<number, any>;
   let nextGroupId = 100;
+  let onCreatedListener: ((tab: any) => void) | null = null;
+  let onUpdatedListener: ((tabId: number, changeInfo: any, tab: any) => void) | null = null;
+  let onRemovedListener: ((tabId: number) => void) | null = null;
 
   beforeEach(() => {
     nextGroupId = 100;
@@ -15,8 +18,17 @@ describe('TabGroupManager (Industrial Grouping & Zero-Orphan Cleanup)', () => {
       { id: 3, windowId: 20, groupId: -1 },
     ];
     mockGroups = new Map();
+    onCreatedListener = null;
+    onUpdatedListener = null;
+    onRemovedListener = null;
 
     (globalThis as any).chrome = {
+      storage: {
+        session: {
+          get: vi.fn().mockResolvedValue({}),
+          set: vi.fn().mockResolvedValue(undefined),
+        },
+      },
       tabs: {
         get: vi.fn(async (id: number) => {
           const t = mockTabs.find((x) => x.id === id);
@@ -46,23 +58,54 @@ describe('TabGroupManager (Industrial Grouping & Zero-Orphan Cleanup)', () => {
             return gid;
           },
         ),
+        ungroup: vi.fn(async (ids: number | number[]) => {
+          const arr = Array.isArray(ids) ? ids : [ids];
+          for (const tid of arr) {
+            const tab = mockTabs.find((x) => x.id === tid);
+            if (tab) tab.groupId = -1;
+          }
+        }),
         query: vi.fn(async (queryInfo: { groupId?: number }) => {
-          if (typeof queryInfo.groupId === 'number') {
+          if (typeof queryInfo?.groupId === 'number') {
             return mockTabs.filter((t) => t.groupId === queryInfo.groupId);
           }
-          return mockTabs;
+          return [...mockTabs];
         }),
         remove: vi.fn(async (ids: number | number[]) => {
           const arr = Array.isArray(ids) ? ids : [ids];
           mockTabs = mockTabs.filter((t) => !arr.includes(t.id));
         }),
-        onRemoved: { addListener: vi.fn() },
+        onCreated: {
+          addListener: vi.fn((fn) => {
+            onCreatedListener = fn;
+          }),
+        },
+        onUpdated: {
+          addListener: vi.fn((fn) => {
+            onUpdatedListener = fn;
+          }),
+        },
+        onRemoved: {
+          addListener: vi.fn((fn) => {
+            onRemovedListener = fn;
+          }),
+        },
       },
       tabGroups: {
         get: vi.fn(async (gid: number) => {
           const g = mockGroups.get(gid);
           if (!g) throw new Error(`Group ${gid} not found`);
           return { ...g };
+        }),
+        query: vi.fn(async (queryInfo?: any) => {
+          let all = Array.from(mockGroups.values());
+          if (typeof queryInfo?.windowId === 'number') {
+            all = all.filter((g) => g.windowId === queryInfo.windowId);
+          }
+          if (queryInfo?.title) {
+            all = all.filter((g) => g.title === queryInfo.title);
+          }
+          return all;
         }),
         update: vi.fn(async (gid: number, props: any) => {
           const g = mockGroups.get(gid);
@@ -142,5 +185,84 @@ describe('TabGroupManager (Industrial Grouping & Zero-Orphan Cleanup)', () => {
     const count = await manager.closeAllManagedGroups();
     expect(count).toBe(2);
     expect(manager.getManagedGroupIds().length).toBe(0);
+  });
+
+  it('immediately ungroups user-opened tabs created in the same window from an agent tab group (onCreated)', async () => {
+    const gid = await manager.ensureAgentTabGroup(1, { title: '12306' });
+    expect(gid).toBeDefined();
+
+    // User opens a new tab in the same window (e.g. Chrome places it into active tab's group)
+    const userTab = {
+      id: 999,
+      windowId: 10,
+      groupId: gid,
+      url: 'chrome://newtab/',
+      pendingUrl: 'chrome://newtab/',
+    };
+    mockTabs.push(userTab);
+
+    expect(onCreatedListener).toBeDefined();
+    await onCreatedListener!(userTab);
+
+    // Assert chrome.tabs.ungroup was called for userTab
+    expect(chrome.tabs.ungroup).toHaveBeenCalledWith(999);
+    expect(mockTabs.find((t) => t.id === 999)?.groupId).toBe(-1);
+  });
+
+  it('ejects non-agent user tabs from agent groups via onUpdated guard', async () => {
+    const gid = await manager.ensureAgentTabGroup(1, { title: 'Agent' });
+    expect(gid).toBeDefined();
+
+    // User navigates or opens external page in an agent group
+    const userTab = {
+      id: 888,
+      windowId: 10,
+      groupId: gid,
+      url: 'https://antigravity.google/auth-success',
+    };
+    mockTabs.push(userTab);
+
+    expect(onUpdatedListener).toBeDefined();
+    await onUpdatedListener!(888, { status: 'complete' }, userTab as any);
+
+    expect(chrome.tabs.ungroup).toHaveBeenCalledWith(888);
+    expect(mockTabs.find((t) => t.id === 888)?.groupId).toBe(-1);
+  });
+
+  it('safely preserves user tabs when closing managed groups (ungroups user tab, closes agent tab)', async () => {
+    const gid = await manager.ensureAgentTabGroup(1, { title: 'Test Task' });
+    expect(gid).toBeDefined();
+
+    // Simulate an accidental user tab inside this group
+    const userTab = {
+      id: 777,
+      windowId: 10,
+      groupId: gid,
+      url: 'https://user-private-doc.com',
+    };
+    mockTabs.push(userTab);
+
+    // Call closeManagedGroup
+    const success = await manager.closeManagedGroup(gid!);
+    expect(success).toBe(true);
+
+    // User tab 777 must have been ungrouped (not removed)
+    expect(chrome.tabs.ungroup).toHaveBeenCalledWith([777]);
+    expect(mockTabs.some((t) => t.id === 777)).toBe(true);
+
+    // Agent tab 1 must have been removed
+    expect(mockTabs.some((t) => t.id === 1)).toBe(false);
+  });
+
+  it('prunes dead tab IDs from agentTabIds during cleanup to avoid memory leaks', async () => {
+    manager.registerAgentTab(1);
+    manager.registerAgentTab(9999); // Dead tab ID that does not exist in chrome.tabs.query
+
+    expect(manager.isAgentTab(9999)).toBe(true);
+
+    await manager.cleanupEmptyOrOrphanGroups();
+
+    expect(manager.isAgentTab(1)).toBe(true);
+    expect(manager.isAgentTab(9999)).toBe(false);
   });
 });

@@ -24,10 +24,12 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpSessionManager } from '../mcp/session-manager';
+import { handleToolCall } from '../mcp/register-tools';
 import { NativeMessageType } from 'chrome-mcp-shared';
 
 import { resolveBridgeToken, getBridgeToken, isValidBridgeToken } from './token';
-export { resolveBridgeToken, getBridgeToken, isValidBridgeToken };
+import { jevModelManager, JevMode } from './jev-model-manager';
+export { resolveBridgeToken, getBridgeToken, isValidBridgeToken, jevModelManager };
 
 export function safeWriteError(
   reply: FastifyReply,
@@ -137,9 +139,13 @@ export class Server {
         return;
       }
 
-      // 2. Allow health check endpoint (handshake) and temporary media asset streaming
+      // 2. Allow health check endpoint (handshake), temporary media assets, and Jev model routes
       const pathOnly = (request.raw.url || request.url || '').split('?')[0];
-      if (pathOnly === '/ping' || pathOnly.startsWith('/media-asset/')) {
+      if (
+        pathOnly === '/ping' ||
+        pathOnly.startsWith('/media-asset/') ||
+        pathOnly.startsWith('/jev/')
+      ) {
         return;
       }
 
@@ -161,7 +167,15 @@ export class Server {
           request.headers['x-hermes-auth'] === 'true' ||
           request.headers['x-local-trust'] === 'true');
 
-      if (hasLocalTrust && (pathOnly === '/eval' || pathOnly === '/execute-script')) {
+      // Hardened: Disallow browser-origin requests from forging x-hermes-auth headers (Anti-CSRF)
+      const isBrowserRequest = Boolean(
+        request.headers['origin'] || request.headers['sec-fetch-mode'],
+      );
+      if (
+        hasLocalTrust &&
+        !isBrowserRequest &&
+        (pathOnly === '/eval' || pathOnly === '/execute-script' || pathOnly === '/call-tool')
+      ) {
         return;
       }
 
@@ -192,6 +206,9 @@ export class Server {
 
     // Extension communication
     this.setupExtensionRoutes();
+
+    // Jev model routes
+    this.setupJevRoutes();
 
     // MCP routes
     this.setupMcpRoutes();
@@ -394,6 +411,7 @@ export class Server {
       request: FastifyRequest<{ Body: { script: string; tabId?: number; timeoutMs?: number } }>,
       reply: FastifyReply,
     ) => {
+      jevModelManager.onToolInvocation();
       if (!this.nativeHost) {
         return reply
           .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
@@ -438,6 +456,272 @@ export class Server {
 
     this.fastify.post('/eval', handleScriptEval);
     this.fastify.post('/execute-script', handleScriptEval);
+
+    // POST /call-tool: Direct tool invocation through full MCP pipeline (supporting local Jev micro-loop)
+    const handleCallTool = async (
+      request: FastifyRequest<{ Body: { name: string; args?: any; timeoutMs?: number } }>,
+      reply: FastifyReply,
+    ) => {
+      const name = (request.body as any)?.name;
+      const args = (request.body as any)?.args || {};
+
+      if (!name || typeof name !== 'string') {
+        return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Tool name is required' });
+      }
+
+      try {
+        const response = await handleToolCall(name, args);
+        return reply.status(HTTP_STATUS.OK).send({ status: 'success', data: response });
+      } catch (error: any) {
+        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+          status: 'error',
+          message: error?.message || 'Failed to call tool',
+        });
+      }
+    };
+
+    this.fastify.post('/call-tool', handleCallTool);
+  }
+
+  // ============================================================
+  // Jev Model Management & Routing Routes
+  // ============================================================
+
+  private setupJevRoutes(): void {
+    // GET /jev/model-status: Returns model downloaded state, disk path, active mode, and local service health
+    this.fastify.get('/jev/model-status', async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const status = await jevModelManager.getStatus();
+        return reply.status(HTTP_STATUS.OK).send(status);
+      } catch (err: any) {
+        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+          error: err?.message || 'Failed to query Jev model status',
+        });
+      }
+    });
+
+    // GET /jev/models: Returns list of installed local models and current active model
+    this.fastify.get('/jev/models', async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const models = jevModelManager.listModels();
+        const activeModel = jevModelManager.getActiveModel();
+        return reply.status(HTTP_STATUS.OK).send({ models, activeModel });
+      } catch (err: any) {
+        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+          error: err?.message || 'Failed to list models',
+        });
+      }
+    });
+
+    // POST /jev/select-model: Switches active local model
+    this.fastify.post(
+      '/jev/select-model',
+      async (request: FastifyRequest<{ Body: { model: string } }>, reply: FastifyReply) => {
+        const model = (request.body as any)?.model;
+        if (!model || typeof model !== 'string') {
+          return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Model name required' });
+        }
+        jevModelManager.setActiveModel(model);
+        mcpSessionManager.broadcastToolListChanged();
+        return reply
+          .status(HTTP_STATUS.OK)
+          .send({ success: true, activeModel: jevModelManager.getActiveModel() });
+      },
+    );
+
+    // POST /jev/delete-model: Deletes a local model directory and falls back to remaining
+    this.fastify.post(
+      '/jev/delete-model',
+      async (request: FastifyRequest<{ Body: { model: string } }>, reply: FastifyReply) => {
+        const model = (request.body as any)?.model;
+        if (!model || typeof model !== 'string') {
+          return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Model name required' });
+        }
+        const res = await jevModelManager.deleteModel(model);
+        mcpSessionManager.broadcastToolListChanged();
+        return reply.status(HTTP_STATUS.OK).send(res);
+      },
+    );
+
+    // POST /jev/download-start: Triggers silent network probe and starts background streaming download
+    this.fastify.post(
+      '/jev/download-start',
+      async (
+        request: FastifyRequest<{ Body?: { customUrl?: string; url?: string; model?: string } }>,
+        reply: FastifyReply,
+      ) => {
+        try {
+          const custom =
+            (request.body as any)?.customUrl ||
+            (request.body as any)?.url ||
+            (request.body as any)?.model;
+          const result = jevModelManager.startDownload(custom);
+          return reply.status(HTTP_STATUS.OK).send(result);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            success: false,
+            message: err?.message || 'Failed to start Jev model download',
+          });
+        }
+      },
+    );
+
+    // GET /jev/download-progress: Returns live download progress, percentage, speed, and active file
+    this.fastify.get(
+      '/jev/download-progress',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const progress = jevModelManager.getProgress();
+          return reply.status(HTTP_STATUS.OK).send(progress);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            status: 'error',
+            error: err?.message || 'Failed to query download progress',
+          });
+        }
+      },
+    );
+
+    // POST /jev/download-cancel: Cancels active streaming download and resets state
+    this.fastify.post(
+      '/jev/download-cancel',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const result = jevModelManager.cancelDownload();
+          return reply.status(HTTP_STATUS.OK).send(result);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            success: false,
+            message: err?.message || 'Failed to cancel Jev model download',
+          });
+        }
+      },
+    );
+
+    // POST /jev/set-mode: Updates active in-memory routing mode ('off' | 'local' | 'remote') in <= 2ms
+    this.fastify.post(
+      '/jev/set-mode',
+      async (request: FastifyRequest<{ Body: { mode: JevMode } }>, reply: FastifyReply) => {
+        const mode = (request.body as any)?.mode;
+        if (mode !== 'off' && mode !== 'local' && mode !== 'remote') {
+          return reply.status(HTTP_STATUS.BAD_REQUEST).send({
+            error: 'Invalid Jev mode. Must be one of: "off", "local", "remote"',
+          });
+        }
+        jevModelManager.setActiveMode(mode);
+        mcpSessionManager.broadcastToolListChanged();
+        return reply.status(HTTP_STATUS.OK).send({
+          success: true,
+          mode: jevModelManager.getActiveMode(),
+        });
+      },
+    );
+
+    // POST /jev/service-start: Triggers model hot-load and starts background resident service
+    this.fastify.post(
+      '/jev/service-start',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const res = await jevModelManager.ensureLocalServiceRunning();
+          mcpSessionManager.broadcastToolListChanged();
+          return reply.status(HTTP_STATUS.OK).send(res);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            success: false,
+            message: err?.message || 'Failed to start local Jev service',
+          });
+        }
+      },
+    );
+
+    // POST /jev/service-stop: Stops local service and unloads model from GPU VRAM
+    this.fastify.post(
+      '/jev/service-stop',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const res = await jevModelManager.unloadLocalModel();
+          mcpSessionManager.broadcastToolListChanged();
+          return reply.status(HTTP_STATUS.OK).send(res);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            success: false,
+            message: err?.message || 'Failed to stop local Jev service',
+          });
+        }
+      },
+    );
+
+    // POST /jev/service-unload: Alias for service-stop
+    this.fastify.post(
+      '/jev/service-unload',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        try {
+          const res = await jevModelManager.unloadLocalModel();
+          mcpSessionManager.broadcastToolListChanged();
+          return reply.status(HTTP_STATUS.OK).send(res);
+        } catch (err: any) {
+          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+            success: false,
+            message: err?.message || 'Failed to unload local Jev service',
+          });
+        }
+      },
+    );
+
+    // POST /jev/remote-config: Updates remote Jev configuration (baseUrl, apiKey, modelId)
+    this.fastify.post(
+      '/jev/remote-config',
+      async (
+        request: FastifyRequest<{ Body: { baseUrl?: string; apiKey?: string; modelId?: string } }>,
+        reply: FastifyReply,
+      ) => {
+        const body = request.body || {};
+        const updatePayload: { baseUrl?: string; apiKey?: string; modelId?: string } = {
+          baseUrl: body.baseUrl,
+          modelId: body.modelId,
+        };
+        // Don't overwrite existing API key if client passed back masked key or omitted it
+        if (body.apiKey !== undefined && !body.apiKey.includes('...')) {
+          updatePayload.apiKey = body.apiKey;
+        }
+        jevModelManager.setRemoteConfig(updatePayload);
+        mcpSessionManager.broadcastToolListChanged();
+        return reply.status(HTTP_STATUS.OK).send({
+          success: true,
+          remoteConfig: jevModelManager.getRemoteConfig(),
+        });
+      },
+    );
+
+    // GET /jev/remote-config: Returns current remote Jev configuration and env detection
+    this.fastify.get(
+      '/jev/remote-config',
+      async (_request: FastifyRequest, reply: FastifyReply) => {
+        const config = jevModelManager.getRemoteConfig();
+        const envKey = (process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
+        const envKeySource = process.env.TYPESAFE_API_KEY
+          ? 'TYPESAFE_API_KEY'
+          : process.env.JEV_API_KEY
+            ? 'JEV_API_KEY'
+            : undefined;
+
+        const maskedApiKey = config.apiKey
+          ? config.apiKey.length > 8
+            ? `${config.apiKey.slice(0, 4)}...${config.apiKey.slice(-4)}`
+            : '********'
+          : '';
+
+        return reply.status(HTTP_STATUS.OK).send({
+          baseUrl: config.baseUrl || '',
+          modelId: config.modelId || 'jev-latest',
+          apiKey: config.apiKey || '',
+          maskedApiKey,
+          hasConfiguredApiKey: Boolean(config.apiKey),
+          hasEnvApiKey: Boolean(envKey),
+          envKeySource,
+        });
+      },
+    );
   }
 
   // ============================================================
@@ -615,6 +899,11 @@ export class Server {
       process.env.CHROME_MCP_TOKEN = token;
 
       this.isRunning = true;
+
+      // Eager background warm-up of local Jev decider service if model is present and mode is local
+      if (jevModelManager.getActiveMode() === 'local' && jevModelManager.isModelDownloaded()) {
+        jevModelManager.ensureLocalServiceRunning().catch(() => {});
+      }
     } catch (err) {
       this.isRunning = false;
       throw err;

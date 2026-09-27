@@ -50,7 +50,7 @@ mcp-chrome-master/
 ├── app/
 │   ├── chrome-extension/        # 🧩 Chrome MV3 Extension (WXT + Vue 3)
 │   │   ├── entrypoints/
-│   │   │   ├── background/      # Main Service Worker (48 Extension Tool Executors + 1 Local Loop Tool)
+│   │   │   ├── background/      # Main Service Worker (49 Browser Atomic Tool Executors)
 │   │   │   │   └── tools/browser/tab-group-manager.ts # Tab grouping & orphan cleanup
 │   │   │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay
 │   │   │   ├── inpage-engine.ts # Isolated-world DOM indexing & pruning engine
@@ -112,7 +112,7 @@ BrowserPaw supports **Dynamic Profile Layering**, balancing prompt token consump
 │   • Autonomous Micro-Loop: chrome_act_toward_goal (Fast Jev Engine)    │
 │   • Advanced CDP: cdp_execute (Target polymorphic routing + Anti-Hang) │
 │   • Human-in-the-Loop: request_human_intervention, undo_last_action   │
-│   • Network & Console: network_capture, get_console_logs, storage...   │
+│   • Network & Console: network_capture, chrome_console, storage...   │
 │   • Browser Mgmt: tab_groups, bookmarks, history, download, doctor...  │
 └────────────────────────────────────────────────────────────────────────┘
 ```

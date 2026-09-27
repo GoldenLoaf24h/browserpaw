@@ -37,7 +37,9 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
   "timeoutMs": 90000,
   "confidenceThreshold": 0.55,
   "textHint": "Optional text to type if not clearly quoted in goal",
-  "pauseBeforeKeywords": ["Post", "Submit", "Pay"]
+  "pauseBeforeKeywords": ["Post", "Submit", "Pay"],
+  "pressEnter": true,
+  "mode": "local"
 }
 ```
 
@@ -48,19 +50,40 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
 - `confidenceThreshold`: Default 0.55. Actions below this threshold trigger instant escalation.
 - `textHint`: Explicit text to enter when typing if not clearly quoted in the goal string.
 - `pauseBeforeKeywords`: Array of keyword strings (e.g. `["Post", "Submit", "Pay"]`). Halts execution with `status: "paused"` and `pausedBeforeAction` before dispatching an action against matching elements.
+- `pressEnter`: Automatically press Enter key after typing actions (optional, boolean, default `false`).
+- `mode`: Jev engine execution mode (`"off"` | `"local"` | `"remote"`). Defaults to active mode configured in extension popup or environment.
 
 ---
 
-## 3. Three-Tier Degradation Ladder
+## 3. Three-Tier Jev Architecture & Degradation Ladder
 
-1. **Tier 1 (TypeSafe Jev System One)**:
-   - Evaluates 7 parallel structured questions against the compact DOM.
-   - Requires `JEV_API_KEY` (or `TYPESAFE_API_KEY`).
-2. **Tier 2 (Heuristic Rule Fallback)**:
-   - Zero-dependency string tokenization, role weighting, and bigram matching.
-   - Activates automatically when no API key is provided, or on 401 unauthenticated (session latched), 429 quota exhaustion, or network disconnect.
-3. **Tier 3 (Macro Escalation to Caller LLM)**:
-   - Immediately returns control to the primary LLM with structured diagnostic context and indexed candidate elements.
+### Engine Modes
+
+1. **Tier 1 (Off)**:
+   - Jev semantic execution is disabled by the user in the extension popup.
+   - `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions.
+   - Direct execution attempts are intercepted with an explicit user authorization requirement.
+
+2. **Tier 2 (Local)**:
+   - Zero-cloud-latency, privacy-first local decider service running on port 8009 (`http://127.0.0.1:8009/v1/systemone`).
+   - Powered by `Mapika/decider-2b` weights stored locally in `~/.browserpaw/models/decider-2b`.
+   - Features automatic hot-loading, persistent background process management, and CUDA GPU acceleration with CPU fallback.
+   - If local weights are missing or service cannot be reached, cleanly falls back to heuristic engine with `fallbackReason: "local_service_offline"`.
+
+3. **Tier 3 (Remote)**:
+   - Cloud TypeSafe Jev System One model requiring `TYPESAFE_API_KEY` (or `JEV_API_KEY`).
+   - Supports custom `baseUrl` and `modelId` persisted in `~/.browserpaw/jev-remote.json`.
+   - On 401 unauthenticated, latches key invalidation for 5 minutes and falls back to heuristic engine.
+
+### Heuristic Rule Fallback
+
+- Zero-dependency string tokenization, role weighting, and bigram matching.
+- Activates automatically when no API key or local model is available, or when service is offline.
+- Bounded execution: `maxSteps` is automatically capped at $\le 5$ in heuristic mode.
+
+### Macro Escalation to Caller LLM
+
+- When confidence drops below threshold or ambiguity/stuck state is reached, immediately returns control to the primary LLM with structured diagnostic context and fresh indexed candidate elements (`currentElements`).
 
 ---
 

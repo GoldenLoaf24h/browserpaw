@@ -2,8 +2,14 @@
   "name": "chrome-mcp-server",
   "description": "a chrome extension to use your own chrome as a mcp server",
   "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw.git",
+    "directory": "app/chrome-extension"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "private": true,
-  "version": "3.1.0",
+  "version": "3.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",

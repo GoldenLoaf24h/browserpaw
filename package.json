@@ -1,15 +1,23 @@
 {
   "name": "browserpaw",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
   "private": true,
   "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw.git"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
+  "bugs": {
+    "url": "https://github.com/GoldenLoaf24h/browserpaw/issues"
+  },
   "type": "module",
   "scripts": {
     "build:shared": "pnpm --filter chrome-mcp-shared build",
     "build:native": "pnpm --filter mcp-chrome-bridge build",
-    "build:extension": "pnpm --filter chrome-mcp-server build",
-    "build": "pnpm -r --filter=\"!browserpaw\" run build",
+    "build:extension": "pnpm --filter chrome-mcp-server build && node scripts/sync-extension-dist.mjs",
+    "build": "pnpm -r --filter=\"!browserpaw\" run build && node scripts/sync-extension-dist.mjs",
     "dev:shared": "pnpm --filter chrome-mcp-shared dev",
     "dev:native": "pnpm --filter mcp-chrome-bridge dev",
     "dev:extension": "pnpm --filter chrome-mcp-server dev",

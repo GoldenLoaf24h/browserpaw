@@ -1,4 +1,4 @@
-# BrowserPaw 项目工程规范说明
+﻿# BrowserPaw 项目工程规范说明
 
 [English Version](./PROJECT.md)
 
@@ -39,11 +39,17 @@ BrowserPaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器�
 - **基于 rAF 与 ARIA 的智能微等待**：废除粗暴 `sleep`，默认 2 个 `requestAnimationFrame`（$\approx 32$ms）结合突变监听快速收敛，并为 `role="combobox"` 搜索候选框提供 $\le 200$ms 的选项可见性监听。
 - **无特权 HTML5 DataTransfer 文件上传降级**：当 CDP `DOM.setFileInputFiles` 失败或未授权时，自动通过标准 `DataTransfer` 与 `File` 合成对象在前端注入文件，支持穿透深层 Shadow DOM。
 
+- **三层 Jev 自主架构与智能门控**：
+  - **Tier 1 (Off 关闭)**：用户在扩展弹窗中关闭 Jev。所有连接的 MCP 会话中 `tools/list` 动态隐藏 `chrome_act_toward_goal`；若 Agent 尝试强制调用，拦截并返回需用户明确授权的结构化提示。
+  - **Tier 2 (Local 本地)**：零云端延迟、隐私优先的本地微决策服务（端口 8009，支持 NVIDIA CUDA RTX GPU 硬件加速与 CPU 自动降级）。支持模型热加载、后台服务常驻自愈与多权重管理（`~/.browserpaw/models`）。
+  - **Tier 3 (Remote 云端)**：云端 TypeSafe Jev System One 大脑，原生支持自定义 `Base URL` 与 `modelId`，具备磁盘持久化（`~/.browserpaw/jev-remote.json`）与智能排查诊断（遇未配置或失效即刻返回诊断日志与修复指引，杜绝静默假降级）。
+  - **即时 MCP 响应通知**：弹窗中的任何模式与模型切换均在 2ms 内触发 `mcpSessionManager.broadcastToolListChanged()`，向所有活跃 MCP 客户端广播工具列表变动。
+
 ## 质量门与验证指标
 
-- **扩展 Vitest**：463 项测试在 51 个套件中 100% 通过（含 F1–M3 管线、多层 Deep Shadow DOM 穿透、视觉回退漂移实时补偿、复合卡片拍平与语义词元边界断言）。
-- **Native Server Jest**：94 项单元与集成测试 100% 通过（含 Jev 极速决策引擎、启发式打分、更新检查通知器、客户端弹性重试与 Session 管理）。
+- **扩展 Vitest**：547 项测试在 57 个套件中 100% 通过（含 F1–M3 管线、多层 Deep Shadow DOM 穿透、视觉回退漂移实时补偿、复合卡片拍平与语义词元边界断言）。
+- **Native Server Jest**：127 项单元与集成测试 100% 通过（含 Jev 极速决策引擎、启发式打分、更新检查通知器、客户端弹性重试与 Session 管理）。
 - **E2E 规范套件**：153 项四层端到端测试 100% 通过。
 - **Hermes 插件测试**：8 项 Pytest 100% 通过。
 - **TypeScript 类型检查**：全仓库 0 错误（`pnpm typecheck`）。
-- **自动化测试总数**：710 / 710 项测试全绿通过。
+- **自动化测试总数**：835 / 835 项测试全绿通过。

@@ -26,13 +26,13 @@
 
 - **通过仓库 CLI 执行（跨平台通用）**：
   ```bash
-  node bin/browserpaw.cjs register
+  node app/native-server/dist/scripts/register-dev.js
   # 或直接在服务端目录执行：
   cd app/native-server && node dist/scripts/register-dev.js
   ```
 - **若通过 npm 全局安装或使用 npx**：
   ```bash
-  npx browserpaw register
+  node app/native-server/dist/cli.js register
   ```
 
 _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.chromemcp.nativehost`）或 macOS/Linux 系统对应目录写入宿主清单配置。_

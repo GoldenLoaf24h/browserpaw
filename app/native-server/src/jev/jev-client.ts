@@ -11,6 +11,7 @@ import {
   type SystemOneResult,
 } from '@typesafe-ai/sdk';
 import { JevState, JevPageState, JevHistoryItem, JevUsage, FallbackReason } from './types';
+import { jevModelManager, JevMode } from '../server/jev-model-manager';
 
 // 14 Built-in destructive keywords (Iron Rule §2.3)
 export const DESTRUCTIVE_KEYWORDS: readonly string[] = [
@@ -322,34 +323,81 @@ export function getTop3Probabilities(
 
 export class JevClientWrapper {
   private client: TypeSafeClient | null = null;
+  private localClient: TypeSafeClient | null = null;
   private explicitApiKey?: string;
   private currentKey?: string;
 
   constructor(apiKey?: string) {
     this.explicitApiKey = apiKey;
-    const key = (apiKey || process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
+    const remoteCfg = jevModelManager.getRemoteConfig();
+    const baseUrl = remoteCfg.baseUrl?.trim() || undefined;
+    const modelId = remoteCfg.modelId?.trim() || undefined;
+    const key = (
+      apiKey ||
+      remoteCfg.apiKey ||
+      process.env.TYPESAFE_API_KEY ||
+      process.env.JEV_API_KEY ||
+      ''
+    ).trim();
     if (key) {
       try {
-        this.currentKey = key;
-        this.client = new TypeSafeClient({ apiKey: key });
+        this.currentKey = `${key}@${baseUrl || 'default'}@${modelId || 'default'}`;
+        this.client = new TypeSafeClient({
+          apiKey: key,
+          ...(baseUrl ? { baseURL: baseUrl } : {}),
+          ...(modelId ? { defaultModel: modelId } : {}),
+        });
       } catch (e) {
         this.client = null;
       }
     }
   }
 
-  public getClient(): TypeSafeClient | null {
+  public getLocalClient(): TypeSafeClient {
+    if (!this.localClient) {
+      this.localClient = new TypeSafeClient({
+        apiKey: 'local',
+        baseURL: 'http://127.0.0.1:8009',
+        timeout: 45000,
+      });
+    }
+    return this.localClient;
+  }
+
+  public getRemoteClient(): TypeSafeClient | null {
+    return this.getClient();
+  }
+
+  public getClient(mode?: JevMode): TypeSafeClient | null {
+    const targetMode = mode || jevModelManager.getActiveMode();
+    if (targetMode === 'off') {
+      return null;
+    }
+    if (targetMode === 'local') {
+      return this.getLocalClient();
+    }
+
+    const remoteCfg = jevModelManager.getRemoteConfig();
     const key = (
       this.explicitApiKey ||
+      remoteCfg.apiKey ||
       process.env.TYPESAFE_API_KEY ||
       process.env.JEV_API_KEY ||
       ''
     ).trim();
+    const baseUrl = remoteCfg.baseUrl?.trim() || undefined;
+    const modelId = remoteCfg.modelId?.trim() || undefined;
+    const clientKey = `${key}@${baseUrl || 'default'}@${modelId || 'default'}`;
+
     if (key) {
-      if (!this.client || this.currentKey !== key) {
+      if (!this.client || this.currentKey !== clientKey) {
         try {
-          this.currentKey = key;
-          this.client = new TypeSafeClient({ apiKey: key });
+          this.currentKey = clientKey;
+          this.client = new TypeSafeClient({
+            apiKey: key,
+            ...(baseUrl ? { baseURL: baseUrl } : {}),
+            ...(modelId ? { defaultModel: modelId } : {}),
+          });
         } catch {
           this.client = null;
         }
@@ -361,36 +409,72 @@ export class JevClientWrapper {
     return this.client;
   }
 
-  public isAvailable(): boolean {
-    return Boolean(this.getClient() && !isSessionKeyInvalid());
+  public isAvailable(mode?: JevMode): boolean {
+    const targetMode = mode || jevModelManager.getActiveMode();
+    if (targetMode === 'off') return false;
+    if (targetMode === 'local') return jevModelManager.isModelDownloaded();
+    return Boolean(this.getRemoteClient() && !isSessionKeyInvalid());
   }
 
   /**
-   * Execute System One multi-question query with typed error handling
+   * Execute System One multi-question query with typed error handling and mode dispatch
    */
   public async query(
     state: JevState,
     questions: Record<string, any>,
+    mode?: JevMode,
   ): Promise<{
     result: SystemOneResult<any> | null;
     errorReason: FallbackReason;
     rawError?: any;
   }> {
-    const client = this.getClient();
-    if (!client || isSessionKeyInvalid()) {
+    const targetMode = mode || jevModelManager.getActiveMode();
+    if (targetMode === 'off') {
       return {
         result: null,
-        errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
+        errorReason: 'jev_disabled',
       };
     }
 
+    let client: TypeSafeClient | null = null;
+    if (targetMode === 'local') {
+      await jevModelManager.ensureLocalServiceRunning();
+      jevModelManager.touchActivity();
+      client = this.getLocalClient();
+    } else {
+      client = this.getRemoteClient();
+      if (!client || isSessionKeyInvalid()) {
+        return {
+          result: null,
+          errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
+        };
+      }
+    }
+
     try {
+      const remoteCfg = targetMode === 'remote' ? jevModelManager.getRemoteConfig() : undefined;
+      const model = remoteCfg?.modelId?.trim() || undefined;
       const response = await client.systemOne({
         state: state as any,
         questions,
+        ...(model ? { model } : {}),
       });
       return { result: response, errorReason: null };
     } catch (err: any) {
+      if (targetMode === 'local') {
+        if (
+          err instanceof APITimeoutError ||
+          err instanceof APIConnectionError ||
+          err?.code === 'ECONNREFUSED' ||
+          err?.code === 'ETIMEDOUT' ||
+          err?.status === 502 ||
+          err?.status === 503 ||
+          err?.status === 504
+        ) {
+          return { result: null, errorReason: 'local_service_offline', rawError: err };
+        }
+      }
+
       if (err instanceof AuthenticationError || err?.status === 401) {
         latchInvalidKey();
         return { result: null, errorReason: 'invalid_key', rawError: err };
@@ -425,6 +509,7 @@ export class JevClientWrapper {
   public async scoreOptions(
     goal: string,
     options: Array<{ text: string; value: string }>,
+    mode?: JevMode,
   ): Promise<{
     bestIndex: number;
     bestOption: { text: string; value: string };
@@ -432,7 +517,8 @@ export class JevClientWrapper {
     score: number;
     usage?: { inputTokens: number };
   } | null> {
-    if (!this.getClient() || options.length === 0) return null;
+    const targetMode = mode || jevModelManager.getActiveMode();
+    if (!this.getClient(targetMode) || options.length === 0) return null;
     if (options.length === 1) {
       return {
         bestIndex: 0,
@@ -478,6 +564,7 @@ export class JevClientWrapper {
         history: [],
       },
       { select_option: selectQuestion },
+      targetMode,
     );
 
     if (!response.result?.answers?.select_option) {

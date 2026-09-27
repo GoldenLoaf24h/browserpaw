@@ -55,7 +55,7 @@ browserpaw/
 ├── app/
 │   ├── chrome-extension/     # Chrome extension MV3 (WXT + Vue 3)
 │   │   ├── entrypoints/      # Background SW, popup, and isolated inpage scripts
-│   │   ├── tests/            # Vitest suite for all 48 extension tool executors & utilities
+│   │   ├── tests/            # Vitest suite for all 50 extension tool executors & utilities
 │   │   └── utils/            # CDP session manager, storage managers, ring buffer
 │   └── native-server/        # Native messaging Fastify bridge & Stdio MCP host
 │       ├── src/mcp/          # MCP protocol implementation (HTTP, SSE, Stdio)

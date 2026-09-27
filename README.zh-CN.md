@@ -68,7 +68,11 @@
 - 自然语言微目标、元素位于当前页面但位置动态未知 → **Tier 1** 语义微循环 (`chrome_act_toward_goal`)
 - 长程复杂任务、页面陌生探索、内容生成或微循环遇到歧义/破坏性动作反抛 → **Tier 2** 宏规划大模型直接介入
 
-**环境配置：** 配置 `TYPESAFE_API_KEY` 环境变量即可开启 Jev 极速推理。若未配置或遇额度耗尽，`chrome_act_toward_goal` 将**自动无缝降级**至内置的零依赖启发式引擎 —— 工具永远可用，并在返回体的 `engine` 字段明确自述当前采用的决策引擎。
+**Jev 自主决策运行模式与智能门控：**
+
+- **Off (关闭)**：用户在扩展弹窗中关闭 Jev。`tools/list` 自动隐藏 `chrome_act_toward_goal`；若 Agent 尝试强制调用，拦截并返回需用户明确授权的提示。
+- **Local (本地)**：端口 8009 运行零云端依赖的离线小模型（`decider-2b`），支持 NVIDIA CUDA RTX GPU 硬件加速与 CPU 自动降级，首次调用自动热加载并常驻后台。
+- **Remote (云端)**：采用 TypeSafe Jev System One 云端大模型，支持配置自定义 `Base URL` 与 `modelId`，具备磁盘持久化（`~/.browserpaw/jev-remote.json`）。遇配置缺失或失效返回具体诊断日志与修复指引，杜绝静默假降级。
 
 ### 真实环境基准实测 (基于真实 Jev API, T1~T5)
 

@@ -26,13 +26,13 @@ Execute the registration script once to bind the Native Messaging manifest with 
 
 - **Via Repository CLI (Cross-Platform)**:
   ```bash
-  node bin/browserpaw.cjs register
+  node app/native-server/dist/scripts/register-dev.js
   # or from native server directory:
   cd app/native-server && node dist/scripts/register-dev.js
   ```
 - **If Globally Installed via npm / npx**:
   ```bash
-  npx browserpaw register
+  node app/native-server/dist/cli.js register
   ```
 
 _The registration script creates the manifest pointing to the host runner and registers it in the OS registry (`HKCU\Software\Google\Chrome\NativeMessagingHosts\com.chromemcp.nativehost` on Windows) or Chrome Application Support / NativeMessagingHosts directory on macOS and Linux._

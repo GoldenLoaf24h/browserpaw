@@ -40,10 +40,15 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
       const coordRes = await executeInPage({ tabId }, 'inPageGetElementCoordinates', [index]);
       const coords = coordRes?.[0]?.result;
       if (coords?.success && typeof coords.x === 'number' && typeof coords.y === 'number') {
-        void animateAgentCursor(tabId, coords.x, coords.y);
-        void animateAgentCursorClick(tabId, coords.x, coords.y);
+        const clickNote = `Clicking [${index}]`;
+        await animateAgentCursor(tabId, coords.x, coords.y, {
+          waitForArrival: true,
+          timeoutMs: 350,
+          actionNote: clickNote,
+        });
 
         await cdpSessionManager.withSession(tabId, 'form-pipeline-click', async () => {
+          await animateAgentCursorClick(tabId, coords.x, coords.y, clickNote);
           await raceCdp(tabId, 'Input.dispatchMouseEvent', {
             type: 'mousePressed',
             x: coords.x,
@@ -88,10 +93,13 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
       tabFaviconManager.markTabActive(tabId);
 
       return await sessionTabAffinity.runSerialized(tabId, async () => {
-        const maxSteps = typeof args.maxSteps === 'number' && args.maxSteps > 0 ? args.maxSteps : 20;
+        const maxSteps =
+          typeof args.maxSteps === 'number' && args.maxSteps > 0 ? args.maxSteps : 20;
         const autoAdvance = args.autoAdvance !== false;
 
-        const completedFields: Array<FormPipelineField & { matchedQuestion?: string; step: number }> = [];
+        const completedFields: Array<
+          FormPipelineField & { matchedQuestion?: string; step: number }
+        > = [];
         const completedIndices = new Set<number>();
         let status: 'completed' | 'partial' | 'interrupted' = 'completed';
         let reason = 'all_fields_completed';
@@ -124,7 +132,9 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
           // 3. Validation error check from previous action
           if (step > 1 && preSig?.alerts && preSig.alerts.length > 0) {
             const hasBlockingError = preSig.alerts.some((a) =>
-              /(required|invalid|error|cannot be blank|please enter|必填|错误|请填写|有效)/i.test(a),
+              /(required|invalid|error|cannot be blank|please enter|必填|错误|请填写|有效)/i.test(
+                a,
+              ),
             );
             if (hasBlockingError) {
               status = 'interrupted';
@@ -157,7 +167,11 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               .map((f, i) => ({ id: i, text: f.query, details: f.value }))
               .filter((c) => !completedIndices.has(Number(c.id)));
             if (uncompletedCandidates.length > 0) {
-              const semMatch = await matchSemantically('field', preSig.question, uncompletedCandidates);
+              const semMatch = await matchSemantically(
+                'field',
+                preSig.question,
+                uncompletedCandidates,
+              );
               if (semMatch) {
                 matchedIndex = Number(semMatch.matchedId);
               }
@@ -191,9 +205,15 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               .filter((c) => !completedIndices.has(Number(c.id)));
 
             for (const inp of preSig.activeInputs) {
-              const inpDescriptor = [inp.name, inp.placeholder, inp.ariaLabel].filter(Boolean).join(' ');
+              const inpDescriptor = [inp.name, inp.placeholder, inp.ariaLabel]
+                .filter(Boolean)
+                .join(' ');
               if (!inpDescriptor) continue;
-              const semMatch = await matchSemantically('input', inpDescriptor, uncompletedCandidates);
+              const semMatch = await matchSemantically(
+                'input',
+                inpDescriptor,
+                uncompletedCandidates,
+              );
               if (semMatch) {
                 matchedIndex = Number(semMatch.matchedId);
                 matchedInputIndex = inp.index;
@@ -247,7 +267,11 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                 )?.[0]?.result;
                 if (Array.isArray(domItems) && domItems.length > 0) {
                   const choiceCandidates = domItems
-                    .filter((item: any) => typeof item.index === 'number' && (item.text || item.ariaLabel || item.value))
+                    .filter(
+                      (item: any) =>
+                        typeof item.index === 'number' &&
+                        (item.text || item.ariaLabel || item.value),
+                    )
                     .map((item: any) => ({
                       id: item.index,
                       text: String(item.text || item.ariaLabel || item.value || '').trim(),
@@ -271,13 +295,19 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               if (!clicked) {
                 status = 'interrupted';
                 reason = 'choice_click_failed';
-                interruptDetails = { choiceValue: currentField.value, fieldQuery: currentField.query };
+                interruptDetails = {
+                  choiceValue: currentField.value,
+                  fieldQuery: currentField.query,
+                };
                 break;
               }
             } else {
               status = 'interrupted';
               reason = 'choice_not_found';
-              interruptDetails = { choiceValue: currentField.value, fieldQuery: currentField.query };
+              interruptDetails = {
+                choiceValue: currentField.value,
+                fieldQuery: currentField.query,
+              };
               break;
             }
           } else if (fieldType === 'enter') {
@@ -319,9 +349,16 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                   .filter((inp) => typeof inp.index === 'number')
                   .map((inp) => ({
                     id: inp.index!,
-                    text: [inp.name, inp.placeholder, inp.ariaLabel].filter(Boolean).join(' ') || `input-${inp.index}`,
+                    text:
+                      [inp.name, inp.placeholder, inp.ariaLabel].filter(Boolean).join(' ') ||
+                      `input-${inp.index}`,
                   }));
-                const semInput = await matchSemantically('input', currentField.query, inputCandidates, currentField.value);
+                const semInput = await matchSemantically(
+                  'input',
+                  currentField.query,
+                  inputCandidates,
+                  currentField.value,
+                );
                 if (semInput) {
                   finalTargetIndex = Number(semInput.matchedId);
                 }
@@ -435,7 +472,9 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
           // Check if postSig reveals blocking validation errors
           if (postSig?.alerts && postSig.alerts.length > 0) {
             const hasBlockingError = postSig.alerts.some((a) =>
-              /(required|invalid|error|cannot be blank|please enter|必填|错误|请填写|有效)/i.test(a),
+              /(required|invalid|error|cannot be blank|please enter|必填|错误|请填写|有效)/i.test(
+                a,
+              ),
             );
             if (hasBlockingError) {
               status = 'interrupted';
@@ -450,12 +489,12 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
 
           const didAdvance = Boolean(
             delta?.advanced ||
-              (preSig?.question && postSig?.question && preSig.question !== postSig.question) ||
-              (preSig?.progress && postSig?.progress && preSig.progress !== postSig.progress) ||
-              (step === 1 && postSig?.question && !preSig?.question) ||
-              (preSig?.question && !postSig?.question) ||
-              delta?.urlChanged ||
-              isLastField,
+            (preSig?.question && postSig?.question && preSig.question !== postSig.question) ||
+            (preSig?.progress && postSig?.progress && preSig.progress !== postSig.progress) ||
+            (step === 1 && postSig?.question && !preSig?.question) ||
+            (preSig?.question && !postSig?.question) ||
+            delta?.urlChanged ||
+            isLastField,
           );
 
           if (autoAdvance && !didAdvance) {

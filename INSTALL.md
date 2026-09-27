@@ -127,14 +127,34 @@ open -a "Google Chrome" --args --silent-debugger-extension-api
 
 ---
 
-## Step 5: Enable Jev Semantic Engine (Recommended for Speed)
+## Step 5: Configure Autonomous Decision Engine (Jev Dual-Brain)
 
-BrowserPaw's on-page autonomy (`chrome_act_toward_goal`) runs on **Jev**, a fast semantic decision model from TypeSafe. Without an API key it still works, but falls back to the slower heuristic engine with reduced step budgets — page interactions feel noticeably less snappy (roughly 2-5x slower per decision step).
+BrowserPaw features a **Dual-Brain architecture** where the calling AI agent acts as System 2 (Macro Planner) and an autonomous on-page micro-loop acts as System 1 (`chrome_act_toward_goal`, ~109-350ms/step).
 
-To unlock full-speed Jev:
+Jev offers **three operational tiers** configured directly via the Chrome extension popup or environment variables:
 
-1. Get a free API key: register at https://typesafe.ai/blog/introducing-system-one-models-and-jev
-2. Set the environment variable before starting your agent / the native bridge:
+### Tier 1: Off (Default / Zero-Autonomy Mode)
+
+- **Behavior**: The autonomous semantic micro-loop is turned off. `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP clients.
+- **Safety Interception**: If an agent attempts to call `chrome_act_toward_goal` directly, BrowserPaw intercepts the invocation and returns a structured request asking for user authorization.
+- **Configuration**: Set mode to **Off** in the BrowserPaw extension popup.
+
+### Tier 2: Local Decider (100% Offline with GPU / MPS Acceleration)
+
+- **Zero-Cloud-Latency & Full Privacy**: Runs an offline decider model (`decider-2b`) locally on `http://127.0.0.1:8009` with weights stored in `~/.browserpaw/models`.
+- **Hardware Acceleration**:
+  - **NVIDIA GeForce RTX (CUDA FP16)**: VRAM usage slashed from 7.8GB to **~1.7GB**, reducing decision latency to **109ms**.
+  - **Apple Silicon (M1~M4)**: Native Metal Performance Shaders (MPS) and Apple MLX Metal Shading Language (MSL) JIT kernels with unified zero-copy memory.
+  - **CPU Fallback**: Automatic multi-threaded CPU execution when no dedicated GPU is available.
+- **Zero-Wait Preload & 10-Minute Auto-Offload**: Calling any MCP tool warms the decider service in the background. A two-tier watchdog automatically offloads model weights after 10 minutes of idle time, reclaiming 100% of GPU VRAM.
+- **Configuration**: Select **Local** in the extension popup. The service hot-loads automatically on first use.
+
+### Tier 3: Remote Cloud (TypeSafe Jev System One)
+
+- **High-Throughput Semantic Cloud**: Uses TypeSafe's cloud Jev System One model.
+- **Custom Endpoints & Models**: Supports custom `Base URL` and fine-tuned `modelId` (e.g. `jev-latest`), with settings persisted to `~/.browserpaw/jev-remote.json`.
+- **Actionable Diagnostics**: If an invalid key or network disconnection occurs, BrowserPaw delivers explicit diagnostic logs and remediation instructions instead of silent heuristic fallback.
+- **Configuration**: Select **Remote** in the extension popup, or set the `TYPESAFE_API_KEY` environment variable:
 
 **Windows (PowerShell, persistent for current user):**
 
@@ -150,9 +170,7 @@ export TYPESAFE_API_KEY="your-key-here"
 # To persist, add the line above to ~/.bashrc or ~/.zshrc
 ```
 
-3. Restart your agent client (or the native bridge if running standalone) so it picks up the variable.
-
-> No key, or invalid key? BrowserPaw automatically degrades to the deterministic heuristic engine — nothing breaks, decisions are just slower and more conservative.
+> **Real-Time MCP Reactivity**: Toggling between Off, Local, and Remote or updating credentials in the extension popup immediately broadcasts a `tools/list_changed` notification across all connected MCP sessions within 2ms.
 
 ---
 

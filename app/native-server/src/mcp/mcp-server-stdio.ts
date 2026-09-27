@@ -16,18 +16,22 @@ import {
   TOOL_SCHEMAS,
   TOOL_CATEGORIES,
   TOOL_NAME_TO_CATEGORY,
+  normalizeIncomingToolName,
+  alignToolReferences,
+  getActiveToolPrefix,
+  getBaseToolName,
 } from 'chrome-mcp-shared';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveBridgeToken } from '../server/token';
+import { jevModelManager } from '../server/jev-model-manager';
 
 let stdioMcpServer: Server | null = null;
 let mcpClient: Client | null = null;
 
-// Same profile contract as the HTTP server (register-tools.ts): resolved once
-// at startup, full by default, CHROME_MCP_TOOL_PROFILE=core to trim to 26.
+// Profile contract: resolved at startup (default is 'core', set CHROME_MCP_TOOL_PROFILE=full to expose all tools).
 const TOOL_PROFILE = resolveToolProfile(process.env.CHROME_MCP_TOOL_PROFILE);
 const EXPOSED_TOOLS = filterToolSchemas(TOOL_SCHEMAS, TOOL_PROFILE);
 
@@ -115,24 +119,36 @@ export const getStdioMcpServer = () => {
 export const setupTools = (server: Server) => {
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    if (dynamicExtraTools.size === 0) return { tools: EXPOSED_TOOLS };
-    const combined = TOOL_SCHEMAS.filter(
-      (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || dynamicExtraTools.has(t.name),
-    );
-    return { tools: combined };
+    let tools = EXPOSED_TOOLS;
+    if (dynamicExtraTools.size > 0) {
+      tools = TOOL_SCHEMAS.filter(
+        (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || dynamicExtraTools.has(t.name),
+      );
+    }
+    // Gating check: If Jev mode is 'off' or neither local nor remote is available, hide chrome_act_toward_goal
+    const activeMode = jevModelManager.getActiveMode();
+    if (activeMode === 'off' || !jevModelManager.isAvailable()) {
+      tools = tools.filter((t) => getBaseToolName(t.name) !== 'act_toward_goal');
+    }
+    return { tools };
   });
 
   // Call tool handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
     const args = request.params.arguments || {};
-    let isAllowed = EXPOSED_TOOLS.some((t) => t.name === name) || dynamicExtraTools.has(name);
+    const normalized = normalizeIncomingToolName(name);
+    const backendName = normalized.canonicalBackendName;
+    const requestedPrefix = normalized.prefix || getActiveToolPrefix();
+
+    let isAllowed =
+      EXPOSED_TOOLS.some((t) => t.name === backendName) || dynamicExtraTools.has(backendName);
     let autoActivatedCategory: string | undefined;
 
     if (!isAllowed) {
-      const known = TOOL_SCHEMAS.some((t) => t.name === name);
+      const known = TOOL_SCHEMAS.some((t) => t.name === backendName);
       if (known) {
-        const cat = TOOL_NAME_TO_CATEGORY[name];
+        const cat = TOOL_NAME_TO_CATEGORY[backendName];
         if (cat) {
           const catList = TOOL_CATEGORIES[cat] ? TOOL_CATEGORIES[cat].split(' ') : [];
           for (const tName of catList) dynamicExtraTools.add(tName);
@@ -150,7 +166,7 @@ export const setupTools = (server: Server) => {
             {
               type: 'text',
               text: known
-                ? profileBlockedMessage(name, TOOL_PROFILE)
+                ? profileBlockedMessage(backendName, TOOL_PROFILE)
                 : `Tool "${name}" is not a BrowserPaw tool. Call tools/list to see the ${EXPOSED_TOOLS.length} available tools.`,
             },
           ],
@@ -161,7 +177,7 @@ export const setupTools = (server: Server) => {
 
     // Dynamic activation hook for chrome_tool_docs
     if (
-      name === 'chrome_tool_docs' &&
+      backendName === 'chrome_tool_docs' &&
       (args as any)?.activateForSession &&
       (args as any)?.category
     ) {
@@ -173,12 +189,19 @@ export const setupTools = (server: Server) => {
       }
     }
 
-    const res = await handleToolCall(name, args);
-    if (autoActivatedCategory && res && Array.isArray(res.content)) {
-      res.content.unshift({
-        type: 'text',
-        text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
-      });
+    const res = await handleToolCall(backendName, args);
+    if (res && Array.isArray(res.content)) {
+      for (const item of res.content) {
+        if (item && item.type === 'text' && typeof item.text === 'string') {
+          item.text = alignToolReferences(item.text, requestedPrefix);
+        }
+      }
+      if (autoActivatedCategory) {
+        res.content.unshift({
+          type: 'text',
+          text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
+        });
+      }
     }
     return res;
   });
@@ -209,6 +232,7 @@ const isConnectionError = (err: any): boolean => {
 };
 
 const handleToolCall = async (name: string, args: any): Promise<CallToolResult> => {
+  jevModelManager.onToolInvocation();
   const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
 
   const executeCall = async (): Promise<CallToolResult> => {
@@ -340,7 +364,9 @@ async function main() {
   await getStdioMcpServer().connect(transport);
 }
 
-main().catch((error) => {
-  console.error('Fatal error Chrome MCP Server main():', error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('Fatal error Chrome MCP Server main():', error);
+    process.exit(1);
+  });
+}

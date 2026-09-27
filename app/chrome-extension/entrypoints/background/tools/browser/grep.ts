@@ -366,7 +366,7 @@ export class GrepTool extends BaseBrowserToolExecutor {
                   : {}),
                 ...(textFallbackMatches
                   ? {
-                      note: `No interactive elements matched query "${args.query}". Displaying matches found in deep page text. Use ${resolveToolName('interact_index')} with coordinate, or ${resolveToolName('click_element')} with text/role.`,
+                      note: `No interactive elements matched query "${args.query}". Displaying matches found in deep page text. Use ${resolveToolName('interact_index')} with coordinate or consult ${resolveToolName('read_dom')} for target context.`,
                     }
                   : {}),
               },

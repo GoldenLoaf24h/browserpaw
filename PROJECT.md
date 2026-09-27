@@ -1,4 +1,4 @@
-# BrowserPaw Project Specifications & Notes
+﻿# BrowserPaw Project Specifications & Notes
 
 [Chinese Version (zh-CN)](./PROJECT.zh-CN.md)
 
@@ -39,11 +39,17 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 - **rAF & ARIA Combobox Smart Micro-Wait**: Eliminates blind sleeps with 2-frame `requestAnimationFrame` ($\approx 32$ms) convergence and dedicated option-discovery watchdogs for autocomplete comboboxes ($\le 200$ms).
 - **HTML5 DataTransfer Upload Fallback**: Gracefully falls back to browser-native `DataTransfer` file synthesis across Shadow DOM boundaries when CDP debugger attachment is unavailable.
 
+- **3-Tier Jev Autonomous Architecture & Smart Gating**:
+  - **Tier 1 (Off)**: Autonomous semantic loop is disabled in extension popup. `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions. If an agent attempts to invoke it directly, the request is intercepted with an explicit authorization prompt requiring user confirmation.
+  - **Tier 2 (Local)**: Zero-cloud-latency, privacy-first local decider service running on port 8009 (supporting CUDA RTX GPU acceleration and CPU fallback). Features automatic hot-loading, persistent background residency, and weight management (`~/.browserpaw/models`).
+  - **Tier 3 (Remote)**: Cloud-powered TypeSafe Jev System One model with custom `Base URL` and `modelId` support, disk persistence (`~/.browserpaw/jev-remote.json`), and intelligent error diagnostics (diagnostics + remediation feedback rather than silent heuristic fallback).
+  - **Real-Time MCP Reactivity**: Mode and config switches in the popup immediately trigger `mcpSessionManager.broadcastToolListChanged()` across all active SSE and stdio sessions.
+
 ## Quality Gates & Verification Matrix
 
-- **Chrome Extension Vitest**: 463 unit tests passing 100% across 51 suites (including F1-M3 pipeline, tab closing, javascript execution, grep, delta diffs, batch assertions, media extraction, deep shadow DOM piercing, visual drift compensation, card flattening, token boundary matching, and undo).
-- **Native Server Jest**: 94 unit and integration tests passing 100% across 5 suites (including Jev fast-decision engine, heuristic scoring, client resilience, update notifier, and session managers).
+- **Chrome Extension Vitest**: 547 unit tests passing 100% across 57 suites (including F1-M3 pipeline, tab closing, javascript execution, grep, delta diffs, batch assertions, media extraction, deep shadow DOM piercing, visual drift compensation, card flattening, token boundary matching, and undo).
+- **Native Server Jest**: 127 unit and integration tests passing 100% across 7 suites (including Jev fast-decision engine, heuristic scoring, client resilience, update notifier, and session managers).
 - **End-to-End Suite**: 153 four-tier E2E tests passing 100% (`node --experimental-strip-types test/e2e/runner.ts`).
 - **Plugin Integration**: 8 Pytest cases passing 100% (`plugins/browserpaw/tests/test_bridge_token.py`).
 - **TypeScript Checking**: 0 errors across all monorepo packages (`pnpm typecheck`).
-- **Total Automated Test Volume**: 710 / 710 tests passing (100% green).
+- **Total Automated Test Volume**: 835 / 835 tests passing (100% green).

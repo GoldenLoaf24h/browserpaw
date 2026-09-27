@@ -1,7 +1,13 @@
 {
   "name": "chrome-mcp-shared",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "main": "dist/index.js",
   "module": "./dist/index.mjs",
   "types": "dist/index.d.ts",

@@ -185,6 +185,25 @@ export function deriveSmartGroupTitle(
   return TabGroupManager.DEFAULT_TITLE;
 }
 
+/**
+ * Check if a URL represents a new tab or blank browser page.
+ */
+export function isNewTabUrl(url?: string): boolean {
+  if (url === undefined || url === null) return false;
+  const clean = url.trim().toLowerCase();
+  return (
+    clean === '' ||
+    clean === 'about:blank' ||
+    clean === 'chrome://newtab/' ||
+    clean === 'chrome://newtab' ||
+    clean === 'chrome://new-tab-page/' ||
+    clean === 'chrome://new-tab-page' ||
+    clean === 'chrome-search://local-ntp/local-ntp.html' ||
+    clean === 'edge://newtab/' ||
+    clean === 'edge://newtab'
+  );
+}
+
 export class TabGroupManager {
   private static instance: TabGroupManager | null = null;
   public static readonly DEFAULT_TITLE = 'Agent';
@@ -192,10 +211,13 @@ export class TabGroupManager {
 
   private managedGroupIds: Set<number> = new Set<number>();
   private explicitGroupTitles: Map<number, string> = new Map<number, string>();
+  private agentTabIds: Set<number> = new Set<number>();
+  private agentCreationInProgress = 0;
   private listenersRegistered = false;
   private storageLoadedPromise: Promise<void> | null = null;
   private static readonly STORAGE_KEY = 'tab_group_manager_managed_groups';
   private static readonly TITLES_STORAGE_KEY = 'tab_group_manager_explicit_titles';
+  private static readonly AGENT_TABS_STORAGE_KEY = 'tab_group_manager_agent_tabs';
 
   public static getInstance(): TabGroupManager {
     if (!TabGroupManager.instance) {
@@ -206,7 +228,34 @@ export class TabGroupManager {
 
   constructor() {
     this.registerEventListeners();
-    this.storageLoadedPromise = this.loadFromStorage();
+    this.storageLoadedPromise = this.loadFromStorage().then(() => {
+      // Clean up any empty or orphan residue groups left from previous sessions or crashed tests
+      void this.cleanupEmptyOrOrphanGroups().catch(() => {});
+    });
+  }
+
+  public registerAgentTab(tabId: number): void {
+    if (typeof tabId === 'number' && tabId > 0) {
+      this.agentTabIds.add(tabId);
+      void this.saveToStorage();
+    }
+  }
+
+  public isAgentTab(tabId: number): boolean {
+    return typeof tabId === 'number' && this.agentTabIds.has(tabId);
+  }
+
+  public beginAgentTabCreation(): void {
+    this.agentCreationInProgress++;
+  }
+
+  public endAgentTabCreation(tabId?: number): void {
+    if (this.agentCreationInProgress > 0) {
+      this.agentCreationInProgress--;
+    }
+    if (typeof tabId === 'number' && tabId > 0) {
+      this.registerAgentTab(tabId);
+    }
   }
 
   public async ensureStorageLoaded(): Promise<void> {
@@ -215,12 +264,19 @@ export class TabGroupManager {
     }
   }
 
+  private getStorageArea(): chrome.storage.StorageArea | null {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    return chrome.storage.session || chrome.storage.local || null;
+  }
+
   private async loadFromStorage(): Promise<void> {
     try {
-      if (typeof chrome !== 'undefined' && chrome.storage?.session?.get) {
-        const data = await chrome.storage.session.get([
+      const storage = this.getStorageArea();
+      if (storage?.get) {
+        const data = await storage.get([
           TabGroupManager.STORAGE_KEY,
           TabGroupManager.TITLES_STORAGE_KEY,
+          TabGroupManager.AGENT_TABS_STORAGE_KEY,
         ]);
         if (data && Array.isArray(data[TabGroupManager.STORAGE_KEY])) {
           for (const gid of data[TabGroupManager.STORAGE_KEY]) {
@@ -236,36 +292,184 @@ export class TabGroupManager {
             }
           }
         }
+        if (data && Array.isArray(data[TabGroupManager.AGENT_TABS_STORAGE_KEY])) {
+          for (const tid of data[TabGroupManager.AGENT_TABS_STORAGE_KEY]) {
+            if (typeof tid === 'number') {
+              this.agentTabIds.add(tid);
+            }
+          }
+        }
+      }
+
+      // Re-hydrate agentTabIds from open tabs in managed groups that are not new tabs
+      if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+        for (const gid of Array.from(this.managedGroupIds)) {
+          try {
+            const tabsInGroup = await chrome.tabs.query({ groupId: gid });
+            for (const t of tabsInGroup) {
+              if (
+                typeof t.id === 'number' &&
+                !isNewTabUrl(t.url || (t as any).pendingUrl) &&
+                t.title !== 'New Tab' &&
+                t.title !== '新标签页'
+              ) {
+                this.agentTabIds.add(t.id);
+              }
+            }
+          } catch {}
+        }
       }
     } catch {}
   }
 
   private async saveToStorage(): Promise<void> {
     try {
-      if (typeof chrome !== 'undefined' && chrome.storage?.session?.set) {
-        await chrome.storage.session.set({
+      const storage = this.getStorageArea();
+      if (storage?.set) {
+        await storage.set({
           [TabGroupManager.STORAGE_KEY]: Array.from(this.managedGroupIds),
           [TabGroupManager.TITLES_STORAGE_KEY]: Array.from(this.explicitGroupTitles.entries()),
+          [TabGroupManager.AGENT_TABS_STORAGE_KEY]: Array.from(this.agentTabIds),
         });
       }
     } catch {}
+  }
+
+  public async registerManagedGroup(groupId: number, title?: string): Promise<void> {
+    if (typeof groupId === 'number' && groupId > 0) {
+      await this.ensureStorageLoaded();
+      this.managedGroupIds.add(groupId);
+      if (title && title.trim()) {
+        this.explicitGroupTitles.set(groupId, title.trim());
+      }
+      await this.saveToStorage();
+    }
+  }
+
+  public async unregisterManagedGroup(groupId: number): Promise<void> {
+    if (typeof groupId === 'number') {
+      await this.ensureStorageLoaded();
+      this.managedGroupIds.delete(groupId);
+      this.explicitGroupTitles.delete(groupId);
+      await this.saveToStorage();
+    }
+  }
+
+  public async isAgentGroup(groupId: number): Promise<boolean> {
+    if (typeof groupId !== 'number' || groupId <= 0) return false;
+    await this.ensureStorageLoaded();
+    if (this.managedGroupIds.has(groupId)) return true;
+    if (typeof chrome !== 'undefined' && chrome.tabGroups?.get) {
+      try {
+        const group = await chrome.tabGroups.get(groupId);
+        if (
+          group &&
+          (group.title === TabGroupManager.DEFAULT_TITLE ||
+            this.explicitGroupTitles.has(groupId) ||
+            Array.from(this.explicitGroupTitles.values()).includes(group.title || ''))
+        ) {
+          this.managedGroupIds.add(groupId);
+          return true;
+        }
+      } catch {}
+    }
+    // Also check if any open tab in this group is an agent tab
+    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+      try {
+        const tabsInGroup = await chrome.tabs.query({ groupId });
+        if (tabsInGroup.some((t) => typeof t.id === 'number' && this.agentTabIds.has(t.id))) {
+          this.managedGroupIds.add(groupId);
+          return true;
+        }
+      } catch {}
+    }
+    return false;
   }
 
   public registerEventListeners(): void {
     if (this.listenersRegistered) return;
     this.listenersRegistered = true;
 
-    // Listen to tab removal to aggressively clean up empty or orphan groups
+    // 1. Listen to tab removal to aggressively clean up empty or orphan groups and memory
     if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved) {
-      chrome.tabs.onRemoved.addListener((_tabId, _removeInfo) => {
-        // Debounce slightly to allow Chrome to update tab group states
+      chrome.tabs.onRemoved.addListener((removedTabId: number) => {
+        this.agentTabIds.delete(removedTabId);
+        // Immediate cleanup + debounced cleanup
+        void this.cleanupEmptyOrOrphanGroups().catch(() => {});
         setTimeout(() => {
           this.cleanupEmptyOrOrphanGroups().catch(() => {});
-        }, 80);
+        }, 120);
       });
     }
 
-    // Listen to group removal
+    // 2. Listen to tab creation to prevent user tabs in the same window from being erroneously grouped into agent groups
+    if (typeof chrome !== 'undefined' && chrome.tabs?.onCreated) {
+      chrome.tabs.onCreated.addListener(async (tab: chrome.tabs.Tab) => {
+        if (!tab || typeof tab.id !== 'number') return;
+        await this.ensureStorageLoaded();
+
+        const createdTabId = tab.id;
+        const tabUrl = tab.url || (tab as any).pendingUrl || '';
+        const isNewTab =
+          isNewTabUrl(tabUrl) ||
+          tab.title === 'New Tab' ||
+          tab.title === '新标签页' ||
+          (!tab.url && !(tab as any).pendingUrl);
+
+        if (this.agentCreationInProgress > 0 && !isNewTab) {
+          this.agentTabIds.add(createdTabId);
+          return;
+        }
+
+        const rawGroupId = (tab as any).groupId;
+        if (typeof rawGroupId === 'number' && rawGroupId > 0) {
+          const isAgentManaged = await this.isAgentGroup(rawGroupId);
+          if (isAgentManaged) {
+            const isAgent = this.agentTabIds.has(createdTabId);
+            if (!isAgent || isNewTab) {
+              console.log(
+                `[TabGroupManager] User opened tab ${createdTabId} in window ${tab.windowId}. Ejecting from agent tab group ${rawGroupId}.`,
+              );
+              try {
+                if (chrome.tabs.ungroup) {
+                  await chrome.tabs.ungroup(createdTabId);
+                  void this.cleanupEmptyOrOrphanGroups();
+                }
+              } catch (err) {
+                console.warn('[TabGroupManager] Failed to ungroup user tab:', err);
+              }
+            }
+          }
+        }
+
+        // Fast follow-up: in case Chrome groups the tab asynchronously right after creation
+        if (!this.agentTabIds.has(createdTabId) || isNewTab) {
+          const checkAndUngroup = async () => {
+            try {
+              const updated = await chrome.tabs.get(createdTabId);
+              if (updated && typeof updated.groupId === 'number' && updated.groupId > 0) {
+                const isManaged = await this.isAgentGroup(updated.groupId);
+                if (isManaged) {
+                  const stillAgent = this.agentTabIds.has(updated.id!);
+                  const isNtp =
+                    isNewTabUrl(updated.url || (updated as any).pendingUrl) ||
+                    updated.title === 'New Tab' ||
+                    updated.title === '新标签页';
+                  if (!stillAgent || isNtp) {
+                    await chrome.tabs.ungroup(updated.id!);
+                    void this.cleanupEmptyOrOrphanGroups();
+                  }
+                }
+              }
+            } catch {}
+          };
+          setTimeout(checkAndUngroup, 50);
+          setTimeout(checkAndUngroup, 150);
+        }
+      });
+    }
+
+    // 3. Listen to group removal
     if (typeof chrome !== 'undefined' && chrome.tabGroups?.onRemoved) {
       chrome.tabGroups.onRemoved.addListener((group) => {
         if (group && typeof group.id === 'number') {
@@ -276,22 +480,47 @@ export class TabGroupManager {
       });
     }
 
-    // Dynamic Title Self-Healing: when page finishes loading, auto-derive meaningful title if not explicitly set
+    // 4. Dynamic Title Self-Healing & User-Tab Ejection Guard
     if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
       chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         await this.ensureStorageLoaded();
-        if (tab?.groupId && tab.groupId !== -1 && this.managedGroupIds.has(tab.groupId)) {
-          if (changeInfo.status === 'complete' || changeInfo.title) {
-            if (!this.explicitGroupTitles.has(tab.groupId)) {
+        const effectiveGroupId = changeInfo?.groupId ?? tab?.groupId;
+        if (typeof effectiveGroupId === 'number' && effectiveGroupId > 0) {
+          const isAgentManaged = await this.isAgentGroup(effectiveGroupId);
+          if (isAgentManaged) {
+            const isAgent = this.agentTabIds.has(tabId);
+            const tabUrl = tab?.url || (tab as any)?.pendingUrl || '';
+            const isNewTab =
+              isNewTabUrl(tabUrl) || tab?.title === 'New Tab' || tab?.title === '新标签页';
+
+            // Guard: If a non-agent user tab ends up in an agent group, eject it immediately
+            if (!isAgent || isNewTab) {
+              console.log(
+                `[TabGroupManager] Non-agent tab ${tabId} found in managed group ${effectiveGroupId}. Ungrouping.`,
+              );
               try {
-                const group = await chrome.tabGroups.get(tab.groupId);
-                if (!group.title || group.title === TabGroupManager.DEFAULT_TITLE) {
-                  const smartTitle = deriveSmartGroupTitle(tab);
-                  if (smartTitle && smartTitle !== TabGroupManager.DEFAULT_TITLE) {
-                    await chrome.tabGroups.update(tab.groupId, { title: smartTitle });
-                  }
+                if (chrome.tabs.ungroup) {
+                  await chrome.tabs.ungroup(tabId);
+                  void this.cleanupEmptyOrOrphanGroups();
                 }
               } catch {}
+              return;
+            }
+
+            if (changeInfo.status === 'complete' || changeInfo.title) {
+              if (!this.explicitGroupTitles.has(effectiveGroupId)) {
+                try {
+                  const group = await chrome.tabGroups.get(effectiveGroupId);
+                  if (!group.title || group.title === TabGroupManager.DEFAULT_TITLE) {
+                    const smartTitle = deriveSmartGroupTitle(tab);
+                    if (smartTitle && smartTitle !== TabGroupManager.DEFAULT_TITLE) {
+                      await chrome.tabGroups.update(effectiveGroupId, { title: smartTitle });
+                      this.explicitGroupTitles.set(effectiveGroupId, smartTitle);
+                      void this.saveToStorage();
+                    }
+                  }
+                } catch {}
+              }
             }
           }
         }
@@ -313,6 +542,7 @@ export class TabGroupManager {
     }
 
     try {
+      this.registerAgentTab(tabId);
       await this.ensureStorageLoaded();
       const tab = await chrome.tabs.get(tabId);
       const targetWindowId = options.windowId ?? tab.windowId;
@@ -339,6 +569,26 @@ export class TabGroupManager {
         }
       }
 
+      // If not found in memory, query chrome.tabGroups for any existing agent group in this window
+      if (targetGroupId === null && typeof chrome.tabGroups.query === 'function') {
+        try {
+          const windowGroups = await chrome.tabGroups.query(
+            typeof targetWindowId === 'number' ? { windowId: targetWindowId } : {},
+          );
+          for (const wg of windowGroups) {
+            if (
+              typeof wg.id === 'number' &&
+              (typeof targetWindowId !== 'number' || wg.windowId === targetWindowId) &&
+              (await this.isAgentGroup(wg.id))
+            ) {
+              targetGroupId = wg.id;
+              this.managedGroupIds.add(wg.id);
+              break;
+            }
+          }
+        } catch {}
+      }
+
       if (targetGroupId !== null) {
         // Add tab to the existing group
         await chrome.tabs.group({
@@ -359,6 +609,8 @@ export class TabGroupManager {
             if (!currentGroup.title || currentGroup.title === TabGroupManager.DEFAULT_TITLE) {
               if (title && title !== TabGroupManager.DEFAULT_TITLE) {
                 updateProps.title = title;
+                this.explicitGroupTitles.set(targetGroupId, title);
+                void this.saveToStorage();
               }
             }
           } catch {}
@@ -380,9 +632,7 @@ export class TabGroupManager {
       });
 
       this.managedGroupIds.add(newGroupId);
-      if (isExplicitTitle) {
-        this.explicitGroupTitles.set(newGroupId, title);
-      }
+      this.explicitGroupTitles.set(newGroupId, title);
       void this.saveToStorage();
 
       await chrome.tabGroups.update(newGroupId, {
@@ -400,18 +650,48 @@ export class TabGroupManager {
 
   /**
    * Actively scans all managed groups and removes any group that has 0 tabs,
-   * completely eliminating orphan tab group clutter.
+   * ungroups accidental user tabs, and purges empty/residue groups.
    */
   public async cleanupEmptyOrOrphanGroups(): Promise<number> {
-    if (typeof chrome === 'undefined' || !chrome.tabGroups) {
+    if (typeof chrome === 'undefined' || !chrome.tabGroups || !chrome.tabs) {
       return 0;
     }
 
     await this.ensureStorageLoaded();
     let removedCount = 0;
-    const groupIds = Array.from(this.managedGroupIds);
 
-    for (const gid of groupIds) {
+    // Prune closed tabs from agentTabIds to strictly eliminate any memory leaks
+    if (typeof chrome.tabs?.query === 'function') {
+      try {
+        const allOpenTabs = await chrome.tabs.query({});
+        const openTabIdSet = new Set(
+          allOpenTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number'),
+        );
+        for (const tid of Array.from(this.agentTabIds)) {
+          if (!openTabIdSet.has(tid)) {
+            this.agentTabIds.delete(tid);
+          }
+        }
+      } catch {}
+    }
+
+    // Collect all candidate group IDs:
+    // 1) All actively tracked managedGroupIds
+    // 2) Any browser tab group matching managed titles or DEFAULT_TITLE
+    const candidateGroupIds = new Set<number>(this.managedGroupIds);
+
+    if (typeof chrome.tabGroups.query === 'function') {
+      try {
+        const allGroups = await chrome.tabGroups.query({});
+        for (const g of allGroups) {
+          if (typeof g.id === 'number') {
+            candidateGroupIds.add(g.id);
+          }
+        }
+      } catch {}
+    }
+
+    for (const gid of candidateGroupIds) {
       try {
         const tabs = await chrome.tabs.query({ groupId: gid });
         if (!tabs || tabs.length === 0) {
@@ -420,8 +700,67 @@ export class TabGroupManager {
           const tg = chrome.tabGroups as any;
           if (typeof tg.remove === 'function') {
             await tg.remove(gid).catch(() => {});
+          } else if (typeof tg.close === 'function') {
+            await tg.close(gid).catch(() => {});
           }
           removedCount++;
+        } else {
+          // If group has tabs, check if it's an agent group
+          const isManaged = await this.isAgentGroup(gid);
+          if (isManaged) {
+            // Eject any user tabs from this agent group
+            const userTabsToEject: number[] = [];
+            const agentTabs: chrome.tabs.Tab[] = [];
+            for (const t of tabs) {
+              if (typeof t.id === 'number') {
+                if (!this.agentTabIds.has(t.id)) {
+                  userTabsToEject.push(t.id);
+                } else {
+                  agentTabs.push(t);
+                }
+              }
+            }
+
+            if (userTabsToEject.length > 0) {
+              try {
+                await chrome.tabs.ungroup(userTabsToEject);
+              } catch {}
+            }
+
+            // If no agent tabs remain, destroy group completely
+            if (agentTabs.length === 0) {
+              this.managedGroupIds.delete(gid);
+              this.explicitGroupTitles.delete(gid);
+              const tg = chrome.tabGroups as any;
+              if (typeof tg?.remove === 'function') {
+                await tg.remove(gid).catch(() => {});
+              } else if (typeof tg?.close === 'function') {
+                await tg.close(gid).catch(() => {});
+              }
+              removedCount++;
+            } else if (
+              agentTabs.length > 0 &&
+              agentTabs.every((t) => isNewTabUrl(t.url || (t as any).pendingUrl))
+            ) {
+              // If the only remaining tabs in this managed group are agent newtab / blank residue tabs:
+              const residueIds = agentTabs.map((t) => t.id!).filter(Boolean);
+              for (const tid of residueIds) {
+                this.agentTabIds.delete(tid);
+              }
+              try {
+                await chrome.tabs.remove(residueIds);
+              } catch {}
+              this.managedGroupIds.delete(gid);
+              this.explicitGroupTitles.delete(gid);
+              const tg = chrome.tabGroups as any;
+              if (typeof tg?.remove === 'function') {
+                await tg.remove(gid).catch(() => {});
+              } else if (typeof tg?.close === 'function') {
+                await tg.close(gid).catch(() => {});
+              }
+              removedCount++;
+            }
+          }
         }
       } catch {
         // Group no longer exists
@@ -439,19 +778,50 @@ export class TabGroupManager {
   }
 
   /**
-   * Closes all tabs in a managed group and removes the group completely.
+   * Closes all agent tabs in a managed group and removes the group completely.
+   * Accidental user tabs inside the group are safely ejected/ungrouped without data loss.
    */
   public async closeManagedGroup(groupId: number): Promise<boolean> {
     if (typeof chrome === 'undefined' || !chrome.tabs) return false;
     try {
       await this.ensureStorageLoaded();
       const tabs = await chrome.tabs.query({ groupId });
-      const tabIds = tabs.map((t) => t.id).filter((id): id is number => typeof id === 'number');
-      if (tabIds.length > 0) {
-        await chrome.tabs.remove(tabIds);
+      const userTabsToEject: number[] = [];
+      const tabsToClose: number[] = [];
+
+      for (const t of tabs) {
+        if (typeof t.id === 'number') {
+          // If a user tab was mistakenly in this group, don't close it, ungroup it!
+          if (!this.agentTabIds.has(t.id)) {
+            userTabsToEject.push(t.id);
+          } else {
+            tabsToClose.push(t.id);
+          }
+        }
+      }
+
+      if (userTabsToEject.length > 0) {
+        try {
+          await chrome.tabs.ungroup(userTabsToEject);
+        } catch {}
+      }
+
+      if (tabsToClose.length > 0) {
+        for (const tid of tabsToClose) {
+          this.agentTabIds.delete(tid);
+        }
+        await chrome.tabs.remove(tabsToClose);
+      }
+
+      const tg = (chrome as any).tabGroups;
+      if (tg && typeof tg.remove === 'function') {
+        await tg.remove(groupId).catch(() => {});
+      } else if (tg && typeof tg.close === 'function') {
+        await tg.close(groupId).catch(() => {});
       }
       this.managedGroupIds.delete(groupId);
       this.explicitGroupTitles.delete(groupId);
+      await this.saveToStorage();
       await this.cleanupEmptyOrOrphanGroups();
       return true;
     } catch (error) {
@@ -465,11 +835,31 @@ export class TabGroupManager {
    */
   public async closeAllManagedGroups(): Promise<number> {
     if (typeof chrome === 'undefined' || !chrome.tabs) return 0;
+    await this.ensureStorageLoaded();
     let count = 0;
-    for (const gid of Array.from(this.managedGroupIds)) {
+    const gids = new Set<number>(this.managedGroupIds);
+
+    // Also sweep for any orphan groups in chrome.tabGroups
+    if (typeof chrome.tabGroups?.query === 'function') {
+      try {
+        const allGroups = await chrome.tabGroups.query({});
+        for (const og of allGroups) {
+          if (typeof og.id === 'number') {
+            const isAgent = await this.isAgentGroup(og.id);
+            if (isAgent) {
+              gids.add(og.id);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    for (const gid of gids) {
       const ok = await this.closeManagedGroup(gid);
       if (ok) count++;
     }
+
+    await this.cleanupEmptyOrOrphanGroups();
     return count;
   }
 
@@ -495,6 +885,8 @@ export class TabGroupManager {
   public resetForTest(): void {
     this.managedGroupIds.clear();
     this.explicitGroupTitles.clear();
+    this.agentTabIds.clear();
+    this.agentCreationInProgress = 0;
     this.storageLoadedPromise = Promise.resolve();
   }
 }

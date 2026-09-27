@@ -6,6 +6,7 @@ import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
 import { executeInPage } from './in-page-engine';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import { setAgentCursorNote } from './agent-cursor';
 
 /**
  * Keys that the content-script simulator understands as a single named key.
@@ -177,13 +178,24 @@ class KeyboardTool extends BaseBrowserToolExecutor {
 
       // Clipboard chords (Ctrl+C / Ctrl+V) require the real system clipboard; synthetic
       // KeyboardEvents cannot trigger browser edit commands, so route them natively.
-      const clipboardChord = /^(?:ctrl|control|meta|cmd)\+([cv])$/i.exec(String(keys).trim());
+      const clipboardChord = /^(?:ctrl|control|meta|cmd)\+([cvxa])$/i.exec(String(keys).trim());
       if (clipboardChord) {
         const kind = clipboardChord[1].toLowerCase();
         try {
+          await setAgentCursorNote(
+            tab.id,
+            kind === 'c' ? 'Copying to clipboard' : 'Pasting clipboard',
+          );
           await this.injectContentScript(tab.id, ['inject-scripts/keyboard-helper.js']);
           const resp = await this.sendMessageToTab(tab.id, {
-            action: kind === 'c' ? 'clipboardCopy' : 'clipboardPaste',
+            action:
+              kind === 'c'
+                ? 'clipboardCopy'
+                : kind === 'x'
+                  ? 'clipboardCut'
+                  : kind === 'a'
+                    ? 'selectAll'
+                    : 'clipboardPaste',
           });
           if (!resp || resp.success !== true) {
             return createErrorResponse(
@@ -218,6 +230,8 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       // page sees trusted input, instead of failing key-combination parsing.
       if (isLiteralText(keys)) {
         try {
+          const typeNote = `Typing "${keys.length > 18 ? keys.slice(0, 15) + '...' : keys}"`;
+          await setAgentCursorNote(tab.id, typeNote);
           await cdpSessionManager.withSession(tab.id, 'keyboard-type', async () => {
             await cdpSessionManager.sendCommand(tab.id!, 'Input.insertText', { text: keys });
           });

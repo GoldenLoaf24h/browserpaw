@@ -51,6 +51,22 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
       canonicalBackendName: 'get_windows_and_tabs',
       prefix: '',
     });
+    expect(normalizeIncomingToolName('chrome_get_windows_and_tabs')).toEqual({
+      canonicalBackendName: 'get_windows_and_tabs',
+      prefix: 'chrome_',
+    });
+    expect(normalizeIncomingToolName('chrome_performance_start_trace')).toEqual({
+      canonicalBackendName: 'performance_start_trace',
+      prefix: 'chrome_',
+    });
+    expect(normalizeIncomingToolName('read_dom')).toEqual({
+      canonicalBackendName: 'chrome_read_dom',
+      prefix: '',
+    });
+    expect(normalizeIncomingToolName('navigate')).toEqual({
+      canonicalBackendName: 'chrome_navigate',
+      prefix: '',
+    });
   });
 
   it('aligns legacy tool references in prompts, hints, and errors to requested target prefix', () => {

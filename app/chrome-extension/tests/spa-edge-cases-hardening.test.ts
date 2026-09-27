@@ -89,7 +89,7 @@ describe('SPA Twitter/X Edge Cases & Parity Hardening', () => {
       expect(renderedSearch).not.toContain('[composer]');
     });
 
-    it('locates role=\"composer\" prioritising rich tweet composer over generic search inputs', () => {
+    it('locates role="composer" prioritising rich tweet composer over generic search inputs', () => {
       const searchBox = document.createElement('input');
       searchBox.setAttribute('type', 'search');
       searchBox.setAttribute('placeholder', 'Search Twitter');
@@ -239,7 +239,13 @@ describe('SPA Twitter/X Edge Cases & Parity Hardening', () => {
             backgroundColor: 'rgba(0, 0, 0, 0)',
           } as any;
         }
-        return { pointerEvents: 'auto', display: 'block', visibility: 'visible', opacity: '1', backgroundColor: '#fff' } as any;
+        return {
+          pointerEvents: 'auto',
+          display: 'block',
+          visibility: 'visible',
+          opacity: '1',
+          backgroundColor: '#fff',
+        } as any;
       });
 
       document.elementFromPoint = vi.fn().mockReturnValue(transparentMask);
@@ -274,7 +280,13 @@ describe('SPA Twitter/X Edge Cases & Parity Hardening', () => {
             backgroundColor: 'transparent',
           } as any;
         }
-        return { pointerEvents: 'auto', display: 'block', visibility: 'visible', opacity: '1', backgroundColor: '#fff' } as any;
+        return {
+          pointerEvents: 'auto',
+          display: 'block',
+          visibility: 'visible',
+          opacity: '1',
+          backgroundColor: '#fff',
+        } as any;
       });
 
       // elementsFromPoint returns mask on top, followed by targetBtn
@@ -318,13 +330,15 @@ describe('SPA Twitter/X Edge Cases & Parity Hardening', () => {
     it('continues queue processing even if a preceding operation throws', async () => {
       const order: string[] = [];
 
-      const p1 = sessionTabAffinity.runSerialized(202, async () => {
-        order.push('op1_started');
-        throw new Error('Failure in op 1');
-      }).catch(() => {
-        order.push('op1_failed');
-        return 'caught';
-      });
+      const p1 = sessionTabAffinity
+        .runSerialized(202, async () => {
+          order.push('op1_started');
+          throw new Error('Failure in op 1');
+        })
+        .catch(() => {
+          order.push('op1_failed');
+          return 'caught';
+        });
 
       const p2 = sessionTabAffinity.runSerialized(202, async () => {
         order.push('op2_succeeded');

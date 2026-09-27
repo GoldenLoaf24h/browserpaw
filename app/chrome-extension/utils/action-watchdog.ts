@@ -1,4 +1,6 @@
 import type { PageSettleResult } from 'chrome-mcp-shared';
+import type { executeInPage as ExecuteInPageFn } from '@/entrypoints/background/tools/browser/in-page-engine';
+import type { cdpSessionManager as CDPSessionManagerInstance } from '@/utils/cdp-session-manager';
 
 export interface WaitForPageSettleOptions {
   timeoutMs?: number;
@@ -204,6 +206,22 @@ export function inPageWaitForDOMSettle(
   });
 }
 
+let cdpSessionManagerCache: typeof CDPSessionManagerInstance | null = null;
+async function getCdpSessionManager(): Promise<typeof CDPSessionManagerInstance> {
+  if (cdpSessionManagerCache) return cdpSessionManagerCache;
+  const mod = await import('@/utils/cdp-session-manager');
+  cdpSessionManagerCache = mod.cdpSessionManager;
+  return cdpSessionManagerCache;
+}
+
+let executeInPageCache: typeof ExecuteInPageFn | null = null;
+async function getExecuteInPage(): Promise<typeof ExecuteInPageFn> {
+  if (executeInPageCache) return executeInPageCache;
+  const mod = await import('@/entrypoints/background/tools/browser/in-page-engine');
+  executeInPageCache = mod.executeInPage;
+  return executeInPageCache;
+}
+
 /**
  * Execute DOM settle watchdog in target tab.
  * Monitors DOM mutations and returns once mutations pause for quietPeriodMs or timeout occurs.
@@ -219,8 +237,9 @@ export async function waitForPageSettle(
   // Retrieve 100% accurate in-flight request status via CDP session manager Network tracking
   let hasActiveNet = options?.hasActiveRequests;
   if (hasActiveNet === undefined) {
+    await new Promise((r) => setTimeout(r, 40));
     try {
-      const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+      const cdpSessionManager = await getCdpSessionManager();
       hasActiveNet = cdpSessionManager.hasInFlightRequests(tabId);
     } catch {
       hasActiveNet = false;
@@ -231,7 +250,7 @@ export async function waitForPageSettle(
   if (hasActiveNet) {
     await waitForNetworkQuiescence(tabId, Math.min(timeoutMs, 1000));
     try {
-      const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+      const cdpSessionManager = await getCdpSessionManager();
       hasActiveNet = cdpSessionManager.hasInFlightRequests(tabId);
     } catch {
       hasActiveNet = false;
@@ -239,7 +258,7 @@ export async function waitForPageSettle(
   }
 
   try {
-    const { executeInPage } = await import('@/entrypoints/background/tools/browser/in-page-engine');
+    const executeInPage = await getExecuteInPage();
     const results = await executeInPage<PageSettleResult>({ tabId }, 'inPageWaitForDOMSettle', [
       timeoutMs,
       quietPeriodMs,
@@ -283,10 +302,11 @@ export async function waitForNetworkQuiescence(
   initialGraceMs = 60,
 ): Promise<boolean> {
   try {
-    const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
-    if (cdpSessionManager.isAttached(tabId)) {
-      await cdpSessionManager.enableNetworkDomain(tabId).catch(() => {});
+    const cdpSessionManager = await getCdpSessionManager();
+    if (!cdpSessionManager.isAttached(tabId)) {
+      return true;
     }
+    await cdpSessionManager.enableNetworkDomain(tabId).catch(() => {});
 
     // Brief initial grace delay allowing asynchronous onClick/mutation handlers
     // to dispatch fetch/XHR network requests to Chromium
@@ -294,8 +314,13 @@ export async function waitForNetworkQuiescence(
       await new Promise((r) => setTimeout(r, initialGraceMs));
     }
 
+    // Fast path: if zero in-flight requests exist after initial grace, return immediately
+    if (!cdpSessionManager.hasInFlightRequests(tabId)) {
+      return true;
+    }
+
     const deadline = Date.now() + Math.max(0, maxWaitMs - initialGraceMs);
-    let consecutiveQuietStart = cdpSessionManager.hasInFlightRequests(tabId) ? 0 : Date.now();
+    let consecutiveQuietStart = 0;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, pollIntervalMs));
@@ -321,7 +346,7 @@ export async function waitForNetworkQuiescence(
  */
 export async function hasActiveNetworkRequests(tabId: number): Promise<boolean> {
   try {
-    const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+    const cdpSessionManager = await getCdpSessionManager();
     return cdpSessionManager.hasInFlightRequests(tabId);
   } catch {
     return false;

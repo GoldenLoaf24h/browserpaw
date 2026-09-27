@@ -151,11 +151,20 @@ for (const dir of STANDALONE_EXT_DIRS) {
   }
   const standaloneBg = join(dir, 'background.js');
   const srcBg = join(EXT_SRC_OUTPUT, 'background.js');
+  const standalonePopup = join(dir, 'popup.html');
+  const srcPopup = join(EXT_SRC_OUTPUT, 'popup.html');
   let synced = false;
-  if (existsSync(standaloneBg) && existsSync(srcBg)) {
+  if (
+    existsSync(standaloneBg) &&
+    existsSync(srcBg) &&
+    existsSync(standalonePopup) &&
+    existsSync(srcPopup)
+  ) {
     const s1 = readFileSync(standaloneBg).length;
     const s2 = readFileSync(srcBg).length;
-    synced = s1 === s2;
+    const p1 = readFileSync(standalonePopup, 'utf8').trim();
+    const p2 = readFileSync(srcPopup, 'utf8').trim();
+    synced = s1 === s2 && p1 === p2;
   }
   if (synced) {
     report(true, `Standalone Directory Synced: ${dir}`, `Files matched perfectly.`);
@@ -197,6 +206,40 @@ if (platform() === 'win32') {
       }
     }
   }
+}
+
+// 7. Jev Decision Model & Local Service (Mapika/decider-2b)
+const JEV_MODEL_DIR = join(homedir(), '.browserpaw', 'models', 'decider-2b');
+const JEV_WEIGHTS_PATH = join(JEV_MODEL_DIR, 'model.safetensors');
+const JEV_CONFIG_PATH = join(JEV_MODEL_DIR, 'config.json');
+
+const modelDownloaded = existsSync(JEV_WEIGHTS_PATH) && existsSync(JEV_CONFIG_PATH);
+if (modelDownloaded) {
+  try {
+    const fs = await import('node:fs');
+    const sizeMB = Math.round(fs.statSync(JEV_WEIGHTS_PATH).size / (1024 * 1024));
+    report(true, `Jev Decision Model Found: ${JEV_MODEL_DIR}`, `Weights: model.safetensors (${sizeMB} MB)`);
+  } catch {
+    report(true, `Jev Decision Model Found: ${JEV_MODEL_DIR}`);
+  }
+} else {
+  report(
+    true,
+    `Jev Decision Model (Mapika/decider-2b): Not Downloaded Yet`,
+    `Optional: Open extension popup, click "Local" to download (~3.8GB) for offline inference.`,
+  );
+}
+
+// Check local port 8009 service
+try {
+  const localRes = await fetch('http://127.0.0.1:8009/ping', { signal: AbortSignal.timeout(800) });
+  if (localRes.ok || localRes.status === 404) {
+    report(true, `Local Jev Decider Service Listening on Port 8009`, `Endpoint: http://127.0.0.1:8009/v1/systemone`);
+  } else {
+    report(true, `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`);
+  }
+} catch {
+  report(true, `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`);
 }
 
 console.log('\n----------------------------------------------------------------');

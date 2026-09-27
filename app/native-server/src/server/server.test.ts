@@ -527,4 +527,67 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       }
     });
   });
+
+  describe('Jev Model Management & 3-Tier Routing Endpoints', () => {
+    test('GET /jev/model-status returns 200 without requiring auth token', async () => {
+      const res = await supertest(Server.getInstance().server).get('/jev/model-status');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('downloaded');
+      expect(res.body).toHaveProperty('activeMode');
+    });
+
+    test('GET /jev/download-progress returns 200 and progress object', async () => {
+      const res = await supertest(Server.getInstance().server).get('/jev/download-progress');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('status');
+      expect(res.body).toHaveProperty('percent');
+    });
+
+    test('POST /jev/set-mode updates active mode in memory', async () => {
+      const res = await supertest(Server.getInstance().server)
+        .post('/jev/set-mode')
+        .send({ mode: 'local' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, mode: 'local' });
+
+      // Reject invalid mode
+      const invalidRes = await supertest(Server.getInstance().server)
+        .post('/jev/set-mode')
+        .send({ mode: 'invalid' });
+      expect(invalidRes.status).toBe(400);
+
+      // Restore to remote
+      await supertest(Server.getInstance().server).post('/jev/set-mode').send({ mode: 'remote' });
+    });
+
+    test('GET /jev/models and POST /jev/select-model work without auth token', async () => {
+      const getRes = await supertest(Server.getInstance().server).get('/jev/models');
+      expect(getRes.status).toBe(200);
+      expect(getRes.body).toHaveProperty('models');
+      expect(getRes.body).toHaveProperty('activeModel');
+
+      const selectRes = await supertest(Server.getInstance().server)
+        .post('/jev/select-model')
+        .send({ model: 'decider-2b' });
+      expect(selectRes.status).toBe(200);
+      expect(selectRes.body.success).toBe(true);
+    });
+
+    test('POST & GET /jev/remote-config updates and retrieves remote parameters with jev-latest sanitization', async () => {
+      const postRes = await supertest(Server.getInstance().server).post('/jev/remote-config').send({
+        baseUrl: 'https://api.typesafe.ai/v1',
+        apiKey: 'sk-test-live-key',
+        modelId: 'decider-2b',
+      });
+      expect(postRes.status).toBe(200);
+      expect(postRes.body.success).toBe(true);
+      expect(postRes.body.remoteConfig.modelId).toBe('jev-latest');
+
+      const getRes = await supertest(Server.getInstance().server).get('/jev/remote-config');
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.baseUrl).toBe('https://api.typesafe.ai/v1');
+      expect(getRes.body.apiKey).toBe('sk-test-live-key');
+      expect(getRes.body.modelId).toBe('jev-latest');
+    });
+  });
 });

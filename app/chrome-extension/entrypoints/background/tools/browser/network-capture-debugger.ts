@@ -100,6 +100,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   private requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests (after filtering)
   private static MAX_REQUESTS_PER_CAPTURE = 100; // Max requests to store to prevent memory issues
   public static instance: NetworkDebuggerStartTool | null = null;
+  public static listenersInitialized = false;
 
   constructor() {
     super();
@@ -108,10 +109,13 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     }
     NetworkDebuggerStartTool.instance = this;
 
-    chrome.debugger.onEvent.addListener(this.handleDebuggerEvent.bind(this));
-    chrome.debugger.onDetach.addListener(this.handleDebuggerDetach.bind(this));
-    chrome.tabs.onRemoved.addListener(this.handleTabRemoved.bind(this));
-    chrome.tabs.onCreated.addListener(this.handleTabCreated.bind(this));
+    if (!NetworkDebuggerStartTool.listenersInitialized) {
+      NetworkDebuggerStartTool.listenersInitialized = true;
+      chrome.debugger.onEvent.addListener(this.handleDebuggerEvent.bind(this));
+      chrome.debugger.onDetach.addListener(this.handleDebuggerDetach.bind(this));
+      chrome.tabs.onRemoved.addListener(this.handleTabRemoved.bind(this));
+      chrome.tabs.onCreated.addListener(this.handleTabCreated.bind(this));
+    }
   }
 
   private handleTabRemoved(tabId: number) {

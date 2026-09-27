@@ -20,7 +20,7 @@ const METADATA = {
       { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'Chinese translation of client configuration guide' },
       { name: 'INSTALL.md', desc: 'Installation instructions for the native messaging host and extension' },
       { name: 'PRIVACY.md', desc: 'Privacy notice detailing data locality and local-only processing guarantees' },
-      { name: 'RELEASE_NOTES_v3.1.0.md', desc: 'Release notes detailing v3.1.0 features, fixes, and migration notes' },
+      { name: 'RELEASE_NOTES_v3.2.0.md', desc: 'Release notes detailing v3.2.0 features, fixes, and migration notes' },
       { name: 'commitlint.config.cjs', desc: 'Conventional commits enforcement rules for git commit messages' },
       { name: 'eslint.config.js', desc: 'Global ESLint 9 flat configuration across TypeScript and Vue files' },
       { name: 'marketplace.json', desc: 'MCP and plugin catalog registry metadata for plugin discovery' },
@@ -681,16 +681,16 @@ const METADATA = {
 
   'docs': {
     title: 'docs',
-    purpose: 'Documentation vault containing technical architecture specifications, tool references, navigation maps, troubleshooting playbooks, and architectural reviews.',
+    purpose: 'Documentation vault containing technical architecture specifications, tool references, navigation maps, troubleshooting playbooks, and architectural guides.',
     keyFiles: [
+      { name: 'README.md', desc: 'Central documentation hub, reading paths, and documentation index' },
       { name: 'MAP.md', desc: 'Master navigation hub for repository topology, reading paths, and tool radars' },
       { name: 'ARCHITECTURE.md', desc: 'Comprehensive 3-tier architecture, IPC protocols, and design decisions' },
-      { name: 'TOOLS.md', desc: 'Auto-generated reference for all 49 canonical tools and arguments' },
+      { name: 'TOOLS.md', desc: 'Auto-generated reference for all 50 canonical tools and arguments' },
       { name: 'TROUBLESHOOTING.md', desc: 'Diagnostic checklists for connection issues, token mismatch, and CDP' },
       { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Chinese translation of troubleshooting playbook' },
       { name: 'CONTRIBUTING.md', desc: 'Guidelines for contributors covering workflows and PR protocols' },
-      { name: 'mcp-cli-config.md', desc: 'MCP configuration snippets for various CLI environments' },
-      { name: 'review-notes-boost.md', desc: 'Notes on performance and stability optimization phases' }
+      { name: 'mcp-cli-config.md', desc: 'MCP configuration snippets for various CLI environments' }
     ],
     instructions: [
       'Do not edit docs/TOOLS.md manually; regenerate it using `node scripts/gen-tools-doc.mjs`.',
@@ -744,7 +744,74 @@ const METADATA = {
     externalDeps: []
   },
 
-  'docs/review-2026-09': {
+  'docs/archive': {
+    title: 'archive',
+    purpose: 'Historical archive repository holding past release notes, refactoring handoff memos, audit reviews, and testing logs.',
+    keyFiles: [],
+    instructions: ['Read-only historical reference files.'],
+    testing: 'Documentation review.',
+    patterns: 'Archived documentation.',
+    internalDeps: [],
+    externalDeps: []
+  },
+
+  'docs/archive/releases': {
+    title: 'archive-releases',
+    purpose: 'Historical release notes for earlier major and minor versions (e.g. v3.1.0).',
+    keyFiles: [
+      { name: 'RELEASE_NOTES_v3.1.0.md', desc: 'Release notes for version 3.1.0' }
+    ],
+    instructions: ['Read-only historical release notes.'],
+    testing: 'Documentation review.',
+    patterns: 'Release records.',
+    internalDeps: [],
+    externalDeps: []
+  },
+
+  'docs/archive/handoffs': {
+    title: 'archive-handoffs',
+    purpose: 'Historical engineering handoff documents and phase transition notes across refactor phases.',
+    keyFiles: [
+      { name: 'HANDOFF.md', desc: 'Historical engineering handoff summary' },
+      { name: 'HANDOFF.zh-CN.md', desc: 'Chinese translation of historical handoff summary' },
+      { name: 'HANDOFF-refactor-phase.md', desc: 'Refactor phase handoff report' },
+      { name: 'HANDOFF-refactor-phase.zh-CN.md', desc: 'Chinese translation of refactor phase handoff report' }
+    ],
+    instructions: ['Read-only historical handoffs.'],
+    testing: 'Documentation review.',
+    patterns: 'Handoff records.',
+    internalDeps: [],
+    externalDeps: []
+  },
+
+  'docs/archive/testing': {
+    title: 'archive-testing',
+    purpose: 'Historical test session notes, manual test playbooks, and verification logs.',
+    keyFiles: [
+      { name: 'TESTING-NOTES.md', desc: 'Historical testing notes and execution logs' },
+      { name: 'TESTING-NOTES.zh-CN.md', desc: 'Chinese translation of historical testing notes' }
+    ],
+    instructions: ['Read-only historical test records.'],
+    testing: 'Documentation review.',
+    patterns: 'Test logs.',
+    internalDeps: [],
+    externalDeps: []
+  },
+
+  'docs/archive/reviews': {
+    title: 'archive-reviews',
+    purpose: 'Historical architecture reviews, security audits, and boost optimization notes.',
+    keyFiles: [
+      { name: 'review-notes-boost.md', desc: 'Notes on performance and stability optimization phases' }
+    ],
+    instructions: ['Read-only historical reviews.'],
+    testing: 'Documentation review.',
+    patterns: 'Audit reports.',
+    internalDeps: [],
+    externalDeps: []
+  },
+
+  'docs/archive/reviews/review-2026-09': {
     title: 'review-2026-09',
     purpose: 'Architecture review and dependency graph documentation from the September 2026 audit.',
     keyFiles: [
@@ -758,7 +825,7 @@ const METADATA = {
     externalDeps: []
   },
 
-  'docs/review-2026-09/by-module': {
+  'docs/archive/reviews/review-2026-09/by-module': {
     title: 'by-module',
     purpose: 'Module-by-module audit reports covering extension tools, JEV engine, Native MCP bridge, scripts, and shared utils.',
     keyFiles: [
@@ -776,7 +843,7 @@ const METADATA = {
     externalDeps: []
   },
 
-  'docs/review-skill-2026-09': {
+  'docs/archive/reviews/review-skill-2026-09': {
     title: 'review-skill-2026-09',
     purpose: 'Skill audit, tool contract verification, and core capability assessments from September 2026.',
     keyFiles: [

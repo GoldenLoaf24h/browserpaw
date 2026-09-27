@@ -3,6 +3,11 @@
  * Binds client MCP sessions to dedicated Chrome tabs to prevent concurrent agents
  * from hijacking each other's active tabs when tabId is omitted.
  */
+import {
+  tabGroupManager,
+  isNewTabUrl,
+} from '../entrypoints/background/tools/browser/tab-group-manager';
+
 const STORAGE_KEY = 'session_tab_affinity_map';
 
 export interface TabHandoverInfo {
@@ -91,6 +96,14 @@ export class SessionTabAffinityManager {
         if (chrome.tabs.onCreated?.addListener) {
           chrome.tabs.onCreated.addListener((tab: chrome.tabs.Tab) => {
             if (typeof tab.id === 'number') {
+              const url = tab.url || (tab as any).pendingUrl;
+              const isNewTab =
+                isNewTabUrl(url) || tab.title === 'New Tab' || tab.title === '新标签页';
+              // Blank or user-opened new tabs must NEVER be registered in lineage or hijack affinity
+              if (isNewTab) {
+                return;
+              }
+
               const parentId = tab.openerTabId;
               if (typeof parentId === 'number') {
                 this.tabLineage.set(tab.id, {
@@ -116,24 +129,25 @@ export class SessionTabAffinityManager {
 
         // 3. Tab activation listener: auto-handover affinity to newly active child tabs
         if (chrome.tabs.onActivated?.addListener) {
-          chrome.tabs.onActivated.addListener(
-            (activeInfo: { tabId: number; windowId: number }) => {
-              const tabId = activeInfo.tabId;
-              const lineage = this.tabLineage.get(tabId);
-              if (lineage) {
-                lineage.active = true;
-                // If activated within 30 seconds of derivation, handover affinity
-                if (Date.now() - lineage.createdAt < 30_000) {
-                  this.handleChildTabActivated(
-                    tabId,
-                    lineage.parentTabId,
-                    lineage.url,
-                    lineage.title,
-                  );
-                }
+          chrome.tabs.onActivated.addListener((activeInfo: { tabId: number; windowId: number }) => {
+            const tabId = activeInfo.tabId;
+            const lineage = this.tabLineage.get(tabId);
+            if (lineage) {
+              lineage.active = true;
+              // If activated within 30 seconds of derivation, handover affinity
+              if (Date.now() - lineage.createdAt < 30_000) {
+                this.handleChildTabActivated(
+                  tabId,
+                  lineage.parentTabId,
+                  lineage.url,
+                  lineage.title,
+                );
               }
-              if (typeof chrome.tabs.get === 'function') {
-                chrome.tabs.get(tabId).then((tab) => {
+            }
+            if (typeof chrome.tabs.get === 'function') {
+              chrome.tabs
+                .get(tabId)
+                .then((tab) => {
                   if (tab && tab.id) {
                     for (const tracker of this.activeHandoverTrackers) {
                       try {
@@ -141,10 +155,10 @@ export class SessionTabAffinityManager {
                       } catch {}
                     }
                   }
-                }).catch(() => {});
-              }
-            },
-          );
+                })
+                .catch(() => {});
+            }
+          });
         }
 
         // 4. Tab update listener: keep lineage url & title updated in real time
@@ -175,6 +189,9 @@ export class SessionTabAffinityManager {
     title?: string,
   ): void {
     if (childTabId === parentTabId) return;
+    if (isNewTabUrl(url) || title === 'New Tab' || title === '新标签页') return; // Never hand over affinity to blank/new tab
+
+    const parentHadAffinity = Array.from(this.affinityMap.values()).includes(parentTabId);
     let modified = false;
     for (const [sessionId, boundTabId] of this.affinityMap.entries()) {
       if (boundTabId === parentTabId) {
@@ -189,14 +206,24 @@ export class SessionTabAffinityManager {
       void this.saveToStorage();
     }
 
-    // Auto-group child tab into parent's tab group if parent had a group
+    // Auto-group child tab into parent's tab group when parent belongs to an agent group
     if (typeof chrome !== 'undefined' && chrome.tabs?.get && chrome.tabs?.group) {
       try {
-        chrome.tabs.get(parentTabId).then((pTab) => {
-          if (pTab && typeof pTab.groupId === 'number' && pTab.groupId > 0) {
-            chrome.tabs.group({ tabIds: [childTabId], groupId: pTab.groupId }).catch(() => {});
-          }
-        }).catch(() => {});
+        chrome.tabs
+          .get(parentTabId)
+          .then(async (pTab) => {
+            if (pTab && typeof pTab.groupId === 'number' && pTab.groupId > 0) {
+              const isAgent =
+                parentHadAffinity ||
+                tabGroupManager.isAgentTab(parentTabId) ||
+                (await tabGroupManager.isAgentGroup(pTab.groupId));
+              if (isAgent && !isNewTabUrl(url) && title !== 'New Tab' && title !== '新标签页') {
+                tabGroupManager.registerAgentTab(childTabId);
+                chrome.tabs.group({ tabIds: [childTabId], groupId: pTab.groupId }).catch(() => {});
+              }
+            }
+          })
+          .catch(() => {});
       } catch {}
     }
   }
@@ -223,28 +250,40 @@ export class SessionTabAffinityManager {
     try {
       if (typeof chrome !== 'undefined' && chrome.tabs) {
         if (typeof targetWindowId !== 'number' && typeof chrome.tabs.get === 'function') {
-          chrome.tabs.get(parentTabId).then((p) => {
-            if (p && typeof p.windowId === 'number') targetWindowId = p.windowId;
-          }).catch(() => {});
+          chrome.tabs
+            .get(parentTabId)
+            .then((p) => {
+              if (p && typeof p.windowId === 'number') targetWindowId = p.windowId;
+            })
+            .catch(() => {});
         }
         if (typeof chrome.tabs.query === 'function') {
           const queryFilter: chrome.tabs.QueryInfo = {};
           if (typeof options?.windowId === 'number') {
             queryFilter.windowId = options.windowId;
           }
-          initialQueryPromise = chrome.tabs.query(queryFilter).then((tabs) => {
-            for (const t of tabs) {
-              if (typeof t.id === 'number' && !newlySeenTabIds.has(t.id)) {
-                knownExistingTabIds.add(t.id);
+          initialQueryPromise = chrome.tabs
+            .query(queryFilter)
+            .then((tabs) => {
+              for (const t of tabs) {
+                if (typeof t.id === 'number' && !newlySeenTabIds.has(t.id)) {
+                  knownExistingTabIds.add(t.id);
+                }
               }
-            }
-          }).catch(() => {});
+            })
+            .catch(() => {});
         }
       }
     } catch {}
 
     const listener = (tab: chrome.tabs.Tab, activated: boolean) => {
       if (handoverResolved || !tab || typeof tab.id !== 'number' || tab.id === parentTabId) return;
+      if (
+        isNewTabUrl(tab.url || (tab as any).pendingUrl) ||
+        tab.title === 'New Tab' ||
+        tab.title === '新标签页'
+      )
+        return;
 
       // Window matching guard
       if (
@@ -260,9 +299,7 @@ export class SessionTabAffinityManager {
 
       const isDirectOpener = tab.openerTabId === parentTabId;
       const isNewTabInWindow =
-        knownExistingTabIds.size > 0
-          ? !knownExistingTabIds.has(tab.id)
-          : true;
+        knownExistingTabIds.size > 0 ? !knownExistingTabIds.has(tab.id) : true;
 
       if (isDirectOpener || isNewTabInWindow) {
         // Record lineage
@@ -287,9 +324,12 @@ export class SessionTabAffinityManager {
     };
     const onActivated = (activeInfo: { tabId: number; windowId?: number }) => {
       if (typeof chrome !== 'undefined' && typeof chrome.tabs?.get === 'function') {
-        chrome.tabs.get(activeInfo.tabId).then((tab) => {
-          if (tab && typeof tab.id === 'number') listener(tab, true);
-        }).catch(() => {});
+        chrome.tabs
+          .get(activeInfo.tabId)
+          .then((tab) => {
+            if (tab && typeof tab.id === 'number') listener(tab, true);
+          })
+          .catch(() => {});
       }
     };
 
@@ -331,6 +371,9 @@ export class SessionTabAffinityManager {
                 active &&
                 typeof active.id === 'number' &&
                 active.id !== parentTabId &&
+                !isNewTabUrl(active.url || (active as any).pendingUrl) &&
+                active.title !== 'New Tab' &&
+                active.title !== '新标签页' &&
                 (active.openerTabId === parentTabId ||
                   (!knownExistingTabIds.has(active.id) && knownExistingTabIds.size > 0) ||
                   newlySeenTabIds.has(active.id))
@@ -375,7 +418,12 @@ export class SessionTabAffinityManager {
                   chrome.tabs.get(childId),
                   new Promise<null>((r) => setTimeout(() => r(null), 150)),
                 ]);
-                if (freshTab && freshTab.url && freshTab.url !== 'about:blank' && !freshTab.url.startsWith('chrome://newtab')) {
+                if (
+                  freshTab &&
+                  freshTab.url &&
+                  freshTab.url !== 'about:blank' &&
+                  !freshTab.url.startsWith('chrome://newtab')
+                ) {
                   finalUrl = freshTab.url;
                   finalTitle = freshTab.title;
                   break;
@@ -525,4 +573,3 @@ export function startHandoverTracking(
 ): TabHandoverTracker {
   return sessionTabAffinity.startHandoverTracking(parentTabId, sessionId, options);
 }
-

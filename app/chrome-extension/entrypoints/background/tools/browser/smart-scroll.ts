@@ -8,6 +8,7 @@ import { executeInPage } from './in-page-engine';
 import type { SmartScrollTargetInfo } from './dom-indexer';
 import { parseUnifiedCoordinate, type PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
+import { animateAgentCursor } from './agent-cursor';
 
 export interface SmartScrollParams {
   tabId?: number;
@@ -22,6 +23,8 @@ export interface SmartScrollParams {
   smooth?: boolean;
   waitForSettle?: boolean;
   settleTimeoutMs?: number;
+  note?: string;
+  actionNote?: string;
 }
 
 // Background/occluded tabs never ack CDP wheel dispatches; remember the failure
@@ -144,19 +147,73 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
           isBackground = Boolean(fullTab && !fullTab.active);
         } catch {}
 
+        const scrollLabel =
+          args.note ||
+          args.actionNote ||
+          (direction === 'down'
+            ? 'Scrolling down timeline'
+            : direction === 'up'
+              ? 'Scrolling back up'
+              : direction === 'right'
+                ? 'Scrolling right'
+                : 'Scrolling left');
+
+        // Animate virtual agent cursor smoothly to target container before physical scrolling
+        if (!isBackground) {
+          try {
+            await animateAgentCursor(tabId, target.x, target.y, {
+              waitForArrival: true,
+              timeoutMs: 350,
+              actionNote: scrollLabel,
+            });
+          } catch {}
+        }
+
         // 3. Attempt physical CDP mouseWheel scroll
         let cdpSuccess = false;
         const skipUntil = smartScrollWheelSkipUntil.get(tabId) || 0;
         if (!isBackground && skipUntil < Date.now()) {
           try {
             await cdpSessionManager.withSession(tabId, 'smart_scroll', async () => {
-              await raceCdp(tabId, 'Input.dispatchMouseEvent', {
-                type: 'mouseWheel',
-                x: target.x,
-                y: target.y,
-                deltaX,
-                deltaY,
-              });
+              if (args.smooth !== false) {
+                // Progressive multi-step wheel easing matching macOS momentum curve (10-14 steps over ~180-260ms)
+                const STEPS = Math.abs(deltaY || deltaX) > 400 ? 14 : 10;
+                const stepDelayMs = 18;
+                let accumulatedX = 0;
+                let accumulatedY = 0;
+
+                for (let i = 1; i <= STEPS; i++) {
+                  // Sinusoidal ease-in-out curve
+                  const progress = 0.5 * (1 - Math.cos((Math.PI * i) / STEPS));
+                  const targetX = Math.round(deltaX * progress);
+                  const targetY = Math.round(deltaY * progress);
+                  const stepX = targetX - accumulatedX;
+                  const stepY = targetY - accumulatedY;
+                  accumulatedX += stepX;
+                  accumulatedY += stepY;
+
+                  if (stepX !== 0 || stepY !== 0) {
+                    await raceCdp(tabId, 'Input.dispatchMouseEvent', {
+                      type: 'mouseWheel',
+                      x: target.x,
+                      y: target.y,
+                      deltaX: stepX,
+                      deltaY: stepY,
+                    });
+                  }
+                  if (i < STEPS) {
+                    await new Promise((resolve) => setTimeout(resolve, stepDelayMs));
+                  }
+                }
+              } else {
+                await raceCdp(tabId, 'Input.dispatchMouseEvent', {
+                  type: 'mouseWheel',
+                  x: target.x,
+                  y: target.y,
+                  deltaX,
+                  deltaY,
+                });
+              }
             });
             cdpSuccess = true;
             smartScrollWheelSkipUntil.delete(tabId);

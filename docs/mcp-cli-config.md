@@ -75,7 +75,7 @@ File: `~/.claude/claude_desktop_config.json`
 
 ### 3.2 Codex CLI
 
-File: `~/.codex/config.json`
+File: `~/.codex/config.toml`
 
 ```json
 {
@@ -141,7 +141,7 @@ To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
 | :------------------- | :--------- | :------------- | :----------------------------------------------------------------- |
 | **`core`** (default) | 14         | ~5.8k tokens   | Daily semantic navigation, 1-based clicks, form fills, screenshots |
 | **`crawl`**          | 12         | ~4.8k tokens   | High-throughput content extraction, markdown, links                |
-| **`full`**           | 48         | ~16.5k tokens  | Full low-level CDP access, diagnostics, tab groups, and storage    |
+| **`full`**           | 50         | ~16.5k tokens  | Full low-level CDP access, diagnostics, tab groups, and storage    |
 
 ### Dynamic Tool Activation Without Restart
 

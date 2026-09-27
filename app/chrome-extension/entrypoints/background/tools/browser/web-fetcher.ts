@@ -79,8 +79,11 @@ class WebFetcherTool extends BaseBrowserToolExecutor {
             const newTabId = tab.id;
             console.log('Waiting for page to load...');
             await new Promise<void>((resolve) => {
-              let timer: any;
-              const updatedListener = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+              let timer: any = undefined;
+              const updatedListener = (
+                updatedTabId: number,
+                changeInfo: chrome.tabs.TabChangeInfo,
+              ) => {
                 if (updatedTabId === newTabId && changeInfo.status === 'complete') {
                   cleanup();
                   resolve();

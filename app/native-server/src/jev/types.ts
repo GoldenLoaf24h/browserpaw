@@ -60,7 +60,14 @@ export interface PausedBeforeAction {
 }
 
 export type FallbackReason =
-  'no_api_key' | 'invalid_key' | 'quota_exhausted' | 'rate_limited' | 'network_error' | null;
+  | 'no_api_key'
+  | 'invalid_key'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'network_error'
+  | 'jev_disabled'
+  | 'local_service_offline'
+  | null;
 
 export interface ActTowardGoalParams {
   goal: string;
@@ -72,6 +79,8 @@ export interface ActTowardGoalParams {
   pauseBeforeKeywords?: string[];
   sessionId?: string;
   sessionContext?: string;
+  pressEnter?: boolean;
+  mode?: 'off' | 'local' | 'remote';
   _meta?: {
     progressToken?: string | number;
     [key: string]: any;

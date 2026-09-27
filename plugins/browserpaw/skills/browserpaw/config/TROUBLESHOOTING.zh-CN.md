@@ -82,16 +82,16 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 
 ---
 
-### 4. 交互报错 `ACTION REQUIRED: Please call 'browserpaw_read_dom' to refresh`
+### 4. 交互报错 `ACTION REQUIRED: Please call 'chrome_read_dom' to refresh`
 
 - **故障现象**：
-  执行 `browserpaw_interact_index` 或 `browserpaw_fill_index` 时返回：
-  `ACTION REQUIRED: Element reference is stale. Please call 'browserpaw_read_dom' to refresh the index tree.`
+  执行 `chrome_interact_index` 或 `chrome_fill_index` 时返回：
+  `ACTION REQUIRED: Element reference is stale. Please call 'chrome_read_dom' to refresh the index tree.`
 - **根本原因**：
   目标页面发生了 SPA 单页路由跳转、动态加载或局部 DOM 树重渲染，导致上一轮提取的数字索引（`ref`）在当前 DOM 树中已失效。
 - **规范解决行为**：
   **严禁盲目重试！**
-  Agent 必须立即调用一次 `browserpaw_read_dom`，获取最新 1-based 索引树，基于新索引继续下发动作。
+  Agent 必须立即调用一次 `chrome_read_dom`，获取最新 1-based 索引树，基于新索引继续下发动作。
 
 ---
 
@@ -121,14 +121,14 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
     }
   }
   ```
-  Agent 只需调用 `browserpaw_handle_dialog({ action: 'accept' })` 即可平滑解除挂起。
+  Agent 只需调用 `chrome_handle_dialog({ action: 'accept' })` 即可平滑解除挂起。
 
 ---
 
-### 7. 调用 `browserpaw_close_tabs` 报需显式确认 (`confirm: true`)
+### 7. 调用 `chrome_close_tabs` 报需显式确认 (`confirm: true`)
 
 - **故障现象**：
-  Agent 调用 `browserpaw_close_tabs({})` 报错：`No tabIds or url specified. To close the current active tab, pass confirm: true or specify tabIds explicitly...`。
+  Agent 调用 `chrome_close_tabs({})` 报错：`No tabIds or url specified. To close the current active tab, pass confirm: true or specify tabIds explicitly...`。
 - **根本原因与防误关保护**：
   为防止 AI Agent 在未绑定特定标签页或参数缺省时意外关闭人类用户正在查看的前台活跃工作标签页，系统强制开启活跃 Tab 确认保护。
 - **规范解决行为**：
@@ -166,13 +166,13 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 - **操作方法**：
   直接调用：
   ```json
-  browserpaw_tool_docs({ "category": "manage", "activateForSession": true })
+  chrome_tool_docs({ "category": "manage", "activateForSession": true })
   ```
   支持类别：`navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, `crawl`。Stdio 与 HTTP/SSE 均原生支持在后续调用中立即使用新开放的工具。
 
 ---
 
-### 11. `browserpaw_javascript` 即席表达式执行
+### 11. `chrome_javascript` 即席表达式执行
 
 - **使用技巧**：
   执行 JavaScript 时，Agent 无需手动编写 `(function(){ return ... })()`。无论是单表达式如 `document.title`、`window.location.href`，还是包含注释的单个求值表达式，执行器均会自动探测并包装 `return (...)`。对于多行复合逻辑，保持标准 `return` 关键字即可。

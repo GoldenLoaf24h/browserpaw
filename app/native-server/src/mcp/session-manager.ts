@@ -141,6 +141,17 @@ export class McpSessionManager {
   public getAllSessions(): SessionTransport[] {
     return Array.from(this.sessions.values());
   }
+
+  /**
+   * Broadcast tool list changed event to all connected MCP client sessions.
+   */
+  public broadcastToolListChanged(): void {
+    for (const session of this.sessions.values()) {
+      if (session.server && typeof (session.server as any).sendToolListChanged === 'function') {
+        (session.server as any).sendToolListChanged().catch(() => {});
+      }
+    }
+  }
 }
 
 export const mcpSessionManager = new McpSessionManager();

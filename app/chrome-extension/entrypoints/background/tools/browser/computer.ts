@@ -11,10 +11,14 @@ import { screenshotContextManager, scaleCoordinates } from '@/utils/screenshot-c
 import { screenshotOriginViolation, dwell } from '@/utils/screenshot-guard';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
-import { compressImage, smartCompressForTransport, overlayCoordinateGrid } from '@/utils/image-utils';
+import {
+  compressImage,
+  smartCompressForTransport,
+  overlayCoordinateGrid,
+} from '@/utils/image-utils';
 import { parseUnifiedCoordinate, type PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
-import { animateAgentCursor } from './agent-cursor';
+import { animateAgentCursor, animateAgentCursorClick, setAgentCursorNote } from './agent-cursor';
 import { executeInPage } from './in-page-engine';
 
 type MouseButton = 'left' | 'right' | 'middle';
@@ -429,6 +433,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
           await animateAgentCursor(tabId, coord.x, coord.y, {
             waitForArrival: true,
             timeoutMs: 350,
+            actionNote: 'Hovering',
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
             // Move pointer to target. We can dispatch a single mouseMoved; browsers will generate mouseover/mouseenter as needed.
@@ -520,13 +525,23 @@ class ComputerTool extends BaseBrowserToolExecutor {
               await executeInPage({ tabId }, 'inPageSnapCoordinate', [coord.x, coord.y, 24])
             )?.[0]?.result;
             if (snap?.snapped) {
-              autoSnapResult = { snapped: true, targetTag: snap.targetTag, distance: snap.distance };
+              autoSnapResult = {
+                snapped: true,
+                targetTag: snap.targetTag,
+                distance: snap.distance,
+              };
               coord = { x: snap.x, y: snap.y };
             }
           } catch {}
         }
         // Direct native CDP mouse event dispatch for coordinate clicks (isTrusted: true)
         try {
+          const clickNote = params.action === 'right_click' ? 'Right click' : 'Click';
+          await animateAgentCursor(tabId, coord.x, coord.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: clickNote,
+          });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
             const button: MouseButton = params.action === 'right_click' ? 'right' : 'left';
             const clickCount = 1;
@@ -538,6 +553,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               buttons: 0,
               modifiers: modifiersMask,
             });
+            await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
             for (let i = 1; i <= clickCount; i++) {
               await CDPHelper.dispatchMouseEvent(tabId, {
                 type: 'mousePressed',
@@ -634,14 +650,19 @@ class ComputerTool extends BaseBrowserToolExecutor {
         }
         if (!coord) return createErrorResponse('Failed to resolve coordinates from ref/selector');
 
-        let doubleSnapResult: { snapped: boolean; targetTag?: string; distance?: number } | undefined;
+        let doubleSnapResult:
+          { snapped: boolean; targetTag?: string; distance?: number } | undefined;
         if (params.coordinates && params.autoSnap !== false && coord) {
           try {
             const snap = (
               await executeInPage({ tabId }, 'inPageSnapCoordinate', [coord.x, coord.y, 24])
             )?.[0]?.result;
             if (snap?.snapped) {
-              doubleSnapResult = { snapped: true, targetTag: snap.targetTag, distance: snap.distance };
+              doubleSnapResult = {
+                snapped: true,
+                targetTag: snap.targetTag,
+                distance: snap.distance,
+              };
               coord = { x: snap.x, y: snap.y };
             }
           } catch {}
@@ -654,6 +675,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
           if (stale) return createErrorResponse(stale);
         }
         try {
+          const clickNote = params.action === 'double_click' ? 'Double click' : 'Triple click';
+          await animateAgentCursor(tabId, coord.x, coord.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: clickNote,
+          });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
             const button: MouseButton = 'left';
             const clickCount = params.action === 'double_click' ? 2 : 3;
@@ -666,6 +693,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               modifiers: modifiersMask,
             });
             for (let i = 1; i <= clickCount; i++) {
+              await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
               await CDPHelper.dispatchMouseEvent(tabId, {
                 type: 'mousePressed',
                 x: coord.x,
@@ -675,6 +703,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 clickCount: i,
                 modifiers: modifiersMask,
               });
+              await new Promise((r) => setTimeout(r, 35));
               await CDPHelper.dispatchMouseEvent(tabId, {
                 type: 'mouseReleased',
                 x: coord.x,
@@ -684,6 +713,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 clickCount: i,
                 modifiers: modifiersMask,
               });
+              if (i < clickCount) {
+                await new Promise((r) => setTimeout(r, 50));
+              }
             }
           });
           return {
@@ -760,6 +792,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
         }
         if (!start || !end) return createErrorResponse('Failed to resolve drag coordinates');
         try {
+          const dragNote = 'Dragging';
+          await animateAgentCursor(tabId, start.x, start.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: dragNote,
+          });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
             // 1. Move to start position
             await CDPHelper.dispatchMouseEvent(tabId, {
@@ -782,6 +820,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
             });
             await new Promise((r) => setTimeout(r, 200));
 
+            // Launch visual cursor glide towards drop destination concurrently with physical trajectory
+            const cursorDragArrivalPromise = animateAgentCursor(tabId, end.x, end.y, {
+              waitForArrival: true,
+              timeoutMs: 350,
+              actionNote: dragNote,
+            });
+
             // 3. Move along trajectory with intermediate steps so drag and dragover events fire
             const dragSteps = 5;
             for (let i = 1; i <= dragSteps; i++) {
@@ -796,6 +841,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
               });
               await new Promise((r) => setTimeout(r, 50));
             }
+
+            // Ensure visual cursor has arrived at drop destination before releasing
+            await cursorDragArrivalPromise;
 
             // 4. Physical hover pause at destination (300ms) ensuring drop target processes dragover
             await new Promise((r) => setTimeout(r, 300));
@@ -861,14 +909,30 @@ class ComputerTool extends BaseBrowserToolExecutor {
         if (direction === 'left') deltaX = -amount * unit;
         if (direction === 'right') deltaX = amount * unit;
         try {
+          await animateAgentCursor(tabId, coord.x, coord.y, {
+            waitForArrival: true,
+            timeoutMs: 350,
+            actionNote: `Scrolling ${direction}`,
+          });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
-            await CDPHelper.dispatchMouseEvent(tabId, {
-              type: 'mouseWheel',
-              x: coord.x,
-              y: coord.y,
-              deltaX,
-              deltaY,
-            });
+            const STEPS = 8;
+            let lastRatio = 0;
+            for (let s = 1; s <= STEPS; s++) {
+              const ratio = 0.5 * (1 - Math.cos((Math.PI * s) / STEPS));
+              const slice = ratio - lastRatio;
+              lastRatio = ratio;
+              const stepX = Math.round(deltaX * slice);
+              const stepY = Math.round(deltaY * slice);
+              await CDPHelper.dispatchMouseEvent(tabId, {
+                type: 'mouseWheel',
+                x: coord.x,
+                y: coord.y,
+                deltaX: stepX,
+                deltaY: stepY,
+              });
+              if (s < STEPS) await new Promise((r) => setTimeout(r, 16));
+            }
+            await new Promise((r) => setTimeout(r, 60));
           });
           return {
             content: [
@@ -894,6 +958,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
       case 'type': {
         if (!params.text) return createErrorResponse('Text parameter is required for type action');
         try {
+          const typeNote = `Typing "${params.text.length > 18 ? params.text.slice(0, 15) + '...' : params.text}"`;
+          await setAgentCursorNote(tabId, typeNote);
           // Optional focus via ref before typing
           if (params.ref) {
             await clickTool.execute({
@@ -999,6 +1065,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse('repeat must be an integer between 1 and 100 for key action');
         }
         try {
+          const keyNote = `Pressing ${tokens.slice(0, 3).join(' ')}${tokens.length > 3 ? '...' : ''}`;
+          await setAgentCursorNote(tabId, keyNote);
           // Optional focus via ref before key events
           if (params.ref) {
             await clickTool.execute({
@@ -1317,7 +1385,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 'image/png',
                 1.0,
                 {
-                  style: gridStyle === 'classic' ? 'classic' : gridStyle === 'crosshair' ? 'crosshair' : 'ruler',
+                  style:
+                    gridStyle === 'classic'
+                      ? 'classic'
+                      : gridStyle === 'crosshair'
+                        ? 'crosshair'
+                        : 'ruler',
                   originX: rx0,
                   originY: ry0,
                   normalized1000: gridStyle === '1000',

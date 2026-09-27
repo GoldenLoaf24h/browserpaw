@@ -9,7 +9,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
  * browsing workflow actually needs.
  *
  * NOTE on the achievable saving: the biggest schemas (chrome_computer 5.2KB,
- * chrome_click_element 3.4KB, chrome_screenshot 3.2KB) are all core interaction
+ * chrome_batch_actions 3.1KB, chrome_screenshot 3.2KB) are all core interaction
  * tools, so a usable core set cannot go below ~42KB. The real gain is ~25%
  * (~4.1k tokens/session), not the 80% a naive "13 tools" split suggests — those
  * 13 omit navigation entirely.
@@ -52,12 +52,16 @@ CORE_TOOL_NAMES.add('chrome_tool_docs');
  *
  * Default is now "core" to drastically reduce token overhead and avoid decision paralysis.
  * Set CHROME_MCP_TOOL_PROFILE=full to expose all 50 tools, or crawl for crawl workflows.
+ * Aliases "compact" and "minimal" are safely mapped to "core".
  */
 export function resolveToolProfile(raw?: string | null): ToolProfile {
   const v = String(raw ?? '')
     .trim()
     .toLowerCase();
-  return v === 'full' ? 'full' : v === 'crawl' ? 'crawl' : 'core';
+  if (v === 'full') return 'full';
+  if (v === 'crawl') return 'crawl';
+  if (v === 'compact' || v === 'minimal' || v === 'core') return 'core';
+  return 'core';
 }
 
 /**
@@ -178,16 +182,15 @@ export function hasJevApiKey(): boolean {
  */
 export function isJevDisabledWithoutKey(): boolean {
   const env = typeof process !== 'undefined' ? process.env : undefined;
-  if (!env) return false;
-  const flag = (
-    env.BROWSERPAW_DISABLE_JEV_WITHOUT_KEY ||
-    env.BROWSERCLAW_DISABLE_JEV_WITHOUT_KEY ||
-    env.DISABLE_JEV_WITHOUT_KEY ||
-    ''
-  )
-    .trim()
-    .toLowerCase();
-  return flag === 'true' || flag === '1';
+  if (!env) return true; // Default Fail-Closed
+  // Explicit override only if test environment explicitly enables heuristic-only mode
+  if (
+    env.CHROME_MCP_ENABLE_JEV_HEURISTIC_TESTING === 'true' ||
+    env.CHROME_MCP_ENABLE_JEV_HEURISTIC_TESTING === '1'
+  ) {
+    return false;
+  }
+  return true; // Strict: Without valid key/model, Jev tool is completely purged
 }
 
 /** Filter the schema list for a profile. Unknown names are simply not exposed. */
@@ -206,7 +209,7 @@ export function filterToolSchemas(schemas: Tool[], profile: ToolProfile): Tool[]
     typeof process !== 'undefined' &&
     (process.env.CHROME_MCP_AUTO_PROMOTE_JEV === 'true' ||
       process.env.CHROME_MCP_AUTO_PROMOTE_JEV === '1');
-  if (hasKey && autoPromote && profile === 'core') {
+  if ((hasKey || autoPromote) && autoPromote && profile === 'core') {
     allow.add('chrome_act_toward_goal');
   } else if (shouldPurgeJev) {
     allow.delete('chrome_act_toward_goal');

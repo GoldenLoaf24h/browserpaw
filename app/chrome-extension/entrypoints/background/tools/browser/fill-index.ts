@@ -13,7 +13,6 @@ import {
   createTargetOccludedResponse,
 } from '@/utils/race-cdp';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
-import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
 import { captureDeltaIfRequested, ensureSnapshotBaseline } from '@/utils/delta-helper';
 import { getSubframeViewportOffset } from './interact-index';
 import { tabFaviconManager } from './tab-favicon';
