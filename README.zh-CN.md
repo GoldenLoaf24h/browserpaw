@@ -14,7 +14,7 @@
 ---
 
 <details>
-<summary><b>💡 背景故事：为什么我要做 BrowserPaw？（点击展开）</b></summary>
+<summary><b>💡 背景故事：为什么我要做 BrowserPaw？</b></summary>
 
 <br/>
 

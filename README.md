@@ -14,7 +14,7 @@
 ---
 
 <details>
-<summary><b>The Backstory: Why I Built BrowserPaw (Click to expand)</b></summary>
+<summary><b>The Backstory: Why I Built BrowserPaw</b></summary>
 
 <br/>
 
