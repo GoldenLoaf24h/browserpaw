@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/images/logo.png" width="100" alt="BrowserPaw Logo" />
+  <img src="./docs/images/logo.png" width="128" alt="BrowserPaw Logo" />
   <h1>BrowserPaw</h1>
   <p><b>控制你自己的浏览器的一切。</b></p>
   <p>

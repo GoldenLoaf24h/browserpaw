@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/images/logo.png" width="100" alt="BrowserPaw Logo" />
+  <img src="./docs/images/logo.png" width="128" alt="BrowserPaw Logo" />
   <h1>BrowserPaw</h1>
   <p><b>Control your everyday Chrome browser from AI agents, without losing logins or focus.</b></p>
   <p>
