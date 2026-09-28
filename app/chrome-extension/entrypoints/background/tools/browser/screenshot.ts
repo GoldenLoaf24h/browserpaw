@@ -220,19 +220,7 @@ async function hasBlackBars(dataUrl: string): Promise<boolean> {
   }
 }
 
-const pendingScreenshotFilenames = new Map<number, string>();
-
-if (typeof chrome !== 'undefined' && chrome.downloads?.onDeterminingFilename) {
-  try {
-    chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-      const designatedName = pendingScreenshotFilenames.get(item.id);
-      if (designatedName) {
-        pendingScreenshotFilenames.delete(item.id);
-        suggest({ filename: designatedName, conflictAction: 'uniquify' });
-      }
-    });
-  } catch {}
-}
+// Do not register global chrome.downloads.onDeterminingFilename listener to prevent conflicts with download managers (e.g. IDM)
 
 /**
  * Saves screenshot base64 data to the system temporary directory via Native Messaging Host.
@@ -912,7 +900,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
               saveAs: false,
               conflictAction: 'uniquify',
             });
-            pendingScreenshotFilenames.set(downloadId, filename);
+            // filename specified directly in chrome.downloads.download
 
             results.downloadId = downloadId;
             results.filename = filename;
