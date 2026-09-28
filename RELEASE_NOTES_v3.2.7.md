@@ -53,5 +53,5 @@ BrowserPaw **v3.2.7** is a major feature and reliability release that introduces
 
 | Asset                                                                                                                                       | Size   | SHA256 Checksum                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------ |
-| [**browserpaw-extension-v3.2.7.zip**](https://github.com/GoldenLoaf24h/browserpaw/releases/download/v3.2.7/browserpaw-extension-v3.2.7.zip) | 611 KB | `f7a83f4e8c848db4da4a10e92a350bba5b52bd9c9ca1b350086404e04b94c44b` |
+| [**browserpaw-extension-v3.2.7.zip**](https://github.com/GoldenLoaf24h/browserpaw/releases/download/v3.2.7/browserpaw-extension-v3.2.7.zip) | 611 KB | `bba3dd2702d0cd7b6c03196bdf30020f69a23b0b1ddf4edbd6b83ee7852cbb4b` |
 | [**browserpaw-skill-v3.2.7.zip**](https://github.com/GoldenLoaf24h/browserpaw/releases/download/v3.2.7/browserpaw-skill-v3.2.7.zip)         | 36 KB  | `1a0d4e1c6fc4759a880184978a2beb2741afc10cc0828c9af18a7dd91c62cd1c` |
