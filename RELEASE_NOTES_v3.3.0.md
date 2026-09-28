@@ -12,6 +12,13 @@ BrowserPaw **v3.3.0** is an ongoing stability and coexistence release. It resolv
 
 ---
 
+## 🎨 Brand & Visual Identity Refresh
+
+### 1. 🐾 Brand-New High-Resolution Extension & Documentation Icon
+
+- **Vector-Faithful Multi-Resolution Rasterization**: Replaced all extension action icons across 16x16, 32x32, 48x48, 96x96, and 128x128 with the newly designed BrowserPaw visual identity using high-precision Lanczos anti-aliasing resampling.
+- **Repository Branding**: Updated `docs/images/logo.png` (256x256 high-def) to align the documentation presentation with the official Chrome extension UI.
+
 ## 🪲 Bug Fixes & Architectural Hardening
 
 ### 1. 🛡️ Native Tab Signature Validation & Extension Error Elimination (`chrome_switch_tab`)
