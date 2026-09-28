@@ -1065,11 +1065,34 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.SWITCH_TAB;
 
   async execute(args: SwitchTabToolParams): Promise<ToolResult> {
-    const { tabId, windowId } = args;
+    const rawTabId = (args as any)?.tabId;
+    const targetTabId =
+      typeof rawTabId === 'number' && Number.isInteger(rawTabId)
+        ? rawTabId
+        : typeof rawTabId === 'string' && /^\d+$/.test(rawTabId.trim())
+          ? parseInt(rawTabId.trim(), 10)
+          : undefined;
 
-    console.log(`Attempting to switch to tab ID: ${tabId} in window ID: ${windowId}`);
+    if (targetTabId === undefined) {
+      return createErrorResponse('Valid integer tabId is required to switch tab.');
+    }
+
+    const rawWindowId = (args as any)?.windowId;
+    const windowId =
+      typeof rawWindowId === 'number' && Number.isInteger(rawWindowId)
+        ? rawWindowId
+        : typeof rawWindowId === 'string' && /^\d+$/.test(rawWindowId.trim())
+          ? parseInt(rawWindowId.trim(), 10)
+          : undefined;
+
+    console.log(`Attempting to switch to tab ID: ${targetTabId} in window ID: ${windowId}`);
 
     try {
+      const existingTab = await chrome.tabs.get(targetTabId).catch(() => null);
+      if (!existingTab || !existingTab.id) {
+        return createErrorResponse(`Tab with ID ${targetTabId} not found.`);
+      }
+
       // Activation is the whole point of this tool: without it the call was a
       // no-op that still reported success, so agents could not tell that the
       // target tab was never brought forward (and CDP input kept going to the
@@ -1078,12 +1101,12 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
       // Default is "activate": only an explicit background:true opts out.
       const keepBackground = args.background === true;
       if (!keepBackground) {
-        await chrome.tabs.update(tabId, { active: true });
+        await chrome.tabs.update(targetTabId, { active: true });
         // Only focus window if caller explicitly asked for it via focusWindow: true.
         // Never steal OS desktop focus by default.
         if (args.focusWindow === true) {
-          const resolvedWindowId = windowId ?? (await chrome.tabs.get(tabId)).windowId;
-          if (resolvedWindowId !== undefined) {
+          const resolvedWindowId = windowId ?? existingTab.windowId;
+          if (typeof resolvedWindowId === 'number') {
             try {
               const win = await chrome.windows.get(resolvedWindowId);
               if (win.state === 'minimized') {
@@ -1101,7 +1124,7 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
         }
       }
 
-      const updatedTab = await chrome.tabs.get(tabId);
+      const updatedTab = (await chrome.tabs.get(targetTabId).catch(() => null)) ?? existingTab;
       const sessionId = (args as any)?.sessionId || (args as any)?.sessionContext;
       if (sessionId && updatedTab?.id) {
         sessionTabAffinity.setAffinity(sessionId, updatedTab.id);
@@ -1114,8 +1137,8 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
             text: JSON.stringify({
               success: true,
               message: keepBackground
-                ? `Tab ID ${tabId} resolved (background: true, not activated)`
-                : `Activated tab ID: ${tabId}`,
+                ? `Tab ID ${targetTabId} resolved (background: true, not activated)`
+                : `Activated tab ID: ${targetTabId}`,
               tabId: updatedTab.id,
               windowId: updatedTab.windowId,
               url: updatedTab.url,
@@ -1128,10 +1151,10 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
       };
     } catch (error) {
       if (chrome.runtime.lastError) {
-        console.error(`Chrome API Error: ${chrome.runtime.lastError.message}`, error);
+        console.warn(`Chrome API Error: ${chrome.runtime.lastError.message}`, error);
         return createErrorResponse(`Chrome API Error: ${chrome.runtime.lastError.message}`);
       } else {
-        console.error('Error in SwitchTabTool.execute:', error);
+        console.warn('Warning in SwitchTabTool.execute:', error);
         return createErrorResponse(
           `Error switching tab: ${error instanceof Error ? error.message : String(error)}`,
         );
