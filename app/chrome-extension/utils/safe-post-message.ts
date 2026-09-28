@@ -24,17 +24,52 @@ export function safePostMessage(
   if (!port) return false;
   try {
     const serialized = JSON.stringify(msg);
-    const byteLength = new TextEncoder().encode(serialized).length;
+    const encoder = new TextEncoder();
+    const byteLength = encoder.encode(serialized).length;
 
     if (byteLength >= CHUNK_THRESHOLD_BYTES) {
       const chunkId =
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : `chunk_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-      const total = Math.ceil(serialized.length / CHUNK_SIZE);
 
+      // Slice serialized string such that each chunk's UTF-8 byte length is strictly <= CHUNK_SIZE
+      const slices = [];
+      let start = 0;
+      const len = serialized.length;
+      while (start < len) {
+        let guess = Math.min(len, start + Math.floor(CHUNK_SIZE / 2));
+        while (
+          guess < len &&
+          encoder.encode(serialized.slice(start, Math.min(len, guess + 4096))).length <= CHUNK_SIZE
+        ) {
+          guess = Math.min(len, guess + 4096);
+        }
+        while (
+          encoder.encode(serialized.slice(start, guess)).length > CHUNK_SIZE &&
+          guess > start
+        ) {
+          guess -= 100;
+        }
+        while (
+          guess < len &&
+          encoder.encode(serialized.slice(start, guess + 1)).length <= CHUNK_SIZE
+        ) {
+          guess++;
+        }
+        if (guess > start && guess < len) {
+          const code = serialized.charCodeAt(guess - 1);
+          if (code >= 0xd800 && code <= 0xdbff) {
+            guess--;
+          }
+        }
+        slices.push(serialized.slice(start, guess));
+        start = guess;
+      }
+
+      const total = slices.length;
       for (let i = 0; i < total; i++) {
-        const slice = serialized.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const slice = slices[i];
         const chunkEnvelope: ChunkedMessageEnvelope = {
           __chunked__: true,
           chunkId,

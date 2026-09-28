@@ -18,6 +18,28 @@ const toolsMap = new Map(
     .map((tool: any) => [tool.name, tool]),
 );
 
+const TEXT_FIELD_EXCLUSIONS = new Set([
+  'query',
+  'url',
+  'text',
+  'keys',
+  'code',
+  'selector',
+  'pattern',
+  'action',
+  'title',
+  'reason',
+  'goal',
+  'mode',
+  'name',
+  'filepath',
+  'fileurl',
+  'mediaurl',
+  'sessionid',
+  'sessioncontext',
+  'prompttext',
+]);
+
 /**
  * Tool call parameter interface
  */
@@ -57,36 +79,16 @@ export const handleCallTool = async (param: ToolCallParam) => {
       const val = args[key];
       if (typeof val === 'string') {
         const trimmed = val.trim();
-        // Coerce string numeric indices to integers
-        if (
-          (key === 'index' ||
-            key === 'targetIndex' ||
-            key === 'ref' ||
-            key === 'tabId' ||
-            key === 'windowId') &&
-          /^-?\d+$/.test(trimmed)
-        ) {
-          args[key] = parseInt(trimmed, 10);
+        const lower = trimmed.toLowerCase();
+        if (lower === 'true') {
+          args[key] = true;
+        } else if (lower === 'false') {
+          args[key] = false;
         } else if (
-          (key === 'deltaOnly' ||
-            key === 'includeDelta' ||
-            key === 'fullPage' ||
-            key === 'verbose' ||
-            key === 'activeViewportOnly' ||
-            key === 'viewportOnly' ||
-            key === 'autoAdvance' ||
-            key === 'autoScroll' ||
-            key === 'isRegex' ||
-            key === 'submit' ||
-            key === 'pressEnter' ||
-            key === 'savePng' ||
-            key === 'saveToDisk' ||
-            key === 'waitForSettle' ||
-            key === 'dismissOverlays' ||
-            key === 'autoGroup') &&
-          (trimmed === 'true' || trimmed === 'false')
+          !TEXT_FIELD_EXCLUSIONS.has(key.toLowerCase()) &&
+          /^-?\d+(\.\d+)?$/.test(trimmed)
         ) {
-          args[key] = trimmed === 'true';
+          args[key] = trimmed.includes('.') ? parseFloat(trimmed) : parseInt(trimmed, 10);
         }
       }
     }

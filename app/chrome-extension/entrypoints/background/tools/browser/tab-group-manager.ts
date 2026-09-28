@@ -364,9 +364,7 @@ export class TabGroupManager {
         const group = await chrome.tabGroups.get(groupId);
         if (
           group &&
-          (group.title === TabGroupManager.DEFAULT_TITLE ||
-            this.explicitGroupTitles.has(groupId) ||
-            Array.from(this.explicitGroupTitles.values()).includes(group.title || ''))
+          (group.title === TabGroupManager.DEFAULT_TITLE || this.explicitGroupTitles.has(groupId))
         ) {
           this.managedGroupIds.add(groupId);
           return true;

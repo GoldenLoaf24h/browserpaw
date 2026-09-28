@@ -213,6 +213,19 @@ class NavigateTool extends BaseBrowserToolExecutor {
         return createErrorResponse('URL parameter is required when refresh is not true');
       }
 
+      // [ACT-02] Strict protocol & pattern guard (inspired by Chrome DevTools MCP)
+      if (/^(chrome-untrusted|chrome-search|devtools):\/\//i.test(url)) {
+        return createErrorResponse(
+          `Access denied: navigation to privileged internal scheme "${url.split(':')[0]}" is blocked for security.`,
+        );
+      }
+
+      if (url.toLowerCase().startsWith('javascript:')) {
+        return createErrorResponse(
+          'Access denied: "javascript:" URLs cannot be executed via chrome_navigate. Use chrome_javascript for script execution.',
+        );
+      }
+
       // Guard against popup.html (P1-5: agent code paths must never open popup.html)
       if (isPopupUrl(url)) {
         return createErrorResponse(

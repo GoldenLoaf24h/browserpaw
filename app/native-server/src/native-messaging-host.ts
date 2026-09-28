@@ -388,20 +388,11 @@ export class NativeMessagingHost {
 
       // Pre-check payload size to fail immediately rather than hang until timeout
       try {
-        const testStr = JSON.stringify({
+        JSON.stringify({
           type: messageType,
           payload: messagePayload,
           requestId,
         });
-        const byteLen = Buffer.byteLength(testStr);
-        if (byteLen >= 1000 * 1024) {
-          reject(
-            new Error(
-              `Outgoing request payload (${byteLen} bytes) exceeds Chrome Native Messaging 1MB ceiling.`,
-            ),
-          );
-          return;
-        }
       } catch (err: any) {
         reject(new Error(`Failed to serialize outgoing request: ${err?.message || err}`));
         return;

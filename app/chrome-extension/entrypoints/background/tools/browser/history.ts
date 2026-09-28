@@ -15,8 +15,8 @@ import {
 
 interface HistoryToolParams {
   text?: string;
-  startTime?: string;
-  endTime?: string;
+  startTime?: string | number;
+  endTime?: string | number;
   maxResults?: number;
   excludeCurrentTabs?: boolean;
 }
@@ -54,7 +54,10 @@ class HistoryTool extends BaseBrowserToolExecutor {
    *  - Relative times: "1 day ago", "2 weeks ago", "3 months ago", "1 year ago"
    *  - Special keywords: "now", "today", "yesterday"
    */
-  private parseDateString(dateStr: string | undefined | null): number | null {
+  private parseDateString(dateStr: string | number | undefined | null): number | null {
+    if (typeof dateStr === 'number') {
+      return Number.isFinite(dateStr) ? dateStr : null;
+    }
     if (!dateStr) {
       // If an empty or null string is passed, it might mean "no specific date",
       // depending on how you want to treat it. Returning null is safer.
@@ -62,7 +65,7 @@ class HistoryTool extends BaseBrowserToolExecutor {
     }
 
     const now = new Date();
-    const lowerDateStr = dateStr.toLowerCase().trim();
+    const lowerDateStr = String(dateStr).toLowerCase().trim();
 
     if (lowerDateStr === 'now') return now.getTime();
     if (lowerDateStr === 'today') return startOfToday().getTime();

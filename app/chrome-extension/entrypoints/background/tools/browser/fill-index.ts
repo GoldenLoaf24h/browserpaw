@@ -13,7 +13,11 @@ import {
   createTargetOccludedResponse,
 } from '@/utils/race-cdp';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
-import { captureDeltaIfRequested, ensureSnapshotBaseline } from '@/utils/delta-helper';
+import {
+  captureDeltaIfRequested,
+  ensureSnapshotBaseline,
+  captureChainedSnapshotSummary,
+} from '@/utils/delta-helper';
 import { getSubframeViewportOffset } from './interact-index';
 import { tabFaviconManager } from './tab-favicon';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
@@ -74,7 +78,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
           .then((r) => r?.[0]?.result)
           .catch(() => null);
 
-        await ensureSnapshotBaseline(targetTabId, args.includeDelta);
+        await ensureSnapshotBaseline(targetTabId, args.includeDelta !== false);
 
         // D3 (TESTING-NOTES #19): surface active-tab fallback in the response.
         const fillIdxAffinityWarning =
@@ -122,7 +126,20 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
           (outcome as any).affinityWarning = fillIdxAffinityWarning;
         }
 
-        const delta = await captureDeltaIfRequested(targetTabId, args.includeDelta);
+        const chainedSnapshot =
+          args.includeDelta !== false
+            ? await captureChainedSnapshotSummary(targetTabId, previousUrl, {
+                maxItems: 10,
+                delayMs: 80,
+              })
+            : undefined;
+        if (chainedSnapshot) {
+          (outcome as any).chainedSnapshot = chainedSnapshot;
+        }
+        const delta =
+          args.includeDelta === true
+            ? await captureDeltaIfRequested(targetTabId, true, 0)
+            : undefined;
         if (delta) {
           (outcome as any).delta = delta;
         }

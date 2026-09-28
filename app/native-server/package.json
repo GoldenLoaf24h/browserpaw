@@ -1,6 +1,6 @@
 {
   "name": "mcp-chrome-bridge",
-  "version": "3.2.0",
+  "version": "3.2.7",
   "description": "Chrome Native-Messaging host (Node)",
   "author": "hangye",
   "repository": {

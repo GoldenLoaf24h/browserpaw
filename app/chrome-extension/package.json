@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "private": true,
-  "version": "3.2.0",
+  "version": "3.2.7",
   "type": "module",
   "scripts": {
     "dev": "wxt",

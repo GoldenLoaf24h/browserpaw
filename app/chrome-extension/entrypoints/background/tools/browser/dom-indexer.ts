@@ -2554,7 +2554,15 @@ export function inPageDOMPruner(options?: {
     if (rect.width <= 0 || rect.height <= 0) {
       return { isFullyOccluded: false, isOccluded: false, safeClickPoint: defaultCenter };
     }
-    if (rect.left < 0 || rect.top < 0 || rect.right > winWidth || rect.bottom > winHeight) {
+
+    const visibleLeft = Math.max(0, rect.left);
+    const visibleTop = Math.max(0, rect.top);
+    const visibleRight = Math.min(winWidth, rect.right);
+    const visibleBottom = Math.min(winHeight, rect.bottom);
+    const visibleWidth = visibleRight - visibleLeft;
+    const visibleHeight = visibleBottom - visibleTop;
+
+    if (visibleWidth <= 0 || visibleHeight <= 0) {
       return { isFullyOccluded: false, isOccluded: false, safeClickPoint: defaultCenter };
     }
 
@@ -2567,8 +2575,8 @@ export function inPageDOMPruner(options?: {
 
     for (const ry of ratios) {
       for (const rx of ratios) {
-        const px = rect.left + rect.width * rx;
-        const py = rect.top + rect.height * ry;
+        const px = visibleLeft + visibleWidth * rx;
+        const py = visibleTop + visibleHeight * ry;
 
         if (px < 0 || py < 0 || px >= winWidth || py >= winHeight) {
           continue;
@@ -2631,11 +2639,18 @@ export function inPageDOMPruner(options?: {
 
         try {
           const topStyle = window.getComputedStyle(topEl);
-          if (
-            topStyle.display !== 'none' &&
-            topStyle.visibility !== 'hidden' &&
-            parseFloat(topStyle.opacity || '1') >= 0.8
-          ) {
+          const isVisible = topStyle.display !== 'none' && topStyle.visibility !== 'hidden';
+          const isPointerBlocking = topStyle.pointerEvents !== 'none';
+          const isBackdropOrOverlay =
+            topEl.matches?.(
+              'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .modal-backdrop, [class*="backdrop"], [class*="mask"], [class*="overlay"]',
+            ) ||
+            topEl.closest?.(
+              'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .modal-backdrop, [class*="backdrop"], [class*="mask"], [class*="overlay"]',
+            );
+          const hasSignificantOpacity = parseFloat(topStyle.opacity || '1') >= 0.35;
+
+          if (isVisible && isPointerBlocking && (hasSignificantOpacity || isBackdropOrOverlay)) {
             occludedCount++;
             if (!primaryOccluder) {
               const tag = topEl.tagName?.toLowerCase() || 'element';
@@ -5886,6 +5901,62 @@ export function inPageVerifyActiveElement(
     activeId,
     activeName,
   };
+}
+
+/**
+ * Chained Snapshot Helper: extracts lightweight active element & modal state
+ * for instant post-action feedback without requiring a full DOM re-scan.
+ */
+export function inPageGetActiveElementSummary(): {
+  tagName?: string;
+  id?: string;
+  role?: string;
+  type?: string;
+  isInput?: boolean;
+  value?: string;
+  text?: string;
+  hasActiveModal?: boolean;
+} {
+  try {
+    let el = typeof document !== 'undefined' ? document.activeElement : null;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+      el = el.shadowRoot.activeElement;
+    }
+    const modalBlocker =
+      typeof detectActiveModalBlocker === 'function' ? detectActiveModalBlocker(window) : null;
+    const hasActiveModal = Boolean(modalBlocker && modalBlocker.el);
+
+    if (!el || el === document.body || el === document.documentElement) {
+      return { hasActiveModal };
+    }
+
+    const targetEl = el as HTMLElement;
+    const tagName = targetEl.tagName.toLowerCase();
+    const id = targetEl.id || undefined;
+    const role = targetEl.getAttribute('role') || undefined;
+    const type = targetEl.getAttribute('type') || undefined;
+    const isInput =
+      ['input', 'textarea', 'select'].includes(tagName) ||
+      targetEl.getAttribute('contenteditable') === 'true';
+    const value =
+      isInput && 'value' in targetEl
+        ? String((targetEl as any).value ?? '').slice(0, 60)
+        : undefined;
+    const text = targetEl.textContent?.trim()?.slice(0, 60) || undefined;
+
+    return {
+      tagName,
+      id,
+      role,
+      type,
+      isInput,
+      value,
+      text,
+      hasActiveModal,
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**

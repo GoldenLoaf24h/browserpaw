@@ -153,11 +153,11 @@ The agent must immediately invoke `chrome_read_dom` to obtain fresh 1-based elem
 
 ### Symptom
 
-When using visual clicking tools (`chrome_click_coordinate`), mouse clicks land offset from the visible target on high-resolution or scaled Windows displays.
+When using visual clicking tools (`chrome_interact_index`), mouse clicks land offset from the visible target on high-resolution or scaled Windows displays.
 
 ### Architecture & Assurance
 
-BrowserPaw implements **1:1 Viewport CSS Geometric Normalization** inside `screenshot.ts`. Screenshots are resampled via `OffscreenCanvas` to exact standard CSS viewport dimensions ($W_{viewport} \times H_{viewport}$).
+BrowserPaw implements **1:1 Viewport CSS Geometric Normalization** inside `screenshot.ts`. Screenshots are resampled via `OffscreenCanvas` to exact standard CSS viewport dimensions (W_viewport × H_viewport).
 
 ### Important Agent Guideline
 

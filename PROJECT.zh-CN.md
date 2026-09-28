@@ -33,10 +33,10 @@ BrowserPaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器�
 - **词元边界表单语义匹配器**：采用两阶段精确与词元边界语义分析，彻底根治如 `phone` 误匹配 `no`、`male` 误匹配 `female` 的子串穿透 Bug。
 - **通用零漂移标签组归整**：利用环视断言正则在剥离 CJK 分隔符的同时保护英文连字符专有名词（如 `COVID-19`、`Wi-Fi`），彻底移除特化域名硬编码字典。
 
-- **原子化极速 DOM 快照与感知管线**：`chrome_read_dom` 原生支持极速快照（`fast: true`），单次 `TreeWalker` 遍历结合原生 `checkVisibility` 与 `window.__pawFast` WeakMap 弱引用缓存。严格限制动作 $\le 250$、文本 $\le 6000$ 字符，抓取耗时压低至 10~30ms，输出体积 $\le 15$KB。
+- **原子化极速 DOM 快照与感知管线**：`chrome_read_dom` 原生支持极速快照（`fast: true`），单次 `TreeWalker` 遍历结合原生 `checkVisibility` 与 `window.__pawFast` WeakMap 弱引用缓存。严格限制动作 ≤ 250、文本 ≤ 6000 字符，抓取耗时压低至 10~30ms，输出体积 ≤ 15KB。
 - **受控组件原生值设置穿透**：通过原型链直接获取原生描述符（`nativeSetter.call(el, val)`）并严格派发 `input` 与 `change` 合成事件序列，彻底穿透 React 16–19 与 Vue 3 受控组件拦截。
 - **执行前 1ms 防遮挡绝杀断路器**：在 CDP 物理事件派发前注入页内微任务进行靶心命中校验，支持递归穿透最多 3 层 `pointer-events: none` 浮层，遇遮挡立即熔断返回 `{ "error": "target_occluded", "retry": true }`。
-- **基于 rAF 与 ARIA 的智能微等待**：废除粗暴 `sleep`，默认 2 个 `requestAnimationFrame`（$\approx 32$ms）结合突变监听快速收敛，并为 `role="combobox"` 搜索候选框提供 $\le 200$ms 的选项可见性监听。
+- **基于 rAF 与 ARIA 的智能微等待**：废除粗暴 `sleep`，默认 2 个 `requestAnimationFrame`（≈ 32ms）结合突变监听快速收敛，并为 `role="combobox"` 搜索候选框提供 ≤ 200ms 的选项可见性监听。
 - **无特权 HTML5 DataTransfer 文件上传降级**：当 CDP `DOM.setFileInputFiles` 失败或未授权时，自动通过标准 `DataTransfer` 与 `File` 合成对象在前端注入文件，支持穿透深层 Shadow DOM。
 
 - **三层 Jev 自主架构与智能门控**：

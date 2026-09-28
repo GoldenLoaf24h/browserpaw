@@ -1942,7 +1942,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         includeDelta: {
           type: 'boolean',
           description:
-            'Automatically capture and return DOM changes caused by this interaction in the delta field (default: false)',
+            'Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)',
         },
         sessionId: {
           type: 'string',
@@ -2040,7 +2040,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         includeDelta: {
           type: 'boolean',
           description:
-            'Automatically capture and return DOM changes caused by filling in the delta field (default: false)',
+            'Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)',
         },
         sessionId: {
           type: 'string',

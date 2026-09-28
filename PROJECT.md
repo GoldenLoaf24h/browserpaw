@@ -33,10 +33,10 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 - **Token-Boundary Form Semantic Matcher**: Form fields are resolved using discrete two-phase exact and token-boundary semantic analysis, eliminating false-positive substring bleeding (e.g. `phone` vs `no`, `male` vs `female`).
 - **Universal Zero-Drift Tab Grouping**: Domain-agnostic title cleansing preserves English hyphenated words (`COVID-19`, `Wi-Fi`) via lookaround regex while properly organizing tabs without domain dictionaries.
 
-- **Atomic Fast DOM Snapshot & Perception Pipeline**: `chrome_read_dom` natively supports ultrafast atomic snapshots (`fast: true`), single-pass `TreeWalker` traversal with native `checkVisibility` and `window.__pawFast` WeakMap caching. Payload budget is bounded to $\le 250$ actions and $\le 6000$ characters, cutting scan latency to 10~30ms.
+- **Atomic Fast DOM Snapshot & Perception Pipeline**: `chrome_read_dom` natively supports ultrafast atomic snapshots (`fast: true`), single-pass `TreeWalker` traversal with native `checkVisibility` and `window.__pawFast` WeakMap caching. Payload budget is bounded to ≤ 250 actions and ≤ 6000 characters, cutting scan latency to 10~30ms.
 - **Controlled Component Native Value Setter**: Bypasses React 16–19 and Vue 3 controlled input interception by invoking prototype descriptors directly followed by standard synthetic `input` and `change` event sequences.
 - **Pre-CDP 1ms Occlusion Circuit Breaker**: Pre-validates click targeting via in-page microtask hit testing with up to 3 layers of `pointer-events: none` piercing, failing fast with `{ "error": "target_occluded", "retry": true }`.
-- **rAF & ARIA Combobox Smart Micro-Wait**: Eliminates blind sleeps with 2-frame `requestAnimationFrame` ($\approx 32$ms) convergence and dedicated option-discovery watchdogs for autocomplete comboboxes ($\le 200$ms).
+- **rAF & ARIA Combobox Smart Micro-Wait**: Eliminates blind sleeps with 2-frame `requestAnimationFrame` (≈ 32ms) convergence and dedicated option-discovery watchdogs for autocomplete comboboxes (≤ 200ms).
 - **HTML5 DataTransfer Upload Fallback**: Gracefully falls back to browser-native `DataTransfer` file synthesis across Shadow DOM boundaries when CDP debugger attachment is unavailable.
 
 - **3-Tier Jev Autonomous Architecture & Smart Gating**:

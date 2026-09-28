@@ -49,7 +49,7 @@ SESSION_ID_ENV_VARS = ('BROWSERPAW_MCP_SESSION_ID', 'BROWSERCLAW_MCP_SESSION_ID'
 MCP_PROTOCOL_VERSION = '2024-11-05'
 CLIENT_INFO = {
     'name': 'browserpaw-python-plugin',
-    'version': '3.2.0',
+    'version': '3.2.7',
 }
 
 _AUTH_HELP = (
@@ -2541,4 +2541,3 @@ def browserpaw_eval(script: str, tab_id: Optional[int] = None) -> str:
 def browserpaw_execute_script(script: str, tab_id: Optional[int] = None) -> str:
     """Alias for browserpaw_eval."""
     return browserpaw_eval(script, tab_id=tab_id)
-

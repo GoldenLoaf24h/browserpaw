@@ -161,7 +161,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 | **User Profile Reuse**         | **Native**: Uses existing Chrome session, logins, cookies, and tabs                                          | Requires launching separate profile or remote debugging port | Typically launches fresh test browser contexts       |
 | **Focus & Background Safety**  | **Strict P0 Isolation**: Tabs `active: false`, windows `focused: false`, zero focus stealing                 | Often brings tab to foreground; steals focus during typing   | Focuses active viewport during test actions          |
 | **DOM Tree Representation**    | Pruned hybrid DOM tree with interactive nodes, ARIA roles, bounding boxes, scrollable/dialog hints           | Accessibility tree + filtered interactive elements           | Multimodal bounding-box tree + visual prompt markers |
-| **Element Addressing**         | **Unified 4-stage locator**: `ref` (1-based) $\to$ `selector` $\to$ `text/role` $\to$ `coordinate`           | Numbered numeric tags (1, 2, 3...) or raw coordinates        | Natural language query grounded via Vision Model     |
+| **Element Addressing**         | **Unified 4-stage locator**: `ref` (1-based) → `selector` → `text/role` → `coordinate`                       | Numbered numeric tags (1, 2, 3...) or raw coordinates        | Natural language query grounded via Vision Model     |
 | **DOM Mutation Pollution**     | **Zero DOM pollution**: In-memory `WeakRef` Map prevents memory leaks                                        | Modifies DOM with attributes/classes; overlays canvas        | Injects highlight markers or overlays canvas         |
 | **Coordinate Scaling**         | Automatic DPR & viewport scaling via `ScreenshotContextManager`                                              | Playwright coordinate translation                            | Vision-model relative box coordinate conversion      |
 | **Input Fidelity**             | CDP `Input` domain dispatches trusted events (`isTrusted: true`)                                             | Playwright CDP synthetic/trusted events                      | Synthetic DOM dispatch / CDP mouse events            |
@@ -199,7 +199,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Decision**:
   1. Return CDP `Page.captureScreenshot` directly as Base64 image payloads in the MCP response (`type: 'image'`).
   2. Maintain an in-memory `ScreenshotRingBuffer` with a fixed capacity of 1 per tab, automatically evicting stale frames.
-  3. Default compression to JPEG $\le$ 1280px. Disk writes (`savePng: true`) are strictly opt-in for manual debugging.
+  3. Default compression to JPEG ≤ 1280px. Disk writes (`savePng: true`) are strictly opt-in for manual debugging.
   4. For background tabs (`active: false`), strictly use CDP `Page.captureScreenshot` (`fromSurface: true`) instead of `chrome.tabs.captureVisibleTab`, preventing active-window screen leaks and `requestAnimationFrame` hangs.
 - **Consequences**: Zero disk writes, sub-100ms screenshot round-trips, zero visual leaks across background tabs, and zero memory leaks in the MV3 service worker.
 
@@ -208,7 +208,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Status**: Implemented & Verified (P1-4)
 - **Context**: Agents frequently failed when relying solely on brittle CSS selectors or when index maps drifted after page re-renders.
 - **Decision**:
-  1. Implement a 4-tier degradation strategy: `ref` (1-based index) $\to$ `selector` (CSS/XPath) $\to$ `text/role` (ARIA) $\to$ `coordinate` (x, y).
+  1. Implement a 4-tier degradation strategy: `ref` (1-based index) → `selector` (CSS/XPath) → `text/role` (ARIA) → `coordinate` (x, y).
   2. The response always returns `resolutionPath` indicating which strategy succeeded.
   3. Coordinate clicks undergo pre-flight CDP `DOM.getNodeForLocation` / `DOM.getBoxModel` inspection to ensure targets are visible and non-occluded.
 - **Consequences**: Dramatic increase in execution resilience across dynamic SPAs, canvas apps, and legacy web pages.
@@ -392,7 +392,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Status**: Implemented & Verified
 - **Context**: On Windows, Chrome launches the Native Messaging host via `run_host.bat`. When Chrome terminated, `http.Server.close()` inside Fastify was invoked. Under Node.js HTTP server semantics, `close()` waits for all active and idle keep-alive TCP connections to finish before firing the callback. If an MCP client (Cursor, Claude Desktop, or Windsurf) held an open TCP socket or SSE connection, `stop()` returned a Promise that remained pending forever. Because `process.exit(0)` was nested within `stop().then()`, the Node.js process remained running as an invisible zombie process, holding port 12306 and causing subsequent startup attempts to fail with `EADDRINUSE`.
 - **Decision**:
-  1. In `server/index.ts` `stop()`, invoke `this.fastify.server.closeAllConnections()` (Node.js $\ge$ 18.2.0) to immediately sever all open keep-alive HTTP/SSE sockets.
+  1. In `server/index.ts` `stop()`, invoke `this.fastify.server.closeAllConnections()` (Node.js ≥ 18.2.0) to immediately sever all open keep-alive HTTP/SSE sockets.
   2. In `native-messaging-host.ts` `cleanup()`, install an unreferenced 1000ms watchdog timer: `setTimeout(() => process.exit(0), 1000).unref()`.
 - **Consequences**: Guaranteed process exit within 1000ms on browser termination, zero zombie processes, and 100% elimination of port 12306 contention on Windows.
 
@@ -423,18 +423,18 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Decision**:
   1. **Hierarchical Dual-Brain Architecture**: Establish a Fast/System 1 Native Semantic Micro-Loop (`chrome_act_toward_goal`, 200–400ms/step) executing directly inside the Native Server, while Slow/System 2 Generalist LLMs retain macroscopic strategy, goal formulation, and supervisory steering.
   2. **Three-Tier Engine Degradation Ladder**:
-     - _Tier 1 (Semantic Probabilistic)_: TypeSafe Jev via 7 parallel structured questions (action Choice, click_target Choice, type_target Choice, select_target Choice, goal_done Noul, stuck Noul, destructive Noul) evaluated against a strict compact DOM budget ($\le$250 lines, $\le$120 chars/line, $\le$24KB total payload, sensitive password/file fields scrubbed).
-     - _Tier 2 (Heuristic Fast Fallback)_: Zero-dependency tokenization scoring with CJK bigrams, exact/substring matching (+2.0), role bonuses (button, textbox, combobox, link), and confidence separation ratio $((top_1 - top_2) / top_1)$ when Jev is unavailable, 401 unauthenticated (session latched), quota exhausted, or network severed.
-     - _Tier 3 (Macro Escalation)_: Controlled escalation back to System 2 upon encountering low confidence ($<0.30$), destructive actions (`pay`, `delete`, `purchase`, `submit`, `confirm`), repeated action loops ($\ge$3 identical actions without DOM mutation, URL change, or visualDiff), or step budget exhaustion ($\le$10 steps).
-  3. **Two-Stage `<select>` Primitive**: Leverage Jev Score primitive to inspect `<select>` options dynamically and select the optimal value without DOM mutation race conditions, returning full token usage and candidate shortlisting for dropdowns with $>10$ options.
+     - _Tier 1 (Semantic Probabilistic)_: TypeSafe Jev via 7 parallel structured questions (action Choice, click_target Choice, type_target Choice, select_target Choice, goal_done Noul, stuck Noul, destructive Noul) evaluated against a strict compact DOM budget (≤250 lines, ≤120 chars/line, ≤24KB total payload, sensitive password/file fields scrubbed).
+     - _Tier 2 (Heuristic Fast Fallback)_: Zero-dependency tokenization scoring with CJK bigrams, exact/substring matching (+2.0), role bonuses (button, textbox, combobox, link), and confidence separation ratio ((top_1 - top_2) / top_1) when Jev is unavailable, 401 unauthenticated (session latched), quota exhausted, or network severed.
+     - _Tier 3 (Macro Escalation)_: Controlled escalation back to System 2 upon encountering low confidence (< 0.30), destructive actions (`pay`, `delete`, `purchase`, `submit`, `confirm`), repeated action loops (≥3 identical actions without DOM mutation, URL change, or visualDiff), or step budget exhaustion (≤10 steps).
+  3. **Two-Stage `<select>` Primitive**: Leverage Jev Score primitive to inspect `<select>` options dynamically and select the optimal value without DOM mutation race conditions, returning full token usage and candidate shortlisting for dropdowns with > 10 options.
   4. **Zero Extension Changes**: Execute the semantic micro-loop entirely on the Native Server process via internal IPC dispatch (`callToolInternal`), maintaining absolute Manifest V3 extension boundary isolation.
   5. **Threshold Rationales**:
-     - _Action Confidence $\ge 0.55$_: Filters weak random actions while allowing confident navigation.
-     - _Target Confidence $\ge 0.45$ & Top Prob $\ge 0.35$_: Prevents ambiguous clicks between competing elements; separation ensures clear intent.
-     - _Goal Accomplished ($goal\_done \ge 0.85$ / Heuristic Coverage $\ge 0.80$)_: Tight threshold ensuring the goal is definitively achieved before stopping.
-     - _Stuck Circuit-Breaker ($stuck \ge 0.85$ & 3 Consecutive Unchanged Steps with $mutated=false$, $urlChanged=false$, and $visualDiff \le 0.01$)_: Eliminates infinite looping on unresponsive elements while avoiding false positives on visual canvas updates.
-     - _Destructive Guard ($destructive \ge 0.50$ & 14 Built-in Keywords)_: Zero-tolerance safety guard protecting user financial and state assets.
-     - _Execution Budgets_: `maxSteps` defaults to 10 (hard cap 60 in Jev mode, forced $\le 5$ in Heuristic mode) and `timeoutMs` defaults to 90s (hard cap 300s) to prevent unbounded token expenditure.
+     - _Action Confidence ≥ 0.55_: Filters weak random actions while allowing confident navigation.
+     - _Target Confidence ≥ 0.45 & Top Prob ≥ 0.35_: Prevents ambiguous clicks between competing elements; separation ensures clear intent.
+     - _Goal Accomplished (goal_done ≥ 0.85 / Heuristic Coverage ≥ 0.80)_: Tight threshold ensuring the goal is definitively achieved before stopping.
+     - _Stuck Circuit-Breaker (stuck ≥ 0.85 & 3 Consecutive Unchanged Steps with mutated=false, urlChanged=false, and visualDiff ≤ 0.01)_: Eliminates infinite looping on unresponsive elements while avoiding false positives on visual canvas updates.
+     - _Destructive Guard (destructive ≥ 0.50 & 14 Built-in Keywords)_: Zero-tolerance safety guard protecting user financial and state assets.
+     - _Execution Budgets_: `maxSteps` defaults to 10 (hard cap 60 in Jev mode, forced ≤ 5 in Heuristic mode) and `timeoutMs` defaults to 90s (hard cap 300s) to prevent unbounded token expenditure.
 - **Consequences**: 10x interaction acceleration for common deterministic workflows, seamless zero-downtime degradation across network or credential anomalies, and complete protection of user assets via safety escalations.
 
 ### ADR-024: Zero-Teleportation Agent Cursor Kinematics, Cross-Domain Coordinate Relay & Multi-Ripple Lifecycles (v3.2.0)

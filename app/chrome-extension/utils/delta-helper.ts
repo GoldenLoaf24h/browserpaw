@@ -19,16 +19,12 @@ async function fetchCurrentDomElements(
     );
   } catch {
     try {
-      results = await executeInPage<PrunedDOMTreeResult>(
-        { tabId },
-        'inPageDOMPruner',
-        [
-          {
-            viewportThreshold: 500,
-            highlight: false,
-          },
-        ],
-      );
+      results = await executeInPage<PrunedDOMTreeResult>({ tabId }, 'inPageDOMPruner', [
+        {
+          viewportThreshold: 500,
+          highlight: false,
+        },
+      ]);
     } catch {
       return null;
     }
@@ -69,10 +65,7 @@ async function fetchCurrentDomElements(
  * this captures the pre-interaction state so subsequent diff will accurately
  * detect elements added/modified/removed by the immediate action (e.g. dropdowns/popups/modals).
  */
-export async function ensureSnapshotBaseline(
-  tabId: number,
-  includeDelta?: boolean,
-): Promise<void> {
+export async function ensureSnapshotBaseline(tabId: number, includeDelta?: boolean): Promise<void> {
   if (!includeDelta) return;
   if (snapshotCacheManager.isSnapshotValid(tabId)) return;
 
@@ -141,4 +134,123 @@ export async function captureDeltaIfRequested(
       error: err instanceof Error ? err.message : String(err),
     } as any;
   }
+}
+
+export interface ChainedSnapshotSummary {
+  urlChanged: boolean;
+  currentUrl: string;
+  activeElement?: {
+    tagName?: string;
+    id?: string;
+    role?: string;
+    type?: string;
+    isInput?: boolean;
+    value?: string;
+    text?: string;
+  };
+  hasActiveModal: boolean;
+  deltaSummary: { added: number; modified: number; removed: number };
+  keyChanges: Array<{
+    type: 'added' | 'modified' | 'removed';
+    index?: number;
+    tagName: string;
+    text?: string;
+  }>;
+}
+
+/**
+ * Captures a lightweight chained snapshot summary right after an interaction,
+ * allowing agents to observe immediate UI feedback (active element, modals, URL, DOM changes)
+ * without issuing a separate full chrome_read_dom call.
+ */
+export async function captureChainedSnapshotSummary(
+  tabId: number,
+  previousUrl: string,
+  options?: { maxItems?: number; delayMs?: number },
+): Promise<ChainedSnapshotSummary> {
+  const maxItems = options?.maxItems ?? 10;
+  const delayMs = options?.delayMs ?? 100;
+
+  let activeElInfo: any = {};
+  try {
+    const activeRes = await executeInPage({ tabId }, 'inPageGetActiveElementSummary', []);
+    if (activeRes?.[0]?.result) {
+      activeElInfo = activeRes[0].result;
+    }
+  } catch {}
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const currentUrl = tab?.url || previousUrl;
+  const urlChanged = Boolean(previousUrl && currentUrl && previousUrl !== currentUrl);
+
+  const diff = await captureDeltaIfRequested(tabId, true, delayMs);
+
+  const added = diff?.added || [];
+  const modified = diff?.modified || [];
+  const removed = diff?.removed || [];
+
+  const keyChanges: Array<{
+    type: 'added' | 'modified' | 'removed';
+    index?: number;
+    tagName: string;
+    text?: string;
+  }> = [];
+
+  for (const item of added) {
+    if (keyChanges.length >= maxItems) break;
+    keyChanges.push({
+      type: 'added',
+      index: item.index,
+      tagName: item.tagName,
+      text: item.text ? item.text.slice(0, 40) : undefined,
+    });
+  }
+
+  for (const item of modified) {
+    if (keyChanges.length >= maxItems) break;
+    keyChanges.push({
+      type: 'modified',
+      index: item.index,
+      tagName: item.tagName,
+      text: item.text ? item.text.slice(0, 40) : undefined,
+    });
+  }
+
+  for (const item of removed) {
+    if (keyChanges.length >= maxItems) break;
+    const remIndex = typeof item === 'number' ? item : (item as any)?.index;
+    keyChanges.push({
+      type: 'removed',
+      index: remIndex,
+      tagName:
+        typeof item === 'object' && (item as any)?.tagName ? (item as any).tagName : 'removed',
+      text:
+        typeof item === 'object' && (item as any)?.text
+          ? (item as any).text.slice(0, 40)
+          : undefined,
+    });
+  }
+
+  return {
+    urlChanged,
+    currentUrl,
+    activeElement: activeElInfo.tagName
+      ? {
+          tagName: activeElInfo.tagName,
+          id: activeElInfo.id,
+          role: activeElInfo.role,
+          type: activeElInfo.type,
+          isInput: activeElInfo.isInput,
+          value: activeElInfo.value,
+          text: activeElInfo.text,
+        }
+      : undefined,
+    hasActiveModal: Boolean(activeElInfo.hasActiveModal),
+    deltaSummary: {
+      added: added.length,
+      modified: modified.length,
+      removed: removed.length,
+    },
+    keyChanges,
+  };
 }

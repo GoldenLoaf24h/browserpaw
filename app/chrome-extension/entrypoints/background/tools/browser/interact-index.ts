@@ -25,7 +25,11 @@ import {
 } from '../../../../utils/coordinate-parser';
 import { sessionTabAffinity } from '../../../../utils/session-tab-affinity';
 import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
-import { captureDeltaIfRequested, ensureSnapshotBaseline } from '../../../../utils/delta-helper';
+import {
+  captureDeltaIfRequested,
+  ensureSnapshotBaseline,
+  captureChainedSnapshotSummary,
+} from '../../../../utils/delta-helper';
 import { tabFaviconManager } from './tab-favicon';
 import { startActionNetworkCapture } from '../../../../utils/action-network-capture';
 
@@ -346,7 +350,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           .then((r) => r?.[0]?.result)
           .catch(() => null);
 
-        await ensureSnapshotBaseline(tabId, args.includeDelta);
+        await ensureSnapshotBaseline(tabId, args.includeDelta !== false);
 
         // D3 (TESTING-NOTES #19): when no explicit tabId/session bound the
         // target, resolveAffinityTab fell through to the user's ACTIVE tab -
@@ -597,6 +601,28 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             }
           }
 
+          // [ACT-01] Stagehand-inspired Self-Healing Retry:
+          // If the element index was momentarily detached due to dynamic framework rerendering,
+          // perform a micro quiet-wait and retry coordinate resolution once before giving up.
+          if (!coordResult || !coordResult.success) {
+            await new Promise((r) => setTimeout(r, 120));
+            coordResult = (
+              await executeInPage({ tabId }, 'inPageGetElementCoordinates', [args.index!])
+            )?.[0]?.result;
+            if (!coordResult || !coordResult.success) {
+              const frameResults = await executeInPage(
+                { tabId, allFrames: true },
+                'inPageGetElementCoordinates',
+                [args.index!],
+              );
+              const match = frameResults.find((r) => r.result?.success);
+              if (match?.result) {
+                coordResult = match.result;
+                targetFrameId = match.frameId;
+              }
+            }
+          }
+
           if (!coordResult || !coordResult.success) {
             if (hasCoord) {
               // Hybrid Visual Fallback: DOM extraction failed, fallback to coordinate
@@ -714,13 +740,12 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         // 2. Compensate cumulative frame offset if target is inside a nested or cross-origin subframe
         if (targetFrameId !== undefined && targetFrameId !== 0 && !isFallback) {
           const offset = await getSubframeViewportOffset(tabId, targetFrameId);
-          const localX = coordResult?.frameOffsetX || 0;
-          const localY = coordResult?.frameOffsetY || 0;
-          console.warn(
-            `[FRAME_OFFSET_DEBUG] targetFrameId=${targetFrameId} offset=${JSON.stringify(offset)} local=(${localX},${localY}) final=(${x - localX + offset.offsetX},${y - localY + offset.offsetY})`,
-          );
-          x = x - localX + offset.offsetX;
-          y = y - localY + offset.offsetY;
+          // Only add external subframe offset if not already compensated inside page
+          const alreadyCompensated = Boolean(coordResult?.isFrameCompensated);
+          if (!alreadyCompensated) {
+            x = x + offset.offsetX;
+            y = y + offset.offsetY;
+          }
         }
 
         let dragOutcome: any = undefined;
@@ -1222,7 +1247,12 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             ? `screenshot coordinate context expires in ${Math.round(ctxTtlMs / 1000)}s; re-capture to refresh`
             : undefined;
 
-        const delta = await captureDeltaIfRequested(tabId, args.includeDelta);
+        const chainedSnapshot =
+          args.includeDelta !== false
+            ? await captureChainedSnapshotSummary(tabId, previousUrl, { maxItems: 10, delayMs: 80 })
+            : undefined;
+        const delta =
+          args.includeDelta === true ? await captureDeltaIfRequested(tabId, true, 0) : undefined;
 
         let currentUrl = previousUrl;
         try {
@@ -1274,6 +1304,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   screenshotCtxWarning,
                   ...(affinityWarning ? { affinityWarning } : {}),
                   ...(delta ? { delta } : {}),
+                  ...(chainedSnapshot ? { chainedSnapshot } : {}),
                   ...(perceptiveDelta ? { perceptiveDelta } : {}),
                   ...(deliveryVerified === undefined
                     ? {}

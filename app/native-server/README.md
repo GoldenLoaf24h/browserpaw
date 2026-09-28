@@ -96,10 +96,8 @@ Register the native host with Chrome:
 node dist/scripts/register-dev.js
 
 # Or from repository root:
-node bin/browserpaw.cjs register
-
-# Or if globally installed:
-npx browserpaw register
+node app/native-server/dist/scripts/register-dev.js
+# (or pnpm --filter mcp-chrome-bridge register:dev)
 ```
 
 Manifest registration targets:

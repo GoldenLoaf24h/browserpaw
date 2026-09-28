@@ -6,7 +6,7 @@
 
 const LOG_PREFIX = '[KeepaliveManager]';
 const ALARM_NAME = 'mcp_keepalive_heartbeat';
-const activeTags = new Set<string>();
+const activeTags = new Map<string, number>();
 let heartbeatInterval: any = null;
 
 function ensureHeartbeat(): void {
@@ -63,15 +63,30 @@ if (typeof chrome !== 'undefined' && chrome.alarms?.onAlarm?.addListener) {
 }
 
 export function acquireKeepalive(tag: string): () => void {
-  activeTags.add(tag);
+  const current = activeTags.get(tag) || 0;
+  activeTags.set(tag, current + 1);
   ensureHeartbeat();
-  console.debug(`${LOG_PREFIX} Acquired keepalive for tag: ${tag} (total: ${activeTags.size})`);
+  console.debug(
+    `${LOG_PREFIX} Acquired keepalive for tag: ${tag} (tag count: ${current + 1}, active tags: ${activeTags.size})`,
+  );
+  let released = false;
   return () => {
-    activeTags.delete(tag);
+    if (released) return;
+    released = true;
+    const count = activeTags.get(tag);
+    if (count !== undefined) {
+      if (count <= 1) {
+        activeTags.delete(tag);
+      } else {
+        activeTags.set(tag, count - 1);
+      }
+    }
     if (activeTags.size === 0) {
       stopHeartbeat();
     }
-    console.debug(`${LOG_PREFIX} Released keepalive for tag: ${tag} (total: ${activeTags.size})`);
+    console.debug(
+      `${LOG_PREFIX} Released keepalive for tag: ${tag} (remaining tag count: ${activeTags.get(tag) || 0}, active tags: ${activeTags.size})`,
+    );
   };
 }
 
@@ -80,5 +95,9 @@ export function isKeepaliveActive(): boolean {
 }
 
 export function getKeepaliveRefCount(): number {
-  return activeTags.size;
+  let total = 0;
+  for (const count of activeTags.values()) {
+    total += count;
+  }
+  return total;
 }

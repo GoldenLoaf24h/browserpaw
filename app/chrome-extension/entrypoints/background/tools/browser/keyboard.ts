@@ -78,6 +78,65 @@ const TWO_WORD_KEYS: Record<string, string> = {
   'arrow right': 'ArrowRight',
 };
 
+interface CdpKeyDef {
+  key: string;
+  code: string;
+  windowsVirtualKeyCode: number;
+  text?: string;
+  unmodifiedText?: string;
+}
+
+const CDP_KEY_DEFINITIONS: Record<string, CdpKeyDef> = {
+  enter: {
+    key: 'Enter',
+    code: 'Enter',
+    windowsVirtualKeyCode: 13,
+    text: '\r',
+    unmodifiedText: '\r',
+  },
+  return: {
+    key: 'Enter',
+    code: 'Enter',
+    windowsVirtualKeyCode: 13,
+    text: '\r',
+    unmodifiedText: '\r',
+  },
+  tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+  escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+  esc: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+  delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 },
+  del: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 },
+  insert: { key: 'Insert', code: 'Insert', windowsVirtualKeyCode: 45 },
+  space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ', unmodifiedText: ' ' },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+  up: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+  'arrow up': { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  down: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  'arrow down': { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+  left: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+  'arrow left': { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 },
+  arrowright: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+  right: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+  'arrow right': { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 },
+  home: { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 },
+  end: { key: 'End', code: 'End', windowsVirtualKeyCode: 35 },
+  pageup: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 },
+  'page up': { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 },
+  pagedown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 },
+  'page down': { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34 },
+};
+
+for (let i = 1; i <= 12; i++) {
+  CDP_KEY_DEFINITIONS[`f${i}`] = {
+    key: `F${i}`,
+    code: `F${i}`,
+    windowsVirtualKeyCode: 111 + i,
+  };
+}
+
 /**
  * The content-script simulator separates key combinations with ','; accept the
  * space-separated form too so "ArrowDown ArrowDown Enter" works like it does
@@ -337,43 +396,55 @@ class KeyboardTool extends BaseBrowserToolExecutor {
 
       if (!result || result.error) {
         try {
-          const keyLower = keys.trim().toLowerCase();
-          const isEnter = keyLower === 'enter' || keyLower === 'return';
-          const isTab = keyLower === 'tab';
-          const isEscape = keyLower === 'escape' || keyLower === 'esc';
-          const isBackspace = keyLower === 'backspace';
+          const rawKeys = keys.trim();
+          const singleDef = CDP_KEY_DEFINITIONS[keyToken(rawKeys)];
+          let targetDefs: CdpKeyDef[] = [];
 
-          if (isEnter || isTab || isEscape || isBackspace) {
-            const vk = isEnter ? 13 : isTab ? 9 : isEscape ? 27 : 8;
-            const keyName = isEnter ? 'Enter' : isTab ? 'Tab' : isEscape ? 'Escape' : 'Backspace';
+          if (singleDef) {
+            targetDefs = [singleDef];
+          } else {
+            const tokens = rawKeys.split(/[\s,]+/).filter(Boolean);
+            const resolved = tokens.map((t) => CDP_KEY_DEFINITIONS[keyToken(t)]);
+            if (resolved.length > 0 && resolved.every((d): d is CdpKeyDef => Boolean(d))) {
+              targetDefs = resolved;
+            }
+          }
+
+          if (targetDefs.length > 0) {
             await cdpSessionManager.withSession(tab.id, 'keyboard', async () => {
-              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
-                type: 'keyDown',
-                key: keyName,
-                code: keyName,
-                text: isEnter ? String.fromCharCode(13) : undefined,
-                unmodifiedText: isEnter ? String.fromCharCode(13) : undefined,
-                windowsVirtualKeyCode: vk,
-                nativeVirtualKeyCode: vk,
-              });
-              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
-                type: 'keyUp',
-                key: keyName,
-                code: keyName,
-                windowsVirtualKeyCode: vk,
-                nativeVirtualKeyCode: vk,
-              });
+              for (const def of targetDefs) {
+                await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                  type: 'keyDown',
+                  key: def.key,
+                  code: def.code,
+                  text: def.text,
+                  unmodifiedText: def.unmodifiedText,
+                  windowsVirtualKeyCode: def.windowsVirtualKeyCode,
+                  nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                });
+                await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                  type: 'keyUp',
+                  key: def.key,
+                  code: def.code,
+                  windowsVirtualKeyCode: def.windowsVirtualKeyCode,
+                  nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                });
+                if (targetDefs.length > 1) {
+                  await new Promise((r) => setTimeout(r, Math.min(50, Math.max(10, delay))));
+                }
+              }
             });
+            const keyNames = targetDefs.map((d) => d.key).join(', ');
             return {
               content: [
                 {
                   type: 'text',
                   text: JSON.stringify({
                     success: true,
-                    message: 'Dispatched native CDP key ' + keyName,
+                    message: `Dispatched native CDP key(s): ${keyNames}`,
                     method: 'cdp_dispatch_key_event',
                     isTrusted: true,
-                    key: keyName,
+                    keys: keyNames,
                   }),
                 },
               ],

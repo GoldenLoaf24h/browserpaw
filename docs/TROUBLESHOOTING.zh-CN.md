@@ -157,7 +157,7 @@ Agent 必须立即调用一次 `chrome_read_dom` 获取最新的 1-based 索引�
 
 ### 底层机制与保障
 
-BrowserPaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 $W_{viewport} \times H_{viewport}$）。
+BrowserPaw 已在 `screenshot.ts` 中实现全链路 **DPR 1:1 几何归一化**（通过 `OffscreenCanvas` 强制重采样为标准 CSS 视口尺寸 W_viewport × H_viewport）。
 
 ### 注意事项
 

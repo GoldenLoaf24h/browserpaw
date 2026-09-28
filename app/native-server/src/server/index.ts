@@ -838,6 +838,9 @@ export class Server {
 
       request.socket.on('close', () => {
         request.log.info(`SSE client disconnected for session: ${sessionId}`);
+        if (sessionId) {
+          mcpSessionManager.closeSession(sessionId).catch(() => {});
+        }
       });
     });
 

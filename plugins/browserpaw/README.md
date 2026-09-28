@@ -31,7 +31,9 @@ hermes plugins enable browserpaw
 1. **Load BrowserPaw Extension**: In Chrome, navigate to `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `app/chrome-extension/.output/chrome-mv3` directory (or release archive).
 2. **Start Native Bridge**: Run the native MCP bridge:
    ```bash
-   npm run start:server
+   node app/native-server/dist/index.js
+   # or for development:
+   pnpm --filter mcp-chrome-bridge dev
    ```
    The server listens on `http://127.0.0.1:12306/mcp` (or custom `BROWSERPAW_MCP_URL`).
 3. **Bridge token**: The native server requires a bearer token on every `/mcp` request. The plugin sends it automatically, resolving in order `BROWSERPAW_MCP_TOKEN`, `CHROME_MCP_TOKEN`, then the file `~/.chrome-mcp/bridge-token` the server writes on first start. If tools return an HTTP 401 error, set one of those variables or make sure that file is readable by the Hermes process.
@@ -55,7 +57,7 @@ hermes plugins enable browserpaw
 | `browserpaw_switch_tab`           | Switch active focus to a specific tab                                      |
 | `browserpaw_close_tabs`           | Safe tab closure with session affinity protection                          |
 | `browserpaw_get_windows_and_tabs` | Query all open windows, tab groups, and tabs                               |
-| `browserpaw_tool_docs`            | Inspect documentation for all 49 BrowserPaw capabilities                   |
+| `browserpaw_tool_docs`            | Inspect documentation for all 50 BrowserPaw capabilities                   |
 
 ## Bundled Skill
 
