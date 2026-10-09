@@ -82,9 +82,11 @@ describe('GrepTool (chrome_grep)', () => {
     expect(parsed.matches[0].index).toBe(2);
     expect(parsed.matches[0].tagName).toBe('button');
 
-    // Verify inPageReindexFrame was NOT called (read-only search must not mutate subframe index maps)
+    // Verify inPageReindexFrame was called to synchronize subframe index map
     const reindexCall = spy.mock.calls.find((c) => c[1] === 'inPageReindexFrame');
-    expect(reindexCall).toBeUndefined();
+    expect(reindexCall).toBeDefined();
+    expect(reindexCall?.[0]).toEqual({ tabId: 123, frameIds: [42] });
+    expect(reindexCall?.[2]).toEqual([1, false]);
 
     spy.mockRestore();
   });

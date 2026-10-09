@@ -659,6 +659,7 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
       let spanClicked = false;
       button.addEventListener('click', () => {
         buttonClicked = true;
+        popup.style.display = 'none';
       });
       span.addEventListener('click', () => {
         spanClicked = true;
@@ -669,6 +670,8 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
       expect(spanClicked).toBe(false);
       expect(result.dismissedCount).toBe(1);
       expect(result.overlays[0].buttonText).toBe('关闭');
+      expect(result.overlays[0].dismissed).toBe(true);
+      expect(result.overlays[0].needsPhysicalFallback).toBe(false);
     });
 
     it('deduplicates dismissal between nested modal container and its backdrop mask', () => {
@@ -693,6 +696,8 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
       let clickCount = 0;
       btn.addEventListener('click', () => {
         clickCount++;
+        dialog.style.display = 'none';
+        mask.style.display = 'none';
       });
 
       const result = inPageDismissOverlays();
@@ -719,11 +724,40 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
       let clicked = false;
       btn.addEventListener('click', () => {
         clicked = true;
+        wrapper.style.display = 'none';
       });
 
       const result = inPageDismissOverlays();
       expect(clicked).toBe(true);
       expect(result.dismissedCount).toBe(1);
+      expect(result.overlays[0].dismissed).toBe(true);
+      expect(result.overlays[0].needsPhysicalFallback).toBe(false);
+    });
+
+    it('reports dismissedCount: 0 and needsPhysicalFallback: true when synthetic click fails to close overlay (BUG-17 contract)', () => {
+      document.body.innerHTML = `
+        <div class="stubborn-modal" style="position: fixed; z-index: 9999; width: 350px; height: 300px;">
+          <button class="close-btn" aria-label="关闭">×</button>
+        </div>
+      `;
+      const modal = document.querySelector('.stubborn-modal') as HTMLElement;
+      const btn = modal.querySelector('button') as HTMLElement;
+      Object.defineProperty(modal, 'offsetWidth', { configurable: true, value: 350 });
+      Object.defineProperty(modal, 'offsetHeight', { configurable: true, value: 300 });
+      Object.defineProperty(btn, 'offsetWidth', { configurable: true, value: 24 });
+      Object.defineProperty(btn, 'offsetHeight', { configurable: true, value: 24 });
+
+      let clicked = false;
+      // Event dispatched but modal does NOT close (e.g. requires isTrusted true)
+      btn.addEventListener('click', () => {
+        clicked = true;
+      });
+
+      const result = inPageDismissOverlays();
+      expect(clicked).toBe(true);
+      expect(result.dismissedCount).toBe(0);
+      expect(result.overlays[0].dismissed).toBe(false);
+      expect(result.overlays[0].needsPhysicalFallback).toBe(true);
     });
 
     it('triggers overlay dismissal in chrome_navigate when dismissOverlays: true', async () => {

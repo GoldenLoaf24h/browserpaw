@@ -34,7 +34,7 @@ interface TabLineageRecord {
 export class SessionTabAffinityManager {
   private affinityMap = new Map<string, number>();
   private tabLineage = new Map<number, TabLineageRecord>();
-  private activeHandoverTrackers = new Set<(tab: chrome.tabs.Tab, activated: boolean) => void>();
+  private activeHandoverTrackers = new Set<(tab: chrome.tabs.Tab, activated: boolean, isCreated?: boolean) => void>();
 
   constructor() {
     this.initListeners();
@@ -120,7 +120,7 @@ export class SessionTabAffinityManager {
               // Notify active trackers
               for (const tracker of this.activeHandoverTrackers) {
                 try {
-                  tracker(tab, Boolean(tab.active));
+                  tracker(tab, Boolean(tab.active), true);
                 } catch {}
               }
             }
@@ -151,7 +151,7 @@ export class SessionTabAffinityManager {
                   if (tab && tab.id) {
                     for (const tracker of this.activeHandoverTrackers) {
                       try {
-                        tracker(tab, true);
+                        tracker(tab, true, false);
                       } catch {}
                     }
                   }
@@ -276,7 +276,7 @@ export class SessionTabAffinityManager {
       }
     } catch {}
 
-    const listener = (tab: chrome.tabs.Tab, activated: boolean) => {
+    const listener = (tab: chrome.tabs.Tab, activated: boolean, isCreated = false) => {
       if (handoverResolved || !tab || typeof tab.id !== 'number' || tab.id === parentTabId) return;
       if (
         isNewTabUrl(tab.url || (tab as any).pendingUrl) ||
@@ -295,11 +295,13 @@ export class SessionTabAffinityManager {
         return;
       }
 
-      newlySeenTabIds.add(tab.id);
+      if (isCreated) {
+        newlySeenTabIds.add(tab.id);
+      }
 
       const isDirectOpener = tab.openerTabId === parentTabId;
       const isNewTabInWindow =
-        knownExistingTabIds.size > 0 ? !knownExistingTabIds.has(tab.id) : true;
+        isCreated && (knownExistingTabIds.size > 0 ? !knownExistingTabIds.has(tab.id) : true);
 
       if (isDirectOpener || isNewTabInWindow) {
         // Record lineage
@@ -320,14 +322,14 @@ export class SessionTabAffinityManager {
     this.activeHandoverTrackers.add(listener);
 
     const onCreated = (tab: chrome.tabs.Tab) => {
-      listener(tab, Boolean(tab.active));
+      listener(tab, Boolean(tab.active), true);
     };
     const onActivated = (activeInfo: { tabId: number; windowId?: number }) => {
       if (typeof chrome !== 'undefined' && typeof chrome.tabs?.get === 'function') {
         chrome.tabs
           .get(activeInfo.tabId)
           .then((tab) => {
-            if (tab && typeof tab.id === 'number') listener(tab, true);
+            if (tab && typeof tab.id === 'number') listener(tab, true, false);
           })
           .catch(() => {});
       }

@@ -13,6 +13,9 @@ describe('InterceptApiTool (Structured API Sniffing)', () => {
         query: vi.fn(async () => [{ id: 1, active: true, windowId: 1 }]),
       },
       debugger: {
+        attach: vi.fn(async () => {}),
+        detach: vi.fn(async () => {}),
+        sendCommand: vi.fn(async () => ({})),
         onEvent: {
           addListener: vi.fn(),
           removeListener: vi.fn(),

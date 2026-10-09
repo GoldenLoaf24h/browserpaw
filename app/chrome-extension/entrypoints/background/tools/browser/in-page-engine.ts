@@ -157,83 +157,107 @@ export async function executeInPage<R = any>(
     promiseType?: string;
   }>[];
 
+  const cleanupSlot = (slotKey: string, tgt?: chrome.scripting.InjectionTarget) => {
+    if (typeof target.tabId === 'number') {
+      chrome.scripting
+        .executeScript({
+          target: tgt || (typeof effectiveTarget !== 'undefined' ? effectiveTarget : target),
+          func: (k: string) => {
+            const g = globalThis as any;
+            if (g && g[k]) {
+              g[k].abandoned = true;
+              delete g[k];
+            }
+          },
+          args: [slotKey],
+        })
+        .catch(() => {});
+    }
+  };
+
+  let abandoned = false;
+  const startPromise = chrome.scripting.executeScript({
+    target,
+    func: (ns: string, name: string, fnArgs: unknown[], slotKey: string, stashSync?: boolean) => {
+      const g = globalThis as any;
+      const engine = g[ns];
+      const fn = engine ? engine[name] : undefined;
+
+      if (typeof engine !== 'object' || typeof fn !== 'function') {
+        return {
+          engineType: typeof engine,
+          fnType: typeof fn,
+          singleTurn: false,
+          status: 'unavailable',
+        };
+      }
+
+      try {
+        const raw = fn.call(engine, ...fnArgs);
+        const isAsync = Boolean(raw && typeof raw.then === 'function');
+
+        // Stash box only for async promises, or for allFrames sync when mixed frames might fall back to poll/retrieve
+        if (isAsync || stashSync) {
+          const box: {
+            promise?: unknown;
+            settled: boolean;
+            listening?: boolean;
+            value?: unknown;
+            error?: string;
+          } = {
+            promise: raw,
+            settled: !isAsync,
+            listening: false,
+            value: !isAsync
+              ? raw === undefined
+                ? { __mcpInpageReturn: 'undefined' }
+                : raw
+              : undefined,
+            error: undefined,
+          };
+          g[slotKey] = box;
+        }
+
+        if (!isAsync) {
+          return {
+            engineType: 'object',
+            fnType: 'function',
+            singleTurn: true,
+            status: 'success',
+            value: raw === undefined ? { __mcpInpageReturn: 'undefined' } : raw,
+          };
+        }
+
+        return {
+          engineType: 'object',
+          fnType: 'function',
+          singleTurn: false,
+          promiseType: typeof raw,
+        };
+      } catch (err) {
+        return {
+          engineType: 'object',
+          fnType: 'function',
+          singleTurn: true,
+          status: 'error',
+          error: String(err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : err),
+        };
+      }
+    },
+    args: [INPAGE_NAMESPACE, fnName, args, slot, Boolean(target.allFrames)],
+  });
+
+  startPromise
+    .then(() => {
+      if (abandoned) {
+        cleanupSlot(slot, target);
+      }
+    })
+    .catch(() => {});
+
   try {
     startResults = (await raceInjection(
-      chrome.scripting.executeScript({
-        target,
-        func: (ns: string, name: string, fnArgs: unknown[], slotKey: string) => {
-          const g = globalThis as any;
-          const engine = g[ns];
-          const fn = engine ? engine[name] : undefined;
-
-          if (typeof engine !== 'object' || typeof fn !== 'function') {
-            return {
-              engineType: typeof engine,
-              fnType: typeof fn,
-              singleTurn: false,
-              status: 'unavailable',
-            };
-          }
-
-          try {
-            // Clean up any stale slot box from a previous single-turn call
-            if (g.__mcp_last_slot && g[g.__mcp_last_slot]) {
-              delete g[g.__mcp_last_slot];
-            }
-            g.__mcp_last_slot = slotKey;
-
-            const raw = fn.call(engine, ...fnArgs);
-            const isAsync = Boolean(raw && typeof raw.then === 'function');
-
-            // Stash box for both sync and async so if some frames are sync and others async,
-            // the poll/retrieve fallback can safely retrieve values from ALL frames without data loss.
-            const box: {
-              promise?: unknown;
-              settled: boolean;
-              listening?: boolean;
-              value?: unknown;
-              error?: string;
-            } = {
-              promise: raw,
-              settled: !isAsync,
-              listening: false,
-              value: !isAsync
-                ? raw === undefined
-                  ? { __mcpInpageReturn: 'undefined' }
-                  : raw
-                : undefined,
-              error: undefined,
-            };
-            g[slotKey] = box;
-
-            if (!isAsync) {
-              return {
-                engineType: 'object',
-                fnType: 'function',
-                singleTurn: true,
-                status: 'success',
-                value: raw === undefined ? { __mcpInpageReturn: 'undefined' } : raw,
-              };
-            }
-
-            return {
-              engineType: 'object',
-              fnType: 'function',
-              singleTurn: false,
-              promiseType: typeof raw,
-            };
-          } catch (err) {
-            return {
-              engineType: 'object',
-              fnType: 'function',
-              singleTurn: true,
-              status: 'error',
-              error: String(err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : err),
-            };
-          }
-        },
-        args: [INPAGE_NAMESPACE, fnName, args, slot],
-      }),
+      startPromise,
       'eval-or-start',
     )) as unknown as chrome.scripting.InjectionResult<{
       engineType: string;
@@ -245,6 +269,8 @@ export async function executeInPage<R = any>(
       promiseType?: string;
     }>[];
   } catch (err) {
+    abandoned = true;
+    cleanupSlot(slot, target);
     if (typeof target.tabId === 'number' && isNavigationOrContextDestroyedError(err)) {
       injectedTabs.delete(target.tabId);
     }
@@ -298,6 +324,10 @@ export async function executeInPage<R = any>(
     validResults.length > 0 && validResults.every((r) => r?.result?.singleTurn === true);
 
   if (allSingleTurn) {
+    if (target.allFrames) {
+      cleanupSlot(slot, target);
+    }
+
     for (const r of validResults) {
       if (r?.result?.status === 'error') {
         throw new Error(`In-page engine ${fnName} failed: ${r.result.error}`);
@@ -320,6 +350,7 @@ export async function executeInPage<R = any>(
       ? { tabId: target.tabId, frameIds: validFrames }
       : target;
 
+  let retrieved = false;
   try {
     // 2) Poll: attach settle callbacks; every dispatcher stays synchronous.
     const deadline = Date.now() + timeoutMs;
@@ -337,10 +368,12 @@ export async function executeInPage<R = any>(
               box.listening = true;
               promise.then(
                 (value: unknown) => {
+                  if (box.abandoned) return;
                   box.value = value;
                   box.settled = true;
                 },
                 (err: unknown) => {
+                  if (box.abandoned) return;
                   box.error = String(
                     err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : err,
                   );
@@ -369,7 +402,10 @@ export async function executeInPage<R = any>(
         func: (slotKey: string, timeoutMs: number) => {
           const g = globalThis as any;
           const box = g[slotKey];
-          delete g[slotKey];
+          if (box) {
+            box.abandoned = true;
+            delete g[slotKey];
+          }
           // A frame can navigate away between start and retrieve - drop it
           // silently; real engine-missing cases already fail at the start step.
           if (!box) return undefined;
@@ -382,6 +418,7 @@ export async function executeInPage<R = any>(
       }),
       'retrieve',
     )) as unknown as chrome.scripting.InjectionResult<R>[];
+    retrieved = true;
 
     for (const r of results ?? []) {
       const marker = r?.result as
@@ -412,5 +449,9 @@ export async function executeInPage<R = any>(
       ];
     }
     throw err;
+  } finally {
+    if (!retrieved) {
+      cleanupSlot(slot);
+    }
   }
 }

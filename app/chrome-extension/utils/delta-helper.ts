@@ -43,11 +43,26 @@ async function fetchCurrentDomElements(
     if (r === mainFrame || !r.result) continue;
     const subData = r.result;
     if (subData.indexedElements && subData.indexedElements.length > 0) {
+      const frameOffset = currentIndex - 1;
       for (const el of subData.indexedElements) {
         allElements.push({
           ...el,
           index: currentIndex++,
         });
+      }
+      if (typeof r.frameId === 'number') {
+        try {
+          await executeInPage({ tabId, frameIds: [r.frameId] }, 'inPageReindexFrame', [
+            frameOffset,
+            false,
+          ]);
+        } catch (reindexErr) {
+          console.warn(
+            'Failed to synchronize subframe ' + r.frameId + ' index map in delta helper:',
+            reindexErr,
+          );
+          return null;
+        }
       }
     }
   }

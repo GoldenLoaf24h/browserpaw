@@ -641,6 +641,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       let clicked = false;
       closeBtn.onclick = () => {
         clicked = true;
+        modal.style.display = 'none';
       };
 
       modal.appendChild(closeBtn);
@@ -650,6 +651,8 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(dismissRes.dismissedCount).toBe(1);
       expect(clicked).toBe(true);
       expect(dismissRes.overlays[0].action).toBe('clicked_close_button');
+      expect(dismissRes.overlays[0].dismissed).toBe(true);
+      expect(dismissRes.overlays[0].needsPhysicalFallback).toBe(false);
     });
 
     it('verifies input commitment with generic button classes (btn-primary, btn-action, icon-search)', () => {
@@ -714,6 +717,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       let elClicked = false;
       headerBtn.onclick = () => {
         elClicked = true;
+        elDialog.style.display = 'none';
       };
       elDialog.appendChild(headerBtn);
       document.body.appendChild(elDialog);
@@ -722,6 +726,8 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(dismissRes.dismissedCount).toBe(1);
       expect(elClicked).toBe(true);
       expect(dismissRes.overlays[0].buttonSelector).toContain('el-dialog__headerbtn');
+      expect(dismissRes.overlays[0].dismissed).toBe(true);
+      expect(dismissRes.overlays[0].needsPhysicalFallback).toBe(false);
     });
 
     it('aggregates subframe virtualization metrics into mergedData in ReadDOMTool', async () => {

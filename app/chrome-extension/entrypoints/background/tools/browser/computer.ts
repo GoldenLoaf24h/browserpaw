@@ -1,4 +1,5 @@
 import { tabFaviconManager } from './tab-favicon';
+import { tabGroupManager } from './tab-group-manager';
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
@@ -91,6 +92,9 @@ interface ComputerParams {
   crop?: any;
   quality?: number;
   format?: 'png' | 'jpeg' | 'webp';
+  groupTitle?: string;
+  groupColor?: 'grey' | 'blue' | 'red' | 'yellow' | 'green' | 'pink' | 'purple' | 'cyan' | 'orange';
+  autoGroup?: boolean;
 }
 
 // Minimal CDP helper encapsulated here to avoid scattering CDP code
@@ -249,6 +253,21 @@ class ComputerTool extends BaseBrowserToolExecutor {
         return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
       tabFaviconManager.markTabActive(tab.id);
 
+      // TOOL01: Consume groupTitle, groupColor, autoGroup without double-grouping
+      if (args.autoGroup !== false && typeof tab.windowId === 'number') {
+        const isAlreadyAgentTab = tabGroupManager.isAgentTab(tab.id);
+        const hasExplicitConfig = Boolean(args.groupTitle || args.groupColor);
+        if (hasExplicitConfig || !isAlreadyAgentTab) {
+          await tabGroupManager
+            .ensureAgentTabGroup(tab.id, {
+              title: args.groupTitle,
+              color: args.groupColor,
+              windowId: tab.windowId,
+            })
+            .catch(() => {});
+        }
+      }
+
       // D3 (TESTING-NOTES #19): warn when the target fell back to the active
       // tab so agent input landing on the user's current page is visible.
       const computerAffinityWarning = await (async () => {
@@ -287,11 +306,179 @@ class ComputerTool extends BaseBrowserToolExecutor {
       return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
     }
     const tabId = tab.id;
+    const targetSessionId = params.sessionId || params.sessionContext;
+    const targetWindowId = tab.windowId;
 
-    // Helper to project coordinates using screenshot context when available
+    const isScreenshotSpace = params.coordinateSpace === 'screenshot';
+
+    // Single unified helper to project and viewport-align coordinates
+    const projectCoords = async (
+      c1?: any,
+      c2?: any,
+    ): Promise<{
+      p1?: Coordinates;
+      p2?: Coordinates;
+      error?: string;
+    }> => {
+      if (!c1 && !c2) return {};
+
+      let screenshotCtx: any;
+      if (isScreenshotSpace) {
+        screenshotCtx = screenshotContextManager.getContext(tabId);
+        if (!screenshotCtx) {
+          return {
+            error:
+              'Screenshot context expired or not found. Capture a screenshot before using coordinateSpace: "screenshot".',
+          };
+        }
+        if (tab.url) {
+          const originErr = screenshotOriginViolation(tabId, tab.url, params.action);
+          if (originErr) return { error: originErr };
+        }
+      }
+
+      const parseOne = (raw: any): { x: number; y: number; isDocumentSpace?: boolean } | null => {
+        if (!raw) return null;
+        if (isScreenshotSpace && screenshotCtx) {
+          // Normalize to screenshot pixel grid first without double scaling
+          const rawParsed = parseUnifiedCoordinate(raw, {
+            viewportWidth: screenshotCtx.screenshotWidth,
+            viewportHeight: screenshotCtx.screenshotHeight,
+            originX: 0,
+            originY: 0,
+          });
+          if (!rawParsed) return null;
+          const scaled = scaleCoordinates(rawParsed.x, rawParsed.y, screenshotCtx);
+          return { x: scaled.x, y: scaled.y, isDocumentSpace: scaled.isDocumentSpace };
+        }
+        // Viewport space: standard CSS viewport without ROI/crop projection
+        const parsed = parseUnifiedCoordinate(raw, { originX: 0, originY: 0 });
+        return parsed ? { x: parsed.x, y: parsed.y } : null;
+      };
+
+      const res1 = parseOne(c1);
+      const res2 = parseOne(c2);
+
+      if ((c1 && !res1) || (c2 && !res2)) {
+        return { error: 'Failed to parse coordinates' };
+      }
+
+      // If any coordinate is in document space (e.g. from fullPage screenshot), align viewport
+      if (res1?.isDocumentSpace || res2?.isDocumentSpace) {
+        const scrollRes = await executeInPage({ tabId }, 'inPageGetScrollState', []).catch(() => null);
+        const scrollState = scrollRes?.[0]?.result;
+        if (
+          !scrollState ||
+          typeof scrollState.scrollX !== 'number' ||
+          typeof scrollState.scrollY !== 'number' ||
+          typeof scrollState.viewportWidth !== 'number' ||
+          typeof scrollState.viewportHeight !== 'number'
+        ) {
+          return { error: 'Failed to retrieve page scroll geometry for document space coordinates' };
+        }
+
+        const vh = scrollState.viewportHeight;
+        const vw = scrollState.viewportWidth;
+        let curScrollX = scrollState.scrollX;
+        let curScrollY = scrollState.scrollY;
+
+        // Calculate valid scroll bounding interval [minScroll, maxScroll] that can show target point(s)
+        const getFeasibleRange = (
+          p1?: { x: number; y: number },
+          p2?: { x: number; y: number },
+        ): { minX: number; maxX: number; minY: number; maxY: number } | null => {
+          let minX = 0;
+          let maxX = Infinity;
+          let minY = 0;
+          let maxY = Infinity;
+
+          if (p1 && p2) {
+            minX = Math.max(0, p1.x - vw + 1, p2.x - vw + 1);
+            maxX = Math.min(p1.x, p2.x);
+            minY = Math.max(0, p1.y - vh + 1, p2.y - vh + 1);
+            maxY = Math.min(p1.y, p2.y);
+            if (minX > maxX || minY > maxY) return null;
+          } else {
+            const p = p1 || p2!;
+            minX = Math.max(0, p.x - vw + 1);
+            maxX = p.x;
+            minY = Math.max(0, p.y - vh + 1);
+            maxY = p.y;
+          }
+          return { minX, maxX, minY, maxY };
+        };
+
+        const range = getFeasibleRange(res1 ?? undefined, res2 ?? undefined);
+        if (!range) {
+          return {
+            error: `Coordinates (${res1 ? res1.x + ',' + res1.y : ''}) and (${res2 ? res2.x + ',' + res2.y : ''}) cannot fit simultaneously within viewport (${vw}x${vh}). Both points must fit within the same viewport.`,
+          };
+        }
+
+        // Check if current scroll position already accommodates the points
+        const needScrollX = curScrollX < range.minX || curScrollX > range.maxX;
+        const needScrollY = curScrollY < range.minY || curScrollY > range.maxY;
+
+        if (needScrollX || needScrollY) {
+          let targetX = curScrollX;
+          let targetY = curScrollY;
+
+          if (needScrollX) {
+            const desiredX = res1 && res2 ? (res1.x + res2.x) / 2 - vw / 2 : (res1 || res2!).x - vw / 2;
+            targetX = Math.round(Math.max(range.minX, Math.min(range.maxX, desiredX)));
+          }
+          if (needScrollY) {
+            const desiredY = res1 && res2 ? (res1.y + res2.y) / 2 - vh / 2 : (res1 || res2!).y - vh / 2;
+            targetY = Math.round(Math.max(range.minY, Math.min(range.maxY, desiredY)));
+          }
+
+          const instantRes = await executeInPage({ tabId }, 'inPageInstantScrollTo', [targetX, targetY]).catch(() => null);
+          const scrollOutcome = instantRes?.[0]?.result;
+          if (
+            !scrollOutcome ||
+            !scrollOutcome.success ||
+            typeof scrollOutcome.scrollX !== 'number' ||
+            typeof scrollOutcome.scrollY !== 'number'
+          ) {
+            return { error: 'Failed to scroll page to bring target coordinates into viewport' };
+          }
+          curScrollX = scrollOutcome.scrollX;
+          curScrollY = scrollOutcome.scrollY;
+        }
+
+        // Verify that after scrolling, points are genuinely visible in current viewport (fail closed, no blind clamp)
+        const toViewport = (r: { x: number; y: number; isDocumentSpace?: boolean }): Coordinates | null => {
+          if (!r.isDocumentSpace) return { x: r.x, y: r.y };
+          const vx = Math.round(r.x - curScrollX);
+          const vy = Math.round(r.y - curScrollY);
+          if (vx < 0 || vx >= vw || vy < 0 || vy >= vh) {
+            return null;
+          }
+          return { x: vx, y: vy };
+        };
+
+        const p1 = res1 ? toViewport(res1) : undefined;
+        const p2 = res2 ? toViewport(res2) : undefined;
+
+        if ((res1 && !p1) || (res2 && !p2)) {
+          return {
+            error: 'Target coordinates are outside viewport boundaries after scrolling',
+          };
+        }
+
+        return { p1: p1 ?? undefined, p2: p2 ?? undefined };
+      }
+
+      return {
+        p1: res1 ? { x: res1.x, y: res1.y } : undefined,
+        p2: res2 ? { x: res2.x, y: res2.y } : undefined,
+      };
+    };
+
+        // Helper to project coordinates (synchronous, for region/zoom or fallback; absolute CSS viewport, zero-offset)
     const project = (c?: any): Coordinates | undefined => {
       if (!c) return undefined;
-      const parsed = parseUnifiedCoordinate(c, { tabId });
+      const parsed = parseUnifiedCoordinate(c, { originX: 0, originY: 0 });
       if (!parsed) return undefined;
       return { x: parsed.x, y: parsed.y };
     };
@@ -399,7 +586,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
               resolvedBy = 'selector';
             }
           } else if (params.coordinates) {
-            coord = project(params.coordinates);
+            const pr = await projectCoords(params.coordinates);
+            if (pr.error) return createErrorResponse(pr.error);
+            coord = pr.p1;
             resolvedBy = 'coordinates';
           }
         } catch (e) {
@@ -493,6 +682,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
             timeout: TIMEOUTS.DEFAULT_WAIT * 5,
             button: params.action === 'right_click' ? 'right' : 'left',
             modifiers: params.modifiers,
+            tabId,
+            windowId: targetWindowId,
+            sessionId: targetSessionId,
           });
           return domResult;
         }
@@ -506,18 +698,21 @@ class ComputerTool extends BaseBrowserToolExecutor {
             timeout: TIMEOUTS.DEFAULT_WAIT * 5,
             button: params.action === 'right_click' ? 'right' : 'left',
             modifiers: params.modifiers,
+            tabId,
+            windowId: targetWindowId,
+            sessionId: targetSessionId,
           });
           return domResult;
         }
         if (!params.coordinates)
           return createErrorResponse('Provide ref, selector, or coordinates for click action');
 
-        const stale = screenshotOriginViolation(tab.id!, tab.url, params.action);
-        if (stale) return createErrorResponse(stale);
-        let coord = project(params.coordinates);
-        if (!coord) {
-          return createErrorResponse('Failed to resolve coordinates');
+
+        const pr = await projectCoords(params.coordinates);
+        if (pr.error || !pr.p1) {
+          return createErrorResponse(pr.error || 'Failed to resolve coordinates');
         }
+        let coord = pr.p1;
         let autoSnapResult: { snapped: boolean; targetTag?: string; distance?: number } | undefined;
         if (params.autoSnap !== false) {
           try {
@@ -612,7 +807,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse(
             'Provide ref, selector, or coordinates for double/triple click',
           );
-        let coord = params.coordinates ? project(params.coordinates)! : (undefined as any);
+        let coord = (undefined as any);
+        if (params.coordinates) {
+          const pr = await projectCoords(params.coordinates);
+          if (pr.error || !pr.p1) return createErrorResponse(pr.error || 'Failed to resolve coordinates');
+          coord = pr.p1;
+        }
         // If ref is provided, resolve center via accessibility helper
         if (params.ref) {
           try {
@@ -743,16 +943,14 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Provide startRef or startCoordinates for drag');
         if (!params.coordinates && !params.ref)
           return createErrorResponse('Provide ref or end coordinates for drag');
-        let start = params.startCoordinates
-          ? project(params.startCoordinates)!
-          : (undefined as any);
-        let end = params.coordinates ? project(params.coordinates)! : (undefined as any);
-        {
-          const stale =
-            params.startCoordinates || params.coordinates
-              ? screenshotOriginViolation(tab.id!, tab.url, 'left_click_drag')
-              : null;
-          if (stale) return createErrorResponse(stale);
+        let start: Coordinates | undefined;
+        let end: Coordinates | undefined;
+
+        if (params.startCoordinates || params.coordinates) {
+          const pr = await projectCoords(params.startCoordinates, params.coordinates);
+          if (pr.error) return createErrorResponse(pr.error);
+          start = pr.p1;
+          end = pr.p2;
         }
         if (params.startRef || params.ref) {
           await this.injectContentScript(tab.id, ['inject-scripts/accessibility-tree-helper.js']);
@@ -877,7 +1075,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
       case 'scroll': {
         if (!params.coordinates && !params.ref)
           return createErrorResponse('Provide ref or coordinates for scroll');
-        let coord = params.coordinates ? project(params.coordinates)! : (undefined as any);
+        let coord = (undefined as any);
+        if (params.coordinates) {
+          const pr = await projectCoords(params.coordinates);
+          if (pr.error || !pr.p1) return createErrorResponse(pr.error || 'Failed to resolve coordinates');
+          coord = pr.p1;
+        }
         if (params.ref) {
           try {
             await this.injectContentScript(tab.id, ['inject-scripts/accessibility-tree-helper.js']);
@@ -966,6 +1169,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.ref,
               waitForNavigation: false,
               timeout: TIMEOUTS.DEFAULT_WAIT * 5,
+              tabId,
+              windowId: targetWindowId,
+              sessionId: targetSessionId,
             });
           }
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
@@ -991,6 +1197,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
             keys: params.text.split('').join(','),
             delay: 0,
             selector: undefined,
+            tabId,
+            windowId: targetWindowId,
+            sessionId: targetSessionId,
           });
           return res;
         }
@@ -1005,6 +1214,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
           selectorType: params.selectorType as any,
           ref: params.ref as any,
           value: params.value as any,
+          tabId,
+          windowId: targetWindowId,
+          sessionId: targetSessionId,
         } as any);
         return res;
       }
@@ -1026,9 +1238,36 @@ class ComputerTool extends BaseBrowserToolExecutor {
             const r = await fillTool.execute({
               ref: item.ref as any,
               value: item.value as any,
+              tabId,
+              windowId: targetWindowId,
+              sessionId: targetSessionId,
             } as any);
-            const ok = !r.isError;
-            results.push({ ref: item.ref, ok, error: ok ? undefined : 'failed' });
+            let innerOk = false;
+            let errMsg: string | undefined;
+            if (!r.isError && Array.isArray(r.content) && r.content[0]?.type === 'text') {
+              try {
+                const parsed = JSON.parse(r.content[0].text);
+                if (parsed && typeof parsed === 'object') {
+                  innerOk = parsed.success !== false;
+                  if (!innerOk) errMsg = parsed.error || parsed.message || 'failed';
+                } else {
+                  innerOk = true;
+                }
+              } catch {
+                innerOk = true;
+              }
+            }
+            const ok = !r.isError && innerOk;
+            if (!ok && !errMsg) {
+              errMsg = r.isError && Array.isArray(r.content) && r.content[0]?.type === 'text'
+                ? r.content[0].text
+                : 'failed';
+            }
+            results.push({
+              ref: item.ref,
+              ok,
+              error: ok ? undefined : errMsg,
+            });
           } catch (e) {
             results.push({
               ref: item.ref,
@@ -1038,12 +1277,15 @@ class ComputerTool extends BaseBrowserToolExecutor {
           }
         }
         const successCount = results.filter((r) => r.ok).length;
+        const allFailed = results.length > 0 && successCount === 0;
+        const isPartial = successCount > 0 && successCount < results.length;
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
-                success: true,
+                success: !allFailed,
+                partial: isPartial,
                 action: 'fill_form',
                 filled: successCount,
                 total: results.length,
@@ -1051,7 +1293,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               }),
             },
           ],
-          isError: false,
+          isError: allFailed,
         };
       }
       case 'key': {
@@ -1073,6 +1315,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
               ref: params.ref,
               waitForNavigation: false,
               timeout: TIMEOUTS.DEFAULT_WAIT * 5,
+              tabId,
+              windowId: targetWindowId,
+              sessionId: targetSessionId,
             });
           }
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
@@ -1097,7 +1342,12 @@ class ComputerTool extends BaseBrowserToolExecutor {
           const keysStr = tokens.join(',');
           const repeatedKeys =
             repeat === 1 ? keysStr : Array.from({ length: repeat }, () => keysStr).join(',');
-          const res = await keyboardTool.execute({ keys: repeatedKeys });
+          const res = await keyboardTool.execute({
+            keys: repeatedKeys,
+            tabId,
+            windowId: targetWindowId,
+            sessionId: targetSessionId,
+          });
           return res;
         }
       }

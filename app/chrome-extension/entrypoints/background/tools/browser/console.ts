@@ -24,6 +24,10 @@ interface ConsoleToolParams {
   pattern?: string;
   onlyErrors?: boolean;
   limit?: number;
+  waitMs?: number;
+  durationMs?: number;
+  sessionId?: string;
+  sessionContext?: string;
 }
 
 interface ConsoleMessage {
@@ -180,24 +184,18 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     }
 
     try {
+      const sessionId = (args as any)?.sessionId || (args as any)?.sessionContext;
       if (typeof tabId === 'number') {
         // Use explicit tab
-        const t = await chrome.tabs.get(tabId);
+        const t = await this.tryGetTab(tabId, sessionId).catch(() => null);
         if (!t?.id) return createErrorResponse('Failed to identify target tab.');
         targetTab = t;
       } else if (url) {
         // Navigate to the specified URL (background by default)
         targetTab = await this.navigateToUrl(url, background !== false, windowId);
       } else {
-        // Use current active tab
-        const [activeTab] =
-          typeof windowId === 'number'
-            ? await chrome.tabs.query({ active: true, windowId })
-            : await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!activeTab?.id) {
-          return createErrorResponse('No active tab found and no URL provided.');
-        }
-        targetTab = activeTab;
+        // ARCH-05: Use session TabAffinity resolution
+        targetTab = await this.resolveAffinityTab({ windowId, sessionId });
       }
 
       if (!targetTab?.id) {
@@ -290,9 +288,17 @@ class ConsoleTool extends BaseBrowserToolExecutor {
       }
 
       // Snapshot 模式（一次性捕获）
+      const requestedWaitMs =
+        typeof args?.waitMs === 'number'
+          ? args.waitMs
+          : typeof (args as any)?.durationMs === 'number'
+            ? (args as any).durationMs
+            : 0;
+
       const result = await this.captureConsoleMessages(targetTabId, {
         includeExceptions,
         maxMessages: effectiveLimit,
+        waitMs: requestedWaitMs,
       });
 
       // 应用过滤器
@@ -394,6 +400,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     options: {
       includeExceptions: boolean;
       maxMessages: number;
+      waitMs?: number;
     },
   ): Promise<ConsoleResult> {
     const { includeExceptions, maxMessages } = options;
@@ -449,8 +456,12 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         // Also enable Log domain to capture other log entries
         await cdpSessionManager.sendCommand(tabId, 'Log.enable');
 
-        // Wait for all messages to be flushed
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // PERF-03: 显式未来观测窗口等待 waitMs；快照默认微沉降 (50ms) 代替 2000ms 硬等待
+        const flushDelay =
+          typeof options.waitMs === 'number' && options.waitMs > 0
+            ? Math.min(options.waitMs, 30000)
+            : 50;
+        await new Promise((resolve) => setTimeout(resolve, flushDelay));
 
         // Process collected messages
         // Helper to deeply serialize console arguments when possible

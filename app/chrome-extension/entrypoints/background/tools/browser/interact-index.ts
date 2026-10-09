@@ -963,9 +963,16 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               }
               const occRes = occResult?.result;
               if (occRes && typeof occRes.x === 'number' && typeof occRes.y === 'number') {
-                if (x !== occRes.x || y !== occRes.y) {
-                  x = occRes.x;
-                  y = occRes.y;
+                let targetX = occRes.x;
+                let targetY = occRes.y;
+                if (targetFrameId !== undefined && targetFrameId !== 0 && !isFallback) {
+                  const offset = await getSubframeViewportOffset(tabId, targetFrameId);
+                  targetX += offset.offsetX;
+                  targetY += offset.offsetY;
+                }
+                if (x !== targetX || y !== targetY) {
+                  x = targetX;
+                  y = targetY;
                   await animateAgentCursor(tabId, x, y, {
                     waitForArrival: true,
                     timeoutMs: 350,

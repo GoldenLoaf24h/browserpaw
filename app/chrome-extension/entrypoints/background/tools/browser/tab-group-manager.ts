@@ -359,28 +359,6 @@ export class TabGroupManager {
     if (typeof groupId !== 'number' || groupId <= 0) return false;
     await this.ensureStorageLoaded();
     if (this.managedGroupIds.has(groupId)) return true;
-    if (typeof chrome !== 'undefined' && chrome.tabGroups?.get) {
-      try {
-        const group = await chrome.tabGroups.get(groupId);
-        if (
-          group &&
-          (group.title === TabGroupManager.DEFAULT_TITLE || this.explicitGroupTitles.has(groupId))
-        ) {
-          this.managedGroupIds.add(groupId);
-          return true;
-        }
-      } catch {}
-    }
-    // Also check if any open tab in this group is an agent tab
-    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-      try {
-        const tabsInGroup = await chrome.tabs.query({ groupId });
-        if (tabsInGroup.some((t) => typeof t.id === 'number' && this.agentTabIds.has(t.id))) {
-          this.managedGroupIds.add(groupId);
-          return true;
-        }
-      } catch {}
-    }
     return false;
   }
 
@@ -674,20 +652,8 @@ export class TabGroupManager {
     }
 
     // Collect all candidate group IDs:
-    // 1) All actively tracked managedGroupIds
-    // 2) Any browser tab group matching managed titles or DEFAULT_TITLE
+    // Only actively tracked managedGroupIds are candidates for automated cleanup
     const candidateGroupIds = new Set<number>(this.managedGroupIds);
-
-    if (typeof chrome.tabGroups.query === 'function') {
-      try {
-        const allGroups = await chrome.tabGroups.query({});
-        for (const g of allGroups) {
-          if (typeof g.id === 'number') {
-            candidateGroupIds.add(g.id);
-          }
-        }
-      } catch {}
-    }
 
     for (const gid of candidateGroupIds) {
       try {
@@ -836,21 +802,6 @@ export class TabGroupManager {
     await this.ensureStorageLoaded();
     let count = 0;
     const gids = new Set<number>(this.managedGroupIds);
-
-    // Also sweep for any orphan groups in chrome.tabGroups
-    if (typeof chrome.tabGroups?.query === 'function') {
-      try {
-        const allGroups = await chrome.tabGroups.query({});
-        for (const og of allGroups) {
-          if (typeof og.id === 'number') {
-            const isAgent = await this.isAgentGroup(og.id);
-            if (isAgent) {
-              gids.add(og.id);
-            }
-          }
-        }
-      } catch {}
-    }
 
     for (const gid of gids) {
       const ok = await this.closeManagedGroup(gid);

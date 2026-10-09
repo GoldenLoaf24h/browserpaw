@@ -12,33 +12,12 @@ const tools = { ...browserTools } as any;
 // schemas keeps the callable set exactly equal to tools/list, so an undeclared
 // export can never become an invisible, unvalidated entry point.
 const declaredToolNames = new Set(TOOL_SCHEMAS.map((t) => t.name));
+const toolSchemasMap = new Map(TOOL_SCHEMAS.map((t) => [t.name, t]));
 const toolsMap = new Map(
   Object.values(tools)
     .filter((tool: any) => tool && declaredToolNames.has(tool.name))
     .map((tool: any) => [tool.name, tool]),
 );
-
-const TEXT_FIELD_EXCLUSIONS = new Set([
-  'query',
-  'url',
-  'text',
-  'keys',
-  'code',
-  'selector',
-  'pattern',
-  'action',
-  'title',
-  'reason',
-  'goal',
-  'mode',
-  'name',
-  'filepath',
-  'fileurl',
-  'mediaurl',
-  'sessionid',
-  'sessioncontext',
-  'prompttext',
-]);
 
 /**
  * Tool call parameter interface
@@ -53,49 +32,59 @@ export interface ToolCallParam {
  * Handle tool execution
  */
 export const handleCallTool = async (param: ToolCallParam) => {
-  // Pre-flight check: Verify if Agent control switch is enabled by user
   try {
     const session = await chrome.storage.session.get('agentControlEnabled');
-    const isEnabled = session.agentControlEnabled !== false; // Default: true (enabled on browser start)
-    if (!isEnabled) {
+    if (session?.agentControlEnabled === false) {
       return createErrorResponse(
         'Agent control is currently paused by the user via the extension popup switch. Please enable the switch in the extension popup to resume browser automation.',
       );
     }
   } catch {
-    // If storage.session is unavailable (e.g. test environment), proceed normally
+    return createErrorResponse(
+      'Agent control state could not be verified due to storage failure. Actions are blocked to prevent unauthorized automation.',
+    );
   }
 
   const normalized = normalizeIncomingToolName(param.name);
-  const tool = toolsMap.get(normalized.canonicalBackendName) || toolsMap.get(param.name);
+  const canonicalName = normalized.canonicalBackendName || param.name;
+  const tool = toolsMap.get(canonicalName) || toolsMap.get(param.name);
   if (!tool) {
     return createErrorResponse(`Tool ${param.name} not found`);
   }
 
+  const schema = toolSchemasMap.get(normalized.canonicalBackendName) || toolSchemasMap.get(param.name);
+  const schemaProperties = (schema?.inputSchema as any)?.properties || {};
+
   try {
     const args = param.args ?? {};
-    // Smart argument coercion for LLMs (string numbers, booleans, trimmed keys)
+    // Strict schema-driven argument coercion: only coerce when explicitly declared as boolean or number/integer
     for (const key of Object.keys(args)) {
       const val = args[key];
       if (typeof val === 'string') {
         const trimmed = val.trim();
         const lower = trimmed.toLowerCase();
-        if (lower === 'true') {
-          args[key] = true;
-        } else if (lower === 'false') {
-          args[key] = false;
-        } else if (
-          !TEXT_FIELD_EXCLUSIONS.has(key.toLowerCase()) &&
-          /^-?\d+(\.\d+)?$/.test(trimmed)
-        ) {
-          args[key] = trimmed.includes('.') ? parseFloat(trimmed) : parseInt(trimmed, 10);
+        const prop = schemaProperties[key];
+        if (prop) {
+          if (prop.type === 'boolean') {
+            if (lower === 'true') {
+              args[key] = true;
+            } else if (lower === 'false') {
+              args[key] = false;
+            }
+          } else if (prop.type === 'integer' && /^-?\d+$/.test(trimmed)) {
+            args[key] = parseInt(trimmed, 10);
+          } else if (prop.type === 'number' && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+            args[key] = Number(trimmed);
+          }
         }
       }
     }
 
-    if (param.sessionId && !args.sessionId) {
+    if (param.sessionId) {
       args.sessionId = param.sessionId;
+      args.sessionContext = param.sessionId;
     }
+
     const result = await tool.execute(args);
     let targetTabId = typeof args.tabId === 'number' && args.tabId > 0 ? args.tabId : undefined;
     if (!targetTabId && result && typeof result === 'object') {

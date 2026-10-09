@@ -219,6 +219,16 @@ export class GrepTool extends BaseBrowserToolExecutor {
               tagName: el.tagName,
             };
           }
+          if (typeof frame.frameId === 'number') {
+            try {
+              await executeInPage({ tabId, frameIds: [frame.frameId] }, 'inPageReindexFrame', [
+                frameOffset,
+                false,
+              ]);
+            } catch (reindexErr) {
+              console.warn('Failed to synchronize subframe ' + frame.frameId + ' index map:', reindexErr);
+            }
+          }
         }
       }
       const matches: Array<{

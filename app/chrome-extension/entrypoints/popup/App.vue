@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 
 import { CURRENT_VERSION } from 'chrome-mcp-shared';
 import { checkExtensionVersionUpdate } from '@/utils/version-checker';
+import { jevFetch } from './jev-api';
 
 const agentEnabled = ref(true);
 const serverConnected = ref(false);
@@ -65,9 +66,11 @@ const remoteModelId = ref('');
 const isRemoteApplied = ref(false);
 const envApiKeyDetected = ref(false);
 const envKeySourceName = ref('TYPESAFE_API_KEY');
+const hasServerApiKey = ref(false);
 
 const remoteApiKeyPlaceholder = computed(() => {
   if (remoteApiKey.value) return 'API Key (configured in extension)';
+  if (hasServerApiKey.value) return 'API Key (saved on server - leave blank to keep)';
   if (envApiKeyDetected.value) return `Auto-detected: ${envKeySourceName.value}`;
   return 'API Key (or env: TYPESAFE_API_KEY)';
 });
@@ -162,7 +165,7 @@ const checkJevModelStatus = async () => {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch('http://127.0.0.1:12306/jev/model-status', {
+    const res = await jevFetch('/jev/model-status', {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -193,7 +196,7 @@ const pollDownloadProgress = () => {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
-      const res = await fetch('http://127.0.0.1:12306/jev/download-progress', {
+      const res = await jevFetch('/jev/download-progress', {
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -232,7 +235,7 @@ const stopDownload = async () => {
   isDownloading.value = false;
   downloadSpeed.value = '';
   try {
-    await fetch('http://127.0.0.1:12306/jev/download-cancel', { method: 'POST' });
+    await jevFetch('/jev/download-cancel', { method: 'POST' });
   } catch {}
 };
 
@@ -244,7 +247,7 @@ const stopCustomDownload = async () => {
   isCustomDownloading.value = false;
   downloadSpeed.value = '';
   try {
-    await fetch('http://127.0.0.1:12306/jev/download-cancel', { method: 'POST' });
+    await jevFetch('/jev/download-cancel', { method: 'POST' });
   } catch {}
 };
 
@@ -271,7 +274,7 @@ const checkOngoingDownload = async () => {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1000);
-    const res = await fetch('http://127.0.0.1:12306/jev/download-progress', {
+    const res = await jevFetch('/jev/download-progress', {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -313,7 +316,7 @@ const toggleManaging = () => {
 
 const fetchLocalModels = async () => {
   try {
-    const res = await fetch('http://127.0.0.1:12306/jev/models');
+    const res = await jevFetch('/jev/models');
     if (res.ok) {
       const data = await res.json();
       localModels.value = Array.isArray(data.models) ? data.models : [];
@@ -340,7 +343,7 @@ const prevModel = async () => {
     activeModelIndex.value--;
     const name = localModels.value[activeModelIndex.value];
     try {
-      await fetch('http://127.0.0.1:12306/jev/select-model', {
+      await jevFetch('/jev/select-model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: name }),
@@ -355,7 +358,7 @@ const nextModel = async () => {
     activeModelIndex.value++;
     const name = localModels.value[activeModelIndex.value];
     try {
-      await fetch('http://127.0.0.1:12306/jev/select-model', {
+      await jevFetch('/jev/select-model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: name }),
@@ -376,7 +379,7 @@ const confirmDelete = async () => {
   const targetModel = activeModelName.value;
 
   try {
-    const res = await fetch('http://127.0.0.1:12306/jev/delete-model', {
+    const res = await jevFetch('/jev/delete-model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: targetModel }),
@@ -419,7 +422,7 @@ const startCustomDownload = async () => {
   downloadSpeed.value = 'Connecting...';
 
   try {
-    const res = await fetch('http://127.0.0.1:12306/jev/download-start', {
+    const res = await jevFetch('/jev/download-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ customUrl: url }),
@@ -432,7 +435,7 @@ const startCustomDownload = async () => {
     if (progressTimer) clearInterval(progressTimer);
     progressTimer = setInterval(async () => {
       try {
-        const pRes = await fetch('http://127.0.0.1:12306/jev/download-progress');
+        const pRes = await jevFetch('/jev/download-progress');
         if (pRes.ok) {
           const data = await pRes.json();
           downloadPercent.value = data.percent || 0;
@@ -476,7 +479,7 @@ const applyDownloadedModel = async () => {
   activeModelIndex.value = localModels.value.indexOf(modelName);
 
   try {
-    await fetch('http://127.0.0.1:12306/jev/select-model', {
+    await jevFetch('/jev/select-model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelName }),
@@ -515,16 +518,17 @@ const fetchRemoteConfig = async () => {
         remoteModelId.value = rawModel;
       }
     }
-    const res = await fetch('http://127.0.0.1:12306/jev/remote-config');
+    const res = await jevFetch('/jev/remote-config');
     if (res.ok) {
       const cfg = await res.json();
       envApiKeyDetected.value = Boolean(cfg.hasEnvApiKey);
+      hasServerApiKey.value = Boolean(cfg.hasApiKey || cfg.hasConfiguredApiKey);
       if (cfg.envKeySource) {
         envKeySourceName.value = cfg.envKeySource;
       }
       if (!stored?.jevRemoteConfig) {
         remoteBaseUrl.value = cfg.baseUrl || '';
-        remoteApiKey.value = cfg.apiKey || '';
+        remoteApiKey.value = '';
         const rawModel = (cfg.modelId || '').trim();
         if (
           rawModel === 'decider-2b' ||
@@ -547,19 +551,28 @@ const applyRemoteConfig = async () => {
       ? 'jev-latest'
       : rawModel;
 
-  const cfg = {
+  const enteredKey = remoteApiKey.value.trim();
+  const cfg: Record<string, any> = {
     baseUrl: remoteBaseUrl.value.trim(),
-    apiKey: remoteApiKey.value.trim(),
     modelId: effectiveModel,
   };
+  // Only send apiKey if user entered a new key; omitting preserves existing key on server
+  if (enteredKey) {
+    cfg.apiKey = enteredKey;
+  }
 
   try {
     await chrome.storage.local.set({ jevRemoteConfig: cfg });
-    await fetch('http://127.0.0.1:12306/jev/remote-config', {
+    const res = await jevFetch('/jev/remote-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
     });
+    if (res.ok) {
+      if (enteredKey) {
+        hasServerApiKey.value = true;
+      }
+    }
     isRemoteApplied.value = true;
     setTimeout(() => {
       isRemoteApplied.value = false;
@@ -613,7 +626,7 @@ const setJevMode = async (mode: 'off' | 'local' | 'remote') => {
     console.error('Failed to save jev mode:', e);
   }
 
-  fetch('http://127.0.0.1:12306/jev/set-mode', {
+  jevFetch('/jev/set-mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode }),
@@ -638,7 +651,7 @@ const triggerDownload = async () => {
   downloadSpeed.value = 'Connecting...';
 
   try {
-    const res = await fetch('http://127.0.0.1:12306/jev/download-start', { method: 'POST' });
+    const res = await jevFetch('/jev/download-start', { method: 'POST' });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.message || 'Server error starting download');
@@ -655,7 +668,7 @@ const checkServerStatus = async () => {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1000);
-    const res = await fetch('http://127.0.0.1:12306/ping', { signal: controller.signal });
+    const res = await jevFetch('/ping', { signal: controller.signal });
     clearTimeout(timeout);
     serverConnected.value = res.ok;
   } catch {
@@ -805,7 +818,7 @@ onMounted(async () => {
   await checkJevModelStatus();
   await checkOngoingDownload();
 
-  fetch('http://127.0.0.1:12306/jev/set-mode', {
+  jevFetch('/jev/set-mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode: jevMode.value }),
