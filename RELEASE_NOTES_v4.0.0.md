@@ -1,0 +1,80 @@
+# 📦 GitHub Release: BrowserPaw v4.0.0
+
+- **Tag:** `v4.0.0`
+- **Title:** `BrowserPaw v4.0.0: Full-Audit Hardening — Session Recovery, Safe Reconnect & Coordinate Fidelity`
+- **Target:** `main`
+- **Status:** LOCAL DRAFT — not published, not tagged, not pushed.
+
+---
+
+## 🚀 Overview
+
+BrowserPaw **v4.0.0** is the hardening release resulting from a comprehensive
+read-only code audit. It fixes session-lifecycle leaks, makes Stdio reconnect
+safe under lost responses, corrects screenshot coordinate mapping, and aligns
+the documentation, skills, and build scripts with actual behavior.
+
+Every fix below carries a reproducible defect, a code location, and verification
+evidence. No new feature surface was added.
+
+---
+
+## 🪲 What's Changed
+
+### 1. 🔌 Stdio Session Lifecycle & Safe Reconnect
+- **Single-flight connection lock**: concurrent first calls no longer race to
+  create the client; a generation counter prevents a stale failure from
+  tearing down a newer connection.
+- **Session-expiry classification**: 404 and explicit invalid-session 400 are
+  now recognized as recoverable connection errors, so the proxy re-initializes
+  instead of failing permanently.
+- **No blind write replay**: mutating tools are never auto-retried after a lost
+  response; the caller receives an explicit "outcome unknown" error. Safe
+  read-only tools retry at most once, and tab-sensitive reads require an
+  explicit `tabId`.
+
+### 2. 🧭 Screenshot & Coordinate Fidelity
+- Screenshot cropping now derives the real captured-bitmap ratio instead of
+  assuming device pixel ratio, fixing tainted-canvas and DPR=2 sampling.
+- The consumer side now consumes `coordinateSpace` and maps screenshot space
+  to document coordinates, restoring full-page and ROI click accuracy.
+
+### 3. 🛡️ Interaction & Network Robustness
+- CDP session reference counting is now re-entrant safe, eliminating a
+  permanent session leak on repeated attach.
+- Domain enable failures roll back their reference counts instead of silently
+  leaving a phantom claim.
+- Intercept and trace flows now fence late async responses so timing-out
+  requests cannot pollute the cache.
+
+### 4. 🧹 Build, Docs & Skills
+- Extension sync now recreates a pinned load directory when it is missing, so
+  a deleted Chrome load path no longer silently stops syncing (and the derived
+  extension ID stays stable for the native-host allowlist).
+- Archived testing notes now carry a single accurate archival notice in both
+  languages.
+- Skill and tool documentation were aligned with actual registered parameters.
+
+---
+
+## ✅ Verification
+
+- Extension tests: **691 passed, 0 failed**
+- Native bridge tests: **171 passed, 0 failed**
+- Python plugin tests: **21 passed, 1 skipped**
+- Typecheck, lint, Vue type check, skill-sync, tool-schema and manual-client
+  gates: all pass.
+- Real Chrome acceptance: session-expiry recovery verified end-to-end through a
+  live Stdio child process, including the case where a click already executed
+  and the response was lost — the click is **not** repeated.
+
+---
+
+## ⚠️ Notes
+
+- No protocol or SDK upgrade.
+- Chrome, the native host and the user's existing tabs are preserved; the load
+  directory is `D:\workspace\browserclaw`.
+- Known limits: cross-process recovery after a real native-host restart and
+  natural 10-minute idle expiry are not covered by this round.
+
