@@ -1,3 +1,5 @@
+> **Archival Notice**: Test execution descriptions between the English and Chinese testing notes in this directory contain historical discrepancies (e.g., Task T3 container execution descriptions). These historical records are retained as-is for archival tracking and must not be treated as verified current system behavior.
+
 ## 37. BrowserClaw × Jev 分层双脑与语义微循环集成实战复盘 (v2.8.0)
 
 ### 1. 架构目标与工程约束落地

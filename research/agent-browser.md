@@ -40,7 +40,7 @@
 | **交互入口**         | 命令行 CLI 一等公民 (`agent-browser <cmd>`) + `agent-browser mcp` 二等桥接            | MCP 工具调用为一等公民 (Fastify HTTP/SSE + Stdio)                             | agent-browser 的 CLI-first 设计极大加速单步调试与 Agent Shell 直接调用                |
 | **浏览器接管方式**   | 启动托管专用 Headless/Headed Chrome 或通过 WebSocket 附着已存在 CDP (`--cdp`)         | 注入用户正在日常使用的 Chrome 宿主 (通过扩展 + Native Messaging 双向管道)     | BrowserPaw 用户免重新登录、免凭证导出导入；agent-browser 依赖 Job Object / 子进程隔离 |
 | **元素引用机制**     | `@e1`, `@e2` 短字符串引用，基于 AXTree `backendDOMNodeId` + `loaderId` 构筑持久引用   | `[1]`, `[2]` 数字索引，基于 Content Script 注入内存 `WeakRef` + 动态 DOM 打标 | agent-browser 纯外部 CDP/AXTree 解析，无侵入页面 JS 上下文；BrowserPaw 具备微循环感知 |
-| **MCP 工具防膨胀**   | **Tool Profile 9 级分流** (`core`, `network`, `state`, `debug`, `react`, `mobile` 等) | 50 个 Canonical MCP 工具扁平全量暴露 (Schema 单次占用 ~12KB Token)            | **agent-browser Profile 设计是 BrowserPaw 解决上下文爆炸的直接可借鉴范式**            |
+| **MCP 工具防膨胀**   | **Tool Profile 9 级分流** (`core`, `network`, `state`, `debug`, `react`, `mobile` 等) | 已内置 Tool Profile (`core` / `crawl` / `full`) 分流及 `chrome_tool_docs` 会话级分类动态扩容 | Profile 机制针对 Token/上下文预算优化设计，会话可动态按需扩展分类工具，非强制修改底层静态 Profile 配置 |
 | **上下文压缩**       | `--compact` 祖先链路剪枝 + Myers 算法快照文本差分 (`SnapshotDiffResult`)              | DOM 过滤 + PCIE 坐标修剪，缺乏原生的 Snapshot 文本级 Myers Diff 输出          | agent-browser diff 引擎极度高效，单次循环仅传递增量变动                               |
 | **Windows 进程安全** | Windows Job Object 严苛绑定 + 私有桌面 (`CreateDesktopW`) 杜绝 DWM 阴影伪渲染         | 依赖 Chrome 扩展宿主本身及 Native Host 标准进程生命周期                       | agent-browser 对 Windows 崩溃孤儿进程和后台渲染伪弹窗处理堪称典范                     |
 

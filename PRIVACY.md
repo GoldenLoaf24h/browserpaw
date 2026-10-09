@@ -1,55 +1,74 @@
 # Privacy Policy for BrowserPaw
 
-**Last Updated**: September 12, 2026
+**Last Updated**: October 8, 2026
 
-BrowserPaw ("we", "our", or "the extension") is an open-source browser automation bridge designed for AI agents via the Model Context Protocol (MCP). We are committed to protecting user privacy and ensuring full transparency regarding data handling.
-
----
-
-## 1. Zero Data Collection & Local-Only Architecture
-
-- **No Remote Transmission**: BrowserPaw does **not** collect, track, store, or transmit your personal data, browsing history, form inputs, or credentials to any remote server or third-party cloud.
-- **Local Loopback Communication**: All communication occurs strictly within your local machine between the Chrome Extension and the local Native Messaging host on `127.0.0.1` (localhost).
-- **No Analytics / Telemetry**: The extension contains no tracking scripts, advertising libraries, or telemetry SDKs.
+BrowserPaw is an open-source browser automation bridge connecting AI agents to Chrome via the Model Context Protocol (MCP). We prioritize transparent, local-first execution while providing clear disclosures for optional cloud and remote capabilities.
 
 ---
 
-## 2. Permissions Justification (Chrome Web Store Compliance)
+## 1. Local-First Baseline & Network Boundaries
 
-In accordance with the Chrome Web Store Minimum Permissions policy, each requested permission is strictly required for local developer automation:
-
-| Permission                  | Purpose & Justification                                                                                                                                                                                                           |
-| :-------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`debugger`**              | Required to dispatch native CDP input events (`Input.dispatchMouseEvent` / `Input.dispatchKeyEvent`) to accurately interact with modern Web Components, Shadow DOM, and Canvas elements, and to measure page performance metrics. |
-| **`nativeMessaging`**       | Required to establish a secure local JSON-RPC bridge with the local Node.js Native Host on the user's machine.                                                                                                                    |
-| **`tabs` & `activeTab`**    | Required to discover, navigate, switch, or close tabs exclusively upon explicit AI Agent commands initiated by the user.                                                                                                          |
-| **`scripting`**             | Required to inject local semantic DOM indexer scripts into the active tab to extract accessible element trees for AI agents.                                                                                                      |
-| **`storage`**               | Used exclusively to cache local session state (such as tab group affinity) inside Chrome's local storage.                                                                                                                         |
-| **`downloads`**             | Used exclusively to monitor or manage active file downloads initiated by the AI Agent.                                                                                                                                            |
-| **`webRequest`**            | Used for lightweight network traffic monitoring and request inspection without debugger conflict.                                                                                                                                 |
-| **`webNavigation`**         | Required to accurately resolve nested iframe structures and subframe URLs for multi-frame DOM coordination.                                                                                                                       |
-| **`tabGroups`**             | Used to organize AI Agent-spawned tabs into dedicated colored tab groups and cleanly destroy them without orphan residue.                                                                                                         |
-| **`cookies`**               | Accessed only when the user's AI Agent explicitly requests inspecting session state for authenticated workflows. Data never leaves localhost.                                                                                     |
-| **`bookmarks` & `history`** | Accessed only upon explicit user instruction to search local bookmarks or browsing history.                                                                                                                                       |
-| **`<all_urls>`**            | Required to allow the user's AI Agent to automate web tasks across arbitrary user-specified websites.                                                                                                                             |
+- **Default Local Execution**: By default, BrowserPaw components communicate locally via JSON-RPC loopback (`127.0.0.1`). CLI listeners default to localhost but support user-configured host bindings.
+- **No Tracking Telemetry**: BrowserPaw includes no advertising trackers, analytics packages, or silent background telemetry.
+- **External Downloads & Version Checks**: Operating in local inference mode requires downloading public model weights (e.g. from HuggingFace or configured mirrors). Automated extension version checks query public release metadata in the background. Explicit user-directed automation tools (such as `chrome_network_request` and `chrome_navigate`) connect to remote endpoints exclusively as instructed by the user or agent.
+- **MCP Client Transmission**: Tool results (including inspected cookies, storage values, and DOM extracts) return directly to the connected MCP client over the active MCP transport. If your MCP caller or AI host is deployed remotely, data returned by these tools will leave your local machine over your MCP transport.
 
 ---
 
-## 3. Data Retention and Security
+## 2. Jev Semantic Decision Engine: Modes & Data Disclosures
 
-- **Session Isolation**: All DOM index snapshots and temporary interaction caches are volatile and destroyed when tabs are closed.
-- **Token Protection**: Communication between the extension and the local bridge requires token authentication matching `~/.chrome-mcp/bridge-token`.
+BrowserPaw provides a fast semantic micro-loop (Jev System One) for element selection and action guidance. The engine operates in three selectable modes:
+
+| Mode | Inference Location & Transport | External Data Transmission |
+| :--- | :--- | :--- |
+| **`off`** | None (pure local heuristics in the decision engine) | Zero inference transmission. |
+| **`local`** | Offline local model (`decider-2b` served locally at `http://127.0.0.1:8009`) | Local loopback only; model weights are downloaded once upon user setup. |
+| **`remote`** | Cloud inference via `@typesafe-ai/sdk` | Transmits structured decision state to configured API endpoint. |
+
+### Remote Mode Activation & Dynamic Precedence
+- **Activation Triggers**: Remote inference requires available API credentials and a remote mode selection (persisted/default or per-call); existing credentials can make it available without re-entering key. Credentials may be provided via environment variables (`TYPESAFE_API_KEY`, `JEV_API_KEY`) or stored in `~/.browserpaw/jev-remote.json`.
+- **Runtime Overrides**: Tool callers can override the active engine mode on a single-call basis via the `mode` parameter in `chrome_act_toward_goal`.
+- **Endpoint Destination**: Requests route to the TypeSafe AI endpoint or an optional user-defined `baseUrl`. Transport security depends on the configured target endpoint (HTTPS is strongly recommended, but custom baseUrl values are not forced to HTTPS by the client).
+
+### Transmitted Payload & Data Exposure Limits
+When Remote inference executes, the client transmits a bounded System One state:
+1. **Task Goal (`task`)**: The task description or prompt. **Advisory Caution**: Users should avoid including passwords, private tokens, or personal identifiers in task goals.
+2. **Page Context (`page`)**: Active tab URL (capped at 200 characters) and title (capped at 120 characters). Query parameters and sensitive tokens in plain text URL parameters remain visible.
+3. **Filtered Element Labels (`elements`)**: Up to 250 visible interactive elements from the accessibility tree (120 chars/line; 24,000 chars total budget).
+4. **Recent Steps (`history`)**: Up to 5 recent action outcomes.
+5. **Modal Text (`pending_modal`)**: Active dialog title or prompt (capped at 120 characters).
+6. **Decision Criteria**: Seven structured multiple-choice questions.
+
+### Filtering Scope & Exclusions
+- **Tag-Based Input Masking**: The filter only strips elements matching `type="password"`, `type="file"`, or file-upload roles. Plain text labels, page text, and non-password inputs are not masked and may contain sensitive data visible on the page.
+- **Zero Image Data**: Remote Jev calls transmit structured text only; **no screenshots, canvas bitstreams, or page images are ever transmitted to Jev**.
+- **Credentials**: Browser-stored passwords and autofill vaults are never accessed by Jev.
 
 ---
 
-## 4. Open Source Transparency
+## 3. Chrome Permissions Justification
 
-BrowserPaw is open-source software distributed under the GNU Affero General Public License v3.0 (AGPL-3.0). The complete source code is publicly auditable at:  
-[https://github.com/GoldenLoaf24h/browserpaw](https://github.com/GoldenLoaf24h/browserpaw)
+Permissions comply with Chrome Web Store Minimum Permissions requirements:
+
+| Permission | Justification |
+| :--- | :--- |
+| **`debugger`** | Dispatches native trusted CDP input events (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`) across Web Components, Shadow DOM, and Canvas. |
+| **`nativeMessaging`** | Establishes the local JSON-RPC bridge with the Native Messaging Host. |
+| **`tabs` & `activeTab`** | Discovers, switches, and manages browser tabs targeted by agent actions. |
+| **`scripting`** | Injects in-page DOM perception and coordinate helpers into targeted pages. |
+| **`storage`** | Caches local session state and tab affinity within Chrome storage. |
+| **`downloads`** | Monitors file downloads initiated by agent automation. |
+| **`webRequest`** | Inspects network headers and API events without debugger lock conflicts. |
+| **`webNavigation`** | Coordinates subframe hierarchies and iframe navigation events. |
+| **`tabGroups`** | Isolates agent-created tabs into dedicated, managed tab groups. |
+| **`cookies`** | Inspects session cookies only when explicitly called by tools. Data returns to the connected MCP client. |
+| **`bookmarks` & `history`** | Searches local bookmarks or history upon explicit user tool invocation. |
+| **`<all_urls>`** | Enables browser automation across arbitrary sites requested by the user. |
 
 ---
 
-## 5. Contact & Inquiries
+## 4. Data Retention & Source Transparency
 
-For questions, security disclosures, or concerns regarding this policy, please open an issue on GitHub:  
-[https://github.com/GoldenLoaf24h/browserpaw/issues](https://github.com/GoldenLoaf24h/browserpaw/issues)
+- **Transient State**: In-memory DOM trees, coordinate caches, and SoM overlays are volatile and released on tab closure.
+- **Access Control**: Local extension-to-host bridge communication requires authentication via `~/.chrome-mcp/bridge-token`.
+- **Open Source Auditability**: BrowserPaw is open-source under AGPL-3.0. Inspect full source code and report security disclosures at [https://github.com/GoldenLoaf24h/browserpaw](https://github.com/GoldenLoaf24h/browserpaw).

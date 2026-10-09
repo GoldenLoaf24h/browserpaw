@@ -411,7 +411,7 @@ DevTools MCP 支持以守护进程（Daemon）模式驻留后台，通过本地 
 
 | 维度             | Chrome DevTools MCP                                 | BrowserPaw (本项目基线)                                   | 对标优劣势评价与改进启示                                                                                                                                        |
 | ---------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **接入通信信道** | 远程调试端口 (CDP WebSocket) / Daemon 命名管道      | Chrome Native Messaging 扩展双向管道 (标准输入输出)       | **安全与权限**: DevTools MCP 依赖开放 CDP 调试端口（易被同机未授权进程探测扫描）；BrowserPaw 通过 Native Messaging 专有通道与扩展双向绑定，无网络端口暴露风险。 |
+| **接入通信信道** | 远程调试端口 (CDP WebSocket) / Daemon 命名管道      | Chrome Native Messaging 扩展双向管道 (标准输入输出)       | **安全与通信拓扑**: DevTools MCP 依赖开放 CDP 调试端口；BrowserPaw 扩展与 Native Host 间经由 Native Messaging 标准输入输出专有管道双向绑定，Native Server 仍通过本地回环地址 (127.0.0.1:12306) 提供 HTTP/SSE 桥接服务，不对外部公网开放。 |
 | **性能诊断能力** | 官方完整 `DevTools.TraceEngine` + CrUX 性能洞察模型 | 基础 `performance_start_trace` / `performance_stop_trace` | **长板吸收**: DevTools MCP 的分块流式 Trace 解析与 `TraceModel` 防内存泄漏模式极具参考价值，可直接作为 BrowserPaw 性能剖析工具升级的蓝本。                      |
 | **安全过滤控制** | 细粒度 `URLPattern` 防御 + 内部特权协议隔离         | 宿主白名单与扩展内部权限策略                              | DevTools MCP 的 `findUnenforceablePattern` 严格封杀含有正则捕获组的 URLPattern，该防御机制应当纳入 BrowserPaw 安全校验标准。                                    |
 

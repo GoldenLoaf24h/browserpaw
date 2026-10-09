@@ -15,13 +15,13 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
                              ▼
 ┌─ System 1: Semantic Micro-Loop (Local Native Server) ──┐
 │  Perceive compact DOM → Decide via Jev / Heuristic     │
-│  → Dispatch CDP action → Verify outcome (200-400ms/step)│
+│  → Dispatch CDP action → Verify outcome                 │
 └────────────────────────────┬────────────────────────────┘
                              │  Returns: status ("done" | "escalate" | ...)
                              ▼
 ```
 
-- **Speed**: Local IPC execution cuts per-step latency from 3–6s down to 200–400ms.
+- **Speed**: Local IPC execution avoids multi-turn remote round-trips for micro-steps.
 - **Cost**: Eliminates repetitive multi-turn remote LLM calls for deterministic micro-steps.
 - **Privacy**: Only a compact DOM budget (≤250 lines, sensitive password/file fields scrubbed) is evaluated.
 
@@ -75,11 +75,11 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
    - Supports custom `baseUrl` and `modelId` persisted in `~/.browserpaw/jev-remote.json`.
    - On 401 unauthenticated, latches key invalidation for 5 minutes and falls back to heuristic engine.
 
-### Heuristic Rule Fallback
+### Heuristic Rule Engine & Boundaries
 
 - Zero-dependency string tokenization, role weighting, and bigram matching.
-- Activates automatically when no API key or local model is available, or when service is offline.
-- Bounded execution: `maxSteps` is automatically capped at $\le 5$ in heuristic mode.
+- Bounded execution: `maxSteps` is strictly capped at <= 5 when running heuristic evaluation.
+- When Jev is disabled in settings (off mode) or misconfigured, calls return an actionable configuration error rather than executing unconfigured autonomous actions.
 
 ### Macro Escalation to Caller LLM
 
