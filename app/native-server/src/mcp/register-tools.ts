@@ -103,6 +103,9 @@ const fastDecisionEngine = new FastDecisionEngine();
 // Per-session dynamic tool activation store
 const sessionExtraTools = new Map<string, Set<string>>();
 
+let cachedUpdateNotice: string | null = null;
+let updateCheckStarted = false;
+
 export const clearSessionExtraTools = (sessionId: string): void => {
   sessionExtraTools.delete(sessionId);
 };
@@ -133,7 +136,15 @@ export const setupTools = (server: Server, serverSessionId?: string) => {
       ...rawArgs,
       _meta: rawArgs._meta || (request.params as any)?._meta,
     };
-    const sessionId = args?.sessionId || args?.sessionContext || serverSessionId;
+    // ARCH-03: Transport principal serverSessionId strictly takes precedence
+    // over caller-supplied args to prevent spoofing another session's tools / tab affinity.
+    const sessionId = serverSessionId || args?.sessionId || args?.sessionContext;
+    if (serverSessionId) {
+      args.sessionId = serverSessionId;
+      if (args.sessionContext) {
+        args.sessionContext = serverSessionId;
+      }
+    }
     return handleToolCall(request.params.name, args, sessionId, server);
   });
 
@@ -326,6 +337,14 @@ const handleToolCallInner = async (
 
     await prepareMediaArgsIfNeeded(backendName, args);
 
+    // ARCH-03: Consistently inject the resolved principal into both top-level parameter and args
+    if (sessionId) {
+      args.sessionId = sessionId;
+      if (args.sessionContext) {
+        args.sessionContext = sessionId;
+      }
+    }
+
     const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
       {
         name: backendName,
@@ -377,25 +396,36 @@ export const handleToolCall = async (
   // Preload local model and touch activity timer on any MCP tool invocation
   jevModelManager.onToolInvocation();
 
-  // Concurrently initiate the single-turn update check to overlap latency with tool execution.
+  // PERF-01: Initiate update check in background completely out of critical path.
   // In unit test environment, bypass unmocked remote network calls unless explicitly enabled.
   const shouldCheckUpdate =
     process.env.NODE_ENV !== 'test' || process.env.ENABLE_MCP_VERSION_CHECK === 'true';
-  const noticePromise = shouldCheckUpdate
-    ? agentUpdateNotifier.maybeGetFirstCallNotice().catch(() => null)
-    : Promise.resolve(null);
-  const result = await handleToolCallInner(name, args, sessionId, server);
-  try {
-    const notice = await noticePromise;
-    if (notice && result && Array.isArray(result.content)) {
-      result.content.unshift({
-        type: 'text',
-        text: notice,
+  if (shouldCheckUpdate && !updateCheckStarted) {
+    updateCheckStarted = true;
+    agentUpdateNotifier
+      .maybeGetFirstCallNotice()
+      .then((notice) => {
+        if (notice) {
+          cachedUpdateNotice = notice;
+        }
+      })
+      .catch(() => {
+        // Guarantee no unhandled rejection on network failures
       });
-    }
-  } catch {
-    // Non-blocking fallback to ensure tool call never fails due to update check
   }
+
+  // Execute tool call immediately without awaiting update check
+  const result = await handleToolCallInner(name, args, sessionId, server);
+
+  // If a cached update notice is ready, attach it without blocking
+  if (cachedUpdateNotice && result && Array.isArray(result.content)) {
+    result.content.unshift({
+      type: 'text',
+      text: cachedUpdateNotice,
+    });
+    cachedUpdateNotice = null; // Only prompt once per lifecycle
+  }
+
   return result;
 };
 
@@ -407,6 +437,13 @@ export const callToolInternal = async (
 ): Promise<any> => {
   jevModelManager.onToolInvocation();
   await prepareMediaArgsIfNeeded(name, args);
+  // ARCH-03: Consistently inject resolved principal into args in all internal caller paths
+  if (sessionId) {
+    args.sessionId = sessionId;
+    if (args.sessionContext) {
+      args.sessionContext = sessionId;
+    }
+  }
   const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
     {
       name,

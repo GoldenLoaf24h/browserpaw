@@ -196,6 +196,15 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
       return Promise.resolve({ ok: true } as any);
     }) as any;
 
+    // Provide mock live owned child process object for unit test
+    (jevModelManager as any).serviceProcess = {
+      pid: 99999,
+      exitCode: null,
+      killed: false,
+      kill: jest.fn(),
+    };
+    (jevModelManager as any).servicePid = 99999;
+
     const res = await jevModelManager.unloadLocalModel();
     expect(res.success).toBe(true);
     expect(res.message).toContain('unloaded');
@@ -214,5 +223,71 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
     process.env.MOCK_CUDA_AVAILABLE = 'false';
     expect(jevModelManager.detectCudaAvailable('python')).toBe(false);
     delete process.env.MOCK_CUDA_AVAILABLE;
+  });
+
+  test('15. imports cleanly without recursion and defaults to ~/.browserpaw when BROWSERPAW_HOME is unset', async () => {
+    const { homedir } = await import('node:os');
+    const { join } = await import('node:path');
+    const originalEnv = process.env.BROWSERPAW_HOME;
+    const originalFetch = global.fetch;
+    delete process.env.BROWSERPAW_HOME;
+    global.fetch = jest.fn<typeof fetch>().mockResolvedValue({ ok: false } as Response);
+    try {
+      let isolatedMod: any;
+      expect(() => {
+        jest.isolateModules(() => {
+          jest.doMock('node:fs', () => ({
+            existsSync: jest.fn(() => false),
+            mkdirSync: jest.fn(),
+          }));
+          try {
+            isolatedMod = require('./jev-model-manager');
+          } finally {
+            jest.dontMock('node:fs');
+          }
+        });
+      }).not.toThrow();
+      expect(isolatedMod?.jevModelManager).toBeDefined();
+      const status = await isolatedMod.jevModelManager.getStatus();
+      expect(status.path).toBe(join(homedir(), '.browserpaw', 'models', 'decider-2b'));
+    } finally {
+      global.fetch = originalFetch;
+      if (originalEnv !== undefined) process.env.BROWSERPAW_HOME = originalEnv;
+      else delete process.env.BROWSERPAW_HOME;
+    }
+  });
+
+  test('16. respects custom BROWSERPAW_HOME override without recursion', async () => {
+    const { join, resolve } = await import('node:path');
+    const customDir = resolve('custom-bp-home-test');
+    const originalEnv = process.env.BROWSERPAW_HOME;
+    const originalFetch = global.fetch;
+    process.env.BROWSERPAW_HOME = customDir;
+    global.fetch = jest.fn<typeof fetch>().mockResolvedValue({ ok: false } as Response);
+    try {
+      let isolatedMod: any;
+      expect(() => {
+        jest.isolateModules(() => {
+          jest.doMock('node:fs', () => ({
+            existsSync: jest.fn(() => false),
+            mkdirSync: jest.fn(),
+          }));
+          try {
+            isolatedMod = require('./jev-model-manager');
+          } finally {
+            jest.dontMock('node:fs');
+          }
+        });
+      }).not.toThrow();
+      const status = await isolatedMod.jevModelManager.getStatus();
+      expect(status.path).toBe(join(customDir, 'models', 'decider-2b'));
+    } finally {
+      global.fetch = originalFetch;
+      if (originalEnv !== undefined) {
+        process.env.BROWSERPAW_HOME = originalEnv;
+      } else {
+        delete process.env.BROWSERPAW_HOME;
+      }
+    }
   });
 });

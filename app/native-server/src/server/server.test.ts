@@ -328,20 +328,20 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       expect(response.headers['access-control-allow-origin']).toBeUndefined();
     });
 
-    test('allows local origin (127.0.0.1 and localhost)', async () => {
+    test('rejects web page origin without CORS permission (127.0.0.1 and localhost)', async () => {
       const resLocalhost = await supertest(Server.getInstance().server)
         .options('/mcp')
         .set('Origin', 'http://localhost:3000')
         .set('Access-Control-Request-Method', 'POST');
 
-      expect(resLocalhost.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+      expect(resLocalhost.headers['access-control-allow-origin']).toBeUndefined();
 
       const res127 = await supertest(Server.getInstance().server)
         .options('/mcp')
         .set('Origin', 'http://127.0.0.1:8080')
         .set('Access-Control-Request-Method', 'POST');
 
-      expect(res127.headers['access-control-allow-origin']).toBe('http://127.0.0.1:8080');
+      expect(res127.headers['access-control-allow-origin']).toBeUndefined();
     });
   });
 
@@ -510,19 +510,64 @@ describe('Fastify MCP Native Server Integration Tests', () => {
     });
   });
 
-  describe('Architecture: Native Messaging Host Ceiling Defense', () => {
-    test('sendRequestToExtensionAndWait immediately rejects requests exceeding 1MB ceiling without hanging', async () => {
+  describe('Architecture: Native Messaging Host Ceiling Defense (Chunking Contract)', () => {
+    test('sendRequestToExtensionAndWait transparently chunks requests exceeding threshold, keeps chunks < 1MB, and resolves response', async () => {
       nativeMessagingHostInstance.isConnected = true;
+      const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation((() => true) as any);
+
+      try {
+        const hugePayload = 'x'.repeat(1024 * 1024 + 100);
+        const sendPromise = nativeMessagingHostInstance.sendRequestToExtensionAndWait(
+          hugePayload,
+          'test_request',
+          2000,
+        );
+
+        // Verify transparent chunking: each chunk must be strictly < 1MB
+        expect(stdoutSpy).toHaveBeenCalled();
+        const calls = stdoutSpy.mock.calls;
+        expect(calls.length).toBeGreaterThan(1);
+
+        let capturedRequestId: string | undefined;
+        for (const call of calls) {
+          const buf = call[0] as Buffer;
+          const len = buf.readUInt32LE(0);
+          expect(len).toBeLessThan(1024 * 1024);
+          const chunkJson = JSON.parse(buf.slice(4, 4 + len).toString('utf8'));
+          expect(chunkJson.__chunked__).toBe(true);
+          capturedRequestId = chunkJson.requestId;
+        }
+
+        expect(capturedRequestId).toBeDefined();
+
+        // Simulate extension responding to the request ID
+        await (nativeMessagingHostInstance as any).handleMessage({
+          responseToRequestId: capturedRequestId,
+          payload: { success: true, processedBytes: hugePayload.length },
+        });
+
+        const result = await sendPromise;
+        expect(result).toEqual({ success: true, processedBytes: hugePayload.length });
+      } finally {
+        stdoutSpy.mockRestore();
+        nativeMessagingHostInstance.isConnected = false;
+      }
+    });
+
+    test('sendRequestToExtensionAndWait cleanly rejects on timeout without hanging when extension does not reply', async () => {
+      nativeMessagingHostInstance.isConnected = true;
+      const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation((() => true) as any);
       try {
         const hugePayload = 'x'.repeat(1024 * 1024 + 100);
         await expect(
           nativeMessagingHostInstance.sendRequestToExtensionAndWait(
             hugePayload,
             'test_request',
-            1000,
+            100,
           ),
-        ).rejects.toThrow(/exceeds Chrome Native Messaging 1MB ceiling/i);
+        ).rejects.toThrow(/Request timed out after 100ms/);
       } finally {
+        stdoutSpy.mockRestore();
         nativeMessagingHostInstance.isConnected = false;
       }
     });
@@ -543,51 +588,102 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       expect(res.body).toHaveProperty('percent');
     });
 
-    test('POST /jev/set-mode updates active mode in memory', async () => {
+    test('POST /jev/set-mode requires valid token and updates active mode in memory', async () => {
+      // Anonymous negative assertion (W1 hardening)
+      const anonRes = await supertest(Server.getInstance().server)
+        .post('/jev/set-mode')
+        .send({ mode: 'local' });
+      expect(anonRes.status).toBe(401);
+
+      // Authenticated positive assertion
       const res = await supertest(Server.getInstance().server)
         .post('/jev/set-mode')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
         .send({ mode: 'local' });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, mode: 'local' });
 
-      // Reject invalid mode
+      // Reject invalid mode even when authenticated
       const invalidRes = await supertest(Server.getInstance().server)
         .post('/jev/set-mode')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
         .send({ mode: 'invalid' });
       expect(invalidRes.status).toBe(400);
 
-      // Restore to remote
-      await supertest(Server.getInstance().server).post('/jev/set-mode').send({ mode: 'remote' });
+      // Restore to remote with token
+      await supertest(Server.getInstance().server)
+        .post('/jev/set-mode')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
+        .send({ mode: 'remote' });
     });
 
-    test('GET /jev/models and POST /jev/select-model work without auth token', async () => {
-      const getRes = await supertest(Server.getInstance().server).get('/jev/models');
+    test('GET /jev/models and POST /jev/select-model reject anonymous and succeed with token', async () => {
+      // Anonymous negative assertions
+      const anonGet = await supertest(Server.getInstance().server).get('/jev/models');
+      expect(anonGet.status).toBe(401);
+
+      const anonSelect = await supertest(Server.getInstance().server)
+        .post('/jev/select-model')
+        .send({ model: 'decider-2b' });
+      expect(anonSelect.status).toBe(401);
+
+      // Authenticated positive assertions
+      const getRes = await supertest(Server.getInstance().server)
+        .get('/jev/models')
+        .set('Authorization', `Bearer ${getBridgeToken()}`);
       expect(getRes.status).toBe(200);
       expect(getRes.body).toHaveProperty('models');
       expect(getRes.body).toHaveProperty('activeModel');
 
       const selectRes = await supertest(Server.getInstance().server)
         .post('/jev/select-model')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
         .send({ model: 'decider-2b' });
       expect(selectRes.status).toBe(200);
       expect(selectRes.body.success).toBe(true);
     });
 
-    test('POST & GET /jev/remote-config updates and retrieves remote parameters with jev-latest sanitization', async () => {
-      const postRes = await supertest(Server.getInstance().server).post('/jev/remote-config').send({
-        baseUrl: 'https://api.typesafe.ai/v1',
-        apiKey: 'sk-test-live-key',
-        modelId: 'decider-2b',
-      });
-      expect(postRes.status).toBe(200);
-      expect(postRes.body.success).toBe(true);
-      expect(postRes.body.remoteConfig.modelId).toBe('jev-latest');
+    test('POST & GET /jev/remote-config require token and do not expose plaintext apiKey (mocking disk write)', async () => {
+      // Mock fs.writeFileSync to guarantee zero test writes to user home directory ~/.browserpaw
+      const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+      try {
+        // Anonymous negative assertions
+        const anonPost = await supertest(Server.getInstance().server)
+          .post('/jev/remote-config')
+          .send({
+            baseUrl: 'https://api.typesafe.ai/v1',
+            apiKey: 'sk-test-live-key',
+            modelId: 'decider-2b',
+          });
+        expect(anonPost.status).toBe(401);
 
-      const getRes = await supertest(Server.getInstance().server).get('/jev/remote-config');
-      expect(getRes.status).toBe(200);
-      expect(getRes.body.baseUrl).toBe('https://api.typesafe.ai/v1');
-      expect(getRes.body.apiKey).toBe('sk-test-live-key');
-      expect(getRes.body.modelId).toBe('jev-latest');
+        const anonGet = await supertest(Server.getInstance().server).get('/jev/remote-config');
+        expect(anonGet.status).toBe(401);
+
+        // Authenticated positive assertions
+        const postRes = await supertest(Server.getInstance().server)
+          .post('/jev/remote-config')
+          .set('Authorization', `Bearer ${getBridgeToken()}`)
+          .send({
+            baseUrl: 'https://api.typesafe.ai/v1',
+            apiKey: 'sk-test-live-key',
+            modelId: 'decider-2b',
+          });
+        expect(postRes.status).toBe(200);
+        expect(postRes.body.success).toBe(true);
+        expect(postRes.body.remoteConfig.modelId).toBe('jev-latest');
+
+        const getRes = await supertest(Server.getInstance().server)
+          .get('/jev/remote-config')
+          .set('Authorization', `Bearer ${getBridgeToken()}`);
+        expect(getRes.status).toBe(200);
+        expect(getRes.body.baseUrl).toBe('https://api.typesafe.ai/v1');
+        expect(getRes.body.hasApiKey).toBe(true);
+        expect(getRes.body.modelId).toBe('jev-latest');
+        expect(getRes.body.apiKey).toBeUndefined(); // Plaintext apiKey must never be exposed (BUG-13)
+      } finally {
+        writeSpy.mockRestore();
+      }
     });
   });
 });

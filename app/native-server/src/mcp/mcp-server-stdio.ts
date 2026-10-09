@@ -22,7 +22,10 @@ import {
   getBaseToolName,
 } from 'chrome-mcp-shared';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveBridgeToken } from '../server/token';
@@ -30,6 +33,22 @@ import { jevModelManager } from '../server/jev-model-manager';
 
 let stdioMcpServer: Server | null = null;
 let mcpClient: Client | null = null;
+let mcpClientGeneration = 0;
+let currentClientGeneration = 0;
+let connectingPromise: Promise<{ client: Client | null; generation: number }> | null = null;
+
+export const getMcpClientGeneration = () => mcpClientGeneration;
+export const getActiveMcpClient = () => mcpClient;
+export const setMcpClientForTesting = (client: Client | null, generation = 0) => {
+  mcpClient = client;
+  mcpClientGeneration = generation;
+};
+export const resetMcpClientForTesting = () => {
+  mcpClient = null;
+  connectingPromise = null;
+  currentClientGeneration = 0;
+  mcpClientGeneration = 0;
+};
 
 // Profile contract: resolved at startup (default is 'core', set CHROME_MCP_TOOL_PROFILE=full to expose all tools).
 const TOOL_PROFILE = resolveToolProfile(process.env.CHROME_MCP_TOOL_PROFILE);
@@ -59,39 +78,65 @@ const resolveTargetUrl = (): string => {
   return `http://${host}:12306/mcp`;
 };
 
-export const ensureMcpClient = async () => {
-  try {
-    if (mcpClient) {
+// BUG-18 & PERF-02: Single-flight connection promise, generational isolation, and fast-path reuse
+export const ensureMcpClient = async (): Promise<Client | null> => {
+  // Fast path (PERF-02): If an active healthy client already exists, reuse it without ping round-trip.
+  if (mcpClient) {
+    return mcpClient;
+  }
+
+  // Single-flight connecting promise (BUG-18): deduplicate concurrent calls
+  if (connectingPromise) {
+    const res = await connectingPromise;
+    return res.client;
+  }
+
+  const thisGeneration = ++currentClientGeneration;
+  let thisPromise: Promise<{ client: Client | null; generation: number }> | null = null;
+  thisPromise = (async () => {
+    let localClient: Client | null = null;
+    try {
+      const targetUrl = resolveTargetUrl();
+      const token = resolveBridgeToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      localClient = new Client(
+        { name: 'Mcp Chrome Proxy', version: '1.0.0' },
+        { capabilities: {} },
+      );
+      const transport = new StreamableHTTPClientTransport(new URL(targetUrl), {
+        requestInit: { headers },
+      });
+      await localClient.connect(transport);
+      // Only publish to module-level mcpClient if this generation is still current
+      if (currentClientGeneration === thisGeneration) {
+        mcpClient = localClient;
+        mcpClientGeneration = thisGeneration;
+      }
+      return { client: localClient, generation: thisGeneration };
+    } catch (error) {
       try {
-        const pingResult = await mcpClient.ping();
-        if (pingResult) {
-          return mcpClient;
-        }
-      } catch {
-        try {
-          await mcpClient.close();
-        } catch {}
+        await localClient?.close();
+      } catch {}
+      // Stale failure must never close or nullify a newer client generation
+      if (mcpClient === localClient && mcpClientGeneration === thisGeneration) {
         mcpClient = null;
       }
+      console.error('Failed to connect to MCP server:', error);
+      return { client: null, generation: thisGeneration };
+    } finally {
+      // BUG-18: Only clear connectingPromise if it still points to this exact promise
+      if (connectingPromise === thisPromise) {
+        connectingPromise = null;
+      }
     }
+  })();
+  connectingPromise = thisPromise;
 
-    const targetUrl = resolveTargetUrl();
-    const token = resolveBridgeToken();
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    mcpClient = new Client({ name: 'Mcp Chrome Proxy', version: '1.0.0' }, { capabilities: {} });
-    const transport = new StreamableHTTPClientTransport(new URL(targetUrl), {
-      requestInit: { headers },
-    });
-    await mcpClient.connect(transport);
-    return mcpClient;
-  } catch (error) {
-    mcpClient?.close();
-    mcpClient = null;
-    console.error('Failed to connect to MCP server:', error);
-  }
+  const res = await thisPromise;
+  return res.client;
 };
 
 export const getStdioMcpServer = () => {
@@ -217,6 +262,9 @@ const isConnectionError = (err: any): boolean => {
   const msg = String(err?.message || err || '').toLowerCase();
   const code = String(err?.code || '').toLowerCase();
   return (
+    (err instanceof StreamableHTTPError &&
+      (err.code === 404 ||
+        (err.code === 400 && /invalid (or missing mcp session id|sse session)/i.test(msg)))) ||
     code === 'econnreset' ||
     code === 'econnrefused' ||
     code === 'epipe' ||
@@ -231,15 +279,81 @@ const isConnectionError = (err: any): boolean => {
   );
 };
 
+// BUG-19: Strict conservative read-only categorization and explicit target verification.
+// On reconnect, a new transport principal is established and previous TabAffinity is reset.
+// Replaying tab-sensitive tools without an explicit tabId risks targeting the wrong tab (e.g. user foreground).
+const GLOBAL_READ_ONLY_TOOLS = new Set([
+  'get_windows_and_tabs',
+  'chrome_history',
+  'history',
+  'chrome_bookmark_search',
+  'bookmark_search',
+  'chrome_tool_docs',
+  'tool_docs',
+  'chrome_doctor',
+  'doctor',
+]);
+
+const TAB_SENSITIVE_READ_ONLY_TOOLS = new Set([
+  'chrome_read_dom',
+  'read_dom',
+  'chrome_get_markdown',
+  'get_markdown',
+  'chrome_screenshot',
+  'screenshot',
+  'chrome_get_dropdown_options',
+  'get_dropdown_options',
+  'chrome_tab_group_list',
+  'tab_group_list',
+]);
+
+export const isSafeReadOnlyCall = (toolName: string, args: any): boolean => {
+  const baseName = getBaseToolName(toolName);
+  const normalizedName = baseName.startsWith('chrome_') ? baseName : `chrome_${baseName}`;
+
+  if (GLOBAL_READ_ONLY_TOOLS.has(baseName) || GLOBAL_READ_ONLY_TOOLS.has(normalizedName)) {
+    // chrome_tool_docs with activateForSession alters session exposed tools; cannot safely retry
+    if (normalizedName === 'chrome_tool_docs' || baseName === 'tool_docs') {
+      if (args && Boolean(args.activateForSession)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (
+    TAB_SENSITIVE_READ_ONLY_TOOLS.has(baseName) ||
+    TAB_SENSITIVE_READ_ONLY_TOOLS.has(normalizedName)
+  ) {
+    // Overlay dismissal on read_dom is mutating (TOOL-02)
+    if (normalizedName === 'chrome_read_dom' || baseName === 'read_dom') {
+      if (args && Boolean(args.dismissOverlays)) {
+        return false;
+      }
+    }
+    // W3 target stability: require explicit integer tabId so reconnect does not fallback to foreground tab
+    const hasExplicitTabId =
+      args && typeof args.tabId === 'number' && Number.isInteger(args.tabId) && args.tabId > 0;
+    return Boolean(hasExplicitTabId);
+  }
+
+  return false;
+};
+
 const handleToolCall = async (name: string, args: any): Promise<CallToolResult> => {
   jevModelManager.onToolInvocation();
   const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
+
+  let activeCallClient: Client | null = null;
+  let activeCallGeneration = 0;
 
   const executeCall = async (): Promise<CallToolResult> => {
     const client = await ensureMcpClient();
     if (!client) {
       throw new Error('Failed to connect to MCP server');
     }
+    activeCallClient = client;
+    activeCallGeneration = mcpClientGeneration;
     const result = await client.callTool({ name, arguments: args }, undefined, {
       timeout: DEFAULT_CALL_TIMEOUT_MS,
     });
@@ -251,14 +365,45 @@ const handleToolCall = async (name: string, args: any): Promise<CallToolResult> 
   } catch (error: any) {
     if (isConnectionError(error)) {
       console.warn(
-        `[Stdio MCP] Connection lost during tool call (${error.message}). Attempting auto-reconnect...`,
+        `[Stdio MCP] Connection lost during tool call (${error.message}). Invalidating client if still matching...`,
       );
-      try {
-        mcpClient?.close();
-      } catch {}
-      mcpClient = null;
+      // BUG-18: Only invalidate global mcpClient if the active client identity and generation match!
+      // A stale failed request must NEVER close or nullify a newer client created by a subsequent request.
+      const clientToInvalidate = activeCallClient as Client | null;
+      const generationToInvalidate: number = activeCallGeneration;
 
+      if (mcpClient === clientToInvalidate && mcpClientGeneration === generationToInvalidate) {
+        mcpClient = null;
+      }
       try {
+        await clientToInvalidate?.close();
+      } catch {}
+
+      // BUG-19: Do NOT automatically replay mutating tools when connection is lost.
+      // Tools with side effects (or read_dom with dismissOverlays) must return unknown state error.
+      if (!isSafeReadOnlyCall(name, args)) {
+        const isTabSensitiveWithoutTarget =
+          (TAB_SENSITIVE_READ_ONLY_TOOLS.has(name) ||
+            TAB_SENSITIVE_READ_ONLY_TOOLS.has(getBaseToolName(name))) &&
+          !(args && typeof args.tabId === 'number' && args.tabId > 0);
+        const reason = isTabSensitiveWithoutTarget
+          ? `Tool "${name}" is read-only but lacks an explicit valid "tabId". Upon reconnection, transport TabAffinity is reset; replaying without explicit target would risk reading the wrong foreground tab.`
+          : `Tool "${name}" is mutating or has unverified side effects. The operation result is unknown and may have already been executed by the browser.`;
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Connection lost during execution (${error.message}). ${reason} Automatic retry is aborted to protect state. Please inspect state and retry with explicit target if needed.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Safe read-only tools may retry once after re-establishing connection
+      try {
+        console.warn(`[Stdio MCP] Retrying safe read-only tool "${name}" after reconnect...`);
         return await executeCall();
       } catch (retryErr: any) {
         return {

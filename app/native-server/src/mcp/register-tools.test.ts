@@ -174,4 +174,104 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
       'Tool "unknown_tool_xyz" is not a BrowserPaw tool',
     );
   });
+
+  it('ARCH-03: bound serverSessionId takes precedence over caller args.sessionId and consistently injects downstream', async () => {
+    const { setupTools } = await import('./register-tools');
+    const nativeMessagingHostInstance = (await import('../native-messaging-host')).default;
+
+    let callToolHandler: ((req: any) => Promise<any>) | null = null;
+    const mockServer = {
+      setRequestHandler: (schema: any, handler: any) => {
+        if (
+          schema.name === 'CallToolRequestSchema' ||
+          schema._def?.description?.includes('CallTool') ||
+          Object.keys(schema).length > 0
+        ) {
+          // Second handler registered is CallTool
+          if (!callToolHandler && handler.length === 1) {
+            callToolHandler = handler;
+          }
+        }
+      },
+    };
+
+    const BOUND_SESSION = 'transport-principal-session-AAA';
+    setupTools(mockServer as any, BOUND_SESSION);
+
+    // Spy on sendRequestToExtensionAndWait
+    const sendSpy = jest
+      .spyOn(nativeMessagingHostInstance, 'sendRequestToExtensionAndWait')
+      .mockImplementation(async (payload: any) => ({
+        status: 'success',
+        data: { content: [{ type: 'text', text: 'ok' }] },
+      }));
+    nativeMessagingHostInstance.isConnected = true;
+
+    try {
+      expect(callToolHandler).not.toBeNull();
+      await callToolHandler!({
+        params: {
+          name: 'chrome_screenshot',
+          arguments: {
+            sessionId: 'spoofed-session-BBB',
+            sessionContext: 'spoofed-session-BBB',
+          },
+        },
+      });
+
+      expect(sendSpy).toHaveBeenCalled();
+      const sentPayload = sendSpy.mock.calls[0][0];
+      // Top-level sessionId must be the bound serverSessionId, not the spoofed one
+      expect(sentPayload.sessionId).toBe(BOUND_SESSION);
+      // args.sessionId must also be consistently injected with bound serverSessionId
+      expect(sentPayload.args.sessionId).toBe(BOUND_SESSION);
+      expect(sentPayload.args.sessionContext).toBe(BOUND_SESSION);
+    } finally {
+      sendSpy.mockRestore();
+      nativeMessagingHostInstance.isConnected = false;
+    }
+  });
+
+  it('PERF-01: does NOT block tool call when update check hangs or times out', async () => {
+    const { handleToolCall } = await import('./register-tools');
+    const { agentUpdateNotifier } = await import('chrome-mcp-shared');
+    const nativeMessagingHostInstance = (await import('../native-messaging-host')).default;
+
+    // Mock update check to never resolve (simulating hanging remote network)
+    const hangingPromise = new Promise<string | null>(() => {});
+    const checkSpy = jest
+      .spyOn(agentUpdateNotifier, 'maybeGetFirstCallNotice')
+      .mockReturnValue(hangingPromise);
+
+    const sendSpy = jest
+      .spyOn(nativeMessagingHostInstance, 'sendRequestToExtensionAndWait')
+      .mockResolvedValue({
+        status: 'success',
+        data: { content: [{ type: 'text', text: 'fast result' }] },
+      });
+    nativeMessagingHostInstance.isConnected = true;
+
+    const prevEnv = process.env.ENABLE_MCP_VERSION_CHECK;
+    process.env.ENABLE_MCP_VERSION_CHECK = 'true';
+
+    try {
+      const t0 = Date.now();
+      // Race tool call against a 500ms timeout
+      const callPromise = handleToolCall('chrome_screenshot', {}, 'test-session');
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Tool call was blocked by update check')), 500),
+      );
+
+      const res = (await Promise.race([callPromise, timeoutPromise])) as any;
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(400);
+      expect(res.content[0].text).toBe('fast result');
+    } finally {
+      checkSpy.mockRestore();
+      sendSpy.mockRestore();
+      nativeMessagingHostInstance.isConnected = false;
+      if (prevEnv !== undefined) process.env.ENABLE_MCP_VERSION_CHECK = prevEnv;
+      else delete process.env.ENABLE_MCP_VERSION_CHECK;
+    }
+  });
 });

@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
+import { assertSafeUrlAsync, getSafeAgent } from '../file-handler';
 
 export type JevMode = 'off' | 'local' | 'remote';
 
@@ -75,10 +76,13 @@ export interface ModelStatusInfo {
   lastActivityTime?: number;
 }
 
-const MODELS_ROOT_DIR = join(homedir(), '.browserpaw', 'models');
+function getBrowserpawHome(): string {
+  return process.env.BROWSERPAW_HOME ? process.env.BROWSERPAW_HOME : join(homedir(), '.browserpaw');
+}
+const MODELS_ROOT_DIR = join(getBrowserpawHome(), 'models');
 const DEFAULT_MODEL_NAME = 'decider-2b';
 const BASE_MODELS_PATH = join(MODELS_ROOT_DIR, DEFAULT_MODEL_NAME);
-const CONFIG_FILE = join(homedir(), '.browserpaw', 'jev-remote.json');
+const CONFIG_FILE = join(getBrowserpawHome(), 'jev-remote.json');
 
 // Expected model files with approximate sizes
 const MODEL_FILES = [
@@ -242,7 +246,7 @@ export class JevModelManager {
       return;
     }
     try {
-      const dir = join(homedir(), '.browserpaw');
+      const dir = getBrowserpawHome();
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       const payload = {
         ...this.remoteConfig,
@@ -437,7 +441,7 @@ export class JevModelManager {
             valid: false,
             reason: 'local_service_failed',
             message: `Failed to start local Jev service on port 8009: ${startRes.message || 'Health check timed out'}`,
-            diagnostics: `Inspect service log at ${join(homedir(), '.browserpaw', 'decider-service.log')}`,
+            diagnostics: `Inspect service log at ${join(getBrowserpawHome(), 'decider-service.log')}`,
             remediation: `Check if Python virtualenv at ~/.browserpaw/venv is installed and dependencies (uvicorn, torch, transformers) are ready.`,
           };
         }
@@ -518,7 +522,20 @@ export class JevModelManager {
         signal: controller.signal,
       }).catch(() => null);
       clearTimeout(timeout);
-      return Boolean(res && res.ok);
+      if (!res || !res.ok) return false;
+      const data = await res.json().catch(() => null);
+      // ARCH-01: Match authentic decider.serve:app structure
+      // Real decider returns { ok: boolean, model: ..., device: ..., layout: ... }
+      // Or explicit service identifier { service: 'browserpaw-decider' }
+      if (!data || typeof data !== 'object') return false;
+      if (
+        data.service === 'browserpaw-decider' ||
+        data.service === 'decider' ||
+        data.app === 'decider'
+      ) {
+        return true;
+      }
+      return Boolean('ok' in data && 'model' in data && ('device' in data || 'layout' in data));
     } catch {
       return false;
     }
@@ -551,33 +568,40 @@ export class JevModelManager {
    */
   public async killProcessOnPort(port = 8009): Promise<void> {
     if (process.env.NODE_ENV === 'test') return;
+    // ARCH-01: Only kill processes owned by our active ChildProcess instance (this.serviceProcess)
+    // Never kill based solely on port or external PID files to prevent PID reuse hazards.
+    if (!this.serviceProcess || !this.servicePid) {
+      return;
+    }
+    const pidToKill = this.servicePid;
     try {
       if (process.platform === 'win32') {
         const { execSync } = await import('node:child_process');
+        // Double-check port netstat if port is supplied, ensuring it belongs to this child process
         const output = execSync('netstat -ano -p tcp', {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'ignore'],
         });
         const lines = output.split('\n');
-        const pids = new Set<string>();
+        let matched = false;
         for (const line of lines) {
           if (line.includes(`:${port}`) && line.includes('LISTENING')) {
             const parts = line.trim().split(/\s+/);
             const pid = parts[parts.length - 1]?.trim();
-            if (pid && /^\d+$/.test(pid) && pid !== '0') {
-              pids.add(pid);
+            if (pid === String(pidToKill)) {
+              matched = true;
+              break;
             }
           }
         }
-        for (const pid of pids) {
+        if (matched) {
           try {
-            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+            execSync(`taskkill /F /T /PID ${pidToKill}`, { stdio: 'ignore' });
           } catch {}
         }
       } else {
-        const { execSync } = await import('node:child_process');
         try {
-          execSync(`lsof -ti :${port} | xargs kill -9`, { stdio: 'ignore' });
+          process.kill(pidToKill, 'SIGKILL');
         } catch {}
       }
     } catch {}
@@ -627,15 +651,15 @@ export class JevModelManager {
       };
     }
 
-    const home = homedir();
+    const bpHome = getBrowserpawHome();
     const isWin = process.platform === 'win32';
     const venvPython = isWin
-      ? join(home, '.browserpaw', 'venv', 'Scripts', 'python.exe')
-      : join(home, '.browserpaw', 'venv', 'bin', 'python');
+      ? join(bpHome, 'venv', 'Scripts', 'python.exe')
+      : join(bpHome, 'venv', 'bin', 'python');
 
     const pythonBin = existsSync(venvPython) ? venvPython : isWin ? 'python' : 'python3';
 
-    const logPath = join(home, '.browserpaw', 'decider-service.log');
+    const logPath = join(bpHome, 'decider-service.log');
     let logFd: number | undefined;
     try {
       logFd = openSync(logPath, 'a');
@@ -644,7 +668,7 @@ export class JevModelManager {
     }
 
     const modelDir = join(MODELS_ROOT_DIR, activeModel);
-    const deciderRepoDir = join(home, '.browserpaw', 'decider-repo');
+    const deciderRepoDir = join(bpHome, 'decider-repo');
 
     // 1. Resolve target device. Strict Rule: On Windows, GPU/CUDA is strictly prioritized over CPU.
     let targetDevice = process.env.DECIDER_DEVICE?.trim();
@@ -688,7 +712,7 @@ export class JevModelManager {
         ['-m', 'uvicorn', 'decider.serve:app', '--host', '127.0.0.1', '--port', '8009'],
         {
           detached: true,
-          cwd: existsSync(deciderRepoDir) ? deciderRepoDir : home,
+          cwd: existsSync(deciderRepoDir) ? deciderRepoDir : bpHome,
           stdio: logFd !== undefined ? ['ignore', logFd, logFd] : 'ignore',
           env,
           windowsHide: true,
@@ -696,13 +720,24 @@ export class JevModelManager {
       );
       this.serviceProcess = child;
       this.servicePid = child.pid || null;
+      const pidFile = join(bpHome, 'decider-service.pid');
       if (child.pid) {
         try {
-          const pidFile = join(home, '.browserpaw', 'decider-service.pid');
           writeFileSync(pidFile, String(child.pid), 'utf8');
         } catch {}
       }
       child.unref();
+
+      // Clean up owned process references on termination to avoid PID reuse
+      child.once('close', () => {
+        if (this.serviceProcess === child) {
+          this.serviceProcess = null;
+          this.servicePid = null;
+          try {
+            if (existsSync(pidFile)) unlinkSync(pidFile);
+          } catch {}
+        }
+      });
 
       let exitedEarly = false;
       let exitCode: number | null = null;
@@ -787,6 +822,28 @@ export class JevModelManager {
       this.idleTimer = null;
     }
 
+    // ARCH-01: Strict live ChildProcess ownership guard.
+    // Must hold a real live child process whose pid matches servicePid and has not exited.
+    const bpHome = getBrowserpawHome();
+    const pidFile = join(bpHome, 'decider-service.pid');
+    const child = this.serviceProcess;
+    const isLiveOwnedChild = Boolean(
+      child &&
+      typeof child === 'object' &&
+      typeof child.pid === 'number' &&
+      child.pid > 0 &&
+      child.pid === this.servicePid &&
+      child.exitCode === null &&
+      !child.killed,
+    );
+
+    if (!isLiveOwnedChild) {
+      return {
+        success: false,
+        message: 'No locally owned Jev decider service process is running.',
+      };
+    }
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1200);
@@ -800,30 +857,16 @@ export class JevModelManager {
     // Allow process a brief moment to exit cleanly
     await new Promise((r) => setTimeout(r, 200));
 
-    // Check if process is still alive and kill if needed
-    const home = homedir();
-    const pidFile = join(home, '.browserpaw', 'decider-service.pid');
-    let pidToKill = this.servicePid;
-    if (!pidToKill && existsSync(pidFile)) {
-      try {
-        const raw = readFileSync(pidFile, 'utf8').trim();
-        const parsed = parseInt(raw, 10);
-        if (!isNaN(parsed) && parsed > 0) pidToKill = parsed;
-      } catch {}
-    }
-
-    if (pidToKill) {
-      try {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/F', '/T', '/PID', String(pidToKill)], { windowsHide: true });
-        } else {
-          process.kill(pidToKill, 'SIGKILL');
-        }
-      } catch {}
-    }
-
-    // Kill any orphan process still holding port 8009 to strictly free GPU VRAM
-    await this.killProcessOnPort(8009);
+    // Terminate the verified owned child process directly via ChildProcess API
+    try {
+      if (typeof child.kill === 'function') {
+        child.kill('SIGTERM');
+      } else if (process.platform === 'win32') {
+        spawn('taskkill', ['/F', '/PID', String(this.servicePid)], { windowsHide: true });
+      } else if (this.servicePid) {
+        process.kill(this.servicePid, 'SIGKILL');
+      }
+    } catch {}
 
     try {
       if (existsSync(pidFile)) unlinkSync(pidFile);
@@ -1250,10 +1293,19 @@ export class JevModelManager {
         }
       };
 
-      const makeRequest = (targetUrl: string, currentAttempt: number) => {
+      let redirectCount = 0;
+      const makeRequest = async (targetUrl: string, currentAttempt: number) => {
         if (this.isCancelled) {
           cleanup();
           return reject(new Error('Download cancelled by user'));
+        }
+
+        let urlObj: URL;
+        try {
+          urlObj = await assertSafeUrlAsync(targetUrl);
+        } catch (ssrfErr) {
+          cleanup();
+          return reject(ssrfErr);
         }
 
         let existingBytes = 0;
@@ -1265,8 +1317,8 @@ export class JevModelManager {
           existingBytes = 0;
         }
 
-        const client = targetUrl.startsWith('https') ? https : http;
-        const urlObj = new URL(targetUrl);
+        const client = urlObj.protocol === 'https:' ? https : http;
+        const safeAgent = getSafeAgent(urlObj);
         const headers: Record<string, string> = {
           'User-Agent': 'BrowserPaw-JevDownloader/1.0',
         };
@@ -1281,6 +1333,7 @@ export class JevModelManager {
             path: urlObj.pathname + urlObj.search,
             method: 'GET',
             headers,
+            agent: safeAgent,
           },
           (res) => {
             if (this.isCancelled) {
@@ -1288,13 +1341,18 @@ export class JevModelManager {
               return reject(new Error('Download cancelled by user'));
             }
 
-            // Handle 301 / 302 / 307 / 308 redirects (common in HuggingFace CDN)
+            // Handle 301 / 302 / 307 / 308 redirects (max 5 hops with SSRF validation)
             if (
               res.statusCode &&
               res.statusCode >= 300 &&
               res.statusCode < 400 &&
               res.headers.location
             ) {
+              redirectCount++;
+              if (redirectCount > 5) {
+                cleanup();
+                return reject(new Error('Too many redirects (max 5)'));
+              }
               const redirectUrl = new URL(res.headers.location, targetUrl).toString();
               res.resume();
               return makeRequest(redirectUrl, currentAttempt);

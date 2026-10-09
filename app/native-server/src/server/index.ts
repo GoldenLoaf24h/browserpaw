@@ -112,17 +112,6 @@ export class Server {
             }
             return cb(null, false);
           }
-          // Strict exact match for local hostnames; disallow prefix matching
-          const host = parsed.hostname.toLowerCase();
-          const configuredHost = SERVER_CONFIG.HOST.toLowerCase();
-          if (
-            host === '127.0.0.1' ||
-            host === 'localhost' ||
-            host === '::1' ||
-            host === configuredHost
-          ) {
-            return cb(null, true);
-          }
         } catch {
           return cb(null, false);
         }
@@ -139,12 +128,73 @@ export class Server {
         return;
       }
 
-      // 2. Allow health check endpoint (handshake), temporary media assets, and Jev model routes
+      // 1.1 Capability exemption: /media-asset/* allows cross-origin browser asset streaming
       const pathOnly = (request.raw.url || request.url || '').split('?')[0];
+      const isMediaAsset = pathOnly.startsWith('/media-asset/');
+
+      // Strict Host header validation using Fastify's robust parsed hostname: Disallow DNS rebinding / host spoofing
+      const host = (request.hostname || '').toLowerCase();
+      const configuredHost = SERVER_CONFIG.HOST.toLowerCase();
+      if (
+        host &&
+        host !== '127.0.0.1' &&
+        host !== 'localhost' &&
+        host !== '::1' &&
+        host !== '[::1]' &&
+        host !== configuredHost
+      ) {
+        return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+          error: 'Forbidden: Invalid or untrusted Host header',
+        });
+      }
+
+      // Origin verification: Exact allowed chrome-extension:// origins or requests without Origin (CLI / stdio)
+      // Normal web origins are rejected across the board, EXCEPT for short-lived /media-asset/ capability URLs
+      const rawOrigin = request.headers['origin'];
+      if (rawOrigin && !isMediaAsset) {
+        try {
+          const parsedOrigin = new URL(rawOrigin);
+          // Origin must not carry arbitrary path, query, hash or userinfo
+          if (
+            (parsedOrigin.pathname !== '/' && parsedOrigin.pathname !== '') ||
+            parsedOrigin.search ||
+            parsedOrigin.hash ||
+            parsedOrigin.username ||
+            parsedOrigin.password
+          ) {
+            return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+              error: 'Forbidden: Malformed Origin header',
+            });
+          }
+          if (parsedOrigin.protocol === 'chrome-extension:') {
+            const extId = parsedOrigin.hostname.toLowerCase();
+            const allowedIds = getAllowedExtensionIds().map((id) => id.toLowerCase());
+            const exactExpected = `chrome-extension://${extId}`;
+            const normalizedRaw = rawOrigin.toLowerCase().replace(/\/$/, '');
+            if (!allowedIds.includes(extId) || normalizedRaw !== exactExpected) {
+              return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+                error: 'Forbidden: Extension origin not allowed',
+              });
+            }
+          } else {
+            // Reject normal web origins (including localhost / 127.0.0.1 webpages)
+            return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+              error: 'Forbidden: Web page Origin is not permitted to access this endpoint',
+            });
+          }
+        } catch {
+          return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+            error: 'Forbidden: Invalid Origin header',
+          });
+        }
+      }
+
+      // 2. Allow health check endpoint (handshake), temporary media assets, and Jev model routes
       if (
         pathOnly === '/ping' ||
         pathOnly.startsWith('/media-asset/') ||
-        pathOnly.startsWith('/jev/')
+        pathOnly === '/jev/model-status' ||
+        pathOnly === '/jev/download-progress'
       ) {
         return;
       }
@@ -238,6 +288,18 @@ export class Server {
       if (!isLoopback) {
         return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
           error: 'Forbidden: /token is only accessible from local loopback (127.0.0.1)',
+        });
+      }
+
+      // Reject any browser request with Origin or Sec-Fetch headers
+      // (Extensions get token via Native Messaging host, not HTTP /token)
+      if (
+        request.headers['origin'] ||
+        request.headers['sec-fetch-mode'] ||
+        request.headers['sec-fetch-site']
+      ) {
+        return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
+          error: 'Forbidden: Browser requests are not permitted to fetch credentials from /token',
         });
       }
 
@@ -388,6 +450,9 @@ export class Server {
     this.fastify.get(
       '/media-asset/:assetId',
       async (request: FastifyRequest<{ Params: { assetId: string } }>, reply: FastifyReply) => {
+        // Capability URL: Allow browser cross-origin asset loading
+        reply.header('Access-Control-Allow-Origin', '*');
+        reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
         const { assetId } = request.params;
         const entry = mediaAssetStore.get(assetId);
         if (!entry) {
@@ -680,9 +745,16 @@ export class Server {
           baseUrl: body.baseUrl,
           modelId: body.modelId,
         };
-        // Don't overwrite existing API key if client passed back masked key or omitted it
-        if (body.apiKey !== undefined && !body.apiKey.includes('...')) {
-          updatePayload.apiKey = body.apiKey;
+        // Don't overwrite existing API key if client omitted it, passed masked key, or passed empty string (preserve existing)
+        // Explicit clear requires explicit clearApiKey: true
+        if ((body as any).clearApiKey === true) {
+          updatePayload.apiKey = '';
+        } else if (
+          body.apiKey !== undefined &&
+          body.apiKey.trim().length > 0 &&
+          !body.apiKey.includes('...')
+        ) {
+          updatePayload.apiKey = body.apiKey.trim();
         }
         jevModelManager.setRemoteConfig(updatePayload);
         mcpSessionManager.broadcastToolListChanged();
@@ -714,8 +786,7 @@ export class Server {
         return reply.status(HTTP_STATUS.OK).send({
           baseUrl: config.baseUrl || '',
           modelId: config.modelId || 'jev-latest',
-          apiKey: config.apiKey || '',
-          maskedApiKey,
+          hasApiKey: Boolean(config.apiKey || envKey),
           hasConfiguredApiKey: Boolean(config.apiKey),
           hasEnvApiKey: Boolean(envKey),
           envKeySource,
@@ -838,9 +909,8 @@ export class Server {
 
       request.socket.on('close', () => {
         request.log.info(`SSE client disconnected for session: ${sessionId}`);
-        if (sessionId) {
-          mcpSessionManager.closeSession(sessionId).catch(() => {});
-        }
+        // Streamable HTTP transport: socket close only ends this SSE stream transport,
+        // the logical MCP session is kept alive until explicit DELETE or timeout.
       });
     });
 

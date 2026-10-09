@@ -362,6 +362,8 @@ export interface UnifiedLocatorResult {
 export interface ScrollUntilFoundOptions {
   query?: string;
   selector?: string;
+  role?: string;
+  actionOnFound?: 'none' | 'scroll_into_view' | 'click' | 'focus';
   isRegex?: boolean;
   maxSteps?: number;
   stepPx?: number;

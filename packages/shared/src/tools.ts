@@ -1518,7 +1518,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~2s wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).',
+      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1684,13 +1684,13 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
     name: TOOL_NAMES.BROWSER.READ_DOM,
     annotations: {
       title: 'Read DOM',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
       openWorldHint: true,
     },
     description:
-      'Extract and prune interactive DOM tree with compact 1-based index assignment, viewport boundary filtering, and occlusion pruning. Supports scoped container targeting (selector) and noise exclusion (exclude) to eliminate full DOM dump overhead.',
+      'Extract and prune interactive DOM tree with compact 1-based index assignment, viewport boundary filtering, and occlusion pruning. Supports scoped container targeting (selector) and noise exclusion (exclude) to eliminate full DOM dump overhead. Optional dismissOverlays closes modals and removes overlay elements.',
     inputSchema: {
       type: 'object',
       properties: {
