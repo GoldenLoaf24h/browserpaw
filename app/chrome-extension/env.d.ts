@@ -6,3 +6,5 @@ declare module '*.vue' {
   const component: DefineComponent<Props, RawBindings, any>;
   export default component;
 }
+
+declare const __BROWSERPAW_BUILD_ID__: string;

@@ -1,5 +1,7 @@
 # TEST_INFRA — E2E Test Infrastructure Specification
 
+The authoritative acceptance contract is [docs/QUALITY.md](./docs/QUALITY.md), executed with `pnpm verify`. This document describes test infrastructure; the current `test/e2e/runner.ts` suite uses simulated CDP and does not prove live Chrome behavior.
+
 ## 1. Overview & Objectives
 
 This document specifies the architecture, test harness, oracle derivation methodology, and execution framework for the modern, opaque-box End-to-End (E2E) test suite of the **mcp-chrome** system.
@@ -93,7 +95,7 @@ Each test case derives its expected output from authoritative source requirement
 | **F9**     | Batch Action Execution Pipeline              | `PROJECT.md` §Interface Contracts; browser-use multi-act             | Compound action lists execute sequentially; runtime URL drift or static navigation triggers safe interruption; returns detailed partial execution results.      |
 | **F10**    | Structured Markdown & Visual Bounding Boxes  | `PROJECT.md` §Feature 10; browser-use markdown extractor             | Clean hierarchical markdown extraction; scripts/styles/JSON blobs stripped; bounding boxes provide accurate layout coordinates.                                 |
 | **F11**    | Monorepo Build & Typecheck Cleanliness       | `PROJECT.md` §Feature 11; `ORIGINAL_REQUEST.md` §R3                  | `pnpm build` succeeds; root `typecheck` passes cleanly; package exports resolve properly for ESM and CJS.                                                       |
-| **F12**    | Automated Unit & Integration Tests           | `PROJECT.md` §Feature 12; `ORIGINAL_REQUEST.md` §Acceptance          | Unit and integration test suites execute cleanly via `pnpm test`; coverage includes session manager, stdio shutdown, DOM pruning.                               |
+| **F12**    | Automated Unit & Integration Tests           | `PROJECT.md` §Feature 12; `ORIGINAL_REQUEST.md` §Acceptance          | Full monorepo unit, integration, and verification suites execute cleanly via `pnpm verify` across Vitest, Jest, pytest, and E2E runners.                        |
 | **F13**    | Final E2E Acceptance & Adversarial Hardening | `PROJECT.md` §Feature 13; `ORIGINAL_REQUEST.md` §Acceptance          | Full opaque-box E2E pipeline passes 100%; stress testing under concurrent load; input sanitization against adversarial injections.                              |
 
 ---

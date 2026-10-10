@@ -2,22 +2,26 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, 'fix/**']
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
+        uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -28,20 +32,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build project
-        run: pnpm build
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Type check
-        run: pnpm typecheck
+      - name: Install Python test dependencies
+        run: python -m pip install pytest
 
-      - name: Run extension unit tests
-        run: pnpm --filter chrome-mcp-server test -- --run
+      - name: Run complete acceptance gate
+        run: pnpm verify
 
-      - name: Run native server unit tests
-        run: pnpm --filter mcp-chrome-bridge test
-
-      - name: Run scripts regression tests
-        run: node --test scripts/*.test.mjs scripts/*.test.cjs
-
-      - name: Run simulated CDP in-memory mock integration suite
-        run: node --experimental-strip-types test/e2e/runner.ts
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-${{ matrix.os }}
+          path: .artifacts/verification/
+          if-no-files-found: error

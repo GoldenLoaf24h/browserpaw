@@ -20,7 +20,7 @@
     "zip:firefox": "wxt zip -b firefox",
     "compile": "vue-tsc --noEmit",
     "postinstall": "wxt prepare",
-    "lint": "npx eslint .",
+    "lint": "eslint . --max-warnings=0",
     "lint:fix": "npx eslint . --fix",
     "format": "npx prettier --write .",
     "format:check": "npx prettier --check .",

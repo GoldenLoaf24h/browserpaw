@@ -6,6 +6,7 @@ import { resolve } from 'path';
 import Icons from 'unplugin-icons/vite';
 import Components from 'unplugin-vue-components/vite';
 import IconsResolver from 'unplugin-icons/resolver';
+import { createBuildInfo, writeBuildProvenance } from '../../scripts/extension-artifacts.mjs';
 
 config({ path: resolve(process.cwd(), '.env') });
 config({ path: resolve(process.cwd(), '.env.local') });
@@ -14,10 +15,24 @@ const CHROME_EXTENSION_KEY = process.env.CHROME_EXTENSION_KEY;
 // Detect dev mode early for manifest-level switches
 const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'production';
 
+const buildInfo = createBuildInfo({
+  repoRoot: resolve(__dirname, '../..'),
+});
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
-  runner: {
+  hooks: {
+    'build:publicAssets': (_wxt, files) => {
+      for (let index = files.length - 1; index >= 0; index--) {
+        if (/\.md$/i.test(files[index].relativeDest)) files.splice(index, 1);
+      }
+    },
+    'build:done': async (wxt) => {
+      writeBuildProvenance(wxt.config.outDir, buildInfo);
+    },
+  },
+  webExt: {
     // Option 1: Disable auto-open (recommended)
     disabled: true,
 
@@ -80,6 +95,9 @@ export default defineConfig({
     },
   },
   vite: (env) => ({
+    define: {
+      __BROWSERPAW_BUILD_ID__: JSON.stringify(buildInfo.buildId),
+    },
     plugins: [
       // TailwindCSS v4 Vite plugin – no PostCSS config required
       tailwindcss(),

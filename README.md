@@ -267,3 +267,8 @@ Users are solely responsible for ensuring that their automated browser workflows
 ### 🏷️ Trademarks & Non-Affiliation
 
 _Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of Microsoft Corporation. _OpenAI_ and _ChatGPT_ are trademarks of OpenAI, Inc. _TypeSafe_ is a trademark of TypeSafe, Inc. BrowserPaw is an independent open-source project and is not sponsored, endorsed, or affiliated with any of these entities. Third-party software attributions and licenses are documented in [NOTICE](./NOTICE).
+
+## 🛡️ Verification & Quality
+
+Development acceptance gates, build/deployment verification, and runtime identity standards are defined in [**`docs/QUALITY.md`**](docs/QUALITY.md).
+Run `pnpm verify` to execute full static quality and build audits.

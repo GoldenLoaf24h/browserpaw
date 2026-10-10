@@ -58,3 +58,13 @@ research/_external/
 
 .omc/
 **/.omc/
+
+# Local deployment configuration and verification evidence
+browserpaw.local.json
+.artifacts/
+.pytest_cache/
+
+# Keep the canonical agent contract and version ledger under version control
+!/AGENTS.md
+!/docs/releases/
+!/docs/releases/**

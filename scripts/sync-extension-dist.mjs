@@ -1,7 +1,17 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs';
 import { resolve, join, dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import console from 'node:console';
 
@@ -96,11 +106,26 @@ if (realTarget === resolve('/') || realTarget.match(/^[a-zA-Z]:\\?$/)) {
 }
 
 if (!existsSync(SRC)) {
-  console.log('[SYNC] Skipped: extension build output directory does not exist.');
-  process.exit(0);
+  console.error('[SYNC] Error: extension build output directory does not exist: ' + SRC);
+  process.exit(1);
+}
+
+if (!existsSync(join(SRC, 'manifest.json'))) {
+  console.error('[SYNC] Error: manifest.json missing in source directory: ' + SRC);
+  process.exit(1);
 }
 
 try {
+  function checkTargetTree(dir) {
+    assertNoSymlink(dir);
+    if (!existsSync(dir)) return;
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      const child = join(dir, item.name);
+      assertNoSymlink(child);
+      if (item.isDirectory()) checkTargetTree(child);
+    }
+  }
+  checkTargetTree(target);
   mkdirSync(target, { recursive: true });
   for (const sub of ['chunks', 'assets']) {
     const subPath = join(target, sub);
@@ -115,6 +140,29 @@ try {
     }
   }
   cpSync(SRC, target, { recursive: true, force: true });
+
+  // Hash verification between SRC and target
+  function getFiles(dir, base = dir) {
+    const out = [];
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, item.name);
+      if (item.isDirectory()) out.push(...getFiles(full, base));
+      else if (item.isFile()) out.push(relative(base, full));
+    }
+    return out;
+  }
+  function fileHash(p) {
+    return createHash('sha256').update(readFileSync(p)).digest('hex');
+  }
+  for (const rel of getFiles(SRC)) {
+    const srcFile = join(SRC, rel);
+    const targetFile = join(target, rel);
+    if (!existsSync(targetFile) || fileHash(srcFile) !== fileHash(targetFile)) {
+      console.error('[SYNC] Error: hash verification mismatch for ' + rel);
+      process.exit(1);
+    }
+  }
+
   console.log('[SYNC] Successfully synced extension build output to: ' + target);
 } catch (err) {
   console.error('[SYNC] Failed to sync to ' + target + ':', err.message);

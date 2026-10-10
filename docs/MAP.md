@@ -1,6 +1,6 @@
-# 🗺️ BrowserPaw Project Map & Documentation Index
+# 🗺️ BrowserPaw Architecture and Code Map
 
-Welcome to the **BrowserPaw** Project Map. Whether you are an end-user, an AI agent developer, a prompt engineer, or a core contributor, this document serves as your single source of truth for navigating the architecture, code topology, tools, and documentation.
+This map provides architecture and code references. Use [README.md](./README.md) as the single documentation hub and [QUALITY.md](./QUALITY.md) for current acceptance requirements. Reading paths below are technical cross-references rather than a separate acceptance contract.
 
 ---
 

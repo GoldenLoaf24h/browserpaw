@@ -87,10 +87,9 @@ const runScript = (sandboxRoot, env = {}, cwd = sandboxRoot) =>
     const resParent = runScript(root, { BROWSERPAW_EXTENSION_SYNC_DIR: parentDir });
     assert.notStrictEqual(resParent.status, 0, 'Must reject ancestor of repo root');
 
-// 3e. Target is user home directory
+    // 3e. Target is user home directory
     const resHome = runScript(root, { BROWSERPAW_EXTENSION_SYNC_DIR: os.homedir() });
     assert.notStrictEqual(resHome.status, 0, 'Must reject user home directory');
-
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -140,6 +139,51 @@ const runScript = (sandboxRoot, env = {}, cwd = sandboxRoot) =>
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(validTarget, { recursive: true, force: true });
+  }
+}
+
+// 6. Explicit target with missing source output: must fail with non-zero exit code (do not skip)
+{
+  const { root, src } = createSandbox();
+  const validTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-missing-src-'));
+  try {
+    fs.rmSync(src, { recursive: true, force: true });
+    const res = runScript(root, { BROWSERPAW_EXTENSION_SYNC_DIR: validTarget });
+    assert.notStrictEqual(res.status, 0, 'Must fail when source build directory does not exist');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(validTarget, { recursive: true, force: true });
+  }
+}
+
+// 7. Explicit target with missing manifest.json: must fail with non-zero exit code
+{
+  const { root, src } = createSandbox();
+  const validTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-missing-manifest-'));
+  try {
+    fs.rmSync(path.join(src, 'manifest.json'), { force: true });
+    const res = runScript(root, { BROWSERPAW_EXTENSION_SYNC_DIR: validTarget });
+    assert.notStrictEqual(res.status, 0, 'Must fail when manifest.json is missing in source');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(validTarget, { recursive: true, force: true });
+  }
+}
+
+// Destination links outside chunks/assets must also be rejected before copying.
+{
+  const { root } = createSandbox();
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-linked-target-'));
+  const linked = path.join(target, 'inject-scripts');
+  try {
+    fs.symlinkSync(root, linked, 'junction');
+    const res = runScript(root, { BROWSERPAW_EXTENSION_SYNC_DIR: target });
+    assert.notStrictEqual(res.status, 0);
+    assert.ok(!fs.existsSync(path.join(target, 'manifest.json')), 'Reject before copying');
+  } finally {
+    fs.unlinkSync(linked);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
   }
 }
 

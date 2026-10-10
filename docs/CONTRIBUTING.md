@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to BrowserPaw! This document provides guidelines and information for contributors.
 
+The authoritative acceptance contract is [QUALITY.md](./QUALITY.md). Run `pnpm verify` before delivery; individual test commands below are development checks. Extension delivery additionally requires `pnpm build:deploy`, `pnpm verify:delivery`, and runtime identity confirmation after manual reload.
+
 ## 🎯 How to Contribute
 
 We welcome contributions in many forms:

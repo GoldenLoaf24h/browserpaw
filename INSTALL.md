@@ -37,9 +37,8 @@ pnpm build:extension
 
 The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.output/chrome-mv3`.
 
-> **Local Development Tip (Pinned Extension ID & Windows Folder Path):**
-> In local Windows development environments, the build script (`scripts/sync-extension-dist.mjs`) automatically mirrors the build output to `D:\workspace\browserclaw` and creates the directory if missing.
-> Loading the extension directly from `D:\workspace\browserclaw` avoids Chromium folder picker errors with dot-prefixed paths (`.output`) and preserves a stable extension ID (`fkoedonclbdjnkkpdphgfbakiclbjpgl`) matching the Native Messaging Host allowlist.
+> **Local Development & Deployment Synchronization:**
+> The default build output is located at `<repo-root>/app/chrome-extension/.output/chrome-mv3`. To stage the unpacked extension to a custom local directory, configure `extensionSyncDir` in `browserpaw.local.json` or set the `BROWSERPAW_EXTENSION_SYNC_DIR` environment variable and run `pnpm build:deploy`. Standard pnpm build skips deployment synchronization by default. If no target directory is configured, pnpm build:deploy fails with an error rather than silently succeeding.
 
 ---
 
@@ -50,7 +49,7 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 1. In Google Chrome, navigate to **`chrome://extensions/`** (or in Microsoft Edge, navigate to **`edge://extensions/`**).
 2. Enable **Developer mode** via the toggle switch in the top-right corner.
 3. Either:
-   - Click the **Load unpacked** button and select the extracted extension folder (for local builds on Windows, prefer `D:\workspace\browserclaw`, or fallback to `<repo-root>/app/chrome-extension/.output/chrome-mv3`).
+   - Click the **Load unpacked** button and select the extracted extension folder (for local builds on Windows, either your configured local staging directory or `<repo-root>/app/chrome-extension/.output/chrome-mv3`).
    - Or drag and drop the extension folder directly into the `chrome://extensions/` page.
 4. Verify that **BrowserPaw** appears in your extensions list with its status enabled.
 

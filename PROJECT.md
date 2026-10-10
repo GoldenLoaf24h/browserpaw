@@ -47,6 +47,10 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 
 ## Quality Gates & Verification Matrix
 
+> **Authoritative Quality Contract:**
+> All engineering verification, quality gates, and delivery standards are canonically governed by [**`docs/QUALITY.md`**](docs/QUALITY.md).
+> The official static verification suite is `pnpm verify`. Deployment is performed via `pnpm build:deploy` and validated via `pnpm verify:delivery`.
+
 - **Chrome Extension Vitest**: 547 unit tests passing 100% across 57 suites (including F1-M3 pipeline, tab closing, javascript execution, grep, delta diffs, batch assertions, media extraction, deep shadow DOM piercing, visual drift compensation, card flattening, token boundary matching, and undo).
 - **Native Server Jest**: 127 unit and integration tests passing 100% across 7 suites (including Jev fast-decision engine, heuristic scoring, client resilience, update notifier, and session managers).
 - **End-to-End Suite**: 153 four-tier E2E tests passing 100% (`node --experimental-strip-types test/e2e/runner.ts`).

@@ -20,7 +20,9 @@ const METADATA = {
       { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'Chinese translation of client configuration guide' },
       { name: 'INSTALL.md', desc: 'Installation instructions for the native messaging host and extension' },
       { name: 'PRIVACY.md', desc: 'Privacy notice detailing data locality and local-only processing guarantees' },
-      { name: 'RELEASE_NOTES_v3.2.0.md', desc: 'Release notes detailing v3.2.0 features, fixes, and migration notes' },
+      { name: 'CHANGELOG.md', desc: 'Concise pointer to the centralized release archive in docs/releases/' },
+      { name: 'docs/QUALITY.md', desc: 'Engineering quality contract: pnpm verify, build:deploy, and verify:delivery gates' },
+      { name: 'docs/DOCUMENTATION.md', desc: 'Documentation governance: active vs archived, ownership, translations, and release templates' },
       { name: 'commitlint.config.cjs', desc: 'Conventional commits enforcement rules for git commit messages' },
       { name: 'eslint.config.js', desc: 'Global ESLint 9 flat configuration across TypeScript and Vue files' },
       { name: 'marketplace.json', desc: 'MCP and plugin catalog registry metadata for plugin discovery' },
@@ -32,7 +34,7 @@ const METADATA = {
       'Always follow conventional commits format enforced by commitlint.',
       'Do not modify generated files in dist/ or .output/ directly.'
     ],
-    testing: 'Run `pnpm test` (or `node --experimental-strip-types test/e2e/runner.ts`), `pnpm typecheck`, and `pnpm lint`.',
+    testing: 'Official verification gate is `pnpm verify` (static checks, lint, typecheck, tests, build, and doc validation). For deployment, run `pnpm build:deploy` and assert hash parity with `pnpm verify:delivery`. Note: Staged disk files or hot reloads are never valid runtime evidence; manual extension reload in chrome://extensions followed by doctor runtime buildId verification is required.',
     patterns: 'Monorepo workspace coordination; SSOT schema synchronization; layered profile filtering.',
     internalDeps: ['packages/shared'],
     externalDeps: ['pnpm', 'typescript', 'eslint', 'prettier', 'husky']
