@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execSync } from 'node:child_process';
 import test from 'node:test';
 import path from 'node:path';
 import {
@@ -94,7 +95,10 @@ test('checkTagReleaseRecords asserts all local git tags have release notes', () 
   const repoRoot = process.cwd();
   const res = checkTagReleaseRecords(repoRoot);
   assert.equal(res.valid, true);
-  assert.equal(res.tagCount, 31);
+  const actualTags = execSync('git tag -l', { cwd: repoRoot, encoding: 'utf8' })
+    .split('\n')
+    .filter((line) => line.trim().length > 0).length;
+  assert.equal(res.tagCount, actualTags);
   assert.equal(res.missingRecords.length, 0);
 });
 
