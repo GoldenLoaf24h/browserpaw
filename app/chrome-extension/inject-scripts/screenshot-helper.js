@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Screenshot helper content script
  * Handles page preparation, scrolling, element positioning, and GoFullPage-grade
@@ -36,7 +35,8 @@ const StyleStack = {
   addFixed(el, styles, options = {}) {
     if (!el || !el.style) return;
     const beforeCss = el.style.cssText;
-    const hadOriginalId = typeof el.hasAttribute === 'function' ? el.hasAttribute('id') : Boolean(el.id);
+    const hadOriginalId =
+      typeof el.hasAttribute === 'function' ? el.hasAttribute('id') : Boolean(el.id);
     const originalId = hadOriginalId ? el.getAttribute('id') : null;
     const addedId = options.addedId || false;
     for (const [prop, val] of Object.entries(styles)) {
@@ -148,7 +148,12 @@ function categorizeFixedAndStickyElements() {
     } else if (style.position === 'fixed') {
       const rect = el.getBoundingClientRect();
       // Skip elements completely outside viewport
-      if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportHeight || rect.left >= viewportWidth) {
+      if (
+        rect.bottom <= 0 ||
+        rect.right <= 0 ||
+        rect.top >= viewportHeight ||
+        rect.left >= viewportWidth
+      ) {
         return;
       }
       // Fixed header: docked at top
@@ -207,7 +212,7 @@ function prepareSlice(stepIndex, isLastStep) {
     if (stickies.length > 0 && typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
       const stickySelectors = stickies.map((el) => `#${CSS.escape(el.id)}`).join(', ');
       StyleStack.addSliceStyleSheet(
-        `${stickySelectors} { position: relative !important; left: auto !important; right: auto !important; top: auto !important; bottom: auto !important; }`
+        `${stickySelectors} { position: relative !important; left: auto !important; right: auto !important; top: auto !important; bottom: auto !important; }`,
       );
     }
 
@@ -285,7 +290,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     // Avoids setting overflow: hidden on html/body which could freeze programmatic window.scrollTo
     StyleStack.addStyleSheet(
       'html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }\n' +
-      'html, body { scrollbar-width: none !important; -ms-overflow-style: none !important; }'
+        'html, body { scrollbar-width: none !important; -ms-overflow-style: none !important; }',
     );
     if (request.options?.fullPage) {
       prepareSlice(0, false);

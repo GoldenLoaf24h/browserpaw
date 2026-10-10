@@ -132,23 +132,35 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Failed to execute fast DOM snapshot');
         }
 
-        const snapshotElements = (fastData.actions || []).map((a: any, idx: number) => ({
-          index: idx + 1,
-          tagName: a.role || a.kind || 'element',
-          isInteractive: true,
-          attributes: {
-            role: a.role,
-            name: a.name,
-            id: a.id,
-          },
-          text: a.name || '',
-          rect: a.rect || { x: 0, y: 0, width: 0, height: 0 },
-        }));
+        const snapshotElements = (fastData.actions || []).map((a: any, idx: number) => {
+          const actionText = a.label || a.name || '';
+          const rect = a.rect
+            ? {
+                x: a.rect.x ?? 0,
+                y: a.rect.y ?? 0,
+                width: a.rect.w ?? a.rect.width ?? 0,
+                height: a.rect.h ?? a.rect.height ?? 0,
+              }
+            : { x: 0, y: 0, width: 0, height: 0 };
+          return {
+            index: idx + 1,
+            tagName: a.role || a.kind || 'element',
+            isInteractive: true,
+            attributes: {
+              role: a.role,
+              name: actionText,
+              id: a.id,
+            },
+            text: actionText,
+            rect,
+          };
+        });
 
         const snapshot = snapshotCacheManager.setSnapshot(tab.id, {
           url: scrubUrl(tab.url || fastData.url),
           elementCount: snapshotElements.length,
           elements: snapshotElements,
+          representation: 'fast',
         });
 
         const treeString = snapshotElements
@@ -405,9 +417,25 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
               }
 
               if (treeChanged && args.format !== 'html') {
-                mergedData.treeString = mergedData.indexedElements
+                const mainElements = mergedData.indexedElements.filter((el) => {
+                  const fId = mergedData.indexMap[el.index]?.frameId;
+                  return !fId || fId === '0';
+                });
+                mergedData.treeString = mainElements
                   .map((el) => renderCompactElementLine(el))
                   .join('\n');
+
+                subframeLines.length = 0;
+                for (const r of results) {
+                  if (r === mainFrame || !r.result) continue;
+                  subframeLines.push('\n<!-- Frame ' + r.frameId + ' -->');
+                  const frameElements = mergedData.indexedElements.filter(
+                    (el) => String(mergedData.indexMap[el.index]?.frameId) === String(r.frameId),
+                  );
+                  for (const el of frameElements) {
+                    subframeLines.push(renderCompactElementLine(el, r.frameId));
+                  }
+                }
               }
             }
           }
@@ -441,11 +469,13 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         const diff = snapshotCacheManager.diffWithPrevious(
           tab.id,
           mergedData.indexedElements || [],
+          { representation: 'standard' },
         );
         snapshotCacheManager.setSnapshot(tab.id, {
           url: scrubUrl(tab.url || ''),
           elementCount: mergedData.elementCount,
           elements: mergedData.indexedElements,
+          representation: 'standard',
         });
 
         if (diff.isDelta && diff.unchanged) {
@@ -511,6 +541,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         url: scrubUrl(tab.url || ''),
         elementCount: mergedData.elementCount,
         elements: mergedData.indexedElements,
+        representation: 'standard',
       });
 
       // Pagination cursor support (P1-6)

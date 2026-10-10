@@ -227,7 +227,7 @@ export function validateChoice(answer: any, expectedKeys: string[]): boolean {
  * Deterministic extraction without mini-LLM:
  * 1) Quotes in goal (English "" / '' or Chinese “”)
  * 2) textHint parameter
- * 3) Trailing phrase after 输入/搜索/type/enter/for
+ * 3) Trailing phrase after input/search/type/enter keywords
  * 4) Fails -> returns null
  */
 export function extractTextPayload(goal: string, textHint?: string): string | null {

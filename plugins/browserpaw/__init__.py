@@ -49,7 +49,7 @@ SESSION_ID_ENV_VARS = ('BROWSERPAW_MCP_SESSION_ID', 'BROWSERCLAW_MCP_SESSION_ID'
 MCP_PROTOCOL_VERSION = '2024-11-05'
 CLIENT_INFO = {
     'name': 'browserpaw-python-plugin',
-    'version': '3.2.7',
+    'version': '4.0.0',
 }
 
 _AUTH_HELP = (
@@ -333,15 +333,6 @@ def _bridge_token() -> Optional[str]:
     return None
 
 
-def _align_response_tool_names(text: str) -> str:
-    """Rewrite legacy chrome_* tool names and get_windows_and_tabs to browserpaw_* in agent-facing output."""
-    if not text:
-        return text
-    text = re.sub(r'\bchrome_([a-zA-Z0-9_]+)\b', r'browserpaw_\1', text)
-    text = re.sub(r'\bget_windows_and_tabs\b', 'browserpaw_get_windows_and_tabs', text)
-    return text
-
-
 def _call_browserpaw(tool_name: str, arguments: dict) -> str:
     if tool_name == 'browserpaw_read_dom' and isinstance(arguments, dict):
         if 'isolateModal' not in arguments and _plugin_config.get('isolate_modal'):
@@ -405,7 +396,7 @@ def _call_browserpaw(tool_name: str, arguments: dict) -> str:
                                 continue
                     except Exception:
                         pass
-                    return _align_response_tool_names(res_str)
+                    return res_str
 
             except RuntimeError as e:
                 if attempt == 0:
@@ -1786,650 +1777,61 @@ def _make_handler(tool_name: str) -> Callable:
             return json.dumps({'error': str(e)}, ensure_ascii=False)
     return handler
 
-# ── BROWSERPAW DISPLAY & HUMANIZATION SPEC ───────────────────────────
-
-def _clip_display_text(text: Any, n: int = 0) -> str:
-    if text is None:
-        return ""
-    s = " ".join(str(text).split())
-    return f"{s[:n]}..." if (n and n > 0 and len(s) > n) else s
-
-NO_PREVIEW_TOOLS = frozenset({
-    "browserpaw_get_windows_and_tabs",
-    "get_windows_and_tabs",
-    "chrome_get_windows_and_tabs",
-    "browserpaw_tab_group_list",
-    "chrome_tab_group_list",
-    "browserpaw_doctor",
-    "chrome_doctor",
-})
+# ── BROWSERPAW CANONICAL SPECS ───────────────────────────────────────
 
 BROWSERPAW_SPECS: Dict[str, Dict[str, Any]] = {
-    # 1. 核心导航与感知 (15 tools)
-    "browserpaw_act_toward_goal": {
-        "emoji": "💫",
-        "verb": "Autonomous micro-looping",
-        "primary_arg": "goal",
-        "builder": lambda a, m: _clip_display_text(str(a["goal"]).replace('"', ''), m) if a.get("goal") is not None else None,
-    },
-    "browserpaw_navigate": {
-        "emoji": "🌐",
-        "verb": "Navigating to",
-        "primary_arg": "url",
-        "builder": lambda a, m: a.get("url") or a.get("action") or ("refresh" if a.get("refresh") else None),
-    },
-    "browserpaw_read_dom": {
-        "emoji": "🔍",
-        "verb": "Reading DOM structure",
-        "primary_arg": "selector",
-        "builder": lambda a, m: f"scoped to '{a.get('selector') or a.get('scope')}'" if (a.get("selector") or a.get("scope")) else "viewport",
-    },
-    "browserpaw_interact_index": {
-        "emoji": "🎯",
-        "verb": "Interacting with",
-        "primary_arg": "index",
-        "builder": lambda a, m: f"element [#{a.get('index') if a.get('index') is not None else ''}] ({a.get('action') or 'click'})",
-    },
-    "browserpaw_fill_index": {
-        "emoji": "✍️",
-        "verb": "Typing into",
-        "primary_arg": "text",
-        "builder": lambda a, m: f"element [#{a.get('index') if a.get('index') is not None else ''}]: \"{_clip_display_text(a.get('text') if a.get('text') is not None else a.get('value', ''), 20)}\"",
-    },
-    "browserpaw_batch_actions": {
-        "emoji": "⚡",
-        "verb": "Executing batch pipeline",
-        "primary_arg": "actions",
-        "builder": lambda a, m: f"{len(a['actions'])} actions" if isinstance(a.get("actions"), list) else None,
-    },
-    "browserpaw_screenshot": {
-        "emoji": "📸",
-        "verb": "Capturing screenshot",
-        "primary_arg": "fullPage",
-        "builder": lambda a, m: "full page" if a.get("fullPage") else "viewport",
-    },
-    "browserpaw_smart_scroll": {
-        "emoji": "📜",
-        "verb": "Scrolling view",
-        "primary_arg": "direction",
-        "builder": lambda a, m: f"{(a.get('direction') or 'down')} ({(a.get('amount') or 'page')})",
-    },
-    "browserpaw_inspect_media": {
-        "emoji": "🖼️",
-        "verb": "Inspecting media",
-        "primary_arg": "index",
-        "builder": lambda a, m: f"element [#{a.get('index') if a.get('index') is not None else ''}]",
-    },
-    "browserpaw_grep": {
-        "emoji": "🔎",
-        "verb": "Searching DOM",
-        "primary_arg": "query",
-        "builder": lambda a, m: f'query: "{_clip_display_text(a.get("query", ""), 25)}"',
-    },
-    "browserpaw_scroll_until_found": {
-        "emoji": "📜",
-        "verb": "Auto-scrolling until found",
-        "primary_arg": "query",
-        "builder": lambda a, m: f'target: "{_clip_display_text(a.get("query") or a.get("selector") or "", 25)}"',
-    },
-    "browserpaw_get_markdown": {
-        "emoji": "📄",
-        "verb": "Extracting clean markdown",
-        "primary_arg": "fit",
-        "builder": lambda a, m: "fitted article" if a.get("fit") else "full page",
-    },
-    "browserpaw_switch_tab": {
-        "emoji": "🔀",
-        "verb": "Switching tab",
-        "primary_arg": "tabId",
-        "builder": lambda a, m: f"tab [#{a.get('tabId') if a.get('tabId') is not None else ''}]",
-    },
-    "browserpaw_close_tabs": {
-        "emoji": "❌",
-        "verb": "Closing tabs",
-        "primary_arg": "tabIds",
-        "builder": lambda a, m: (
-            f"{len(a['tabIds'])} tabs"
-            if isinstance(a.get("tabIds"), list)
-            else (
-                f"tab [#{a['tabId']}]"
-                if a.get("tabId") is not None
-                else (
-                    f"url: {a['url']}"
-                    if a.get("url")
-                    else "current"
-                )
-            )
-        ),
-    },
-    "browserpaw_get_windows_and_tabs": {
-        "emoji": "🪟",
-        "verb": "Listing open tabs",
-        "primary_arg": None,
-        "builder": lambda a, m: "active windows",
-    },
-    "browserpaw_tool_docs": {
-        "emoji": "📚",
-        "verb": "Reading tool docs",
-        "primary_arg": "category",
-        "builder": lambda a, m: f"category: {a.get('category') or 'all'}",
-    },
-
-    # 2. 开发者与底层逃生门 (5 tools)
-    "browserpaw_javascript": {
-        "emoji": "💻",
-        "verb": "Executing script",
-        "primary_arg": "code",
-        "builder": lambda a, m: f'script: "{_clip_display_text(a.get("code", ""), 40)}"',
-    },
-    "browserpaw_cdp_execute": {
-        "emoji": "⚡",
-        "verb": "Executing CDP command",
-        "primary_arg": "method",
-        "builder": lambda a, m: f'method: "{a.get("method") or ""}"',
-    },
-    "browserpaw_console": {
-        "emoji": "🖥️",
-        "verb": "Reading console",
-        "primary_arg": None,
-        "builder": lambda a, m: "browser console logs",
-    },
-    "browserpaw_doctor": {
-        "emoji": "🩺",
-        "verb": "Running doctor check",
-        "primary_arg": None,
-        "builder": lambda a, m: "diagnostic probe",
-    },
-    "browserpaw_undo_last_action": {
-        "emoji": "↩️",
-        "verb": "Undoing action",
-        "primary_arg": None,
-        "builder": lambda a, m: "reverting last DOM mutation",
-    },
-
-    # 3. 文件、媒体与弹窗/人工干预 (5 tools)
-    "browserpaw_upload_file": {
-        "emoji": "📤",
-        "verb": "Uploading file",
-        "primary_arg": "filePath",
-        "builder": lambda a, m: f'"{a.get("filePath") or ""}" -> element [#{a.get("index") if a.get("index") is not None else (a.get("clickTargetIndex") if a.get("clickTargetIndex") is not None else "")}]',
-    },
-    "browserpaw_insert_media": {
-        "emoji": "📋",
-        "verb": "Pasting media",
-        "primary_arg": "filePath",
-        "builder": lambda a, m: f'media: "{a.get("filePath") or a.get("fileName") or ""}"',
-    },
-    "browserpaw_handle_download": {
-        "emoji": "📥",
-        "verb": "Managing download",
-        "primary_arg": "filenameContains",
-        "builder": lambda a, m: f'filename: "{a.get("filenameContains") or a.get("action") or ""}"',
-    },
-    "browserpaw_handle_dialog": {
-        "emoji": "💬",
-        "verb": "Handling dialog",
-        "primary_arg": "action",
-        "builder": lambda a, m: f'action: {a.get("action") or "accept"} (prompt: "{a.get("promptText")}")' if a.get("promptText") else f'action: {a.get("action") or "accept"}',
-    },
-    "browserpaw_request_human_intervention": {
-        "emoji": "🙋",
-        "verb": "Requesting human help",
-        "primary_arg": "reason",
-        "builder": lambda a, m: f'reason: "{_clip_display_text(a.get("reason", ""), 40)}"',
-    },
-
-    # 4. 遮罩、按键与系统视觉兜底 (3 tools)
-    "browserpaw_dismiss_overlay": {
-        "emoji": "🛡️",
-        "verb": "Dismissing overlay",
-        "primary_arg": None,
-        "builder": lambda a, m: "clearing modal backdrop",
-    },
-    "browserpaw_keyboard": {
-        "emoji": "⌨️",
-        "verb": "Pressing key",
-        "primary_arg": "keys",
-        "builder": lambda a, m: f'keys: "{a.get("keys") or a.get("key") or ""}"',
-    },
-    "browserpaw_computer": {
-        "emoji": "🖱️",
-        "verb": "Controlling cursor",
-        "primary_arg": "action",
-        "builder": lambda a, m: (
-            f"action: {a.get('action') or 'click'} at ({a['coordinate'][0]}, {a['coordinate'][1]})"
-            if isinstance(a.get("coordinate"), (list, tuple)) and len(a["coordinate"]) >= 2
-            else (
-                f"action: {a.get('action') or 'click'} at ({a.get('x')}, {a.get('y')})"
-                if a.get("x") is not None and a.get("y") is not None
-                else f"action: {a.get('action') or 'click'}"
-            )
-        ),
-    },
-
-    # 5. 高级表单与网络捕获 (5 tools)
-    "browserpaw_form_pipeline": {
-        "emoji": "📝",
-        "verb": "Filling form pipeline",
-        "primary_arg": "fields",
-        "builder": lambda a, m: f"fields: {len(a['fields'])} items" if isinstance(a.get("fields"), list) else "fields: 0 items",
-    },
-    "browserpaw_get_dropdown_options": {
-        "emoji": "🔽",
-        "verb": "Reading options",
-        "primary_arg": "index",
-        "builder": lambda a, m: f"element [#{a.get('index') if a.get('index') is not None else ''}]",
-    },
-    "browserpaw_intercept_api": {
-        "emoji": "📡",
-        "verb": "Intercepting API",
-        "primary_arg": "urlPattern",
-        "builder": lambda a, m: f'urlPattern: "{a.get("urlPattern") or ""}"',
-    },
-    "browserpaw_network_request": {
-        "emoji": "🌐",
-        "verb": "Sending HTTP request",
-        "primary_arg": "url",
-        "builder": lambda a, m: f'{(a.get("method") or "GET").upper()}: "{a.get("url") or ""}"',
-    },
-    "browserpaw_network_capture": {
-        "emoji": "🛰️",
-        "verb": "Capturing traffic",
-        "primary_arg": "action",
-        "builder": lambda a, m: f'action: {a.get("action") or "capture"} (pattern: "{a.get("urlPattern") or a.get("pattern") or "*"}")',
-    },
-
-    # 6. 标签组与标签移动 (8 tools)
-    "browserpaw_tab_group_create": {
-        "emoji": "🏷️",
-        "verb": "Creating tab group",
-        "primary_arg": "title",
-        "builder": lambda a, m: (
-            f'title: "{a.get("title") or ""}" ({len(a["tabIds"])} tabs)'
-            if isinstance(a.get("tabIds"), list)
-            else (
-                f'title: "{a.get("title") or ""}" ({len(a["tabs"])} tabs)'
-                if isinstance(a.get("tabs"), list)
-                else f'title: "{a.get("title") or ""}" (0 tabs)'
-            )
-        ),
-    },
-    "browserpaw_tab_group_update": {
-        "emoji": "🏷️",
-        "verb": "Updating tab group",
-        "primary_arg": "groupId",
-        "builder": lambda a, m: (
-            f'group [#{a.get("groupId") if a.get("groupId") is not None else ""}]: title="{a.get("title")}"'
-            if a.get("title") is not None
-            else (
-                f'group [#{a.get("groupId") if a.get("groupId") is not None else ""}]: color="{a.get("color")}"'
-                if a.get("color") is not None
-                else f'group [#{a.get("groupId") if a.get("groupId") is not None else ""}]'
-            )
-        ),
-    },
-    "browserpaw_tab_group_list": {
-        "emoji": "📋",
-        "verb": "Listing tab groups",
-        "primary_arg": None,
-        "builder": lambda a, m: "active window groups",
-    },
-    "browserpaw_tab_group_close": {
-        "emoji": "❌",
-        "verb": "Closing tab group",
-        "primary_arg": "groupId",
-        "builder": lambda a, m: f"group [#{a.get('groupId') if a.get('groupId') is not None else ''}]",
-    },
-    "browserpaw_tab_group_ungroup": {
-        "emoji": "🔓",
-        "verb": "Ungrouping tabs",
-        "primary_arg": "tabId",
-        "builder": lambda a, m: f"tab [#{a.get('tabId') if a.get('tabId') is not None else ''}]",
-    },
-    "browserpaw_move_tab": {
-        "emoji": "📦",
-        "verb": "Moving tab",
-        "primary_arg": "tabId",
-        "builder": lambda a, m: f"tab [#{a.get('tabId') if a.get('tabId') is not None else ''}] -> window [#{a.get('windowId') if a.get('windowId') is not None else ''}]",
-    },
-    "browserpaw_attach_tab": {
-        "emoji": "🔗",
-        "verb": "Attaching tab",
-        "primary_arg": "tabId",
-        "builder": lambda a, m: f"tab [#{a.get('tabId') if a.get('tabId') is not None else ''}] to debugger",
-    },
-    "browserpaw_detach_tab": {
-        "emoji": "⛓️",
-        "verb": "Detaching tab",
-        "primary_arg": "tabId",
-        "builder": lambda a, m: f"tab [#{a.get('tabId') if a.get('tabId') is not None else ''}] from debugger",
-    },
-
-    # 7. 存储、历史与书签 (5 tools)
-    "browserpaw_storage": {
-        "emoji": "💾",
-        "verb": "Accessing storage",
-        "primary_arg": "types",
-        "builder": lambda a, m: f"types: {', '.join(a['types']) if isinstance(a.get('types'), list) else (a.get('types') or 'local')}",
-    },
-    "browserpaw_history": {
-        "emoji": "🕒",
-        "verb": "Searching history",
-        "primary_arg": "text",
-        "builder": lambda a, m: f'query: "{_clip_display_text(a.get("text") or a.get("query", ""), 30)}"',
-    },
-    "browserpaw_bookmark_search": {
-        "emoji": "🔖",
-        "verb": "Searching bookmarks",
-        "primary_arg": "query",
-        "builder": lambda a, m: f'query: "{_clip_display_text(a.get("query", ""), 30)}"',
-    },
-    "browserpaw_bookmark_add": {
-        "emoji": "⭐",
-        "verb": "Adding bookmark",
-        "primary_arg": "title",
-        "builder": lambda a, m: f'title: "{_clip_display_text(a.get("title", ""), 30)}"',
-    },
-    "browserpaw_bookmark_delete": {
-        "emoji": "🗑️",
-        "verb": "Deleting bookmark",
-        "primary_arg": "bookmarkId",
-        "builder": lambda a, m: f'id: "{a.get("bookmarkId") or a.get("id") or ""}"',
-    },
-
-    # 8. 性能分析 (3 tools)
-    "browserpaw_performance_start_trace": {
-        "emoji": "⏱️",
-        "verb": "Starting trace",
-        "primary_arg": "categories",
-        "builder": lambda a, m: f"categories: {', '.join(a['categories']) if isinstance(a.get('categories'), list) else (a.get('categories') or 'timeline')}",
-    },
-    "browserpaw_performance_stop_trace": {
-        "emoji": "⏹️",
-        "verb": "Stopping trace",
-        "primary_arg": None,
-        "builder": lambda a, m: "saving trace file",
-    },
-    "browserpaw_performance_analyze_insight": {
-        "emoji": "📊",
-        "verb": "Analyzing performance",
-        "primary_arg": "insightName",
-        "builder": lambda a, m: f'insight: "{a.get("insightName") or ""}"',
-    },
+    "browserpaw_act_toward_goal": {"emoji": "💫"},
+    "browserpaw_navigate": {"emoji": "🌐"},
+    "browserpaw_read_dom": {"emoji": "🔍"},
+    "browserpaw_interact_index": {"emoji": "🎯"},
+    "browserpaw_fill_index": {"emoji": "✍️"},
+    "browserpaw_batch_actions": {"emoji": "⚡"},
+    "browserpaw_screenshot": {"emoji": "📸"},
+    "browserpaw_smart_scroll": {"emoji": "📜"},
+    "browserpaw_inspect_media": {"emoji": "🖼️"},
+    "browserpaw_grep": {"emoji": "🔎"},
+    "browserpaw_scroll_until_found": {"emoji": "📜"},
+    "browserpaw_get_markdown": {"emoji": "📄"},
+    "browserpaw_switch_tab": {"emoji": "🔀"},
+    "browserpaw_close_tabs": {"emoji": "❌"},
+    "browserpaw_get_windows_and_tabs": {"emoji": "🪟"},
+    "browserpaw_tool_docs": {"emoji": "📚"},
+    "browserpaw_javascript": {"emoji": "💻"},
+    "browserpaw_cdp_execute": {"emoji": "⚡"},
+    "browserpaw_console": {"emoji": "🖥️"},
+    "browserpaw_doctor": {"emoji": "🩺"},
+    "browserpaw_undo_last_action": {"emoji": "↩️"},
+    "browserpaw_upload_file": {"emoji": "📤"},
+    "browserpaw_insert_media": {"emoji": "📋"},
+    "browserpaw_handle_download": {"emoji": "📥"},
+    "browserpaw_handle_dialog": {"emoji": "💬"},
+    "browserpaw_request_human_intervention": {"emoji": "🙋"},
+    "browserpaw_dismiss_overlay": {"emoji": "🛡️"},
+    "browserpaw_keyboard": {"emoji": "⌨️"},
+    "browserpaw_computer": {"emoji": "🖱️"},
+    "browserpaw_form_pipeline": {"emoji": "📝"},
+    "browserpaw_get_dropdown_options": {"emoji": "🔽"},
+    "browserpaw_intercept_api": {"emoji": "📡"},
+    "browserpaw_network_request": {"emoji": "🌐"},
+    "browserpaw_network_capture": {"emoji": "🛰️"},
+    "browserpaw_tab_group_create": {"emoji": "🏷️"},
+    "browserpaw_tab_group_update": {"emoji": "🏷️"},
+    "browserpaw_tab_group_list": {"emoji": "📋"},
+    "browserpaw_tab_group_close": {"emoji": "❌"},
+    "browserpaw_tab_group_ungroup": {"emoji": "🔓"},
+    "browserpaw_move_tab": {"emoji": "📦"},
+    "browserpaw_attach_tab": {"emoji": "🔗"},
+    "browserpaw_detach_tab": {"emoji": "⛓️"},
+    "browserpaw_storage": {"emoji": "💾"},
+    "browserpaw_history": {"emoji": "🕒"},
+    "browserpaw_bookmark_search": {"emoji": "🔖"},
+    "browserpaw_bookmark_add": {"emoji": "⭐"},
+    "browserpaw_bookmark_delete": {"emoji": "🗑️"},
+    "browserpaw_performance_start_trace": {"emoji": "⏱️"},
+    "browserpaw_performance_stop_trace": {"emoji": "⏹️"},
+    "browserpaw_performance_analyze_insight": {"emoji": "📊"},
 }
 
-
-def _get_tool_aliases(name: Any) -> list[str]:
-    if not isinstance(name, str) or not name:
-        return []
-    aliases = [name]
-    if name == "browserpaw_get_windows_and_tabs":
-        aliases.extend(["get_windows_and_tabs", "chrome_get_windows_and_tabs"])
-    elif name.startswith("browserpaw_"):
-        suffix = name[len("browserpaw_"):]
-        aliases.append(f"chrome_{suffix}")
-        if suffix == "get_windows_and_tabs":
-            aliases.append("get_windows_and_tabs")
-    elif name.startswith("chrome_"):
-        suffix = name[len("chrome_"):]
-        aliases.append(f"browserpaw_{suffix}")
-        if suffix == "get_windows_and_tabs":
-            aliases.append("get_windows_and_tabs")
-    elif name == "get_windows_and_tabs":
-        aliases.extend(["browserpaw_get_windows_and_tabs", "chrome_get_windows_and_tabs"])
-    return list(dict.fromkeys(aliases))
-
-
-def _resolve_browserpaw_spec(tool_name: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(tool_name, str) or not tool_name:
-        return None
-    if tool_name in BROWSERPAW_SPECS:
-        return BROWSERPAW_SPECS[tool_name]
-    if tool_name in ("get_windows_and_tabs", "chrome_get_windows_and_tabs"):
-        return BROWSERPAW_SPECS.get("browserpaw_get_windows_and_tabs")
-    if tool_name.startswith("chrome_"):
-        canonical = "browserpaw_" + tool_name[len("chrome_"):]
-        if canonical in BROWSERPAW_SPECS:
-            return BROWSERPAW_SPECS[canonical]
-    elif tool_name.startswith("browserpaw_"):
-        chrome_name = "chrome_" + tool_name[len("browserpaw_"):]
-        if chrome_name in BROWSERPAW_SPECS:
-            return BROWSERPAW_SPECS[chrome_name]
-    return None
-
-
-def _unwrap_deferred_tool_call(tool_name: str, args: dict | None = None) -> tuple[str, dict]:
-    """Unwrap Hermes Deferred Tool bridge calls (`tool_call`) to their underlying tool name & arguments."""
-    if tool_name == "tool_call" and isinstance(args, dict):
-        calls = args.get("calls")
-        if isinstance(calls, list) and len(calls) > 0 and isinstance(calls[0], dict):
-            inner_name = calls[0].get("name")
-            inner_args = calls[0].get("arguments")
-            if isinstance(inner_name, str) and inner_name:
-                safe_inner_args = inner_args if isinstance(inner_args, dict) else {}
-                return inner_name, safe_inner_args
-    return tool_name, args if isinstance(args, dict) else {}
-
-
-def _register_display_formatters() -> None:
-    """Safely register tool previews, verbs, and emojis into agent.display and tools.registry."""
-    try:
-        from agent import display
-        for name, spec in BROWSERPAW_SPECS.items():
-            for alias in _get_tool_aliases(name):
-                if spec.get("primary_arg") and hasattr(display, "_PRIMARY_ARGS"):
-                    display._PRIMARY_ARGS[alias] = spec["primary_arg"]
-                if spec.get("builder") and hasattr(display, "_PREVIEW_BUILDERS"):
-                    display._PREVIEW_BUILDERS[alias] = spec["builder"]
-                if spec.get("verb") and hasattr(display, "_TOOL_VERBS"):
-                    display._TOOL_VERBS[alias] = spec["verb"]
-
-        # Register tools whose verb should render alone without preview suffix
-        if hasattr(display, "_TOOL_VERBS_NO_PREVIEW") and isinstance(display._TOOL_VERBS_NO_PREVIEW, frozenset):
-            display._TOOL_VERBS_NO_PREVIEW = display._TOOL_VERBS_NO_PREVIEW | NO_PREVIEW_TOOLS
-
-        # Wrap get_tool_verb for dynamic fallback when unlisted browserpaw/chrome tools are called
-        orig_get_tool_verb = getattr(display, "get_tool_verb", None)
-        if orig_get_tool_verb is not None and not getattr(orig_get_tool_verb, "_is_browserpaw_wrapped", False):
-            def _browserpaw_get_tool_verb(tool_name: str) -> str | None:
-                if not isinstance(tool_name, str) or not tool_name:
-                    return None
-                real_name, _ = _unwrap_deferred_tool_call(tool_name, None)
-                v = orig_get_tool_verb(real_name)
-                if v:
-                    return v
-                if getattr(display, "_friendly_tool_labels", True):
-                    if real_name.startswith("browserpaw_") or real_name.startswith("chrome_"):
-                        raw = real_name[len("browserpaw_"):] if real_name.startswith("browserpaw_") else real_name[len("chrome_"):]
-                        words = raw.replace("_", " ").strip()
-                        return f"Executing {words}"
-                return None
-
-            _browserpaw_get_tool_verb._is_browserpaw_wrapped = True
-            display.get_tool_verb = _browserpaw_get_tool_verb
-
-            import sys
-            for mod in list(sys.modules.values()):
-                if mod is not None:
-                    d = getattr(mod, "__dict__", None)
-                    if isinstance(d, dict):
-                        if d.get("get_tool_verb") is orig_get_tool_verb:
-                            d["get_tool_verb"] = _browserpaw_get_tool_verb
-                        if d.get("_get_tool_verb") is orig_get_tool_verb:
-                            d["_get_tool_verb"] = _browserpaw_get_tool_verb
-
-        # Ensure build_tool_preview invokes BrowserPaw builders even for zero-argument or default calls,
-        # and unwraps deferred bridge `tool_call` payloads to the underlying tool.
-        orig_build_tool_preview = getattr(display, "build_tool_preview", None)
-        if orig_build_tool_preview is not None and not getattr(orig_build_tool_preview, "_is_browserpaw_wrapped", False):
-            def _browserpaw_build_tool_preview(tool_name: str, args: dict | None = None, max_len: int | None = None) -> str | None:
-                if not isinstance(tool_name, str) or not tool_name:
-                    return None
-                real_name, real_args = _unwrap_deferred_tool_call(tool_name, args)
-                safe_args = real_args if isinstance(real_args, dict) else {}
-                spec = _resolve_browserpaw_spec(real_name)
-                if spec is not None:
-                    builder = spec.get("builder")
-                    if builder is not None:
-                        cap = max_len if max_len is not None else getattr(display, "_tool_preview_max_len", 0)
-                        try:
-                            res = builder(safe_args, cap)
-                            if res is not None:
-                                return res
-                        except Exception:
-                            pass
-                try:
-                    return orig_build_tool_preview(real_name, safe_args, max_len)
-                except Exception:
-                    return None
-
-            _browserpaw_build_tool_preview._is_browserpaw_wrapped = True
-            display.build_tool_preview = _browserpaw_build_tool_preview
-
-            import sys
-            for mod in list(sys.modules.values()):
-                if mod is not None:
-                    d = getattr(mod, "__dict__", None)
-                    if isinstance(d, dict):
-                        if d.get("build_tool_preview") is orig_build_tool_preview:
-                            d["build_tool_preview"] = _browserpaw_build_tool_preview
-                        if d.get("_build_tool_preview") is orig_build_tool_preview:
-                            d["_build_tool_preview"] = _browserpaw_build_tool_preview
-
-        # Fallback emoji resolution for BrowserPaw tools if not yet populated in registry
-        orig_get_tool_emoji = getattr(display, "get_tool_emoji", None)
-        if orig_get_tool_emoji is not None and not getattr(orig_get_tool_emoji, "_is_browserpaw_wrapped", False):
-            def _browserpaw_get_tool_emoji(tool_name: str, default: str = "⚡") -> str:
-                if not isinstance(tool_name, str) or not tool_name:
-                    return default
-                spec = _resolve_browserpaw_spec(tool_name)
-                if spec and "emoji" in spec:
-                    return spec["emoji"]
-                if tool_name.startswith("browserpaw_") or tool_name.startswith("chrome_") or tool_name == "get_windows_and_tabs":
-                    return "🌐"
-                return orig_get_tool_emoji(tool_name, default=default)
-
-            _browserpaw_get_tool_emoji._is_browserpaw_wrapped = True
-            display.get_tool_emoji = _browserpaw_get_tool_emoji
-
-            import sys
-            for mod in list(sys.modules.values()):
-                if mod is not None:
-                    d = getattr(mod, "__dict__", None)
-                    if isinstance(d, dict):
-                        if d.get("get_tool_emoji") is orig_get_tool_emoji:
-                            d["get_tool_emoji"] = _browserpaw_get_tool_emoji
-                        if d.get("_get_tool_emoji") is orig_get_tool_emoji:
-                            d["_get_tool_emoji"] = _browserpaw_get_tool_emoji
-
-        # Wrap prepare_tool_preview to unwrap deferred `tool_call` bridges seamlessly
-        orig_prepare_tool_preview = getattr(display, "prepare_tool_preview", None)
-        if orig_prepare_tool_preview is not None and not getattr(orig_prepare_tool_preview, "_is_browserpaw_wrapped", False):
-            def _browserpaw_prepare_tool_preview(tool_name: str, args: dict | None, *, fallback: str, max_len: int):
-                real_name, real_args = _unwrap_deferred_tool_call(tool_name, args)
-                return orig_prepare_tool_preview(real_name, real_args, fallback=fallback, max_len=max_len)
-
-            _browserpaw_prepare_tool_preview._is_browserpaw_wrapped = True
-            display.prepare_tool_preview = _browserpaw_prepare_tool_preview
-
-            import sys
-            for mod in list(sys.modules.values()):
-                if mod is not None:
-                    d = getattr(mod, "__dict__", None)
-                    if isinstance(d, dict):
-                        if d.get("prepare_tool_preview") is orig_prepare_tool_preview:
-                            d["prepare_tool_preview"] = _browserpaw_prepare_tool_preview
-                        if d.get("_prepare_tool_preview") is orig_prepare_tool_preview:
-                            d["_prepare_tool_preview"] = _browserpaw_prepare_tool_preview
-
-        # Wrap format_tool_event in BasePlatformAdapter if available, so Telegram/Discord/Slack
-        # unwrap deferred `tool_call` bridges when formatting stream chunks.
-        try:
-            from gateway.platforms.base import BasePlatformAdapter
-            orig_format_tool_event = getattr(BasePlatformAdapter, "format_tool_event", None)
-            if orig_format_tool_event is not None and not getattr(orig_format_tool_event, "_is_browserpaw_wrapped", False):
-                def _browserpaw_format_tool_event(self, event: Any, *, mode: str = "all", preview_max_len: int = 40):
-                    from gateway.stream_events import ToolCallChunk
-                    if isinstance(event, ToolCallChunk) and event.tool_name == "tool_call":
-                        real_name, real_args = _unwrap_deferred_tool_call(event.tool_name, event.args)
-                        if real_name != "tool_call":
-                            # Create an unwrapped chunk
-                            from agent.display import prepare_tool_preview
-                            cap = preview_max_len if preview_max_len > 0 else 40
-                            p = prepare_tool_preview(real_name, real_args, fallback="", max_len=cap)
-                            unwrapped_event = ToolCallChunk(
-                                tool_name=real_name,
-                                preview=p.text or event.preview,
-                                args=real_args,
-                                index=getattr(event, "index", 0)
-                            )
-                            return orig_format_tool_event(self, unwrapped_event, mode=mode, preview_max_len=preview_max_len)
-                    return orig_format_tool_event(self, event, mode=mode, preview_max_len=preview_max_len)
-
-                _browserpaw_format_tool_event._is_browserpaw_wrapped = True
-                BasePlatformAdapter.format_tool_event = _browserpaw_format_tool_event
-        except Exception:
-            pass
-
-        # Wrap TurnRunner._progress_build_message if available in gateway.run_turn_runner
-        try:
-            from gateway.run_turn_runner import TurnRunner
-            orig_progress_build_message = getattr(TurnRunner, "_progress_build_message", None)
-            if orig_progress_build_message is not None and not getattr(orig_progress_build_message, "_is_browserpaw_wrapped", False):
-                def _browserpaw_progress_build_message(self, tool_name, preview, args):
-                    real_name, real_args = _unwrap_deferred_tool_call(tool_name, args)
-                    if real_name != tool_name:
-                        # Auto-compute fresh preview for the unwrapped tool
-                        from agent.display import build_tool_preview
-                        unwrapped_preview = build_tool_preview(real_name, real_args) or preview
-                        return orig_progress_build_message(self, real_name, unwrapped_preview, real_args)
-                    return orig_progress_build_message(self, tool_name, preview, args)
-
-                _browserpaw_progress_build_message._is_browserpaw_wrapped = True
-                TurnRunner._progress_build_message = _browserpaw_progress_build_message
-        except Exception:
-            pass
-
-        # Quiet mode CLI renderers (┊ {emoji} {verb:9} {detail})
-        if hasattr(display, "_CUTE_LINES"):
-            for name, spec in BROWSERPAW_SPECS.items():
-                emoji = spec["emoji"]
-                verb = spec["verb"]
-                short_verb = verb.split()[0][:9]
-                for alias in _get_tool_aliases(name):
-                    display._CUTE_LINES[alias] = (
-                        lambda a, r, n=alias, em=emoji, v=short_verb:
-                        f"┊ {em} {v:9} {getattr(display, '_cute_trunc', lambda s: s)(display.build_tool_preview(n, a) or '')}"
-                    )
-
-        logger.debug("Successfully registered BrowserPaw formatters into agent.display")
-    except Exception as e:
-        logger.warning(f"Could not hook agent.display formatters: {e}")
-
-    try:
-        from tools.registry import registry
-        for name, spec in BROWSERPAW_SPECS.items():
-            for alias in _get_tool_aliases(name):
-                entry = registry.get_entry(alias)
-                if entry is not None and hasattr(entry, "emoji"):
-                    entry.emoji = spec.get("emoji", entry.emoji)
-
-        orig_registry_get_emoji = getattr(registry, "get_emoji", None)
-        if orig_registry_get_emoji is not None and not getattr(orig_registry_get_emoji, "_is_browserpaw_wrapped", False):
-            def _browserpaw_registry_get_emoji(name: str, default: str = "⚡") -> str:
-                if not isinstance(name, str) or not name:
-                    return default
-                spec = _resolve_browserpaw_spec(name)
-                if spec and "emoji" in spec:
-                    return spec["emoji"]
-                if name.startswith("browserpaw_") or name.startswith("chrome_") or name == "get_windows_and_tabs":
-                    return "🌐"
-                return orig_registry_get_emoji(name, default=default)
-
-            _browserpaw_registry_get_emoji._is_browserpaw_wrapped = True
-            registry.get_emoji = _browserpaw_registry_get_emoji
-    except Exception:
-        pass
 
 def register(ctx: Any) -> None:
     global _plugin_config
@@ -2447,9 +1849,6 @@ def register(ctx: Any) -> None:
             logger.debug('Failed to parse plugin config: %s', exc)
 
     _register_bundled_skill(ctx)
-    _register_display_formatters()
-
-    is_mock = any('mock' in getattr(cls, '__module__', '').lower() for cls in type(ctx).__mro__)
 
     for tool_name, meta in TOOL_DEFINITIONS.items():
         spec = BROWSERPAW_SPECS.get(tool_name, {})
@@ -2469,24 +1868,6 @@ def register(ctx: Any) -> None:
                 description=meta['description'],
                 emoji=emoji,
             )
-
-        if is_mock:
-            try:
-                from tools.registry import registry
-                registry.register(
-                    name=tool_name,
-                    toolset='browserpaw',
-                    schema=schema,
-                    handler=handler,
-                    description=meta['description'],
-                    emoji=emoji,
-                    override=True,
-                )
-            except Exception:
-                pass
-
-    # Ensure registry entries have emoji updated after registration
-    _register_display_formatters()
 
 
 def browserpaw_scroll_until_found(

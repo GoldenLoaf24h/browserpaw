@@ -7,7 +7,13 @@ echo              (Model: Mapika/decider-2b, Port: 8009)
 echo ================================================================
 echo.
 
-set "MODEL_DIR=%USERPROFILE%\.browserpaw\models\decider-2b"
+if defined BROWSERPAW_HOME (
+    set "BP_HOME=%BROWSERPAW_HOME%"
+) else (
+    set "BP_HOME=%USERPROFILE%\.browserpaw"
+)
+
+set "MODEL_DIR=%BP_HOME%\models\decider-2b"
 set "WEIGHTS_FILE=%MODEL_DIR%\model.safetensors"
 set "PORT=8009"
 
@@ -23,7 +29,7 @@ if not exist "%WEIGHTS_FILE%" (
 )
 
 echo [OK] Found model weights at: %WEIGHTS_FILE%
-set "VENV_PYTHON=%USERPROFILE%\.browserpaw\venv\Scripts\python.exe"
+set "VENV_PYTHON=%BP_HOME%\venv\Scripts\python.exe"
 if exist "%VENV_PYTHON%" (
     set "PYTHON_BIN=%VENV_PYTHON%"
     echo [OK] Using dedicated BrowserPaw virtual environment.
@@ -35,6 +41,15 @@ if exist "%VENV_PYTHON%" (
         exit /b 1
     )
     set "PYTHON_BIN=python"
+)
+
+set "DECIDER_REPO_DIR=%BP_HOME%\decider-repo"
+if exist "%DECIDER_REPO_DIR%" (
+    if defined PYTHONPATH (
+        set "PYTHONPATH=%DECIDER_REPO_DIR%;%PYTHONPATH%"
+    ) else (
+        set "PYTHONPATH=%DECIDER_REPO_DIR%"
+    )
 )
 
 echo [INFO] Starting local decider service on port %PORT%...
@@ -51,4 +66,3 @@ if %errorlevel% neq 0 (
     echo [WARN] Decider service stopped with error code %errorlevel%.
     pause
 )
-

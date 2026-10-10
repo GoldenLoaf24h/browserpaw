@@ -478,24 +478,88 @@ export class NativeMessagingHost {
       const messageString = JSON.stringify(message);
       const messageBuffer = Buffer.from(messageString);
 
-      // Task B8: Transparent chunking for messages >= 950KB
-      const CHUNK_THRESHOLD_BYTES = 950 * 1024;
-      const CHUNK_SIZE = 850 * 1024;
+      // Task B8 & ARCH-04: Transparent chunking based on final UTF-8 envelope byteLength
+      // Chrome Native Messaging ceiling is 1MB (1,048,576 bytes) per message.
+      const CHUNK_THRESHOLD_BYTES = 900 * 1024;
+      const MAX_CHUNK_ENVELOPE_BYTES = 800 * 1024; // 800KB safe ceiling per chunk envelope
+
       if (messageBuffer.length >= CHUNK_THRESHOLD_BYTES) {
         const chunkId = uuidv4();
-        const total = Math.ceil(messageString.length / CHUNK_SIZE);
+        const slices: string[] = [];
+        let start = 0;
+        const totalChars = messageString.length;
+
+        const sampleEnvelope = {
+          __chunked__: true,
+          chunkId,
+          index: 0,
+          total: 1,
+          chunk: '',
+          responseToRequestId: message.responseToRequestId,
+          requestId: message.requestId,
+        };
+        const envelopeOverhead = Buffer.byteLength(JSON.stringify(sampleEnvelope), 'utf8');
+        const targetChunkBytes = MAX_CHUNK_ENVELOPE_BYTES - envelopeOverhead - 256;
+
+        while (start < totalChars) {
+          let end = Math.min(totalChars, start + targetChunkBytes);
+
+          // Prevent splitting a UTF-16 surrogate pair
+          if (
+            end < totalChars &&
+            messageString.charCodeAt(end - 1) >= 0xd800 &&
+            messageString.charCodeAt(end - 1) <= 0xdbff
+          ) {
+            end--;
+          }
+
+          while (end > start) {
+            const candidateSlice = messageString.slice(start, end);
+            const env = { ...sampleEnvelope, chunk: candidateSlice };
+            const envBytes = Buffer.byteLength(JSON.stringify(env), 'utf8');
+
+            if (envBytes <= MAX_CHUNK_ENVELOPE_BYTES) {
+              break;
+            }
+
+            const excess = envBytes - MAX_CHUNK_ENVELOPE_BYTES;
+            const trimChars = Math.max(1, Math.ceil(excess / 3));
+            end -= trimChars;
+
+            if (
+              end < totalChars &&
+              messageString.charCodeAt(end - 1) >= 0xd800 &&
+              messageString.charCodeAt(end - 1) <= 0xdbff
+            ) {
+              end--;
+            }
+          }
+
+          if (end <= start) {
+            end =
+              start + 1 < totalChars &&
+              messageString.charCodeAt(start) >= 0xd800 &&
+              messageString.charCodeAt(start) <= 0xdbff
+                ? start + 2
+                : start + 1;
+          }
+
+          slices.push(messageString.slice(start, end));
+          start = end;
+        }
+
+        const total = slices.length;
         for (let i = 0; i < total; i++) {
-          const slice = messageString.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
           const chunkMsg = {
             __chunked__: true,
             chunkId,
             index: i,
             total,
-            chunk: slice,
+            chunk: slices[i],
             responseToRequestId: message.responseToRequestId,
             requestId: message.requestId,
           };
-          const chunkBuf = Buffer.from(JSON.stringify(chunkMsg));
+          const chunkBuf = Buffer.from(JSON.stringify(chunkMsg), 'utf8');
           const chunkHdr = Buffer.alloc(4);
           chunkHdr.writeUInt32LE(chunkBuf.length, 0);
           stdout.write(Buffer.concat([chunkHdr, chunkBuf]));

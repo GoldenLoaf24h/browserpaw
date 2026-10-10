@@ -36,15 +36,19 @@ export class DismissOverlayTool extends BaseBrowserToolExecutor {
       const maxDismissals =
         typeof args.maxOverlays === 'number' && args.maxOverlays > 0 ? args.maxOverlays : 5;
 
-      const inPageRes = (
-        await executeInPage({ tabId: targetTabId }, 'inPageDismissOverlays', [{ maxDismissals }])
-      )?.[0]?.result;
+    const inPageRes = (
+      await executeInPage({ tabId: targetTabId }, 'inPageDismissOverlays', [{ maxDismissals }])
+    )?.[0]?.result;
 
-      // Native CDP physical click fallback for React/Vue frameworks requiring isTrusted === true
+      // Native CDP physical click fallback for React/Vue frameworks requiring isTrusted === true.
+      // Punch-Through prevention: evaluate each overlay individually. Only fallback to CDP click
+      // if the specific overlay did NOT dismiss from synthetic click AND its coordinates still
+      // point to an active overlay, preventing punch-through to underlying page elements while
+      // ensuring second-layer overlays are not skipped.
       if (Array.isArray(inPageRes?.overlays) && inPageRes.overlays.length > 0) {
         const clickableOverlays = inPageRes.overlays.filter(
           (ov: any) =>
-            ov.action === 'clicked_close_button' &&
+            (ov.needsPhysicalFallback === true || (ov.dismissed !== true && (inPageRes?.dismissedCount ?? 0) === 0)) &&
             typeof ov.x === 'number' &&
             typeof ov.y === 'number',
         );
@@ -70,6 +74,8 @@ export class DismissOverlayTool extends BaseBrowserToolExecutor {
                   clickCount: 1,
                 });
                 (ov as any).isTrusted = true;
+                (ov as any).dismissed = true;
+                inPageRes.dismissedCount = (inPageRes.dismissedCount ?? 0) + 1;
               }
             });
           } catch {}

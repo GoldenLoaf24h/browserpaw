@@ -6,14 +6,23 @@ An authoritative, step-by-step onboarding guide for **AI Agents** (Codex Desktop
 
 ---
 
-## ⚡ Overview & Setup Flow
+## Overview & Setup Flow
 
-1. **Install BrowserPaw Chrome Extension**: Load pre-built release package or local build in Developer mode.
-2. **Register Native Messaging Host**: One-time OS manifest registration and security token creation.
-3. **Connect to Your AI Agent Client**: Configure MCP for Codex, Hermes, Cursor, Claude, Windsurf, or ChatGPT.
-4. **Pin Extension & Setup Jev Decision Engine (Recommended)**: Choose Local 2B (zero cloud latency, GPU/CPU adaptive) or Remote Cloud (TypeSafe Jev API / Custom Gateway).
-5. **Enable Silent Debugger Mode (Zero-Jitter UX Optimization)**: Optional Chromium flag for seamless automation without the top debugging banner.
-6. **Preflight Health Check & Ready for Action**: Run the diagnostic doctor script and start assigning tasks!
+1. Install the extension from a release package or build it from source.
+2. Register the Native Messaging Host from the repository build.
+3. Connect an MCP client using Stdio or HTTP transport.
+4. Optionally configure Jev and pin the extension.
+5. Optionally enable Chromium's silent debugger flag.
+6. Install agent skills if your client supports them.
+7. Run the diagnostic script and resolve any reported issues.
+
+## Prerequisites
+
+- **Source installation:** Node.js `>=22.6.0` and pnpm `12.6.0` (the version declared by this repository's `package.json`).
+- **Release extension installation:** Google Chrome and a supported Node.js runtime for the native server. The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
+- **Local Jev mode:** Python plus the decider runtime dependencies (uvicorn, torch, and transformers) must be installed in the BrowserPaw virtual environment at ~/.browserpaw/venv, or available to the system Python. If they are unavailable, use Remote mode or Off.
+
+Commands below are written for a shell opened at the repository root unless noted otherwise.
 
 ---
 
@@ -32,21 +41,24 @@ If you have cloned this repository locally, build the extension package:
 
 ```bash
 pnpm install
-pnpm build:extension
+pnpm build
 ```
 
 The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.output/chrome-mv3`.
 
+> **Local Development & Deployment Synchronization:**
+> The default build output is located at `<repo-root>/app/chrome-extension/.output/chrome-mv3`. To stage the unpacked extension to a custom local directory, configure `extensionSyncDir` in `browserpaw.local.json` or set the `BROWSERPAW_EXTENSION_SYNC_DIR` environment variable and run `pnpm build:deploy`. Standard pnpm build skips deployment synchronization by default. If no target directory is configured, pnpm build:deploy fails with an error rather than silently succeeding.
+
 ---
 
-### Loading into Chrome / Edge
+### Loading into Google Chrome
 
-> **AI Agent Guidance:** You can assist the user by directly opening or navigating to `chrome://extensions/` (or `edge://extensions/` for Microsoft Edge).
+> **AI Agent Guidance:** You can assist the user by opening `chrome://extensions/` in Google Chrome.
 
-1. In Google Chrome, navigate to **`chrome://extensions/`** (or in Microsoft Edge, navigate to **`edge://extensions/`**).
+1. In Google Chrome, navigate to **`chrome://extensions/`**.
 2. Enable **Developer mode** via the toggle switch in the top-right corner.
 3. Either:
-   - Click the **Load unpacked** button and select the extracted extension folder (or `.output/chrome-mv3`).
+   - Click the **Load unpacked** button and select the extracted extension folder (for local builds on Windows, either your configured local staging directory or `<repo-root>/app/chrome-extension/.output/chrome-mv3`).
    - Or drag and drop the extension folder directly into the `chrome://extensions/` page.
 4. Verify that **BrowserPaw** appears in your extensions list with its status enabled.
 
@@ -56,20 +68,20 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 
 The Native Messaging Host provides high-speed, secure IPC between Chrome and your local AI Agent clients.
 
-Run the registration script from your repository root (or unpacked native server directory):
+This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server. From the repository root, run:
 
 ```bash
 node app/native-server/dist/scripts/register-dev.js
 ```
 
-_(If working from repository source, ensure `pnpm build:shared && pnpm build:native` has completed)._
+The registration script writes the Native Messaging manifest and browser registration. The bridge token is created by the Native Messaging server when it starts for the first time, not by this registration command. The token is stored at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).
 
 **What This Does:**
 
 - **Windows**: Adds registry key `com.chromemcp.nativehost` under `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
 - **macOS**: Places the manifest JSON under `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`.
 - **Linux**: Places the manifest JSON under `~/.config/google-chrome/NativeMessagingHosts/`.
-- **Security Bridge Token**: Automatically creates a high-entropy secret token at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`) to secure local WebSocket and HTTP transports against unauthorized loopback access.
+- **Security Bridge Token**: Created on first server startup and used to authenticate local HTTP and WebSocket connections.
 
 ---
 
@@ -83,10 +95,10 @@ You can connect BrowserPaw either via Direct Stdio (recommended for CLI / local 
 
 #### Option A: Direct Stdio Configuration (Recommended)
 
-Configuring a **Stdio Server** in Codex's `config.toml` is the cleanest and most robust method:
+Configure the Stdio MCP entry in Codex's `config.toml`:
 
-- **Zero Daemon Management**: Codex automatically starts the bridge on demand and shuts it down when done. No manual background terminal processes needed.
-- **Direct Environment Injection**: Inject your Jev API key or tool profile directly in the configuration block without touching global system environment variables.
+- **Bridge requirement**: The Stdio process forwards MCP requests to the local bridge. Google Chrome must be open with BrowserPaw enabled, and the bridge must be available before calling tools.
+- **Direct Environment Injection**: You can set the tool profile and Jev API key in the client configuration without changing global environment variables.
 
 **Configuration File Location:**
 
@@ -118,7 +130,8 @@ If installing through the ChatGPT Desktop or Codex Plugin Marketplace:
 2. Open the application and go to **Settings** > **Plugins** (or open the Plugins panel).
 3. In the Plugins view, select the **"Personal"** tab.
 4. Locate **BrowserPaw** and click the **"+" (Add / Install)** button to install the plugin.
-5. **⚠️ Critical Note**: After completing installation (via either Stdio or Plugin), you **MUST start a New Task / Thread**. The AI agent registers and binds MCP tool definitions only when a new task is initialized!
+   For a local repository installation, add the `<repo-root>/plugins/browserpaw` directory as the plugin source.
+5. After installing or changing the MCP configuration, start a new task if the client has not refreshed its available tools.
 
 ---
 
@@ -159,7 +172,7 @@ Add to `.cursor/mcp.json`:
 
 ---
 
-### 3.4 Claude Desktop & Claude Code (`claude_desktop_config.json`)
+### 3.4 Claude Desktop (`claude_desktop_config.json`)
 
 Config file paths:
 
@@ -201,9 +214,9 @@ Config file paths:
 
 ---
 
-### 3.6 ChatGPT Desktop / Generic Streamable HTTP MCP
+### 3.6 Generic Streamable HTTP MCP
 
-For clients connecting over HTTP SSE transport:
+For clients connecting over Streamable HTTP:
 
 ```json
 {
@@ -233,27 +246,27 @@ Click the puzzle piece icon (Extensions) in Chrome's top toolbar, locate **Brows
 BrowserPaw features an advanced **Hierarchical Dual-Brain Architecture**:
 
 - **Macro Planner (System 2)**: Your host AI Agent (Codex, Claude, Cursor) performs broad reasoning and decomposes complex goals.
-- **Fast Semantic Micro-Loop (System 1)**: Powered by the Jev Decision Engine (`chrome_act_toward_goal`), executing high-frequency on-page decisions (~100–300ms/step) directly inside the browser session without wasting expensive external LLM tokens or incurring roundtrip latency.
+- **Fast Semantic Micro-Loop (System 1)**: Powered by the Jev Decision Engine (`chrome_act_toward_goal`), it performs on-page perceive-decide-act steps without a separate MCP request for each internal step. Latency depends on the selected Jev mode, hardware, and page complexity.
 
 **Tri-State Decision Mode**:
 Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select your preferred mode:
 
 ---
 
-### Mode 1: Local Jev (100% Offline, Zero Cloud Cost, Complete Privacy)
+### Mode 1: Local Jev
 
 1. In the BrowserPaw extension popup, select **Local**.
-2. Click **Download Model** to automatically fetch the compact 2B open-weight Jev model (`decider-2b`, ~1.7GB VRAM / FP16) to `~/.browserpaw/models`.
-3. **Zero Manual Process Management**: The Native Bridge automatically manages the local decider service on `http://127.0.0.1:8009`. A built-in watchdog monitors activity and automatically unloads model weights after 10 minutes of inactivity, freeing 100% of memory.
+2. Click **Download Model** to download the `decider-2b` weights (approximately 3.8 GB) to the configured model directory.
+3. Local inference requires a working Python environment with the decider's runtime dependencies. The bridge manages the local service lifecycle at `http://127.0.0.1:8009` when that environment is available. Resource use and inference speed depend on the model runtime and hardware.
 
 > **💡 AI Agent Hardware Check Guide:**
 > When setting up for a user, the AI Agent should check their computer specifications:
 >
 > - **Operating System & Architecture**: Windows / macOS / Linux, x86_64 / arm64.
 > - **Inference Acceleration Strategy**:
->   - **Discrete GPU (CUDA on Windows/Linux)**: Uses FP16 acceleration for ultra-fast ~109ms decisions.
->   - **Apple Silicon (macOS M1–M4)**: Uses Metal Performance Shaders (MPS) and MLX unified memory.
->   - **CPU Auto-Fallback**: If no discrete GPU is available, the engine automatically selects multi-threaded CPU execution with zero manual configuration.
+>   - **NVIDIA GPU**: CUDA acceleration may be used when the required runtime and compatible hardware are available.
+>   - **Apple Silicon**: PyTorch MPS is used where supported by the installed runtime.
+>   - **CPU**: CPU inference is available where supported by the configured runtime, with performance depending on the host.
 
 ---
 
@@ -278,7 +291,7 @@ Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select y
      echo 'export TYPESAFE_API_KEY="your-key-here"' >> ~/.zshrc
      ```
 
-3. **Using Custom / Self-Hosted Gateways (OpenAI-Compatible)**:
+3. **Using Custom / Self-Hosted Gateways**:
    - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000/v1` or private gateway) and custom `modelId`.
    - Settings are cleanly persisted to `~/.browserpaw/jev-remote.json`.
 
@@ -345,7 +358,7 @@ google-chrome --silent-debugger-extension-api &
 
 ## Step 6: Install Agent Skills (Recommended)
 
-If your agent supports skill definitions (Codex, Hermes, Claude Code), copy the bundled skill folder so your agent has full knowledge of all 50 tools, parameter schemas, and the Dual-Brain workflow:
+If your agent supports skill definitions (Codex, Hermes, or Claude Code), copy the bundled skill folder so your agent has the tool parameter schemas and workflow guidance:
 
 > **Important**: Always copy the **entire `skill/` directory** including its `references/` subdirectory.
 
@@ -377,35 +390,15 @@ Verify your complete BrowserPaw installation with the built-in diagnostic doctor
 node skill/config/doctor.mjs
 ```
 
-**Expected Output:**
-
-```text
-================================================================
-         BrowserPaw System Healthcheck & Repair
-================================================================
-
-[PASS] Node.js Environment: v22.x on win32
-[PASS] Bridge Token Found: ...\.chrome-mcp\bridge-token
-[PASS] Native Bridge Server is Listening (Port 12306)
-[PASS] Token Authentication & MCP Initialize OK
-[PASS] Extension Build Found: ...\app\chrome-extension\.output\chrome-mv3
-[PASS] Standalone Directory Synced
-[PASS] Native Messaging Host Registered in Chrome
-[PASS] Jev Decision Model: Configured and Ready
-----------------------------------------------------------------
-Diagnostic Complete: All Checks Passed.
-STATUS: [HEALTHY] All BrowserPaw layers are operating normally!
-```
-
 ---
 
-## 🎉 You're All Set!
+## You're All Set
 
-Once the doctor reports `STATUS: [HEALTHY]`:
+Run the diagnostic script and follow its reported checks. Its output varies with the local environment and configured optional features; there is no single expected output for every installation.
 
 1. Start a new conversation or task in your AI Agent.
 2. Instruct your agent:
-   > _"Open Twitter in Chrome, search for Elon Musk's profile, and view his latest tweet."_
-3. Watch BrowserPaw navigate, position the kinetic cursor, interact smoothly, and report back results in real time!
+   > _"Open a website in Chrome and report its page title."_
+3. Verify the result in Chrome.
 
 For troubleshooting and common edge cases, see **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)**.

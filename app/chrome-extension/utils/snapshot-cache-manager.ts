@@ -19,6 +19,8 @@ export function computeScopeHash(text: string): string {
   return (hash >>> 0).toString(16);
 }
 
+export type SnapshotRepresentation = 'standard' | 'fast';
+
 export interface CachedSnapshot {
   snapshotId: string;
   tabId: number;
@@ -29,6 +31,7 @@ export interface CachedSnapshot {
   valid: boolean;
   invalidationReason?: string;
   fingerprints?: Map<number, ElementFingerprint>;
+  representation?: SnapshotRepresentation;
 }
 
 export interface DomDiffResult {
@@ -52,6 +55,7 @@ export const DEFAULT_MAX_DELTA_CHANGES = 25;
 export interface DiffOptions {
   maxDelta?: number;
   filterNoise?: boolean;
+  representation?: SnapshotRepresentation;
 }
 
 const COUNTDOWN_TIMER_REGEX =
@@ -175,7 +179,7 @@ export class SnapshotCacheManager {
 
   public setSnapshot(
     tabId: number,
-    data: { url: string; elementCount: number; elements?: any[] },
+    data: { url: string; elementCount: number; elements?: any[]; representation?: SnapshotRepresentation },
   ): CachedSnapshot {
     const currentRev = (this.tabRevisions.get(tabId) ?? 0) + 1;
     this.tabRevisions.set(tabId, currentRev);
@@ -208,6 +212,7 @@ export class SnapshotCacheManager {
       revision: currentRev,
       valid: true,
       fingerprints,
+      representation: data.representation || 'standard',
     };
     this.cache.set(tabId, snapshot);
     return snapshot;
@@ -222,8 +227,10 @@ export class SnapshotCacheManager {
     const currentRev = (this.tabRevisions.get(tabId) ?? 0) + 1;
     const maxDelta = options?.maxDelta ?? DEFAULT_MAX_DELTA_CHANGES;
     const filterNoise = options?.filterNoise ?? true;
+    const prevRep = prev?.representation || 'standard';
+    const currentRep = options?.representation || 'standard';
 
-    if (!prev || !prev.valid || !prev.fingerprints || prev.fingerprints.size === 0) {
+    if (!prev || !prev.valid || !prev.fingerprints || prev.fingerprints.size === 0 || prevRep !== currentRep) {
       // First snapshot on this page or invalidated, no prior baseline to diff
       const isTruncated = currentElements.length > maxDelta;
       const rawAdded = isTruncated ? currentElements.slice(0, maxDelta) : currentElements;

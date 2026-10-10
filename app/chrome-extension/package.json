@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "private": true,
-  "version": "3.2.7",
+  "version": "4.0.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -20,7 +20,7 @@
     "zip:firefox": "wxt zip -b firefox",
     "compile": "vue-tsc --noEmit",
     "postinstall": "wxt prepare",
-    "lint": "npx eslint .",
+    "lint": "eslint . --max-warnings=0",
     "lint:fix": "npx eslint . --fix",
     "format": "npx prettier --write .",
     "format:check": "npx prettier --check .",

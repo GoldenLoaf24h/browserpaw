@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, delimiter } from 'node:path';
 import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
@@ -29,7 +29,11 @@ const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
 const REPO_ROOT = resolve(process.cwd());
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
-const STANDALONE_EXT_DIRS = ['D:\\workspace\\browserclaw', 'D:\\workspace\\browserpaw'];
+// Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths
+const STANDALONE_EXT_DIRS = (process.env.BROWSERPAW_STANDALONE_DIRS
+  ? process.env.BROWSERPAW_STANDALONE_DIRS.split(delimiter).map((d) => d.trim()).filter(Boolean)
+  : []
+);
 
 console.log('\n================================================================');
 console.log('         BrowserPaw System Healthcheck & Repair');
@@ -146,6 +150,8 @@ for (const dir of STANDALONE_EXT_DIRS) {
       } catch (err) {
         report(false, `Failed to create/sync ${dir}`, err.message);
       }
+    } else {
+      report(false, `Standalone Directory Missing: ${dir}`, 'Directory does not exist');
     }
     continue;
   }
@@ -249,4 +255,5 @@ if (failCount === 0) {
 } else {
   console.log('STATUS: [ACTION REQUIRED] Please review the failed items above.');
   console.log('TIP: Run `node skill/config/doctor.mjs --fix` for automatic repair.\n');
+  process.exitCode = 1;
 }

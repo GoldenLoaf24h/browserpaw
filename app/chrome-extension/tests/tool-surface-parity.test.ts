@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
+import { TOOL_SCHEMAS, TOOL_NAMES } from 'chrome-mcp-shared';
 
 /**
  * The callable tool set must equal the declared schema set.
@@ -27,13 +27,23 @@ describe('tool surface parity', () => {
     const constantsUsed = new Set(
       (sources.match(/TOOL_NAMES\.BROWSER\.[A-Z_]+/g) || []).map((s) => s.split('.').pop()),
     );
-    const schemaConstants = new Set(
-      (
-        fs
-          .readFileSync('../../packages/shared/src/tools.ts', 'utf-8')
-          .match(/name: TOOL_NAMES\.BROWSER\.[A-Z_]+/g) || []
-      ).map((s) => s.split('.').pop()),
-    );
+    // Map exported public TOOL_SCHEMAS to TOOL_NAMES.BROWSER constant keys.
+    // Of the 50 exported schemas: 49 are extension browser tools, 1 is native-only loop tool (ACT_TOWARD_GOAL).
+    const browserNameToKey = new Map<string, string>();
+    for (const [key, name] of Object.entries(TOOL_NAMES.BROWSER)) {
+      browserNameToKey.set(name, key);
+    }
+
+    const schemaConstants = new Set<string>();
+    for (const schema of TOOL_SCHEMAS) {
+      const key = browserNameToKey.get(schema.name);
+      if (key) {
+        schemaConstants.add(key);
+      }
+    }
+
+    // Enforce strong assertion: all 49 extension browser schemas must be present and verified
+    expect(schemaConstants.size).toBe(49);
 
     const missing = [...schemaConstants].filter((c) => !constantsUsed.has(c));
     expect(missing, `declared but not implemented: ${missing.join(', ')}`).toEqual([]);

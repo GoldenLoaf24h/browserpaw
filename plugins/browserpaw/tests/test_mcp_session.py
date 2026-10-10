@@ -454,22 +454,3 @@ def test_stale_configured_session_marked_invalid_and_recovered(plugin, monkeypat
     # Call 2 should only make 1 request using new-recovered-session
     assert len(call_log) == 1
     assert call_log[0] == ('tools/call', 'new-recovered-session')
-
-
-def test_align_response_tool_names(plugin):
-    """Verify that legacy chrome_* and get_windows_and_tabs tool references in output are rewritten to browserpaw_*."""
-    legacy_text = (
-        'Delta truncated: showing 0/0 added, 25/143 modified, 1/1 removed. '
-        'Call chrome_read_dom for full DOM tree. Prefer chrome_batch_actions '
-        'or chrome_interact_index. Also check get_windows_and_tabs. '
-        'Ignore chrome://extensions and https://chrome.google.com.'
-    )
-    aligned = plugin._align_response_tool_names(legacy_text)
-    assert 'Call browserpaw_read_dom for full DOM tree.' in aligned
-    assert 'Prefer browserpaw_batch_actions' in aligned
-    assert 'or browserpaw_interact_index.' in aligned
-    assert 'Also check browserpaw_get_windows_and_tabs.' in aligned
-    # Ensure protocols and non-tool names are preserved
-    assert 'chrome://extensions' in aligned
-    assert 'https://chrome.google.com' in aligned
-

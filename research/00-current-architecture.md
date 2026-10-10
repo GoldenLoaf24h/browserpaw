@@ -1,9 +1,11 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # BrowserPaw 现状逆向扫描与架构深度审计报告 (00-current-architecture.md)
 
-> **审计执行人**: Aquinas (`01a0e82e-5821-7ca3-8824-43b1f7bae00d`)  
-> **执行角色**: 阶段一：现状逆向扫描员 (Reverse Architect)  
-> **审计日期**: 2026-09-28  
-> **工作根目录**: `D:\workspace\mcp-chrome-master\mcp-chrome-master`  
+> **审计执行人**: Aquinas (`01a0e82e-5821-7ca3-8824-43b1f7bae00d`)
+> **执行角色**: 阶段一：现状逆向扫描员 (Reverse Architect)
+> **审计日期**: 2026-09-28
+> **工作根目录**: `D:\workspace\mcp-chrome-master\mcp-chrome-master`
 > **验证准则**: §A 双重验证纪律（源码相对路径:行号定位 + 命令行真实执行摘录，严禁臆测）
 
 ---

@@ -1,10 +1,12 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # BrowserOS 架构深度测绘与基线对标报告 (research/browseros.md)
 
-> **测绘执行人**: Hubble (`01a0e83e-b2c8-7bb2-ade2-16d8cba54000`)  
-> **执行角色**: 阶段二：Type A 深度测绘员 (Agent-BrowserOS)  
-> **测绘对象**: `research/_external/BrowserOS` (基于 commit `7a5ae53600414cbb88bcd29cf5e972f16b199e92`, 全栈 Chromium Fork + Rust/Bun 双服务端 + browser-core + browser-mcp)  
-> **对标基线**: `research/00-current-architecture.md` (BrowserPaw Monorepo: Fastify + Chrome MV3 Extension + Dual-Brain + 1-based WeakRef DOM)  
-> **开源协议约束**: **AGPL-3.0** (严格声明：禁止直接复制代码，仅吸收架构机制与设计思想)  
+> **测绘执行人**: Hubble (`01a0e83e-b2c8-7bb2-ade2-16d8cba54000`)
+> **执行角色**: 阶段二：Type A 深度测绘员 (Agent-BrowserOS)
+> **测绘对象**: `research/_external/BrowserOS` (基于 commit `7a5ae53600414cbb88bcd29cf5e972f16b199e92`, 全栈 Chromium Fork + Rust/Bun 双服务端 + browser-core + browser-mcp)
+> **对标基线**: `research/00-current-architecture.md` (BrowserPaw Monorepo: Fastify + Chrome MV3 Extension + Dual-Brain + 1-based WeakRef DOM)
+> **开源协议约束**: **AGPL-3.0** (严格声明：禁止直接复制代码，仅吸收架构机制与设计思想)
 > **验证准则**: §A 双重验证纪律（源码相对路径:行号定位 + 真实逻辑对齐与量化审计，严禁臆测）
 
 ---

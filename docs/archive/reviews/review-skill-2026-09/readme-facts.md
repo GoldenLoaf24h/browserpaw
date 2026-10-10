@@ -45,7 +45,7 @@
     - Jev 破坏性拦截：`destructive.noul >= 0.50`。
     - Jev 动作置信度下限：`confidence >= confidenceThreshold`（默认 0.55）。
     - Jev 目标置信度门限：`targetConf >= 0.45` 且 `topProb >= 0.35`。
-    - 启发式模式完成判定：关键词覆盖率 >= 80% 且上一步必须伴随 URL 变更或 DOM Mutation。
+    - 启发式模式完成判定：关键词Coverage >= 80% 且上一步必须伴随 URL 变更或 DOM Mutation。
 - **README 客观表述建议**：
   > "chrome_act_toward_goal runs an in-process perception-action loop with Jev System 1 inference, falling back to a 5-step heuristic engine with 14 built-in destructive action guards."
 - **改动要求**：说明 Jev 单步 200–400ms 包含网络推理；明确指出启发式降级模式步数上限为 5 步。

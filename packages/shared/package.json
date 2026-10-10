@@ -1,6 +1,6 @@
 {
   "name": "chrome-mcp-shared",
-  "version": "3.2.7",
+  "version": "4.0.0",
   "author": "hangye",
   "repository": {
     "type": "git",
@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "lint": "npx eslint \"src/**/*.{js,ts}\"",
+    "lint": "eslint \"src/**/*.{js,ts}\" --max-warnings=0",
     "lint:fix": "npx eslint \"src/**/*.{js,ts}\" --fix",
     "format": "prettier --write \"src/**/*.{js,ts,json}\""
   },

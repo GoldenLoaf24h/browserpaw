@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Network Capture Helper
  *
@@ -174,12 +173,12 @@ if (window.__NETWORK_CAPTURE_HELPER_INITIALIZED__) {
         options.body = body;
       }
 
-      // 创建一个带超时的 fetch
+      // Create a fetch request with timeout
       const fetchWithTimeout = async (url, options, timeout) => {
         const controller = new AbortController();
         const signal = controller.signal;
 
-        // 设置超时
+        // Set up abort timeout
         const timeoutId = setTimeout(() => controller.abort(), timeout);
 
         try {
@@ -192,7 +191,7 @@ if (window.__NETWORK_CAPTURE_HELPER_INITIALIZED__) {
         }
       };
 
-      // 发送带超时的请求
+      // Send request with timeout controller
       const response = await fetchWithTimeout(url, options, timeout);
 
       // Process response
@@ -243,7 +242,10 @@ if (window.__NETWORK_CAPTURE_HELPER_INITIALIZED__) {
   // Listen for messages from the extension
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     // Respond to ping message
-    if (request.action === 'chrome_network_request_ping' || String(request.action || '').startsWith('mcp_ping_')) {
+    if (
+      request.action === 'chrome_network_request_ping' ||
+      String(request.action || '').startsWith('mcp_ping_')
+    ) {
       sendResponse({ status: 'pong' });
       return false; // Synchronous response
     } else if (request.action === 'sendPureNetworkRequest') {

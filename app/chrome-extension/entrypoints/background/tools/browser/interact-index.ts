@@ -90,49 +90,219 @@ export async function getSubframeViewportOffset(
   frameId: number,
 ): Promise<{ offsetX: number; offsetY: number }> {
   if (!frameId || frameId === 0) return { offsetX: 0, offsetY: 0 };
-  try {
-    let targetUrl: string | undefined;
-    if (typeof chrome !== 'undefined' && chrome.webNavigation?.getFrame) {
-      const frame = await chrome.webNavigation.getFrame({ tabId, frameId }).catch(() => null);
-      if (frame?.url && frame.url !== 'about:blank') {
-        targetUrl = frame.url;
-      }
-    }
+  let cdpOffset: { offsetX: number; offsetY: number } | null = null;
+  const rawToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const probeAttr = 'data-bp-fprobe-' + rawToken.replace(/[^a-z0-9_]/gi, '');
 
-    const results = await chrome.scripting
+  try {
+    // Phase 1: Tag target frame document element using chrome.scripting (bridges Isolated & Main worlds)
+    await chrome.scripting
       .executeScript({
-        target: { tabId },
-        func: (url?: string) => {
-          const iframes = Array.from(document.querySelectorAll('iframe'));
-          if (iframes.length === 0) return { offsetX: 0, offsetY: 0 };
-          const match =
-            (url && iframes.find((f) => f.src === url || (f.src && url.startsWith(f.src)))) ||
-            iframes.find((f) => {
-              const r = f.getBoundingClientRect();
-              return r.width > 50 && r.height > 50;
-            }) ||
-            iframes[0];
-          const rect = match.getBoundingClientRect();
-          const style = window.getComputedStyle(match);
-          const borderLeft = parseFloat(style?.borderLeftWidth || '0') || 0;
-          const borderTop = parseFloat(style?.borderTopWidth || '0') || 0;
-          return {
-            offsetX: Math.round(rect.left + borderLeft),
-            offsetY: Math.round(rect.top + borderTop),
-          };
+        target: { tabId, frameIds: [frameId] },
+        func: (attrName: string) => {
+          try {
+            document.documentElement.setAttribute(attrName, '1');
+          } catch {}
         },
-        args: [targetUrl],
+        args: [probeAttr],
       })
       .catch(() => null);
 
-    const res = results?.[0]?.result;
-    if (res && (res.offsetX !== 0 || res.offsetY !== 0)) {
-      return res;
+    // Track 1: DOM traversal across accessible browsing context tree with full ancestor chain verification
+    const domResult = await chrome.scripting
+      .executeScript({
+        target: { tabId },
+        func: (attrName: string) => {
+          try {
+            const visited = new Set<Window>();
+            function findTargetIframe(win: Window): HTMLIFrameElement | null {
+              if (!win || visited.has(win)) return null;
+              visited.add(win);
+              const iframes = Array.from(win.document.querySelectorAll('iframe'));
+              for (const ifr of iframes) {
+                try {
+                  const doc = ifr.contentDocument || ifr.contentWindow?.document;
+                  if (doc && doc.documentElement.hasAttribute(attrName)) {
+                    return ifr;
+                  }
+                  if (ifr.contentWindow && ifr.contentWindow !== win) {
+                    const deep = findTargetIframe(ifr.contentWindow);
+                    if (deep) return deep;
+                  }
+                } catch {
+                  // Inaccessible cross-origin iframe boundary
+                }
+              }
+              return null;
+            }
+
+            const targetIfr = findTargetIframe(window);
+            if (!targetIfr) return null;
+
+            let totalX = 0;
+            let totalY = 0;
+            let curr: HTMLIFrameElement | null = targetIfr;
+            let reachedTop = false;
+
+            while (curr) {
+              const r = curr.getBoundingClientRect();
+              const win = curr.ownerDocument.defaultView || window;
+              const s = win.getComputedStyle(curr);
+              const bl = parseFloat(s?.borderLeftWidth || '0') || 0;
+              const bt = parseFloat(s?.borderTopWidth || '0') || 0;
+              totalX += r.left + bl;
+              totalY += r.top + bt;
+
+              const parentWin: any = curr.ownerDocument.defaultView;
+              if (!parentWin || parentWin === window) {
+                reachedTop = true;
+                break;
+              }
+
+              try {
+                const grandParentDoc: any = parentWin.parent?.document;
+                if (!grandParentDoc) {
+                  return null; // Cannot traverse parent document, fall through to Track 2
+                }
+                const parentIframes: any[] = Array.from(grandParentDoc.querySelectorAll('iframe'));
+                const matchedParent: any = parentIframes.find(
+                  (f: any) => f.contentWindow === parentWin,
+                );
+                if (!matchedParent) {
+                  return null; // Broken parent chain, fall through to Track 2
+                }
+                curr = matchedParent;
+              } catch {
+                return null; // Cross-origin parent boundary, fall through to Track 2
+              }
+            }
+
+            if (!reachedTop) {
+              return null; // Partial path rejected, must reach top window
+            }
+
+            return { offsetX: Math.round(totalX), offsetY: Math.round(totalY) };
+          } catch {
+            return null;
+          }
+        },
+        args: [probeAttr],
+      })
+      .catch(() => null);
+
+    const track1Res = domResult?.[0]?.result;
+    if (
+      track1Res &&
+      typeof track1Res.offsetX === 'number' &&
+      typeof track1Res.offsetY === 'number'
+    ) {
+      return track1Res;
     }
-  } catch (err) {
-    console.warn('Failed to resolve iframe offset directly:', err);
+
+    // Track 2: CDP FrameTree + Page.createIsolatedWorld + Runtime.evaluate({contextId}) + DOM.getFrameOwner
+    if (cdpSessionManager.isAttached(tabId)) {
+      try {
+        await (async () => {
+          await cdpSessionManager.sendCommand(tabId, 'DOM.enable').catch(() => {});
+          const treeRes: any = await cdpSessionManager.sendCommand(tabId, 'Page.getFrameTree');
+          const rootTree = treeRes?.frameTree;
+
+          let matchedCdpFrameId: string | null = null;
+
+          const checkCdpFrameNode = async (frameNode: any): Promise<string | null> => {
+            if (!frameNode || !frameNode.frame) return null;
+            const fid = frameNode.frame.id;
+            if (fid && frameNode.frame.parentId) {
+              try {
+                const worldRes: any = await cdpSessionManager.sendCommand(
+                  tabId,
+                  'Page.createIsolatedWorld',
+                  {
+                    frameId: fid,
+                    worldName: 'bp_probe_world_' + fid,
+                    grantUniveralAccess: false,
+                  },
+                );
+                const contextId = worldRes?.executionContextId;
+                if (typeof contextId === 'number') {
+                  const evalExpr =
+                    "Boolean(document.documentElement && document.documentElement.hasAttribute('" +
+                    probeAttr +
+                    "'))";
+                  const evalRes: any = await cdpSessionManager.sendCommand(
+                    tabId,
+                    'Runtime.evaluate',
+                    {
+                      contextId,
+                      expression: evalExpr,
+                      returnByValue: true,
+                    },
+                  );
+                  if (evalRes?.result?.value === true) {
+                    return fid; // EXACT UNAMBIGUOUS UNIQUE ATTRIBUTE MATCH
+                  }
+                }
+              } catch {}
+            }
+            if (Array.isArray(frameNode.childFrames)) {
+              for (const child of frameNode.childFrames) {
+                const res = await checkCdpFrameNode(child);
+                if (res) return res;
+              }
+            }
+            return null;
+          };
+
+          if (rootTree) {
+            matchedCdpFrameId = await checkCdpFrameNode(rootTree);
+          }
+
+          if (matchedCdpFrameId) {
+            const owner: any = await cdpSessionManager.sendCommand(tabId, 'DOM.getFrameOwner', {
+              frameId: matchedCdpFrameId,
+            });
+            if (owner?.backendNodeId) {
+              const boxRes: any = await cdpSessionManager.sendCommand(tabId, 'DOM.getBoxModel', {
+                backendNodeId: owner.backendNodeId,
+              });
+              const model = boxRes?.model;
+              if (model?.content && Array.isArray(model.content) && model.content.length >= 2) {
+                cdpOffset = {
+                  offsetX: Math.round(model.content[0]),
+                  offsetY: Math.round(model.content[1]),
+                };
+              }
+            }
+          }
+        })();
+      } catch (cdpErr) {
+        console.warn('Track 2 CDP frame resolution failed:', cdpErr);
+      }
+    }
+
+    if (cdpOffset) {
+      return cdpOffset;
+    }
+  } finally {
+    // Phase 3: Await cleanup of our specific ephemeral attribute
+    await chrome.scripting
+      .executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func: (attrName: string) => {
+          try {
+            document.documentElement.removeAttribute(attrName);
+          } catch {}
+        },
+        args: [probeAttr],
+      })
+      .catch(() => null);
   }
-  return { offsetX: 0, offsetY: 0 };
+
+  throw new Error(
+    'Could not resolve bounding rect for subframe ' +
+      frameId +
+      ': target iframe not found in parent document',
+  );
 }
 
 /**
@@ -963,9 +1133,16 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               }
               const occRes = occResult?.result;
               if (occRes && typeof occRes.x === 'number' && typeof occRes.y === 'number') {
-                if (x !== occRes.x || y !== occRes.y) {
-                  x = occRes.x;
-                  y = occRes.y;
+                let targetX = occRes.x;
+                let targetY = occRes.y;
+                if (targetFrameId !== undefined && targetFrameId !== 0 && !isFallback) {
+                  const offset = await getSubframeViewportOffset(tabId, targetFrameId);
+                  targetX += offset.offsetX;
+                  targetY += offset.offsetY;
+                }
+                if (x !== targetX || y !== targetY) {
+                  x = targetX;
+                  y = targetY;
                   await animateAgentCursor(tabId, x, y, {
                     waitForArrival: true,
                     timeoutMs: 350,

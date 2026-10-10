@@ -36,9 +36,9 @@
 
 ## ⚡ 什么是 BrowserPaw？
 
-- 🧠 **分层双脑协同架构 (`chrome_act_toward_goal`)**：本地语义微循环以 200~400ms/步极速自主完成“感知 → 决策 → 交互”，**零中间 MCP 网络往返**。内置 TypeSafe Jev System One 并支持平滑降级至启发式规则打分与结构化交接。
+- 🧠 **分层双脑协同架构 (`chrome_act_toward_goal`)**：本地语义微循环自主完成“感知 → 决策 → 交互”，**零中间 MCP 网络往返**。内置 TypeSafe Jev System One 并支持平滑降级至启发式规则打分与结构化交接。
 - 🔑 **日常会话与登录态无缝复用**：直接运行在日常 Chrome 浏览器中，完整继承 Google、GitHub、企业 SSO 登录凭证，杜绝文件锁冲突与登录丢失。
-- 🌲 **1-based 剪枝 DOM 与紧凑 AX 树**：剔除装饰性 DOM 噪点与多余闭合标签，输出高结构化紧凑可交互节点树。支持电商/信息流复合卡片扁平化 (`flattenCards`) 与长列表视口虚拟化 (`virtualizeViewport`)，相较原生 HTML 缩减 85%+ Token 消耗。
+- 🌲 **1-based 剪枝 DOM 与紧凑 AX 树**：剔除装饰性 DOM 噪点与多余闭合标签，输出高结构化紧凑可交互节点树。支持电商/信息流复合卡片扁平化 (`flattenCards`) 与长列表视口虚拟化 (`virtualizeViewport`)，针对包含 1000+ 节点的复杂网页达成 >= 85% 的 DOM 节点树剪枝缩减率。
 - ⚡ **代码驱动流水线与原子批处理**：通过 `chrome_batch_actions` 或页内 `mcp.*` 脚本，在单次往返中串联表单填写、点击、断言与数据提取闭环。
 - 🛡️ **Deep Shadow DOM 深度穿透**：Composed 树多层穿透 Web Components（如 Reddit Shreddit 架构），语义提取纯图标按钮的 `aria-label`/`title`/内嵌 SVG 标题，并支持闭合 Shadow Host 的 Composed 事件捕获与冒泡。
 - 🎯 **视觉回退漂移实时补偿**：整页截图真实文档空间坐标映射（`isDocumentSpace`），动态计算滚动位移差（`alignVisualCoordinate`），自动平滑居中并于点击派发期间锁定滚动，消除视口竞态漂移。
@@ -60,7 +60,7 @@
 ┌─ Tier 1 · 本地语义微循环 (Native Server) ──────────────┐
 │  chrome_act_toward_goal 内部闭环：                     │
 │  read_dom → Jev / Heuristic 决策 → 执行动作 → 状态核验 │
-│  ~200–400ms/步 · 零额外 MCP 往返                       │
+│  本地语义微循环 · 零额外 MCP 往返                       │
 └───────────────────────────┬────────────────────────────┘
                             │ Native Messaging 内部管道
                             ▼
@@ -145,7 +145,7 @@ node skill/config/doctor.mjs
 
 <br/>
 
-- **`chrome_act_toward_goal`**：自主语义微闭环执行器，在 Native Server 本地以 200~400ms/步 极速闭环感知、决策与执行。由 TypeSafe Jev System One 驱动，无 Key 或遇额度网络降级时无缝切换内置启发式引擎；遭遇歧义、破坏性动作（14 个敏感词拦截）或卡滞时结构化反抛交回宏规划大模型。
+- **`chrome_act_toward_goal`**：自主语义微闭环执行器，在 Native Server 本地自主闭环感知、决策与执行，消除额外网络往返。由 TypeSafe Jev System One 驱动，无 Key 或遇额度网络降级时无缝切换内置启发式引擎；遭遇歧义、破坏性动作（14 个敏感词拦截）或卡滞时结构化反抛交回宏规划大模型。
 
 </details>
 
@@ -169,7 +169,7 @@ node skill/config/doctor.mjs
 
 <br/>
 
-- **`chrome_read_dom`**：极简剪枝 DOM 交互树，带 1-based 纯数字索引，Token 消耗压缩 85%+。深度穿透多层 open/closed Shadow DOM，提取纯图标按钮的 accessible 名称。
+- **`chrome_read_dom`**：极简剪枝 DOM 交互树，带 1-based 纯数字索引，复杂页面 DOM 节点树裁剪缩减 85%+。深度穿透多层 open/closed Shadow DOM，提取纯图标按钮的 accessible 名称。
 - **`chrome_scroll_until_found`**：客户端高性能 RAF 平滑流式滚屏查找，自动沉降虚拟列表与 DOM 回收节点，找到目标元素后居中高亮并返回活跃索引。
 - **`chrome_grep`**：毫秒级正则/文本定向检索，穿透 Shadow DOM 边界提取文本，超大页面免除 Dump 全量 DOM。
 - **`chrome_get_markdown`**：提取页面排版优美、纯净结构化的 Markdown 文本（支持 `includeLinks: true` 提取链接图谱），阅读长文与资料总结首选。

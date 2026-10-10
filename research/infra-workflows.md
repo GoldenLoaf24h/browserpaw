@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 基础设施与工作流长板测绘报告 (Type E: Stagehand, Skyvern, Steel-browser)
 
 > **调研背景与依据**: 本测绘由子代理 5 (Agent-InfraWorkflows) 执行，严格遵循 §A 双重验证纪律与 §B 粗筛门禁决策（`research/01-triage.md`）。本报告拒绝泛化平铺，专门针对 Type E 基础设施与工作流类项目的 3 大专属长板展开代码级深挖：
@@ -337,7 +339,7 @@ userDataDir =          ProxyServer(proxyUrl)   DuckDB / Memory
 
 1. **Dual-Brain 双脑架构 (System 1 Jev + System 2 Planner)** 必须保持，不能退化为纯单步 SDK 封装；
 2. **WeakRef 1-based 动态数值编号系统** 必须保持，坚决拒绝向宿主 DOM 注入 130KB 的重型脚本（Skyvern 反模式）；
-3. **850KB UTF-8 Slicing 截断与防爆机制** 必须保持，确保在任何复杂页面下不撑爆 LLM 上下文；
+3. **850KB UTF-8 Slicing 分片传输防护** 必须保持，符合 [Chrome Native Messaging 规范](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging) 32-bit 前缀与 1MB 消息上限（host→Chrome 1MB），采用 950KB 阈值与 850KB UTF-8 字节切片保护底层 IPC 通道防爆，非 LLM 上下文窗口限制；
 4. **宿主用户真实浏览器态 (Native Context)** 必须保持，绝不退化为每次冷启动隔离无状态无头浏览器（Steel 反模式）；
 5. **纯 CDP 原生事件分发 (`isTrusted: true`)** 必须保持，确保 React/Vue 复杂事件合成与反爬防护不失效。
 

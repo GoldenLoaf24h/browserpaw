@@ -105,7 +105,7 @@ Task: /goal /boost - Comprehensive Deep Audit + High-Value Fixes + JEV Potential
 ### Candidate 13: P0 - De-patching Known Domains to Universal W3C URL Brand Extraction
 
 - **Location**: `app/chrome-extension/entrypoints/background/tools/browser/tab-group-manager.ts:10-40`
-- **Root Cause**: Hardcoded `KNOWN_DOMAINS` dictionary (e.g. `jd.com -> 京东`). Any site not in dictionary defaulted to static `"Agent"` title.
+- **Root Cause**: Hardcoded `KNOWN_DOMAINS` dictionary (e.g. `jd.com -> JD`). Any site not in dictionary defaulted to static `"Agent"` title.
 - **Consequence**: Site-specific hack with poor generalization.
 - **Fix**: Deleted `KNOWN_DOMAINS`. Implemented universal host normalization (`extractBrandFromUrl()`) with negative-lookaround hyphen preservation (`cleanPageTitle()`) and dynamic task intent naming with `chrome.storage.session` persistence.
 

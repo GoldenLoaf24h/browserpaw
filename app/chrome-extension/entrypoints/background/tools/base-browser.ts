@@ -339,6 +339,7 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
       if (tab && tab.id) {
         return tab;
       }
+      throw new Error(`Tab with ID ${options.tabId} not found`);
     }
 
     if (sessionId) {

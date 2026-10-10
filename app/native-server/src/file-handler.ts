@@ -345,7 +345,12 @@ export class FileHandler {
     }
 
     const resolvedTempDir = path.resolve(this.tempDir);
-    const resolvedPath = path.resolve(resolvedTempDir, rawName);
+    // Isolate each request inside its own unique subdirectory using randomUUID
+    // to preserve the original filename/extension on disk without collision across concurrent requests.
+    const requestDir = path.join(resolvedTempDir, crypto.randomUUID());
+    fs.mkdirSync(requestDir, { recursive: true });
+
+    const resolvedPath = path.resolve(requestDir, rawName);
 
     const normTempDir =
       process.platform === 'win32' ? resolvedTempDir.toLowerCase() : resolvedTempDir;
@@ -666,7 +671,9 @@ export class FileHandler {
       };
       const mimeType = MEDIA_MIMES[ext];
       if (!mimeType) {
-        throw new Error(`Unsupported media file extension: ${ext}. Only image, video, and PDF files are allowed.`);
+        throw new Error(
+          `Unsupported media file extension: ${ext}. Only image, video, and PDF files are allowed.`,
+        );
       }
 
       if (stats.size > 650 * 1024) {
@@ -781,6 +788,14 @@ export class FileHandler {
       if (fs.existsSync(resolvedPath)) {
         await fs.promises.unlink(resolvedPath);
       }
+      const parentDir = path.dirname(resolvedPath);
+      if (parentDir !== resolvedTempDir) {
+        const normParent = process.platform === 'win32' ? parentDir.toLowerCase() : parentDir;
+        if (normParent.startsWith(normalizedTempDir + path.sep)) {
+          // Only remove empty directory using rmdir; preserves any sibling files
+          await fs.promises.rmdir(parentDir).catch(() => {});
+        }
+      }
 
       return {
         success: true,
@@ -827,15 +842,25 @@ export class FileHandler {
       const now = Date.now();
       const oneHour = 60 * 60 * 1000;
 
-      const files = fs.readdirSync(this.tempDir);
-      for (const file of files) {
-        const filePath = path.join(this.tempDir, file);
-        const stats = fs.statSync(filePath);
-        if (now - stats.mtimeMs > oneHour) {
-          fs.unlinkSync(filePath);
-          // Use stderr to avoid polluting stdout (Native Messaging protocol)
-          console.error(`Cleaned up old temp file: ${file}`);
-        }
+      const entries = fs.readdirSync(this.tempDir);
+      for (const entry of entries) {
+        const entryPath = path.join(this.tempDir, entry);
+        try {
+          const lstats = fs.lstatSync(entryPath);
+          if (lstats.isSymbolicLink()) {
+            continue;
+          }
+          if (now - lstats.mtimeMs > oneHour) {
+            const isUuidDir =
+              lstats.isDirectory() &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry);
+            if (isUuidDir) {
+              fs.rmSync(entryPath, { recursive: true, force: true });
+            } else if (lstats.isFile()) {
+              fs.unlinkSync(entryPath);
+            }
+          }
+        } catch {}
       }
     } catch (error) {
       console.error('Error cleaning up old files:', error);

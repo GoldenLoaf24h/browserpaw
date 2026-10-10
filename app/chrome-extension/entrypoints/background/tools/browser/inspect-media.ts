@@ -201,11 +201,12 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
 
     // Path 2: Super-sampled crop fallback (200%-300% zoom)
     try {
-      const zoomFactor = typeof args.zoom === 'number' && args.zoom >= 1.0 ? args.zoom : 2.0;
+      const zoomFactor = typeof args.zoom === 'number' && Number.isFinite(args.zoom) && args.zoom >= 1.0 ? args.zoom : 2.0;
       const cropResult = await screenshotTool.execute({
         tabId,
         targetIndex: args.index,
         selector: args.selector,
+        zoom: zoomFactor,
 
         autoExpand: true,
       });
@@ -224,7 +225,7 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
 
                 targetIndex: args.index,
                 selector: args.selector,
-                note: 'Captured via 2.0x super-sampled viewport crop without boundary distortions',
+                note: `Captured via ${zoomFactor}x super-sampled viewport crop without boundary distortions`,
               },
               null,
               2,

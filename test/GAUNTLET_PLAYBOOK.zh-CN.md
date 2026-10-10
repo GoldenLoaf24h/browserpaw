@@ -1,4 +1,4 @@
-# BrowserClaw 实战靶场通关手册（NEXUS LAB）
+# BrowserPaw 实战靶场通关手册（NEXUS LAB）
 
 > 依据 test/complex-html-testing/src 全量源码逐行阅读整理。用途：供操控者按 UI 合法交互通关。
 > 零作弊红线：不改靶场代码、不注入 JS、不手改 localStorage。本手册只描述"真实用户式"操作。

@@ -1,4 +1,3 @@
-/* eslint-disable */
 // keyboard-helper.js
 // This script is injected into the page to handle keyboard event simulation
 
@@ -31,6 +30,10 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
     pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
     pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
     insert: { key: 'Insert', code: 'Insert', keyCode: 45 },
+    '+': { key: '+', code: 'Equal', keyCode: 187 },
+    plus: { key: '+', code: 'Equal', keyCode: 187 },
+    ',': { key: ',', code: 'Comma', keyCode: 188 },
+    comma: { key: ',', code: 'Comma', keyCode: 188 },
     // Function keys
     ...Object.fromEntries(
       Array.from({ length: 12 }, (_, i) => [
@@ -57,25 +60,56 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
    *          Returns null if the keyString is invalid or represents only modifiers.
    */
   function parseSingleKeyCombination(keyString) {
-    const parts = keyString.split('+').map((part) => part.trim().toLowerCase());
+    const rawTrimmed = keyString.trim();
     const modifiers = {
       ctrlKey: false,
       altKey: false,
       shiftKey: false,
       metaKey: false,
     };
-    let mainKeyPart = null;
 
-    for (const part of parts) {
-      if (MODIFIER_KEYS[part]) {
-        modifiers[MODIFIER_KEYS[part]] = true;
-      } else if (mainKeyPart === null) {
-        // First non-modifier is the main key
-        mainKeyPart = part;
-      } else {
-        // Invalid format: multiple main keys in a single combination (e.g., "Ctrl+A+B")
-        console.error(`Invalid key combination string: ${keyString}. Multiple main keys found.`);
-        return null;
+    if (rawTrimmed === '+') {
+      return { ...SPECIAL_KEY_MAP['+'], modifiers };
+    }
+    if (rawTrimmed === ',') {
+      return { ...SPECIAL_KEY_MAP[','], modifiers };
+    }
+
+    let mainKeyPart = null;
+    if (rawTrimmed.endsWith('++')) {
+      const modPrefix = rawTrimmed.slice(0, -2);
+      const modParts = modPrefix
+        .split('+')
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+      let allMods = true;
+      for (const m of modParts) {
+        if (MODIFIER_KEYS[m]) {
+          modifiers[MODIFIER_KEYS[m]] = true;
+        } else {
+          allMods = false;
+          break;
+        }
+      }
+      if (allMods && modParts.length > 0) {
+        mainKeyPart = '+';
+      }
+    }
+
+    let parts = [];
+    if (mainKeyPart === null) {
+      parts = rawTrimmed.split('+').map((part) => part.trim().toLowerCase());
+      for (const part of parts) {
+        if (MODIFIER_KEYS[part]) {
+          modifiers[MODIFIER_KEYS[part]] = true;
+        } else if (mainKeyPart === null) {
+          // First non-modifier is the main key
+          mainKeyPart = part;
+        } else {
+          // Invalid format: multiple main keys in a single combination (e.g., "Ctrl+A+B")
+          console.error(`Invalid key combination string: ${keyString}. Multiple main keys found.`);
+          return null;
+        }
       }
     }
 
@@ -83,8 +117,8 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
       // This case could happen if the keyString is something like "Ctrl+" or just "Ctrl"
       // If the intent was to press JUST 'Control', the input should be 'Control' not 'Control+'
       // Let's check if mainKeyPart is actually a modifier name used as a main key
-      if (Object.keys(MODIFIER_KEYS).includes(parts[parts.length - 1]) && parts.length === 1) {
-        mainKeyPart = parts[parts.length - 1]; // e.g. user wants to press "Control" key itself
+      if (parts.length === 1 && MODIFIER_KEYS[parts[0]]) {
+        mainKeyPart = parts[0]; // e.g. user wants to press "Control" key itself
         // For "Control" key itself, key: "Control", code: "ControlLeft" (or Right)
         if (mainKeyPart === 'ctrl' || mainKeyPart === 'control')
           return { key: 'Control', code: 'ControlLeft', keyCode: 17, modifiers };
@@ -144,7 +178,13 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
       bubbles: true,
       cancelable: true,
       composed: true, // Important for shadow DOM
-      view: window,
+      view:
+        typeof window !== 'undefined' &&
+        window &&
+        typeof window.Window === 'function' &&
+        window instanceof window.Window
+          ? window
+          : undefined,
       ...modifiers, // ctrlKey, altKey, shiftKey, metaKey
       // keyCode/which are deprecated but often set for compatibility
       keyCode: keyCode || (key.length === 1 ? key.charCodeAt(0) : 0),
@@ -180,6 +220,40 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
    * @param {number} delay - Delay between key sequences in milliseconds (optional)
    * @returns {Promise<Object>} - Result of the keyboard operation
    */
+  function splitKeySequence(str) {
+    const trimmed = (str || '').trim();
+    if (!trimmed) return [];
+    if (trimmed === ',') return [','];
+
+    const results = [];
+    let current = '';
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i];
+      if (char === ',') {
+        const trimmedCurrent = current.trim();
+        const lastNonSpace = trimmedCurrent.slice(-1);
+        if (lastNonSpace === '+' && !trimmedCurrent.endsWith('++')) {
+          current += char;
+        } else if (!trimmedCurrent) {
+          results.push(',');
+          current = '';
+        } else {
+          results.push(trimmedCurrent);
+          current = '';
+        }
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) {
+      results.push(current.trim());
+    }
+
+    return results.filter(Boolean);
+  }
+
   async function simulateKeyboard(keysSequenceString, targetElement = null, delay = 0) {
     try {
       const element = targetElement || document.activeElement || document.body;
@@ -189,10 +263,7 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
         await new Promise((resolve) => setTimeout(resolve, 50)); // Small delay for focus
       }
 
-      const keyCombinations = keysSequenceString
-        .split(',')
-        .map((k) => k.trim())
-        .filter((k) => k.length > 0);
+      const keyCombinations = splitKeySequence(keysSequenceString);
       const operationResults = [];
 
       for (let i = 0; i < keyCombinations.length; i++) {
@@ -259,7 +330,10 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
       runClipboard(request.action)
         .then(sendResponse)
         .catch((error) => {
-          sendResponse({ success: false, error: error && error.message ? error.message : String(error) });
+          sendResponse({
+            success: false,
+            error: error && error.message ? error.message : String(error),
+          });
         });
       return true;
     }
@@ -289,7 +363,10 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
           });
         });
       return true; // Indicates async response is expected
-    } else if (request.action === 'chrome_keyboard_ping' || String(request.action || '').startsWith('mcp_ping_')) {
+    } else if (
+      request.action === 'chrome_keyboard_ping' ||
+      String(request.action || '').startsWith('mcp_ping_')
+    ) {
       sendResponse({ status: 'pong', initialized: true }); // Respond that it's initialized
       return false; // Synchronous response
     }
@@ -314,7 +391,9 @@ async function runClipboard(action) {
       const value = el.value || '';
       const start = typeof el.selectionStart === 'number' ? el.selectionStart : 0;
       const end =
-        typeof el.selectionEnd === 'number' && el.selectionEnd > start ? el.selectionEnd : value.length;
+        typeof el.selectionEnd === 'number' && el.selectionEnd > start
+          ? el.selectionEnd
+          : value.length;
       text = value.slice(start, end);
     } else {
       const sel = window.getSelection();

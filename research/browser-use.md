@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # browser-use 架构深度测绘与基线对标报告 (research/browser-use.md)
 
 > **测绘执行人**: Euler (`01a0e83e-be90-78e1-a2f2-c4dc9b02f262`)

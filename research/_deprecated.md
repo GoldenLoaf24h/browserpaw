@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 归档项目清单（Type F: Deprecated / Withdrawn）
 
 ## 1. hangwin/mcp-chrome

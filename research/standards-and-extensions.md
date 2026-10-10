@@ -1,16 +1,18 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 行业标准与扩展方案深度测绘报告 (standards-and-extensions.md)
 
-> **审计执行人**: Kant (`01a0e83e-d7a4-7fb1-967c-bd5a1ebc8423`)  
-> **执行角色**: 子代理 4：行业标准与扩展方案测绘员 (Agent-StandardsAndExtensions)  
-> **审计日期**: 2026-09-28  
-> **工作根目录**: `D:\workspace\mcp-chrome-master\mcp-chrome-master`  
+> **审计执行人**: Kant (`01a0e83e-d7a4-7fb1-967c-bd5a1ebc8423`)
+> **执行角色**: 子代理 4：行业标准与扩展方案测绘员 (Agent-StandardsAndExtensions)
+> **审计日期**: 2026-09-28
+> **工作根目录**: `D:\workspace\mcp-chrome-master\mcp-chrome-master`
 > **外部测绘目标**:
 >
 > 1. `research/_external/playwright-mcp` (Microsoft 官方 Type C 基准)
 > 2. `research/_external/chrome-devtools-mcp` (Google Chrome 官方 Type C 基准)
 > 3. `research/_external/browser-mcp` (Agent360dk 社区优秀扩展 Type D)
-> 4. `research/_external/nanobrowser` (纯扩展侧端到端多 Agent 方案 Type D)  
->    **对比基准文档**: `research/00-current-architecture.md` (BrowserPaw 架构审计报告)  
+> 4. `research/_external/nanobrowser` (纯扩展侧端到端多 Agent 方案 Type D)
+>    **对比基准文档**: `research/00-current-architecture.md` (BrowserPaw 架构审计报告)
 >    **验证准则**: §A 双重验证纪律（`repo@相对路径:行号` 准确定位 + 真实代码摘录与命令执行验证，严禁臆测）
 
 ---
@@ -409,11 +411,11 @@ DevTools MCP 支持以守护进程（Daemon）模式驻留后台，通过本地 
 
 ### 2.5 与 BrowserPaw 架构对比剖析
 
-| 维度             | Chrome DevTools MCP                                 | BrowserPaw (本项目基线)                                   | 对标优劣势评价与改进启示                                                                                                                                        |
-| ---------------- | --------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **接入通信信道** | 远程调试端口 (CDP WebSocket) / Daemon 命名管道      | Chrome Native Messaging 扩展双向管道 (标准输入输出)       | **安全与权限**: DevTools MCP 依赖开放 CDP 调试端口（易被同机未授权进程探测扫描）；BrowserPaw 通过 Native Messaging 专有通道与扩展双向绑定，无网络端口暴露风险。 |
-| **性能诊断能力** | 官方完整 `DevTools.TraceEngine` + CrUX 性能洞察模型 | 基础 `performance_start_trace` / `performance_stop_trace` | **长板吸收**: DevTools MCP 的分块流式 Trace 解析与 `TraceModel` 防内存泄漏模式极具参考价值，可直接作为 BrowserPaw 性能剖析工具升级的蓝本。                      |
-| **安全过滤控制** | 细粒度 `URLPattern` 防御 + 内部特权协议隔离         | 宿主白名单与扩展内部权限策略                              | DevTools MCP 的 `findUnenforceablePattern` 严格封杀含有正则捕获组的 URLPattern，该防御机制应当纳入 BrowserPaw 安全校验标准。                                    |
+| 维度             | Chrome DevTools MCP                                 | BrowserPaw (本项目基线)                                   | 对标优劣势评价与改进启示                                                                                                                                                                                                                  |
+| ---------------- | --------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **接入通信信道** | 远程调试端口 (CDP WebSocket) / Daemon 命名管道      | Chrome Native Messaging 扩展双向管道 (标准输入输出)       | **安全与通信拓扑**: DevTools MCP 依赖开放 CDP 调试端口；BrowserPaw 扩展与 Native Host 间经由 Native Messaging 标准输入输出专有管道双向绑定，Native Server 仍通过本地回环地址 (127.0.0.1:12306) 提供 HTTP/SSE 桥接服务，不对外部公网开放。 |
+| **性能诊断能力** | 官方完整 `DevTools.TraceEngine` + CrUX 性能洞察模型 | 基础 `performance_start_trace` / `performance_stop_trace` | **长板吸收**: DevTools MCP 的分块流式 Trace 解析与 `TraceModel` 防内存泄漏模式极具参考价值，可直接作为 BrowserPaw 性能剖析工具升级的蓝本。                                                                                                |
+| **安全过滤控制** | 细粒度 `URLPattern` 防御 + 内部特权协议隔离         | 宿主白名单与扩展内部权限策略                              | DevTools MCP 的 `findUnenforceablePattern` 严格封杀含有正则捕获组的 URLPattern，该防御机制应当纳入 BrowserPaw 安全校验标准。                                                                                                              |
 
 ---
 

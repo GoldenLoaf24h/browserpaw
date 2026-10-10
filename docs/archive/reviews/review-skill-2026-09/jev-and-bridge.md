@@ -27,7 +27,7 @@ Jev 在当前代码库中存在 **三大实际调用分支**：
    - **下拉框选项两阶段裁决（Two-stage Select）**：[fast-decision-engine.ts:722-738](app/native-server/src/jev/fast-decision-engine.ts:722)。调用 `this.jevClient.scoreOptions()` 使用 Jev `score()` 打分，置信度 < 0.40 则 escalate。
 
 2. **表单流水线语义匹配（Form Pipeline Semantic Matcher）**
-   - **扩展端发起点**：[form-pipeline.ts:154-198](app/chrome-extension/entrypoints/background/tools/browser/form-pipeline.ts:154) 借助 `matchSemantically()` 解决复杂表单中问题文本与字段标签、输入框占位符的跨语言模糊映射。
+   - **Extension Side发起点**：[form-pipeline.ts:154-198](app/chrome-extension/entrypoints/background/tools/browser/form-pipeline.ts:154) 借助 `matchSemantically()` 解决复杂表单中问题文本与字段标签、输入框占位符的跨语言模糊映射。
    - **混合匹配器分层**：[form-semantic-matcher.ts:172-235](app/chrome-extension/utils/form-semantic-matcher.ts:172)。Tier 1 字符全字匹配 -> Tier 2 Native Jev 匹配 -> Tier 3 同义词与 CJK Bigram 规则。
    - **原生消息通道桥接**：[native-host.ts:392-430](app/chrome-extension/entrypoints/background/native-host.ts:392) `sendJevMatchToNative()` 发送 `jev_semantic_match` 请求；[native-messaging-host.ts:158, 226-298](app/native-server/src/native-messaging-host.ts:158) 由 NativeHost 实例化 `JevClientWrapper` 执行单次 `matched_target` 选择。
 
@@ -38,7 +38,7 @@ Jev 在当前代码库中存在 **三大实际调用分支**：
   - `HeuristicEngine`（[heuristic-engine.ts:118](app/native-server/src/jev/heuristic-engine.ts:118)）为**纯确定性规则引擎**（约 330 行，零外部依赖）。通过 `tokenizeGoal()`（支持 CJK 字符双元分词与停用词过滤）、意图识别权重（`wantsType/wantsClick/wantsSelect` 等加权）、角色评分算法输出候选与打分。
 - **置信度阈值**：
   - Jev 模式：Action >= 0.55，Target Confidence >= 0.45，Top Probability >= 0.35，Goal Done >= 0.85，Destructive 熔断阈值 >= 0.50。
-  - Heuristic 模式：综合匹配分 >= 0.30；Goal Done 要求目标关键词覆盖率 >= 80%。
+  - Heuristic 模式：综合匹配分 >= 0.30；Goal Done 要求目标关键词Coverage >= 80%。
 - **三级降级机制（Fallback）**：
   1. **无密钥 / 401 鉴权失效**：未配置 `JEV_API_KEY` 或 API 报 401，立即触发锁存器 `latchInvalidKey()`（5 分钟内静默屏蔽 Jev 请求，[jev-client.ts:35-50](app/native-server/src/jev/jev-client.ts:35)），无缝降级为 Heuristic 模式。
   2. **限流 429 / 网络超时断开**：`query()` 捕获并返回 `quota_exhausted` / `network_error`（[jev-client.ts:380-410](app/native-server/src/jev/jev-client.ts:380)），当前循环无缝切入 Heuristic，同时将最大步数强制收缩为 <= 5 步（防失控）。
@@ -68,11 +68,11 @@ Jev 在当前代码库中存在 **三大实际调用分支**：
 
 1. **Initialize 握手**：
    - 首次连接调用 `POST /mcp`，Payload 必须为 MCP `initialize` 结构，请求头无需带 `mcp-session-id`。
-   - 服务端分配 `randomUUID()`，初始化 `StreamableHTTPServerTransport`，并在响应头与传输体中确立 Session（[server/index.ts:405-412](app/native-server/src/server/index.ts:405)）。
+   - Server Side分配 `randomUUID()`，初始化 `StreamableHTTPServerTransport`，并在响应头与传输体中确立 Session（[server/index.ts:405-412](app/native-server/src/server/index.ts:405)）。
 2. **会话保持规则**：
    - 后续所有 `tools/call`、`tools/list` 必须在 HTTP Headers 中附带 `mcp-session-id: <session-uuid>`。
    - 若缺失 header 或会话过期，服务拦截并以 400/404 拒绝，提示重新握手（[server/index.ts:413-424](app/native-server/src/server/index.ts:413)）。
-   - 客户端退出时应调用 `DELETE /mcp` 显式销毁会话资源（[server/index.ts:457](app/native-server/src/server/index.ts:457)）。
+   - Client Side退出时应调用 `DELETE /mcp` 显式销毁会话资源（[server/index.ts:457](app/native-server/src/server/index.ts:457)）。
 
 ### 2.3 Token 鉴权机制（Timing-Safe）
 

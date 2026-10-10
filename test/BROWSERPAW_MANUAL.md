@@ -87,7 +87,11 @@ function parseSse(text) {
   return null;
 }
 
-async function rpc(method, params) {
+async function rpc(method, params, isNotification = false) {
+  const payload = { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) };
+  if (!isNotification) {
+    payload.id = Date.now();
+  }
   const res = await fetch(BASE, {
     method: 'POST',
     headers: {
@@ -96,14 +100,15 @@ async function rpc(method, params) {
       Authorization: `Bearer ${TOKEN}`,
       ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
     },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+    body: JSON.stringify(payload),
   });
   const sid = res.headers.get('mcp-session-id');
   if (sid) sessionId = sid;
-  const rawText = await res.text();
+  const rawText = (await res.text()).trim();
+  if (!rawText) return null;
   const msg = parseSse(rawText) ?? JSON.parse(rawText);
-  if (msg.error) throw new Error(JSON.stringify(msg.error));
-  return msg.result;
+  if (msg?.error) throw new Error(JSON.stringify(msg.error));
+  return msg?.result;
 }
 
 // 1. Handshake
@@ -112,7 +117,7 @@ await rpc('initialize', {
   capabilities: {},
   clientInfo: { name: 'demo', version: '1.0' },
 });
-await rpc('notifications/initialized');
+await rpc('notifications/initialized', undefined, true);
 
 // 2. Execute canonical tools
 const windows = await rpc('tools/call', { name: 'get_windows_and_tabs', arguments: {} });
@@ -126,16 +131,16 @@ console.log('DOM snapshot:', dom.content[0].text);
 
 ## 2. Canonical Tool Surface (50 MCP Tools)
 
-BrowserPaw exposes 48 canonical MCP tools organized into 8 functional categories:
+BrowserPaw exposes 50 canonical MCP tools organized into 8 functional categories:
 
-1. **Autonomous Micro-Loop (1)**: `chrome_act_toward_goal` (local fast-decision loop at ~200-400ms/step).
+1. **Autonomous Micro-Loop (1)**: `chrome_act_toward_goal` (local fast-decision loop).
 2. **Navigation & Tabs (7)**: `chrome_navigate`, `chrome_switch_tab`, `chrome_close_tabs`, `chrome_move_tab`, `get_windows_and_tabs`, `chrome_attach_tab`, `chrome_detach_tab`.
-3. **Perception & Content (5)**: `chrome_read_dom`, `chrome_grep`, `chrome_get_markdown`, `chrome_inspect_media`, `chrome_get_dropdown_options`.
-4. **Interaction & Forms (13)**: `chrome_interact_index`, `chrome_fill_index`, `chrome_batch_actions`, `chrome_form_pipeline`, `chrome_smart_scroll`, `chrome_keyboard`, `chrome_upload_file`, `chrome_insert_media`, `chrome_interact_index`, `chrome_batch_actions`, `chrome_undo_last_action`, `chrome_computer`, `chrome_handle_dialog`.
-5. **Observation & Vision (4)**: `chrome_screenshot`, `chrome_take_screenshot`, `chrome_visual_diff`, `chrome_visual_viewport`.
-6. **Data & Tabs (7)**: `chrome_tab_group_create`, `chrome_tab_group_update`, `chrome_tab_group_list`, `chrome_tab_group_ungroup`, `chrome_tab_group_close`, `chrome_history`, `chrome_bookmark_search`.
+3. **Perception & Content (6)**: `chrome_read_dom`, `chrome_grep`, `chrome_get_markdown`, `chrome_inspect_media`, `chrome_get_dropdown_options`, `chrome_scroll_until_found`.
+4. **Interaction & Forms (13)**: `chrome_interact_index`, `chrome_fill_index`, `chrome_batch_actions`, `chrome_form_pipeline`, `chrome_smart_scroll`, `chrome_keyboard`, `chrome_upload_file`, `chrome_insert_media`, `chrome_undo_last_action`, `chrome_computer`, `chrome_handle_dialog`, `chrome_handle_download`, `chrome_dismiss_overlay`.
+5. **Observation & Vision (1)**: `chrome_screenshot`.
+6. **Data & Bookmarks (9)**: `chrome_tab_group_create`, `chrome_tab_group_update`, `chrome_tab_group_list`, `chrome_tab_group_ungroup`, `chrome_tab_group_close`, `chrome_history`, `chrome_bookmark_search`, `chrome_bookmark_add`, `chrome_bookmark_delete`.
 7. **Diagnostics & Scripting (4)**: `chrome_javascript`, `chrome_tool_docs`, `chrome_doctor`, `chrome_intercept_api`.
-8. **Network & Low-Level CDP (7)**: `chrome_network_request`, `chrome_network_capture`, `chrome_cdp_execute`, `chrome_console`, `chrome_storage`, `chrome_request_human_intervention`, `performance_start_trace`.
+8. **Network & Low-Level CDP (9)**: `chrome_network_request`, `chrome_network_capture`, `chrome_cdp_execute`, `chrome_console`, `chrome_storage`, `chrome_request_human_intervention`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`.
 
 ---
 

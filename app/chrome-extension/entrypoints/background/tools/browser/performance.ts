@@ -10,33 +10,65 @@ interface StartTraceParams {
   reload?: boolean; // whether to reload the page after starting trace
   autoStop?: boolean; // whether to auto stop after a short duration
   durationMs?: number; // custom duration when autoStop is true (default 5000)
+  tabId?: number;
+  sessionId?: string;
+  sessionContext?: string;
 }
 
 interface StopTraceParams {
   saveToDownloads?: boolean; // save trace to Downloads as JSON (default true)
   filenamePrefix?: string; // filename prefix (default 'performance_trace')
+  tabId?: number;
+  sessionId?: string;
+  sessionContext?: string;
 }
 
 interface AnalyzeInsightParams {
   insightName?: string; // placeholder for future deep insights
+  tabId?: number;
+  sessionId?: string;
+  sessionContext?: string;
 }
 
 type DebuggeeEvent = (source: chrome.debugger.Debuggee, method: string, params?: any) => void;
 
 interface TraceSessionState {
   recording: boolean;
+  completed: boolean;
+  invalidated?: boolean;
   events: any[];
   startedAt: number;
   pageUrl?: string;
+  sessionId?: string;
   listener: DebuggeeEvent;
   stopResolver?: (value: { completed: boolean }) => void;
   stopPromise?: Promise<{ completed: boolean }>;
+  autoStopTimer?: any;
+  finalizingPromise?: Promise<{
+    saved?: { downloadId?: number; filename?: string; fullPath?: string };
+    metrics?: Record<string, number>;
+    endedAt: number;
+    tracingCompleted: boolean;
+  }>;
 }
 
 export const sessions = new Map<number, TraceSessionState>();
+export const SESSION_LAST_RESULTS = new Map<
+  string,
+  {
+    tabId: number;
+    events: any[];
+    startedAt: number;
+    endedAt: number;
+    tabUrl: string;
+    saved?: { downloadId?: number; filename?: string; fullPath?: string };
+    metrics?: Record<string, number>;
+  }
+>();
 export const LAST_RESULTS = new Map<
   number,
   {
+    tabId: number;
     events: any[];
     startedAt: number;
     endedAt: number;
@@ -329,6 +361,127 @@ function getOrCreateStopPromise(session: TraceSessionState): Promise<{ completed
   return session.stopPromise;
 }
 
+async function finalizeTraceSession(
+  tabId: number,
+  session: TraceSessionState,
+  completed: boolean,
+  saveToDownloads = true,
+  filenamePrefix = 'performance_trace',
+): Promise<{
+  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  metrics?: Record<string, number>;
+  endedAt: number;
+  tracingCompleted: boolean;
+}> {
+  if (session.finalizingPromise) {
+    return session.finalizingPromise;
+  }
+
+  session.finalizingPromise = (async () => {
+    if (session.autoStopTimer) {
+      clearTimeout(session.autoStopTimer);
+      session.autoStopTimer = undefined;
+    }
+    try {
+      chrome.debugger.onEvent.removeListener(session.listener);
+    } catch {}
+    const metrics = await enablePerformanceMetrics(tabId).catch(() => ({}));
+    try {
+      await cdpSessionManager.detach(tabId, 'performance');
+    } catch {}
+
+    const endedAt = Date.now();
+    const trace = { traceEvents: session.events };
+    const json = JSON.stringify(trace);
+
+    let saved: { downloadId?: number; filename?: string; fullPath?: string } | undefined;
+    if (saveToDownloads) {
+      saved = await saveTraceToDownloads(json, filenamePrefix);
+    } else {
+      const tempSaved = await saveTraceToNativeTemp(session.events, filenamePrefix);
+      if (tempSaved) {
+        saved = { ...tempSaved } as any;
+      }
+    }
+
+    const resultRecord = {
+      tabId,
+      events: session.events,
+      startedAt: session.startedAt,
+      endedAt,
+      tabUrl: session.pageUrl || '',
+      saved,
+      metrics,
+    };
+
+    // Identity Guard: if session was invalidated (e.g. by tab close/detach cleanup)
+    // or has already been replaced by a newer session on this tab, do NOT write to cache
+    // and do NOT delete the new active session!
+    if (session.invalidated || sessions.get(tabId) !== session) {
+      return {
+        saved,
+        metrics,
+        endedAt,
+        tracingCompleted: false,
+      };
+    }
+
+    LAST_RESULTS.set(tabId, resultRecord);
+    if (session.sessionId) {
+      SESSION_LAST_RESULTS.set(session.sessionId, resultRecord);
+    }
+
+    sessions.delete(tabId);
+
+    return {
+      saved,
+      metrics,
+      endedAt,
+      tracingCompleted: completed,
+    };
+  })();
+
+  return session.finalizingPromise;
+}
+
+async function stopAndFinalizeTrace(
+  tabId: number,
+  session: TraceSessionState,
+  saveToDownloads = true,
+  filenamePrefix = 'performance_trace',
+): Promise<{
+  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  metrics?: Record<string, number>;
+  endedAt: number;
+  tracingCompleted: boolean;
+}> {
+  if (session.finalizingPromise) {
+    return session.finalizingPromise;
+  }
+
+  let stopResult: { completed: boolean } = { completed: false };
+  if (session.recording) {
+    const stopPromise = getOrCreateStopPromise(session);
+    await cdpSessionManager.sendCommand(tabId, 'Tracing.end').catch(() => {});
+    stopResult = await Promise.race([
+      stopPromise,
+      new Promise<{ completed: boolean }>((resolve) =>
+        setTimeout(() => resolve({ completed: false }), 2000),
+      ),
+    ]);
+  } else {
+    stopResult = { completed: session.completed };
+  }
+
+  return finalizeTraceSession(
+    tabId,
+    session,
+    stopResult.completed,
+    saveToDownloads,
+    filenamePrefix,
+  );
+}
+
 /**
  * Start performance trace
  */
@@ -337,13 +490,14 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
 
   async execute(args: StartTraceParams): Promise<ToolResult> {
     const { reload = false, autoStop = false, durationMs = 5000 } = args || {};
+    const sessionId = args?.sessionId || args?.sessionContext;
 
     try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) {
+      const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId });
+      if (!targetTab?.id) {
         return createErrorResponse('No active tab found');
       }
-      const tabId = activeTab.id;
+      const tabId = targetTab.id;
       const existed = sessions.get(tabId);
       if (existed?.recording) {
         return {
@@ -356,9 +510,11 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
 
       const state: TraceSessionState = {
         recording: true,
+        completed: false,
         events: [],
         startedAt: Date.now(),
-        pageUrl: activeTab.url || '',
+        pageUrl: targetTab.url || '',
+        sessionId,
         listener: (source, method, params) => {
           if (source.tabId !== tabId) return;
           if (method === 'Tracing.dataCollected' && params?.value) {
@@ -369,6 +525,7 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
             }
           } else if (method === 'Tracing.tracingComplete') {
             state.recording = false;
+            state.completed = true;
             state.stopResolver?.({ completed: true });
           }
         },
@@ -376,32 +533,42 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
       chrome.debugger.onEvent.addListener(state.listener);
       sessions.set(tabId, state);
 
-      // Start tracing with categories
-      const cats = tracingCategories().join(',');
-      await cdpSessionManager.sendCommand(tabId, 'Tracing.start', {
-        categories: cats,
-        options: 'record-as-much-as-possible',
-        transferMode: 'ReportEvents',
-      });
+      try {
+        // Start tracing with categories
+        const cats = tracingCategories().join(',');
+        await cdpSessionManager.sendCommand(tabId, 'Tracing.start', {
+          categories: cats,
+          options: 'record-as-much-as-possible',
+          transferMode: 'ReportEvents',
+        });
 
-      if (reload) {
-        try {
-          await cdpSessionManager.sendCommand(tabId, 'Page.reload', { ignoreCache: true });
-        } catch {
-          // best effort; ignore if fails
+        if (reload) {
+          try {
+            await cdpSessionManager.sendCommand(tabId, 'Page.reload', { ignoreCache: true });
+          } catch {
+            // best effort; ignore if fails
+          }
         }
+      } catch (startErr: any) {
+        // BUG-10: Rollback registered listener, session, and lease
+        try {
+          chrome.debugger.onEvent.removeListener(state.listener);
+        } catch {}
+        sessions.delete(tabId);
+        await cdpSessionManager.detach(tabId, 'performance').catch(() => {});
+        throw startErr;
       }
 
       if (autoStop) {
-        setTimeout(
+        state.autoStopTimer = setTimeout(
           async () => {
             try {
-              await cdpSessionManager.sendCommand(tabId, 'Tracing.end');
+              await stopAndFinalizeTrace(tabId, state, false, 'performance_trace');
             } catch {
               // ignore
             }
           },
-          Math.max(1000, Math.min(durationMs, 60000)),
+          Math.max(10, Math.min(durationMs, 60000)),
         );
       }
 
@@ -412,6 +579,7 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
             text: JSON.stringify({
               success: true,
               message: 'Performance trace is recording. Use performance_stop_trace to stop it.',
+              tabId,
               reload,
               autoStop,
             }),
@@ -433,11 +601,42 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
 
   async execute(args: StopTraceParams): Promise<ToolResult> {
     const { saveToDownloads = true, filenamePrefix } = args || {};
+    const sessionId = args?.sessionId || args?.sessionContext;
     try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) return createErrorResponse('No active tab found');
-      const tabId = activeTab.id;
-      const session = sessions.get(tabId);
+      let targetTabId: number | undefined;
+      let session: TraceSessionState | undefined;
+
+      // Explicit tabId ALWAYS takes precedence: do NOT fallback to other tabs
+      if (typeof args?.tabId === 'number') {
+        session = sessions.get(args.tabId);
+        if (session) {
+          targetTabId = args.tabId;
+          // Owner Guard: If caller provided a sessionId and this tab belongs to another principal session, reject!
+          if (sessionId && session.sessionId && session.sessionId !== sessionId) {
+            return createErrorResponse(
+              'Cannot stop performance trace on tab ' + args.tabId + ': it is owned by another session (' + session.sessionId + ').'
+            );
+          }
+        }
+      } else if (sessionId) {
+        // Strict session principal: resolve strictly by caller's sessionId across recording sessions.
+        // If not found, reject directly without fallback to affinityTab (prevents hijacking other sessions).
+        for (const [tId, s] of sessions.entries()) {
+          if (s.sessionId === sessionId) {
+            targetTabId = tId;
+            session = s;
+            break;
+          }
+        }
+      } else {
+        // Legacy unauthenticated callers without tabId or sessionId: fallback to foreground/affinity tab
+        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(() => null);
+        if (targetTab?.id && sessions.has(targetTab.id)) {
+          targetTabId = targetTab.id;
+          session = sessions.get(targetTab.id);
+        }
+      }
+
       if (!session) {
         return {
           content: [
@@ -447,59 +646,13 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
         };
       }
 
-      let stopResult: { completed: boolean } = { completed: false };
-      if (session.recording) {
-        // End tracing and wait for completion signal
-        await cdpSessionManager.sendCommand(tabId, 'Tracing.end');
-        await getOrCreateStopPromise(session);
-        stopResult = await session.stopPromise!;
-      } else {
-        // Already auto-stopped; proceed to finalize without waiting
-        stopResult = { completed: true };
-      }
-      // Fetch metrics before detach
-      const metrics = await enablePerformanceMetrics(tabId);
-
-      // Cleanup event listener and detach
-      try {
-        chrome.debugger.onEvent.removeListener(session.listener);
-      } catch {
-        // ignore
-      }
-      try {
-        await cdpSessionManager.detach(tabId, 'performance');
-      } catch {
-        // ignore
-      }
-
-      const endedAt = Date.now();
-      const trace = { traceEvents: session.events };
-      const json = JSON.stringify(trace);
-
-      let saved: { downloadId?: number; filename?: string; fullPath?: string } | undefined;
-      if (saveToDownloads) {
-        saved = await saveTraceToDownloads(json, filenamePrefix || 'performance_trace');
-      } else {
-        // Persist to native temp directory so that analysis can run without Downloads permission
-        const tempSaved = await saveTraceToNativeTemp(
-          session.events,
-          filenamePrefix || 'performance_trace',
-        );
-        if (tempSaved) {
-          saved = { ...tempSaved } as any;
-        }
-      }
-
-      LAST_RESULTS.set(tabId, {
-        events: session.events,
-        startedAt: session.startedAt,
-        endedAt,
-        tabUrl: session.pageUrl || '',
-        saved,
-        metrics,
-      });
-
-      sessions.delete(tabId);
+      const tabId = targetTabId!;
+      const finalized = await stopAndFinalizeTrace(
+        tabId,
+        session,
+        saveToDownloads,
+        filenamePrefix || 'performance_trace',
+      );
 
       return {
         content: [
@@ -508,14 +661,15 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
             text: JSON.stringify({
               success: true,
               message: 'The performance trace has been stopped.',
+              tabId,
               eventCount: session.events.length,
-              saved,
-              metrics,
+              saved: finalized.saved,
+              metrics: finalized.metrics,
               startedAt: session.startedAt,
-              endedAt,
-              durationMs: endedAt - session.startedAt,
+              endedAt: finalized.endedAt,
+              durationMs: finalized.endedAt - session.startedAt,
               url: session.pageUrl || '',
-              tracingCompleted: stopResult?.completed === true,
+              tracingCompleted: finalized.tracingCompleted,
             }),
           },
         ],
@@ -537,11 +691,26 @@ class PerformanceAnalyzeInsightTool extends BaseBrowserToolExecutor {
 
   async execute(args: AnalyzeInsightParams & { timeoutMs?: number }): Promise<ToolResult> {
     const { insightName } = args || {};
+    const sessionId = args?.sessionId || args?.sessionContext;
     try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) return createErrorResponse('No active tab found');
-      const tabId = activeTab.id;
-      const result = LAST_RESULTS.get(tabId);
+      let result: any;
+      // Explicit tabId ALWAYS takes precedence
+      if (typeof args?.tabId === 'number') {
+        if (LAST_RESULTS.has(args.tabId)) {
+          result = LAST_RESULTS.get(args.tabId);
+        }
+      } else if (sessionId) {
+        // Strict session isolation: only return trace recorded for this session, never fallback!
+        if (SESSION_LAST_RESULTS.has(sessionId)) {
+          result = SESSION_LAST_RESULTS.get(sessionId);
+        }
+      } else {
+        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(() => null);
+        if (targetTab?.id && LAST_RESULTS.has(targetTab.id)) {
+          result = LAST_RESULTS.get(targetTab.id);
+        }
+      }
+
       if (!result) {
         return {
           content: [
@@ -659,17 +828,37 @@ export const performanceAnalyzeInsightTool = new PerformanceAnalyzeInsightTool()
 export function cleanupTabPerformanceData(tabId: number): void {
   const session = sessions.get(tabId);
   if (session) {
+    session.invalidated = true;
+    if (session.autoStopTimer) {
+      clearTimeout(session.autoStopTimer);
+      session.autoStopTimer = undefined;
+    }
     try {
       chrome.debugger.onEvent.removeListener(session.listener);
     } catch {}
     void cdpSessionManager.detach(tabId, 'performance').catch(() => {});
     sessions.delete(tabId);
   }
+  // Clear ALL SESSION_LAST_RESULTS belonging to this tabId even if trace was already finalized
+  for (const [sId, rec] of SESSION_LAST_RESULTS.entries()) {
+    if (rec.tabId === tabId) {
+      SESSION_LAST_RESULTS.delete(sId);
+    }
+  }
   LAST_RESULTS.delete(tabId);
 }
 
-if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved?.addListener) {
-  chrome.tabs.onRemoved.addListener((tabId: number) => {
-    cleanupTabPerformanceData(tabId);
-  });
+if (typeof chrome !== 'undefined') {
+  if (chrome.tabs?.onRemoved?.addListener) {
+    chrome.tabs.onRemoved.addListener((tabId: number) => {
+      cleanupTabPerformanceData(tabId);
+    });
+  }
+  if (chrome.debugger?.onDetach?.addListener) {
+    chrome.debugger.onDetach.addListener((source: chrome.debugger.Debuggee) => {
+      if (typeof source.tabId === 'number') {
+        cleanupTabPerformanceData(source.tabId);
+      }
+    });
+  }
 }

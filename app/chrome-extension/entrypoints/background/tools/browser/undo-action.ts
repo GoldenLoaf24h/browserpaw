@@ -37,7 +37,7 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
     const tabId = targetTab.id;
     if (typeof tabId !== 'number') return createErrorResponse('Invalid target tab ID');
 
-    const lastAction = actionHistoryManager.popAction(tabId);
+    const lastAction = actionHistoryManager.peekAction(tabId);
     if (!lastAction) {
       return createErrorResponse(
         'No undoable action recorded for this tab in current session history.',
@@ -46,9 +46,11 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
 
     try {
       if (lastAction.type === 'navigate') {
-        if (typeof chrome !== 'undefined' && chrome.tabs?.goBack) {
-          await chrome.tabs.goBack(tabId);
+        if (typeof chrome === 'undefined' || !chrome.tabs?.goBack) {
+          return createErrorResponse('chrome.tabs.goBack API is unavailable; cannot undo navigation.');
         }
+        await chrome.tabs.goBack(tabId);
+        actionHistoryManager.removeAction(tabId, lastAction);
         return {
           content: [
             {
@@ -111,24 +113,47 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
         });
 
         const outcome = revertResult?.[0]?.result;
+        const isSuccess = outcome?.success === true;
+        if (isSuccess) {
+          actionHistoryManager.removeAction(tabId, lastAction);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    revertedAction: 'fill',
+                    targetIndex: lastAction.index,
+                    restoredValue: lastAction.prevValue,
+                    message: 'Successfully restored input field to previous value.',
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            isError: false,
+          };
+        }
+
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
                 {
-                  success: outcome?.success !== false,
+                  success: false,
                   revertedAction: 'fill',
                   targetIndex: lastAction.index,
-                  restoredValue: lastAction.prevValue,
-                  message: 'Successfully restored input field to previous value.',
+                  message: `Failed to restore input field: ${outcome?.reason || 'Element no longer in DOM or revert failed'}`,
                 },
                 null,
                 2,
               ),
             },
           ],
-          isError: false,
+          isError: true,
         };
       }
 

@@ -17,6 +17,24 @@ import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
 import { isRestrictedChromeUrl } from '@/utils/restricted-url';
 
 // Screenshot-specific constants
+export const MAX_CANVAS_DIM = 16384;
+export const MAX_CANVAS_AREA = 268435456;
+
+export function clampCanvasDimensions(width: number, height: number): { width: number; height: number } {
+  const safeW = typeof width === 'number' && Number.isFinite(width) && width > 0 ? width : 1;
+  const safeH = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : 1;
+  let w = Math.max(1, Math.round(safeW));
+  let h = Math.max(1, Math.round(safeH));
+  if (w > MAX_CANVAS_DIM || h > MAX_CANVAS_DIM || w * h > MAX_CANVAS_AREA) {
+    const dimScale = Math.min(MAX_CANVAS_DIM / w, MAX_CANVAS_DIM / h);
+    const areaScale = Math.sqrt(MAX_CANVAS_AREA / (w * h));
+    const scale = Math.min(dimScale, areaScale);
+    w = Math.max(1, Math.floor(w * scale));
+    h = Math.max(1, Math.floor(h * scale));
+  }
+  return { width: w, height: h };
+}
+
 const SCREENSHOT_CONSTANTS = {
   SCROLL_DELAY_MS: 350, // Time to wait after scroll for rendering and lazy loading
   CAPTURE_STITCH_DELAY_MS: 50, // Small delay between captures in a scroll sequence
@@ -66,6 +84,8 @@ interface ScreenshotToolParams {
   savePng?: boolean;
   saveToDisk?: boolean;
   maxHeight?: number; // Maximum height to capture in pixels (for infinite scroll pages)
+  maxWidth?: number; // Maximum width to capture in pixels
+  zoom?: number; // Super-sampling / zoom factor for element crop
   grid?: boolean | string; // Overlay coordinate reference grid ('ruler' | 'crosshair' | 'classic' | '1000' | true)
   enableGrid?: boolean | string; // Alias for grid
   expandSearchArea?: boolean; // Adaptively expand crop box for small elements (<100x100)
@@ -176,10 +196,11 @@ export async function normalizeImageToCssDimensions(
     ) {
       return dataUrl;
     }
-    const canvas = new OffscreenCanvas(targetWidthCss, targetHeightCss);
+    const { width: boundedW, height: boundedH } = clampCanvasDimensions(targetWidthCss, targetHeightCss);
+    const canvas = new OffscreenCanvas(boundedW, boundedH);
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to get 2D context from OffscreenCanvas');
-    ctx.drawImage(img, 0, 0, targetWidthCss, targetHeightCss);
+    ctx.drawImage(img, 0, 0, boundedW, boundedH);
     return await canvasToDataURL(canvas, mimeType, quality);
   } catch {
     return dataUrl;
@@ -197,16 +218,17 @@ async function hasBlackBars(dataUrl: string): Promise<boolean> {
     const w = img.width,
       h = img.height;
     if (w < 64 || h < 64) return false;
-    const canvas = new OffscreenCanvas(w, h);
+    const { width: bw, height: bh } = clampCanvasDimensions(w, h);
+    const canvas = new OffscreenCanvas(bw, bh);
     const ctx = canvas.getContext('2d');
     if (!ctx) return false;
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(img, 0, 0, bw, bh);
     const sample = (edge: 'right' | 'bottom'): number => {
       const count = edge === 'right' ? 48 : 48;
       let black = 0;
       for (let i = 0; i < count; i++) {
-        const x = edge === 'right' ? w - 1 : Math.floor((i / count) * w);
-        const y = edge === 'bottom' ? h - 1 : Math.floor((i / count) * h);
+        const x = edge === 'right' ? bw - 1 : Math.floor((i / count) * bw);
+        const y = edge === 'bottom' ? bh - 1 : Math.floor((i / count) * bh);
         const d = ctx.getImageData(x, y, 1, 1).data;
         if (d[0] + d[1] + d[2] < 18) black++;
       }
@@ -358,8 +380,12 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let didPreparePage = false;
     let didInjectSoM = false;
     let pageDetails: ScreenshotPageDetails | undefined;
+    let assetViewport: { viewportWidth: number; viewportHeight: number } | undefined;
+    let capturedDocWidth: number | undefined;
+    let capturedDocHeight: number | undefined;
 
     let elementCropOrigin: { x: number; y: number } | undefined;
+    let elementOriginalCrop: { width: number; height: number } | undefined;
     const qualityFraction =
       typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.8;
 
@@ -436,30 +462,56 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           results.assetSrc = asset.src;
           results.assetSource = 'bytes';
         } else {
-          // Fallback: viewport crop of the asset rect (DPR-scaled)
-          const dpr = pageDetails?.devicePixelRatio || 1;
+          // Match the bitmap's actual scale; capture providers can differ at the same DPR.
+          const viewport = (
+            await executeInPage({ tabId: tab.id! }, 'inPageGetScrollState', [])
+          )?.[0]?.result;
+          if (
+            !viewport ||
+            !Number.isFinite(viewport.viewportWidth) || viewport.viewportWidth <= 0 ||
+            !Number.isFinite(viewport.viewportHeight) || viewport.viewportHeight <= 0
+          ) {
+            throw new Error('Invalid viewport dimensions for asset fallback');
+          }
+          assetViewport = viewport;
+          originalScroll = { x: viewport.scrollX, y: viewport.scrollY };
           const pad = Math.max(0, args.padding ?? 0);
           const crop = {
-            x: Math.max(0, Math.round((asset.rect.x - pad) * dpr)),
-            y: Math.max(0, Math.round((asset.rect.y - pad) * dpr)),
-            w: Math.round((asset.rect.width + pad * 2) * dpr),
-            h: Math.round((asset.rect.height + pad * 2) * dpr),
+            x: Math.max(0, Math.round(asset.rect.x - pad)),
+            y: Math.max(0, Math.round(asset.rect.y - pad)),
+            w: 0,
+            h: 0,
           };
+          crop.w = Math.min(viewport.viewportWidth, Math.round(asset.rect.x + asset.rect.width + pad)) - crop.x;
+          crop.h = Math.min(viewport.viewportHeight, Math.round(asset.rect.y + asset.rect.height + pad)) - crop.y;
+          if (crop.w <= 0 || crop.h <= 0) throw new Error('Asset crop is outside viewport');
           const visibleDataUrl = await this.captureTabPng(tab);
           if (!visibleDataUrl)
             throw new Error('captureTabPng returned empty image (asset fallback)');
-          const cropped = new OffscreenCanvas(crop.w, crop.h);
+          const raw = await createImageBitmapFromUrl(visibleDataUrl);
+          const scaleX = raw.width / viewport.viewportWidth;
+          const scaleY = raw.height / viewport.viewportHeight;
+          const { width: cropW, height: cropH } = clampCanvasDimensions(crop.w, crop.h);
+          const cropped = new OffscreenCanvas(cropW, cropH);
           const cctx = cropped.getContext('2d');
           if (!cctx) throw new Error('OffscreenCanvas 2d context failed (asset fallback)');
-          const raw = await createImageBitmapFromUrl(visibleDataUrl);
-          cctx.drawImage(raw, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+          cctx.drawImage(raw, crop.x * scaleX, crop.y * scaleY, crop.w * scaleX, crop.h * scaleY, 0, 0, cropW, cropH);
+          if (typeof (raw as any).close === 'function') (raw as any).close();
           finalImageDataUrl = await canvasToDataURL(
             cropped,
             targetMimeType as any,
             qualityFraction,
           );
-          finalImageWidthCss = crop.w;
-          finalImageHeightCss = crop.h;
+          finalImageWidthCss = cropW;
+          finalImageHeightCss = cropH;
+          elementCropOrigin = {
+            x: crop.x,
+            y: crop.y,
+          };
+          elementOriginalCrop = {
+            width: crop.w,
+            height: crop.h,
+          };
           assetHandled = true;
           results.assetKind = asset.kind;
           results.assetSrc = asset.src;
@@ -578,6 +630,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
               finalImageWidthCss = w;
               finalImageHeightCss = h;
               elementCropOrigin = { x: rx0, y: ry0 };
+              elementOriginalCrop = { width: w, height: h };
               assetHandled = true;
               results.roi = { x0: rx0, y0: ry0, x1: rx1, y1: ry1, width: w, height: h };
             }
@@ -751,6 +804,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           finalImageDataUrl = fullCapture.dataUrl;
           finalImageWidthCss = fullCapture.widthCss;
           finalImageHeightCss = fullCapture.heightCss;
+          capturedDocWidth = fullCapture.originalCaptureWidth;
+          capturedDocHeight = fullCapture.originalCaptureHeight;
         } else if (selector || typeof args.targetIndex === 'number') {
           this.logInfo(`Capturing element (selector=${selector}, targetIndex=${args.targetIndex})`);
           const elementCapture = await this._captureElement(
@@ -763,6 +818,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           finalImageWidthCss = elementCapture.widthCss;
           finalImageHeightCss = elementCapture.heightCss;
           elementCropOrigin = { x: elementCapture.originX, y: elementCapture.originY };
+          elementOriginalCrop = { width: (elementCapture as any).originalCropWidth, height: (elementCapture as any).originalCropHeight };
         } else {
           // Visible area only
           this.logInfo('Capturing visible area...');
@@ -783,6 +839,42 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
 
       if (!finalImageDataUrl) {
         throw new Error('Failed to capture image data');
+      }
+
+      // TOOL01: Clamp to maxWidth before grid overlay, caching, and disk saving
+      const effectiveMaxWidth =
+        typeof args.maxWidth === 'number' && Number.isFinite(args.maxWidth) && args.maxWidth > 0
+          ? Math.max(1, Math.round(args.maxWidth))
+          : args.highClarity === true || results.roi
+            ? Infinity
+            : 1280;
+      if (finalImageWidthCss && finalImageWidthCss > effectiveMaxWidth && finalImageDataUrl) {
+        const targetW = effectiveMaxWidth;
+        const scale = targetW / finalImageWidthCss;
+        const targetH = Math.max(1, Math.round(finalImageHeightCss! * scale));
+        try {
+          const scaledUrl = await normalizeImageToCssDimensions(
+            finalImageDataUrl,
+            targetW,
+            targetH,
+            targetMimeType,
+            qualityFraction,
+          );
+          if (scaledUrl && scaledUrl !== finalImageDataUrl) {
+            finalImageDataUrl = scaledUrl;
+            try {
+              const bmp = await createImageBitmapFromUrl(scaledUrl);
+              finalImageWidthCss = bmp.width;
+              finalImageHeightCss = bmp.height;
+              if (typeof (bmp as any).close === 'function') (bmp as any).close();
+            } catch {
+            finalImageWidthCss = targetW;
+            finalImageHeightCss = targetH;
+            }
+          }
+        } catch (maxWErr) {
+          console.warn('Failed to clamp screenshot to maxWidth:', maxWErr);
+        }
       }
 
       // 1.5. Coordinate reference grid overlay
@@ -825,20 +917,22 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           }
           // For element captures or ROI crops, keep crop bounds and origin offset
           const isRoiOrElement = Boolean(elementCropOrigin);
-          const cropW = isRoiOrElement ? finalImageWidthCss : undefined;
-          const cropH = isRoiOrElement ? finalImageHeightCss : undefined;
-          const viewportWidth = pageDetails?.viewportWidth ?? finalImageWidthCss;
-          const viewportHeight = pageDetails?.viewportHeight ?? finalImageHeightCss;
-          const captureMode: 'viewport' | 'fullpage' | 'element' = fullPage
-            ? 'fullpage'
-            : isRoiOrElement
-              ? 'element'
+          const cropW = elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
+          const cropH = elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
+          const viewportWidth = pageDetails?.viewportWidth ?? assetViewport?.viewportWidth ?? finalImageWidthCss;
+          const viewportHeight = pageDetails?.viewportHeight ?? assetViewport?.viewportHeight ?? finalImageHeightCss;
+          const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
+            ? 'element'
+            : fullPage
+              ? 'fullpage'
               : 'viewport';
           const scrollX = originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
           const scrollY = originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
-          const docWidth = fullPage ? (pageDetails?.totalWidth ?? finalImageWidthCss) : undefined;
-          const docHeight = fullPage
-            ? (pageDetails?.totalHeight ?? finalImageHeightCss)
+          const docWidth = captureMode === 'fullpage'
+            ? (capturedDocWidth ?? pageDetails?.totalWidth ?? finalImageWidthCss)
+            : undefined;
+          const docHeight = captureMode === 'fullpage'
+            ? (capturedDocHeight ?? pageDetails?.totalHeight ?? finalImageHeightCss)
             : undefined;
           screenshotContextManager.setContext(tab.id!, {
             screenshotWidth: finalImageWidthCss,
@@ -970,7 +1064,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
 
     if (finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
       try {
-        const isHighClarity = args.highClarity === true || fullPage === true;
+        const isHighClarity = args.highClarity === true || fullPage === true || Boolean(results.roi);
         const maxBudget = fullPage
           ? args.highClarity
             ? 2000 * 1024
@@ -982,7 +1076,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           maxBytes: maxBudget,
           preferredFormat: finalMime,
           quality: isHighClarity ? 0.92 : qualityFraction,
-          allowDimensionScaling: fullPage ? Boolean(args.allowDimensionScaling) : !isHighClarity,
+          allowDimensionScaling:
+            fullPage && !results.roi ? Boolean(args.allowDimensionScaling) : !isHighClarity,
         });
         finalBase64 = compressed.dataUrl.replace(/^data:[^;]+;base64,/, '');
         finalMime = compressed.mimeType as any;
@@ -1041,8 +1136,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           quality: args.quality ?? (format === 'png' ? undefined : 80),
           imageWidth: finalImageWidthCss,
           imageHeight: finalImageHeightCss,
-          viewportWidth: pageDetails?.viewportWidth ?? finalImageWidthCss,
-          viewportHeight: pageDetails?.viewportHeight ?? finalImageHeightCss,
+          viewportWidth: pageDetails?.viewportWidth ?? assetViewport?.viewportWidth ?? finalImageWidthCss,
+          viewportHeight: pageDetails?.viewportHeight ?? assetViewport?.viewportHeight ?? finalImageHeightCss,
           originX: elementCropOrigin?.x ?? 0,
           originY: elementCropOrigin?.y ?? 0,
           scaleFactor:
@@ -1185,6 +1280,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     heightCss: number;
     originX: number;
     originY: number;
+    originalCropWidth?: number;
+    originalCropHeight?: number;
   }> {
     let cropRectPx: { x: number; y: number; width: number; height: number };
     let dpr = pageDpr || 1;
@@ -1250,8 +1347,12 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     }
 
     // DPR 1:1 Normalization: enforce output dimensions to exact CSS pixel dimensions
-    const finalWidthCss = options.width ?? Math.max(1, Math.round(cropRectPx.width / dpr));
-    const finalHeightCss = options.height ?? Math.max(1, Math.round(cropRectPx.height / dpr));
+    const zoom = typeof options.zoom === 'number' && Number.isFinite(options.zoom) && options.zoom > 0 ? options.zoom : 1;
+    const baseWidth = Math.max(1, Math.round(cropRectPx.width / dpr));
+    const baseHeight = Math.max(1, Math.round(cropRectPx.height / dpr));
+    const rawWidthCss = options.width ?? Math.round(baseWidth * zoom);
+    const rawHeightCss = options.height ?? Math.round(baseHeight * zoom);
+    const { width: finalWidthCss, height: finalHeightCss } = clampCanvasDimensions(rawWidthCss, rawHeightCss);
 
     const croppedCanvas = new OffscreenCanvas(finalWidthCss, finalHeightCss);
     const ctx = croppedCanvas.getContext('2d');
@@ -1283,6 +1384,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       heightCss: finalHeightCss,
       originX: Math.round(cropRectPx.x / dpr),
       originY: Math.round(cropRectPx.y / dpr),
+      originalCropWidth: baseWidth,
+      originalCropHeight: baseHeight,
     };
   }
 
@@ -1300,7 +1403,13 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     options: ScreenshotToolParams,
     initialPageDetails: any,
     windowId?: number,
-  ): Promise<{ dataUrl: string; widthCss: number; heightCss: number }> {
+  ): Promise<{
+    dataUrl: string;
+    widthCss: number;
+    heightCss: number;
+    originalCaptureWidth: number;
+    originalCaptureHeight: number;
+  }> {
     // 1. Warmup page: quick down-and-up scroll to trigger lazy loading, IntersectionObserver & skeleton screens
     try {
       this.logInfo('Warming up page for lazy loading and skeleton rendering...');
@@ -1318,7 +1427,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     }
 
     const dpr = initialPageDetails.devicePixelRatio || 1;
-    const totalWidthCss = options.width || initialPageDetails.totalWidth;
+    const totalWidthCss = initialPageDetails.totalWidth;
     let totalHeightCss = initialPageDetails.totalHeight;
 
     // Apply maximum height limit for infinite scroll pages
@@ -1452,12 +1561,19 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       );
     }
 
+    const actualCapturedHeightPx = Math.min(
+      totalHeightPx,
+      capturedHeightPx > 0 ? capturedHeightPx : totalHeightPx,
+    );
+    const capturedHeightCss = Math.max(1, Math.round(actualCapturedHeightPx / dpr));
+    const capturedWidthCss = Math.max(1, Math.round(initialPageDetails.totalWidth));
+
     this.logInfo('Stitching image with canvas boundary safety...');
-    const finalCanvas = await stitchImages(capturedParts, totalWidthPx, totalHeightPx);
+    const finalCanvas = await stitchImages(capturedParts, totalWidthPx, actualCapturedHeightPx);
 
     // DPR 1:1 Normalization: enforce output dimensions to standard CSS pixels
-    let targetWidthCss = totalWidthCss;
-    let targetHeightCss = limitedHeightCss;
+    let targetWidthCss = capturedWidthCss;
+    let targetHeightCss = capturedHeightCss;
 
     if (options.width && !options.height) {
       targetWidthCss = options.width;
@@ -1508,6 +1624,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       dataUrl: finalDataUrl,
       widthCss: targetWidthCss,
       heightCss: targetHeightCss,
+      originalCaptureWidth: capturedWidthCss,
+      originalCaptureHeight: capturedHeightCss,
     };
   }
 }

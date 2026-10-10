@@ -13,12 +13,37 @@ export interface PendingDialogInfo {
 
 interface TabSessionState {
   refCount: number;
-  owners: Set<OwnerTag>;
+  owners: Map<OwnerTag, number>;
   attachedByUs: boolean;
 }
 
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 export const CDP_IDLE_DETACH_TIMEOUT_MS = 600000; // 10 minutes session-aware retention to prevent infobar flicker and viewport shift
+
+const CDP_READ_METHODS = new Set([
+  'DOM.getDocument',
+  'DOM.getBoxModel',
+  'DOM.getContentQuads',
+  'DOM.describeNode',
+  'DOM.resolveNode',
+  'DOM.querySelector',
+  'DOM.querySelectorAll',
+  'DOM.getOuterHTML',
+  'CSS.getComputedStyleForNode',
+  'CSS.getMatchedStylesForNode',
+  'CSS.getInlineStylesForNode',
+  'Page.getNavigationHistory',
+  'Page.getLayoutMetrics',
+  'Page.captureScreenshot',
+  'Page.printToPDF',
+  'Network.getCookies',
+  'Network.getResponseBody',
+  'Network.getRequestPostData',
+  'Target.getTargetInfo',
+  'Target.getTargets',
+]);
+
+const isReadOnlyCdpMethod = (method: string): boolean => CDP_READ_METHODS.has(method);
 
 class CDPSessionManager {
   private sessions = new Map<number, TabSessionState>();
@@ -28,7 +53,26 @@ class CDPSessionManager {
   private dialogStates = new Map<number, PendingDialogInfo>();
   private inFlightRequests = new Map<number, Map<string, number>>();
   private domainRefCounts = new Map<number, Map<string, number>>();
+  private domainEnablesInFlight = new Map<string, Promise<void>>();
   private activeCommands = new Map<number, number>();
+  private tabEpochs = new Map<number, number>();
+
+  private getTabEpoch(tabId: number): number {
+    return this.tabEpochs.get(tabId) || 0;
+  }
+
+  private bumpTabEpoch(tabId: number): void {
+    this.tabEpochs.set(tabId, (this.tabEpochs.get(tabId) || 0) + 1);
+  }
+
+  private clearFlightEnables(tabId: number): void {
+    const prefix = `${tabId}:`;
+    for (const key of Array.from(this.domainEnablesInFlight.keys())) {
+      if (key.startsWith(prefix)) {
+        this.domainEnablesInFlight.delete(key);
+      }
+    }
+  }
 
   constructor() {
     if (typeof chrome !== 'undefined') {
@@ -179,6 +223,8 @@ class CDPSessionManager {
   }
 
   private handleDetachOrRemoved(tabId: number, reason: string) {
+    this.bumpTabEpoch(tabId);
+    this.clearFlightEnables(tabId);
     if (this.idleTimers.has(tabId)) {
       clearTimeout(this.idleTimers.get(tabId));
       this.idleTimers.delete(tabId);
@@ -215,8 +261,8 @@ class CDPSessionManager {
     this.tabQueues.set(tabId, current);
 
     try {
-      // Anti-hang queue guard: prevent previous stalled operations from deadlocking the queue
-      await Promise.race([prev.catch(() => {}), new Promise<void>((r) => setTimeout(r, 4000))]);
+      // FIFO queue serialized per tabId: prevents concurrent race without deadlock or bypass
+      await prev.catch(() => {});
       return await op();
     } finally {
       resolveCurrent();
@@ -236,7 +282,7 @@ class CDPSessionManager {
       const state = this.getState(tabId);
       if (state && state.attachedByUs) {
         state.refCount += 1;
-        state.owners.add(owner);
+        state.owners.set(owner, (state.owners.get(owner) || 0) + 1);
         return;
       }
 
@@ -250,9 +296,11 @@ class CDPSessionManager {
       if (existing) {
         if (existing.extensionId === chrome.runtime.id) {
           // Already attached by us (e.g., previous tool). Adopt and refcount.
+          const adoptedOwners = state?.owners || new Map<OwnerTag, number>();
+          adoptedOwners.set(owner, (adoptedOwners.get(owner) || 0) + 1);
           this.setState(tabId, {
             refCount: state ? state.refCount + 1 : 1,
-            owners: new Set([...(state?.owners || []), owner]),
+            owners: adoptedOwners,
             attachedByUs: true,
           });
           return;
@@ -265,12 +313,23 @@ class CDPSessionManager {
 
       // Attach freshly
       await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
-      this.setState(tabId, { refCount: 1, owners: new Set([owner]), attachedByUs: true });
-      await Promise.resolve(
-        chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }),
-      ).catch(() => {});
-      await this.enablePageDomain(tabId);
-      await this.enableNetworkDomain(tabId);
+      this.setState(tabId, { refCount: 1, owners: new Map([[owner, 1]]), attachedByUs: true });
+      try {
+        await Promise.resolve(
+          chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }),
+        ).catch(() => {});
+        await this.enablePageDomain(tabId);
+        await this.enableNetworkDomain(tabId);
+      } catch (initErr) {
+        try {
+          await chrome.debugger.detach({ tabId });
+        } catch {}
+        this.bumpTabEpoch(tabId);
+        this.clearFlightEnables(tabId);
+        this.sessions.delete(tabId);
+        this.domainRefCounts.delete(tabId);
+        throw initErr;
+      }
     });
   }
 
@@ -283,27 +342,69 @@ class CDPSessionManager {
    * actually dispatches <domain>.enable to CDP.
    */
   async enableDomain(tabId: number, domain: string, params?: object): Promise<void> {
+    const epoch = this.getTabEpoch(tabId);
     let tabDomains = this.domainRefCounts.get(tabId);
     if (!tabDomains) {
       tabDomains = new Map<string, number>();
       this.domainRefCounts.set(tabId, tabDomains);
     }
     const current = tabDomains.get(domain) || 0;
-    tabDomains.set(domain, current + 1);
-    if (current === 0 || (params && Object.keys(params).length > 0)) {
-      if ((chrome.runtime as any)?.id === 'test-ext-id') return;
+    const hasParams = Boolean(params && Object.keys(params).length > 0);
+    const flightKey = `${tabId}:${domain}`;
+
+    // If already enabled and no special params and not in-flight, just increment refCount
+    if (current > 0 && !hasParams && !this.domainEnablesInFlight.has(flightKey)) {
+      tabDomains.set(domain, current + 1);
+      return;
+    }
+
+    // If an enable is currently in-flight for this domain and no special params, join it
+    if (this.domainEnablesInFlight.has(flightKey) && !hasParams) {
+      tabDomains.set(domain, current + 1);
       try {
-        await this.sendDebuggerCommand(tabId, `${domain}.enable`, params || {}, 3000);
-      } catch (e: any) {
-        const msg = String(e?.message || e || '').toLowerCase();
-        if (
-          msg.includes('target closed') ||
-          msg.includes('tab closed') ||
-          msg.includes('not attached')
-        ) {
-          throw e;
+        await this.domainEnablesInFlight.get(flightKey);
+        if (this.getTabEpoch(tabId) !== epoch) {
+          throw new Error(`Tab ${tabId} detached during domain enable`);
+        }
+        return;
+      } catch (e) {
+        if (this.getTabEpoch(tabId) === epoch) {
+          const c = tabDomains.get(domain) || 0;
+          if (c <= 1) tabDomains.delete(domain);
+          else tabDomains.set(domain, c - 1);
+        }
+        throw e;
+      }
+    }
+
+    tabDomains.set(domain, current + 1);
+    if ((chrome.runtime as any)?.id === 'test-ext-id') return;
+
+    const enablePromise: Promise<void> = (async () => {
+      await this.sendDebuggerCommand(tabId, `${domain}.enable`, params || {}, 3000);
+    })().finally(() => {
+      if (this.domainEnablesInFlight.get(flightKey) === enablePromise) {
+        this.domainEnablesInFlight.delete(flightKey);
+      }
+    });
+
+    this.domainEnablesInFlight.set(flightKey, enablePromise);
+
+    try {
+      await enablePromise;
+      if (this.getTabEpoch(tabId) !== epoch) {
+        throw new Error(`Tab ${tabId} detached during domain enable`);
+      }
+    } catch (e: any) {
+      if (this.getTabEpoch(tabId) === epoch) {
+        const currentCount = tabDomains.get(domain) || 0;
+        if (currentCount <= 1) {
+          tabDomains.delete(domain);
+        } else {
+          tabDomains.set(domain, currentCount - 1);
         }
       }
+      throw e;
     }
   }
 
@@ -367,6 +468,8 @@ class CDPSessionManager {
     return this.serializeTabOp(tabId, async () => {
       if (owner === 'timeout-guard') {
         // Anti-hang guard: immediately detach physical debugger and clear session without refCount underflow
+        this.bumpTabEpoch(tabId);
+        this.clearFlightEnables(tabId);
         if (this.idleTimers.has(tabId)) {
           clearTimeout(this.idleTimers.get(tabId));
           this.idleTimers.delete(tabId);
@@ -382,9 +485,14 @@ class CDPSessionManager {
       const state = this.getState(tabId);
       if (!state) return; // Nothing to do
 
-      // Update ownership/refcount: only decrement if owner was tracked or unknown
-      if (state.owners.has(owner)) {
-        state.owners.delete(owner);
+      // Update ownership/refcount: decrement owner count and refCount
+      const count = state.owners.get(owner) || 0;
+      if (count > 0) {
+        if (count === 1) {
+          state.owners.delete(owner);
+        } else {
+          state.owners.set(owner, count - 1);
+        }
         state.refCount = Math.max(0, state.refCount - 1);
       } else if (owner === 'unknown') {
         state.refCount = Math.max(0, state.refCount - 1);
@@ -422,6 +530,8 @@ class CDPSessionManager {
             } catch (e) {
               // Best-effort detach; ignore
             } finally {
+              this.bumpTabEpoch(tabId);
+              this.clearFlightEnables(tabId);
               this.sessions.delete(tabId);
               this.domainRefCounts.delete(tabId);
             }
@@ -466,13 +576,24 @@ class CDPSessionManager {
   }
 
   private async restoreActiveDomains(tabId: number): Promise<void> {
-    await this.enablePageDomain(tabId).catch(() => {});
-    await this.enableNetworkDomain(tabId).catch(() => {});
-    const activeDomains = this.domainRefCounts.get(tabId);
-    if (activeDomains) {
-      for (const [domain, count] of activeDomains.entries()) {
-        if (count > 0 && domain !== 'Page' && domain !== 'Network') {
-          await this.sendDebuggerCommand(tabId, `${domain}.enable`, {}, 3000).catch(() => {});
+    const isTestExt = (chrome.runtime as any)?.id === 'test-ext-id';
+    let tabDomains = this.domainRefCounts.get(tabId);
+    if (!tabDomains) {
+      tabDomains = new Map<string, number>();
+      this.domainRefCounts.set(tabId, tabDomains);
+    }
+    if (!tabDomains.has('Page')) tabDomains.set('Page', 1);
+    if (!tabDomains.has('Network')) tabDomains.set('Network', 1);
+
+    if (!isTestExt) {
+      await this.sendDebuggerCommand(tabId, 'Page.enable', {}, 3000);
+      await this.sendDebuggerCommand(tabId, 'Network.enable', {}, 3000);
+    }
+
+    for (const [domain, count] of tabDomains.entries()) {
+      if (count > 0 && domain !== 'Page' && domain !== 'Network') {
+        if (!isTestExt) {
+          await this.sendDebuggerCommand(tabId, `${domain}.enable`, {}, 3000);
         }
       }
     }
@@ -495,12 +616,17 @@ class CDPSessionManager {
         msg.includes('session not found')
       );
     };
+    const uncertainError = (err: any): Error =>
+      new Error(
+        `CDP ${method} outcome unknown: connection lost after dispatch (${err?.message || err}). The command may have executed; inspect page state before retrying.`,
+      );
 
     const tryAutoReconnect = async (originalState?: TabSessionState): Promise<boolean> => {
       if (typeof chrome === 'undefined' || !chrome.debugger?.attach) {
         return false;
       }
       return this.serializeTabOp(tabId, async () => {
+        let newlyAttached = false;
         try {
           // If chrome.tabs.get is available, check tab existence
           if (chrome.tabs?.get) {
@@ -508,11 +634,25 @@ class CDPSessionManager {
             if (!tab) return false;
           }
 
-          // If a concurrent call already reconnected, reuse the active session
           const currentState = this.getState(tabId);
-          if (currentState && currentState.attachedByUs) {
-            return true;
+
+          // Restore owners: prefer current state owners (reflecting all preceding serialized operations),
+          // fallback to originalState only if current session was cleared, or default to 'reconnected'.
+          const resolvedOwners = new Map<OwnerTag, number>();
+          const sourceOwners =
+            currentState?.owners && currentState.owners.size > 0
+              ? currentState.owners
+              : originalState?.owners && originalState.owners.size > 0
+                ? originalState.owners
+                : new Map<OwnerTag, number>([['reconnected', 1]]);
+          for (const [k, v] of sourceOwners.entries()) {
+            if (v > 0) resolvedOwners.set(k, v);
           }
+          if (resolvedOwners.size === 0) {
+            resolvedOwners.set('reconnected', 1);
+          }
+          let totalRefs = 0;
+          for (const v of resolvedOwners.values()) totalRefs += v;
 
           // Check if already attached by us in Chrome debugger targets
           if (chrome.debugger?.getTargets) {
@@ -522,8 +662,8 @@ class CDPSessionManager {
             if (existing) {
               if (existing.extensionId === chrome.runtime?.id) {
                 this.setState(tabId, {
-                  refCount: Math.max(1, originalState?.refCount || 1),
-                  owners: originalState?.owners || new Set(['reconnected']),
+                  refCount: totalRefs,
+                  owners: resolvedOwners,
                   attachedByUs: true,
                 });
                 await this.restoreActiveDomains(tabId);
@@ -538,12 +678,10 @@ class CDPSessionManager {
 
           // Re-attach debugger session freshly
           await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
+          newlyAttached = true;
           this.setState(tabId, {
-            refCount: Math.max(1, originalState?.refCount || 1),
-            owners:
-              originalState?.owners && originalState.owners.size > 0
-                ? originalState.owners
-                : new Set(['reconnected']),
+            refCount: totalRefs,
+            owners: resolvedOwners,
             attachedByUs: true,
           });
           // Short settle delay for transient navigation to stabilize
@@ -554,6 +692,14 @@ class CDPSessionManager {
           await this.restoreActiveDomains(tabId);
           return true;
         } catch (reconnectErr) {
+          if (newlyAttached) {
+            try {
+              await chrome.debugger.detach({ tabId });
+            } catch {}
+          }
+          this.bumpTabEpoch(tabId);
+          this.clearFlightEnables(tabId);
+          this.sessions.delete(tabId);
           console.warn(`[CDPSessionManager] Auto-reconnect failed for tab ${tabId}:`, reconnectErr);
           return false;
         }
@@ -578,7 +724,7 @@ class CDPSessionManager {
       } catch (err: any) {
         if (isDetachedError(err)) {
           const reconnected = await tryAutoReconnect(state);
-          if (reconnected) {
+          if (reconnected && isReadOnlyCdpMethod(method)) {
             try {
               return (await this.sendDebuggerCommand(tabId, method, params)) as T;
             } catch (retryErr: any) {
@@ -587,9 +733,10 @@ class CDPSessionManager {
               }
               throw retryErr;
             }
-          } else {
+          } else if (!reconnected) {
             this.handleDetachOrRemoved(tabId, `sendCommand error (${err?.message})`);
           }
+          if (!isReadOnlyCdpMethod(method)) throw uncertainError(err);
         }
         throw err;
       }
@@ -601,8 +748,9 @@ class CDPSessionManager {
         return (await this.sendDebuggerCommand(tabId, method, params)) as T;
       } catch (err: any) {
         if (isDetachedError(err)) {
-          const reconnected = await tryAutoReconnect();
-          if (reconnected) {
+          const current = this.getState(tabId);
+          const reconnected = await tryAutoReconnect(current);
+          if (reconnected && isReadOnlyCdpMethod(method)) {
             try {
               return (await this.sendDebuggerCommand(tabId, method, params)) as T;
             } catch (retryErr: any) {
@@ -612,9 +760,10 @@ class CDPSessionManager {
               );
               throw retryErr;
             }
-          } else {
+          } else if (!reconnected) {
             this.handleDetachOrRemoved(tabId, `sendCommand temp-session error (${err?.message})`);
           }
+          if (!isReadOnlyCdpMethod(method)) throw uncertainError(err);
         }
         throw err;
       }

@@ -60,7 +60,10 @@ describe('dom-indexer regressions', () => {
     const prevChrome = (globalThis as any).chrome;
     (globalThis as any).chrome = {
       ...prevChrome,
-      tabs: { ...prevChrome?.tabs, get: vi.fn().mockResolvedValue({ id: 77, url: 'https://x.test' }) },
+      tabs: {
+        ...prevChrome?.tabs,
+        get: vi.fn().mockResolvedValue({ id: 77, url: 'https://x.test' }),
+      },
     };
     const dispatched: Array<Record<string, any>> = [];
     vi.spyOn(cdpSessionManager, 'withSession').mockImplementation((async (
@@ -89,7 +92,6 @@ describe('dom-indexer regressions', () => {
 
     (globalThis as any).chrome = prevChrome;
   });
-
 
   it('inPageFocusIndex focuses the indexed element and reports it', () => {
     const input = document.createElement('input');
@@ -166,7 +168,10 @@ describe('dom-indexer regressions', () => {
   describe('restricted page guard', () => {
     it('flags browser internal and web store pages only', () => {
       expect(isRestrictedChromeUrl('chrome://settings')).toBe(true);
+      expect(isRestrictedChromeUrl('Chrome://settings')).toBe(true);
       expect(isRestrictedChromeUrl('edge://flags')).toBe(true);
+      expect(isRestrictedChromeUrl('EDGE://flags')).toBe(true);
+      expect(isRestrictedChromeUrl('VIEW-SOURCE:https://example.com')).toBe(true);
       expect(isRestrictedChromeUrl('https://chrome.google.com/webstore/detail/x')).toBe(true);
       expect(isRestrictedChromeUrl('https://microsoftedge.microsoft.com/addons/x')).toBe(true);
       expect(isRestrictedChromeUrl('https://example.com')).toBe(false);
@@ -211,7 +216,9 @@ describe('dom-indexer regressions', () => {
         ...prevChrome,
         tabs: {
           ...prevChrome?.tabs,
-          get: vi.fn().mockResolvedValue({ id: 11, url: 'http://169.254.169.254/latest/meta-data/' }),
+          get: vi
+            .fn()
+            .mockResolvedValue({ id: 11, url: 'http://169.254.169.254/latest/meta-data/' }),
         },
       };
 
@@ -253,9 +260,8 @@ describe('dom-indexer regressions', () => {
 
   describe('safeClickPoint survives re-injection', () => {
     it('stores the map on globalThis so a rebuilt in-page engine reuses it', async () => {
-      const { safeClickPointWeakMap } = await import(
-        '../entrypoints/background/tools/browser/dom-indexer'
-      );
+      const { safeClickPointWeakMap } =
+        await import('../entrypoints/background/tools/browser/dom-indexer');
       const key = Symbol.for('__browser_use_safe_click_point_map__');
 
       expect((globalThis as any)[key]).toBe(safeClickPointWeakMap);

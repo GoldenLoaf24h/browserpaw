@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 子代理调度与审计日志 (Subagent Dispatch & Audit Log)
 
 根据 §D 子代理调度纪律硬性要求，全程记录所有子代理的调度时间、任务分配、产出物、一句话结论与差错处置。

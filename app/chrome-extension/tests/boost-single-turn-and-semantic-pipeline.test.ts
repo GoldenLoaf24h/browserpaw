@@ -46,11 +46,17 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
 
     it('evaluates synchronous entrypoints in a single turn without poll or retrieve', async () => {
       let executeScriptCallCount = 0;
+      const scriptCalls: any[] = [];
       (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 101, url: 'https://example.com' });
       (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
         executeScriptCallCount++;
+        scriptCalls.push(opts);
         // First injection is the engine file if not already injected
         if (opts.files) {
+          return [{ result: undefined }];
+        }
+        // Slot cleanup call in single-turn path
+        if (opts.func && opts.args && opts.args.length === 1 && String(opts.args[0]).startsWith('__mcp_slot_')) {
           return [{ result: undefined }];
         }
         // Then eval-or-start call: simulate synchronous function execution in page
@@ -74,7 +80,7 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
         [5],
       );
 
-      // 1 file injection + 1 single-turn eval = exactly 2 calls (instead of 4 calls previously)
+      // 1 file injection + 1 single-turn eval = exactly 2 calls (zero poll, zero retrieve, zero extra cleanup for single target sync)
       expect(executeScriptCallCount).toBe(2);
       expect(res[0].result.success).toBe(true);
       expect(res[0].result.coords.x).toBe(120);
@@ -89,6 +95,67 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       // Only 1 single-turn call, 0 file injections, 0 poll calls, 0 retrieve calls
       expect(executeScriptCallCount).toBe(1);
       expect(res2[0].result.coords.y).toBe(340);
+    });
+
+    it('cleans up stashed slots across frames when allFrames synchronous evaluation completes', async () => {
+      let cleanupCalled = false;
+      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 102, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
+        if (opts.files) return [{ result: undefined }];
+        if (opts.func && opts.args && opts.args.length === 1) {
+          cleanupCalled = true;
+          return [{ result: undefined }];
+        }
+        return [
+          { frameId: 0, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 10 } } },
+          { frameId: 1, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 20 } } },
+        ];
+      });
+
+      const res = await executeInPage({ tabId: 102, allFrames: true }, 'inPageGetElementCoordinates', [5]);
+      expect(res).toHaveLength(2);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cleanupCalled).toBe(true);
+    });
+
+    it('cleans up its slot on eval-or-start timeout and late resolution without deleting other slots', async () => {
+      const g = globalThis as any;
+      const cleanedSlots: string[] = [];
+      let lateResolveStart: any;
+      const delayedStartPromise = new Promise((resolve) => {
+        lateResolveStart = resolve;
+      });
+
+      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 103, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
+        if (opts.files) return [{ result: undefined }];
+        if (opts.func && opts.args && opts.args.length === 1) {
+          cleanedSlots.push(opts.args[0]);
+          delete g[opts.args[0]];
+          return [{ result: undefined }];
+        }
+        // Stash another slot belonging to someone else in the page
+        g['other_user_slot'] = { value: 'keep_me' };
+        // Simulate late start execution that hangs across timeout
+        await delayedStartPromise;
+        return [
+          { frameId: 0, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 99 } } },
+        ];
+      });
+
+      // Run executeInPage with very small timeout (20ms) so eval-or-start times out
+      const pending = executeInPage({ tabId: 103 }, 'inPageGetElementCoordinates', [5], 20);
+      await expect(pending).rejects.toThrow();
+
+      // After timeout, initial cleanup was called for own slot, other slot is untouched
+      expect(cleanedSlots.length).toBeGreaterThan(0);
+      expect(g['other_user_slot']).toBeDefined();
+
+      // Settle late resolution: late cleanup triggers, other slot still untouched
+      lateResolveStart();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g['other_user_slot']).toBeDefined();
+      expect(g['other_user_slot'].value).toBe('keep_me');
     });
 
     it('falls back to poll and retrieve when entrypoint returns a promise', async () => {

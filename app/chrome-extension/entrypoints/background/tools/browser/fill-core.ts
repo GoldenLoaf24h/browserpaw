@@ -451,15 +451,6 @@ export async function performPhysicalFill(
       (typeof coords.value === 'string' && coords.value === '') ||
       (coords.value === undefined && (!coords.text || coords.text.trim() === ''));
 
-    if (typeof coords.value === 'string' && numericIndex !== undefined) {
-      actionHistoryManager.pushAction(tabId, {
-        type: 'fill',
-        index: numericIndex,
-        prevValue: coords.value,
-        timestamp: Date.now(),
-      });
-    }
-
     let verification: any = null;
     const isSingleLineInput =
       coords?.tagName === 'input' &&
@@ -1035,6 +1026,17 @@ export async function performPhysicalFill(
     resolutionPath,
   };
 
+  // Record successful mutating action in history for undo capability
+  if (resObj.success && typeof coords?.value === 'string' && numericIndex !== undefined) {
+    actionHistoryManager.pushAction(tabId, {
+      type: 'fill',
+      index: numericIndex,
+      selector: typeof options.target === 'string' && !isNumericIndex ? options.target : undefined,
+      prevValue: coords.value,
+      timestamp: Date.now(),
+    });
+  }
+
   // 6. Handle auto-submit if requested (and not already submitted via pressEnter)
   if (submit && resObj.success && !resObj.submitted) {
     await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId);
@@ -1111,24 +1113,50 @@ async function handleAutoSubmit(
         sessionId,
         waitForSettle: false,
       });
-      const timeoutPromise = new Promise<{ content: any[] }>((resolve) =>
-        setTimeout(
-          () =>
-            resolve({
-              content: [{ type: 'text', text: JSON.stringify({ success: true, timedOut: true }) }],
-            }),
-          4000,
-        ),
-      );
-      const clickRes = (await Promise.race([clickPromise, timeoutPromise])) as any;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<{ isTimeout: true }>((resolve) => {
+        timeoutTimer = setTimeout(() => resolve({ isTimeout: true }), 4000);
+      });
+      let raceRes: { isTimeout: boolean; res?: any };
+      try {
+        raceRes = (await Promise.race([
+          clickPromise.then((res) => ({ isTimeout: false, res })),
+          timeoutPromise,
+        ])) as { isTimeout: boolean; res?: any };
+      } finally {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
+      }
+
+      if (raceRes.isTimeout) {
+        result.submitted = false;
+        result.submitMethod = 'click';
+        result.submittedButtonIndex = btnIdx;
+        result.submitResult = {
+          success: false,
+          timedOut: true,
+          status: 'unknown',
+          message: 'Auto-submit click timed out after 4000ms; submit delivery status is unknown',
+        };
+        return;
+      }
+
+      const clickRes = raceRes.res;
       let submitSummary: any = (clickRes?.content?.[0] as any)?.text;
       try {
         submitSummary = JSON.parse(submitSummary);
       } catch {}
-      result.submitted = true;
+      const hasTopError = Boolean(clickRes?.isError);
+      const innerSuccess = submitSummary && typeof submitSummary === 'object'
+        ? submitSummary.success !== false
+        : !hasTopError;
+      const submitOk = !hasTopError && innerSuccess;
+
+      result.submitted = submitOk;
       result.submitMethod = 'click';
       result.submittedButtonIndex = btnIdx;
-      result.submitResult = submitSummary || { success: true };
+      result.submitResult = submitSummary || { success: submitOk };
       if (submitSummary?.tabHandover) {
         result.tabHandover = submitSummary.tabHandover;
       }

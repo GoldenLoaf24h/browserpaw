@@ -921,7 +921,14 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     let tabToOperateOn: chrome.tabs.Tab | undefined;
 
     try {
-      if (targetUrl) {
+      if (typeof (args as any)?.tabId === 'number') {
+        const explicitTab = await chrome.tabs.get((args as any).tabId).catch(() => null);
+        if (explicitTab?.id) {
+          tabToOperateOn = explicitTab;
+        } else {
+          return createErrorResponse(`Tab ${(args as any).tabId} not found.`);
+        }
+      } else if (targetUrl) {
         if (isPopupUrl(targetUrl)) {
           return createErrorResponse(
             'Access denied: popup.html cannot be opened or navigated to by agent code paths. Popup is reserved exclusively for user manual interaction.',
@@ -1022,7 +1029,7 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
     NetworkDebuggerStopTool.instance = this;
   }
 
-  async execute(): Promise<ToolResult> {
+  async execute(args?: { tabId?: number }): Promise<ToolResult> {
     console.log(`NetworkDebuggerStopTool: Executing command.`);
 
     const startTool = NetworkDebuggerStartTool.instance;
@@ -1042,51 +1049,27 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
       return createErrorResponse('No active network captures found in any tab.');
     }
 
-    // Get current active tab
-    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const activeTabId = activeTabs[0]?.id;
-
-    // Determine the primary tab to stop
     let primaryTabId: number;
 
-    if (activeTabId && startTool['captureData'].has(activeTabId)) {
-      // If current active tab is capturing, prioritize stopping it
-      primaryTabId = activeTabId;
-      console.log(
-        `NetworkDebuggerStopTool: Active tab ${activeTabId} is capturing, will stop it first.`,
-      );
-    } else if (ongoingCaptures.length === 1) {
-      // If only one tab is capturing, stop it
-      primaryTabId = ongoingCaptures[0];
-      console.log(
-        `NetworkDebuggerStopTool: Only one tab ${primaryTabId} is capturing, stopping it.`,
-      );
+    if (typeof args?.tabId === 'number') {
+      if (!startTool['captureData'].has(args.tabId)) {
+        return createErrorResponse(`No active network captures found on tab ${args.tabId}.`);
+      }
+      primaryTabId = args.tabId;
     } else {
-      // If multiple tabs are capturing but current active tab is not among them, stop the first one
-      primaryTabId = ongoingCaptures[0];
-      console.log(
-        `NetworkDebuggerStopTool: Multiple tabs capturing, active tab not among them. Stopping tab ${primaryTabId} first.`,
-      );
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTabId = activeTabs[0]?.id;
+      if (activeTabId && startTool['captureData'].has(activeTabId)) {
+        primaryTabId = activeTabId;
+      } else if (ongoingCaptures.length === 1) {
+        primaryTabId = ongoingCaptures[0];
+      } else {
+        primaryTabId = ongoingCaptures[0];
+      }
     }
 
     // Stop capture for the primary tab
     const result = await this.performStop(startTool, primaryTabId);
-
-    // If multiple tabs are capturing, stop other tabs
-    if (ongoingCaptures.length > 1) {
-      const otherTabIds = ongoingCaptures.filter((id) => id !== primaryTabId);
-      console.log(
-        `NetworkDebuggerStopTool: Stopping ${otherTabIds.length} additional captures: ${otherTabIds.join(', ')}`,
-      );
-
-      for (const tabId of otherTabIds) {
-        try {
-          await startTool.stopCapture(tabId);
-        } catch (error) {
-          console.error(`NetworkDebuggerStopTool: Error stopping capture on tab ${tabId}:`, error);
-        }
-      }
-    }
 
     return result;
   }

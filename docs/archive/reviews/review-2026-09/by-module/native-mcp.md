@@ -15,7 +15,7 @@
 **审查重点维度**：
 
 1. 安全（Token生成/校验、Bridge Token、越权、注入、路径穿越、SSRF）
-2. 并发与状态共享（Session 管理、多客户端同时连接）
+2. 并发与状态共享（Session 管理、多Client Side同时连接）
 3. 协议正确性（MCP initialize/tools-call 生命周期、Streamable HTTP/SSE 细节、Content-Length、JSON-RPC id 处理）
 4. 错误恢复与超时
 5. 资源清理（端口、定时器、连接）
@@ -58,11 +58,11 @@
 
 ---
 
-### [P0] 确定性 Bug / 功能阻断：媒体流式端点未携带 Token 导致扩展端流式大图 100% 401 失败
+### [P0] 确定性 Bug / 功能阻断：媒体流式端点未携带 Token 导致Extension Side流式大图 100% 401 失败
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:121-155, 285-303`，`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\register-tools.ts:63`
 - **严重度**：P0（确定性 Bug / 功能完全损坏）
-- **问题描述**：Fastify 的全局 `preHandler` 钩子对除 `/ping` 和 OPTIONS 以外的所有 HTTP 请求执行严格的 Bridge Token 鉴权。然而在处理大于 650KB 的大媒体文件时，`register-tools.ts` 和 `file-handler.ts` 生成的下载 URL 为 `http://127.0.0.1:12306/media-asset/${assetId}`（未附带任何 token 参数）；而 Chrome 扩展端 `insert-media.ts` 直接通过原生 `fetch(mediaUrl)` 拉取数据（未设置 Authorization 头）。这导致所有通过流式传输的大图/视频在请求时 100% 被 401 Unauthorized 拦截，大文件媒体插入功能完全无法使用。
+- **问题描述**：Fastify 的全局 `preHandler` 钩子对除 `/ping` 和 OPTIONS 以外的所有 HTTP 请求执行严格的 Bridge Token 鉴权。然而在处理大于 650KB 的大媒体文件时，`register-tools.ts` 和 `file-handler.ts` 生成的下载 URL 为 `http://127.0.0.1:12306/media-asset/${assetId}`（未附带任何 token 参数）；而 Chrome Extension Side `insert-media.ts` 直接通过原生 `fetch(mediaUrl)` 拉取数据（未设置 Authorization 头）。这导致所有通过流式传输的大图/视频在请求时 100% 被 401 Unauthorized 拦截，大文件媒体插入功能完全无法使用。
 - **代码证据与触发推演**：
   1. `server/index.ts:127-130`：
      ```ts
@@ -75,7 +75,7 @@
      ```ts
      args.mediaUrl = `http://${SERVER_CONFIG.HOST}:${port}/media-asset/${assetId}`;
      ```
-  3. 扩展端 `insert-media.ts:49`：
+  3. Extension Side `insert-media.ts:49`：
      ```ts
      const resp = await fetch(fetchTargetUrl);
      if (!resp.ok) {
@@ -146,7 +146,7 @@
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:366-385`
 - **严重度**：P1（协议异常处理缺陷）
-- **问题描述**：在 `POST /mcp` 路由中，初始化判断分支条件为 `if (!transport && !sessionId && isInit)`。当客户端因重试或代理透传了旧的（但本地已过期的）`mcp-session-id` 发起 `initialize` 请求时，由于 `sessionId` 存在，条件判定失败，代码直接落入 `else if (!transport)` 分支，向客户端返回 404 `INVALID_SESSION_ID`，阻止了合法的重初始化握手。
+- **问题描述**：在 `POST /mcp` 路由中，初始化判断分支条件为 `if (!transport && !sessionId && isInit)`。当Client Side因重试或代理透传了旧的（但本地已过期的）`mcp-session-id` 发起 `initialize` 请求时，由于 `sessionId` 存在，条件判定失败，代码直接落入 `else if (!transport)` 分支，向Client Side返回 404 `INVALID_SESSION_ID`，阻止了合法的重初始化握手。
 - **代码证据与触发推演**：
   ```ts
   const sessionId = request.headers['mcp-session-id'] as string | undefined;
@@ -163,12 +163,12 @@
     return;
   }
   ```
-  客户端重连并发送 `initialize` 时携带了上一次会话 ID，由于内存中 session 已销毁，服务端返回 404，导致客户端重连失败，死锁在未初始化状态。
-- **一句话净收益**：对包含 `isInitializeRequest` 的请求，忽略已失效的旧 sessionId 并无条件建立新 Session，保障客户端断线重连顺畅。
+  Client Side重连并发送 `initialize` 时携带了上一次会话 ID，由于内存中 session 已销毁，Server Side返回 404，导致Client Side重连失败，死锁在未初始化状态。
+- **一句话净收益**：对包含 `isInitializeRequest` 的请求，忽略已失效的旧 sessionId 并无条件建立新 Session，保障Client Side断线重连顺畅。
 
 ---
 
-### [P1] 资源管理：GET `/mcp` (SSE Stream) 客户端断开连接不回收 Session
+### [P1] 资源管理：GET `/mcp` (SSE Stream) Client Side断开连接不回收 Session
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\index.ts:424-427`
 - **严重度**：P1（资源长期悬挂）
@@ -188,7 +188,7 @@
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:241-253`
 - **严重度**：P1（系统资源占用/僵尸进程）
-- **问题描述**：Stdio 看门狗每 500ms 通过 `process.kill(parentPid, 0)` 探测父进程存活性。在 Windows 操作系统中，PID 极易快速循环重用。父进程（如 Claude Desktop 或某终端）异常退出后，其 PID 极可能在极短时间内被操作系统重新赋予其他系统进程（如 svchost.exe），导致 `process.kill` 永远不抛出 `ESRCH`，使得 Stdio 子进程永久驻留后台不退出。
+- **问题描述**：Stdio Watchdog每 500ms 通过 `process.kill(parentPid, 0)` 探测父进程存活性。在 Windows 操作系统中，PID 极易快速循环重用。父进程（如 Claude Desktop 或某终端）异常退出后，其 PID 极可能在极短时间内被操作系统重新赋予其他系统进程（如 svchost.exe），导致 `process.kill` 永远不抛出 `ESRCH`，使得 Stdio 子进程永久驻留后台不退出。
 - **代码证据与触发推演**：
   ```ts
   const interval = setInterval(() => {
@@ -228,13 +228,13 @@
 
 ---
 
-### [P1] 架构硬伤：Native Host 超时后未向扩展端发送取消信号致浏览器资源浪费
+### [P1] 架构硬伤：Native Host 超时后未向Extension Side发送取消信号致浏览器资源浪费
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:254-265`
 - **严重度**：P1（架构设计缺陷）
-- **问题描述**：当 `sendRequestToExtensionAndWait` 发生 120 秒超时后，本地 Promise 被 reject，从 `pendingRequests` 中剔除了该请求。但 Native Host 从未向 Chrome 扩展端发出任何取消命令（Abort）。扩展端仍在浏览器后台继续执行高开销的 CDP 操作（如全页面重排截屏、长轮询等待等），产生僵尸操作并阻塞后续请求队列。
+- **问题描述**：当 `sendRequestToExtensionAndWait` 发生 120 秒超时后，本地 Promise 被 reject，从 `pendingRequests` 中剔除了该请求。但 Native Host 从未向 Chrome Extension Side发出任何取消命令（Abort）。Extension Side仍在浏览器后台继续执行高开销的 CDP 操作（如全页面重排截屏、长轮询等待等），产生僵尸操作并阻塞后续请求队列。
 - **代码证据与触发推演**：
-  超时触发逻辑中仅有本地 `this.pendingRequests.delete(requestId); reject(...)`。扩展端执行完毕后回传消息时，由于 requestId 已被移除，在 `native-messaging-host.ts:133` 命中 `// just ignore`，不仅白白消耗了浏览器端性能，而且可能因后台残留动作与后续新工具调用发生冲突。
+  超时触发逻辑中仅有本地 `this.pendingRequests.delete(requestId); reject(...)`。Extension Side执行完毕后回传消息时，由于 requestId 已被移除，在 `native-messaging-host.ts:133` 命中 `// just ignore`，不仅白白消耗了浏览器端性能，而且可能因后台残留动作与后续新工具调用发生冲突。
 - **一句话净收益**：引入取消协议并在超时触发时向扩展发送中断指令，释放浏览器端无谓的计算开销。
 
 ---
@@ -243,7 +243,7 @@
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:40, 195-212`
 - **严重度**：P1（双模式状态一致性）
-- **问题描述**：Stdio 模式下，动态工具通过 `dynamicExtraTools = new Set<string>()` 维护在本地内存中。当网络出现异常触发自动重连时，`mcpClient` 重新与 HTTP 服务端协商建立全新的 HTTP Session。然而 Stdio 代理并没有将之前已激活的工具分类同步给新的 HTTP Session，导致后续请求若需要 HTTP 校验 Session 权限时可能出现不一致或功能受阻。
+- **问题描述**：Stdio 模式下，动态工具通过 `dynamicExtraTools = new Set<string>()` 维护在本地内存中。当网络出现异常触发自动重连时，`mcpClient` 重新与 HTTP Server Side协商建立全新的 HTTP Session。然而 Stdio 代理并没有将之前已激活的工具分类同步给新的 HTTP Session，导致后续请求若需要 HTTP 校验 Session 权限时可能出现不一致或功能受阻。
 - **一句话净收益**：在 Stdio 重连建立新 Session 后，主动同步补发当前已激活的分类列表，保持双端状态闭环。
 
 ---
@@ -255,15 +255,15 @@
 - **问题描述**：在处理 `get_server_info` 与 `get_token` 消息时，代码尝试读取 `(this.associatedServer as any)?.port || 12306`。但 `Server` 类（`server/index.ts`）中根本没有定义 `port` 属性或 getter，导致无论服务实际在哪个端口启动，返回给扩展的信息中端口号永远退化为硬编码的 12306。
 - **代码证据与触发推演**：
   查看 `Server` 类定义，无 `port` 成员。若用户通过环境变量配置了自定义端口（如 12308），扩展获取到的端口依然显示 12306，产生配置脱节。
-- **一句话净收益**：在 `Server` 类显式维护实际绑定的端口属性，保证扩展端读取信息准确。
+- **一句话净收益**：在 `Server` 类显式维护实际绑定的端口属性，保证Extension Side读取信息准确。
 
 ---
 
-### [P2] 协议错误处理：未捕获异常响应中错误类型被硬编码为 `file_operation_response`
+### [P2] 协议Error Handling：未捕获异常响应中错误类型被硬编码为 `file_operation_response`
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\native-messaging-host.ts:84-88`
 - **严重度**：P2（协议语义混乱）
-- **问题描述**：在处理 Native 消息的全局 catch 块中，当捕获到异常且消息中携带 `requestId` 时，响应消息被写死为 `type: 'file_operation_response'`。如果异常发生于非文件操作请求（例如启动命令、系统设置等），扩展端会收到一个伪造的文件操作响应，破坏扩展端的消息路由协议。
+- **问题描述**：在处理 Native 消息的全局 catch 块中，当捕获到异常且消息中携带 `requestId` 时，响应消息被写死为 `type: 'file_operation_response'`。如果异常发生于非文件操作请求（例如启动命令、系统设置等），Extension Side会收到一个伪造的文件操作响应，破坏Extension Side的消息路由协议。
 - **一句话净收益**：基于原消息类型动态生成响应类型，消除跨模块协议混淆。
 
 ---
@@ -290,8 +290,8 @@
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\mcp-server-stdio.ts:68-105`
 - **严重度**：P2（功能完整性）
-- **问题描述**：Stdio 代理端仅实现了对工具请求与列表的单向转发，未挂载从底层 HTTP 服务传回的 MCP notifications（如 `notifications/progress`、`notifications/message`）。导致后台 Jev 决策微循环或长任务向客户端推送的实时进度被静默丢弃，Claude Desktop 端体验退化为长时间无响应等待。
-- **一句话净收益**：打通 Stdio 代理层的 Notifications 双向转发，实现客户端可见的实时长任务进度。
+- **问题描述**：Stdio 代理端仅实现了对工具请求与列表的单向转发，未挂载从底层 HTTP 服务传回的 MCP notifications（如 `notifications/progress`、`notifications/message`）。导致后台 Jev 决策微循环或长任务向Client Side推送的实时进度被静默丢弃，Claude Desktop 端体验退化为长时间无响应等待。
+- **一句话净收益**：打通 Stdio 代理层的 Notifications 双向转发，实现Client Side可见的实时长任务进度。
 
 ---
 
@@ -340,7 +340,7 @@
    - **分析**：`buffer = Buffer.concat([buffer, chunk])` 在持续接收分片流时，每次读入 chunk 都会重新申请内存并搬运历史全部字节。若一个 1MB 的大消息被分为 16 个 64KB 的 chunk 传入，总共会发生约 8.5MB 的内存分配和搬运。建议改用定长 Buffer 预分配或 Chunk 队列遍历，消除内存拷贝二次放大。
 
 3. **双层反向代理调用链与往返延迟**：
-   - **路径**：`MCP 客户端 (Stdio) -> Stdio 代理进程 (mcp-server-stdio.ts) -> 本地 HTTP 服务 (Fastify 12306) -> Native Messaging Host -> Chrome Extension -> CDP Target`
+   - **路径**：`MCP Client Side (Stdio) -> Stdio 代理进程 (mcp-server-stdio.ts) -> 本地 HTTP 服务 (Fastify 12306) -> Native Messaging Host -> Chrome Extension -> CDP Target`
    - **分析**：每次工具调用经历 4 层进程间通信（IPC）与 2 次 HTTP 握手。单次工具调用基线 IPC 开销在 10~~25ms，若能在支持 Stdio 的场景下减少一层代理或支持本地直连，可进一步削减 5~~10ms 网络开销。
 
 ---

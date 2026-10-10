@@ -3,7 +3,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
-export const TOKEN_DIR = path.join(os.homedir(), '.chrome-mcp');
+export const TOKEN_DIR = process.env.CHROME_MCP_TOKEN_DIR
+  ? process.env.CHROME_MCP_TOKEN_DIR
+  : path.join(os.homedir(), '.chrome-mcp');
 export const TOKEN_FILE = path.join(TOKEN_DIR, 'bridge-token');
 
 let cachedToken: string | null = null;

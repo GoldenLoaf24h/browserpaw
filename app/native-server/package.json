@@ -1,6 +1,6 @@
 {
   "name": "mcp-chrome-bridge",
-  "version": "3.2.7",
+  "version": "4.0.0",
   "description": "Chrome Native-Messaging host (Node)",
   "author": "hangye",
   "repository": {
@@ -23,7 +23,7 @@
     "build": "ts-node src/scripts/build.ts",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
-    "lint": "eslint src",
+    "lint": "eslint src --max-warnings=0",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write 'src/**/*.{js,ts,json}'",
     "register:dev": "node dist/scripts/register-dev.js",

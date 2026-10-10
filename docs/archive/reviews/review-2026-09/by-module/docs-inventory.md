@@ -1,8 +1,8 @@
 # BrowserPaw 文档与 Skill 体系全面盘点审计报告 (docs-inventory)
 
-> **审计执行日期**：2026-09-20  
-> **审计范围**：根目录全部 MD、docs/ 全部 MD、skill/ 与 skills/ 体系、plugins/browserpaw/ 体系、prompt/ MD  
-> **审查基准版本**：v2.9.2 (当前代码仓运行态真实版本)  
+> **审计执行日期**：2026-09-20
+> **审计范围**：根目录全部 MD、docs/ 全部 MD、skill/ 与 skills/ 体系、plugins/browserpaw/ 体系、prompt/ MD
+> **审查基准版本**：v2.9.2 (当前代码仓运行态真实版本)
 > **报告定位**：为阶段 5 文档与 Skill 体系对齐同步提供硬核、严谨、带行号与调用链推演的单一事实依据。
 
 ---
@@ -70,8 +70,8 @@
 | 6    | `PRIVACY.md`                                                    | 隐私与 Chrome Web Store 权限合规政策，声明零远程传输与权限合理性。                                              | 权限清单遗漏了 `storage` 权限声明。                                                                    | `PRIVACY.md:20-28` 仅列出 debugger, nativeMessaging, tabs, activeTab，但在 MV3 实现中必须依赖 `storage` 权限存储 Session 状态（`app/chrome-extension/entrypoints/background/index.ts:31`）。                                                                        |
 | 7    | `HANDOFF.md`                                                    | 2026-09-07 早期全域通关（12 协议 79/79 pass）的历史交接文档，立下“零作弊”红线。                                 | **严重过时**：依然指导使用已被切除的工具 `chrome_scroll`，且整体内容为 2.0.0 时期产物。                | 1. `HANDOFF.md:18` 明确写道：“操作：通过 ... chrome_scroll（物理滚轮）”；但在 `packages/shared/src/tools.ts:3244` 中，`chrome_scroll` 属于 `PURGED_TOOL_NAMES`，MCP 无法调用！<br/>2. 更新时间为 `2026-09-07`，未涵盖后续的 Jev 双脑与 48 工具体系。                |
 | 8    | `HANDOFF-refactor-phase.md`                                     | 早期技术重构交接文档，阐述从传统 mcp-chrome 向 browser-use/Midscene 演进的设计。                                | 记录的测试集指标与当前套件不一致。                                                                     | `HANDOFF-refactor-phase.md:194-199` 记录的测试集（65+70+31=166 pass）属于过渡期快照；当前测试套件已升级为 T1-T4 153 项全量用例。                                                                                                                                    |
-| 9    | `AGENT_CONFIG_GUIDE.md`                                         | 面向 Claude、Cursor、Windsurf 等 Agent 的客户端高能效交互与配置完整指引。                                       | 缺少 Hermes Agent 本地插件方式的接入说明。                                                             | 仅提供了 Streamable HTTP/SSE 与 stdio 的手动 JSON 配置，未提供基于 `plugins/browserpaw` 的一键集成方式。                                                                                                                                                            |
-| 10   | `AGENT_CONFIG_GUIDE.zh-CN.md`                                   | 中文版 AI Agent 客户端配置手册，包含 6 大高能效交互规则与常见故障诊断。                                         | 与英文版相同，缺少 Hermes 插件命令配置引导。                                                           | `AGENT_CONFIG_GUIDE.zh-CN.md:16-120` 缺少 `hermes plugins install` 指引。                                                                                                                                                                                           |
+| 9    | `AGENT_CONFIG_GUIDE.md`                                         | 面向 Claude、Cursor、Windsurf 等 Agent 的Client Side高能效交互与配置完整指引。                                  | 缺少 Hermes Agent 本地插件方式的接入说明。                                                             | 仅提供了 Streamable HTTP/SSE 与 stdio 的手动 JSON 配置，未提供基于 `plugins/browserpaw` 的一键集成方式。                                                                                                                                                            |
+| 10   | `AGENT_CONFIG_GUIDE.zh-CN.md`                                   | 中文版 AI Agent Client Side配置手册，包含 6 大高能效交互规则与常见故障诊断。                                    | 与英文版相同，缺少 Hermes 插件命令配置引导。                                                           | `AGENT_CONFIG_GUIDE.zh-CN.md:16-120` 缺少 `hermes plugins install` 指引。                                                                                                                                                                                           |
 | 11   | `TESTING-NOTES.md`                                              | 记录 v2.3.1 ~ v2.8.0 历次攻坚、实战测试与底层引擎加固的超长复盘库（1100+行）。                                  | 存在工具总数历史口径冲突（45 vs 47 vs 48）。                                                           | 1. `TESTING-NOTES.md:1075` 记载“分类工具总数准确对齐为 45 个规范工具”；<br/>2. `TESTING-NOTES.md:4` 记载 `chrome_act_toward_goal` 为“第 47 个工具”；<br/>3. 与当前实际活跃的 48 个工具存在数字断层。                                                                |
 | 12   | `TEST_INFRA.md`                                                 | 现代端到端黑盒测试基础设施规范，定义 4 级验证天梯与 Node 22 原生测试架构。                                      | 提及所有工具均具备四项 security annotations，与部分实际 schema 不符。                                  | `TEST_INFRA.md:87` 宣称“Every tool schema includes annotations object with readOnlyHint, destructiveHint, idempotentHint, openWorldHint”，但部分内部辅助工具仍缺失 `openWorldHint`。                                                                                |
 | 13   | `dist/release-notes-v2.9.1.md` / `dist/release-notes-v2.9.2.md` | 分别详细记录 v2.9.1（Shadow DOM 穿透、视觉对齐）与 v2.9.2（MCP 2024-11-05 握手、Header 传递与重连）的发版日志。 | **归档位置严重错误**：文件位于 `dist/` 临时目录下，面临被一键物理删除的风险。                          | 根目录 `package.json:20` 配置了 `"clean:dist": "node scripts/clean.js dist"`。一旦运行清空构建目录脚本，作为版本凭据的重要 Release Notes 将被直接物理清空，无法追溯。                                                                                               |
@@ -85,7 +85,7 @@
 | 1    | `docs/ARCHITECTURE.md`          | 系统总体架构设计、三层通信拓扑与 23 项 ADR 决策记录全书。                     | **致命版本脱节与切除工具案例残留**：<br/>1. 顶层版本号仍为 2.0.0；<br/>2. 仍包含切除工具案例。 | 1. `docs/ARCHITECTURE.md:3` 写道：`> **Version**: 2.0.0 (Boost Hardened Release)`，滞后 9 个小版本（当前 2.9.2）；<br/>2. `docs/ARCHITECTURE.md:50` 写道 `46 deterministic tools + 1 micro-loop`（47 个），与当前 48 个矛盾；<br/>3. `docs/ARCHITECTURE.md:334`（ADR-015）仍将被 Purged 的 `chrome_get_web_content` 作为事件监听优化案例叙述。 |
 | 2    | `docs/CONTRIBUTING.md`          | 开发者贡献指南，包含开发依赖、本地环境拉起、编译调试与测试规范。              | 启动调试命令遗漏前置编译依赖。                                                                 | `docs/CONTRIBUTING.md:45` 说明使用 `pnpm --filter chrome-mcp-server dev` 启动扩展开发；但由于扩展依赖 `packages/shared` 的类型与实现，若未预先执行 `pnpm --filter chrome-mcp-shared build`，将导致缺少共享模块产物而构建失败。                                                                                                                 |
 | 3    | `docs/MAP.md`                   | 全项目导航地图与文档总索引，提供角色阅读路径、48 工具雷达图及数据流图。       | 引用了已被切除的工具。                                                                         | `docs/MAP.md:182` 表格第 12 行：“Event-Driven Navigation Waiting: `chrome_get_web_content` listens to `chrome.tabs.onUpdated`...”，该工具已在 `packages/shared/src/tools.ts:3244` 中被加入 `PURGED_TOOL_NAMES` 彻底移除，应更正或注明历史上下文。                                                                                              |
-| 4    | `docs/mcp-cli-config.md`        | 各 Agent 客户端配置 MCP 连接的详细指南（HTTP/SSE 与 Stdio 模式）。            | 保持较好，但 Hermes 部分仅列出手工 URL 命令。                                                  | 仅展示了 `hermes mcp add browserpaw --url ...`，未阐明与 `plugins/browserpaw` 插件的一体化配合。                                                                                                                                                                                                                                               |
+| 4    | `docs/mcp-cli-config.md`        | 各 Agent Client Side配置 MCP 连接的详细指南（HTTP/SSE 与 Stdio 模式）。       | 保持较好，但 Hermes 部分仅列出手工 URL 命令。                                                  | 仅展示了 `hermes mcp add browserpaw --url ...`，未阐明与 `plugins/browserpaw` 插件的一体化配合。                                                                                                                                                                                                                                               |
 | 5    | `docs/review-notes-boost.md`    | 2026-09-19 专项审查笔记，记录 9 大模块深度审计进展及 6 个候选漏洞的修复验证。 | 属于已完结阶段性审查快照，未标记归档状态。                                                     | 记录了 2026-09-19 的审查结论，当前处于活跃 docs/ 根目录，容易与常规长期维护文档混淆。                                                                                                                                                                                                                                                          |
 | 6    | `docs/TOOLS.md`                 | 由脚本根据 `packages/shared/src/tools.ts` 自动生成的 48 规范工具参数字典。    | **完全最新**。                                                                                 | 由 `scripts/gen-tools-doc.mjs` 自动化生成，精准体现了 48 个规范工具及 Core(14)/Crawl(12)/Full(48) Profile 结构。                                                                                                                                                                                                                               |
 | 7    | `docs/TROUBLESHOOTING.md`       | 英文运行环境故障诊断手册，涵盖 12306 端口占用、僵尸进程释放及一键自愈脚本。   | 遗漏 Jev 模式 401 密钥失效和 Session 锁存排查。                                                | 仅关注端口和原生连接排查，未包含 v2.8.0 引入的 Jev System 1 相关的 API Key 配置与降级排查。                                                                                                                                                                                                                                                    |
@@ -100,7 +100,7 @@
 | 1    | `skill/SKILL.md` (207行)                   | 采用渐进式披露设计的官方核心 Skill 定义文档，分为 8 大章节并引导至 references/。 | **设计典范**。结构紧凑，有效遏制上下文膨胀，与代码契约完全对齐。                                                 | 哈希为 `1D73EDC0B62F26B7667BF90B477C55AE`，与插件目录完全一致。                                                                                                                                        |
 | 2    | `skills/browserpaw/SKILL.md` (728行)       | 未重构的旧版单体 Skill 文档，将所有细节和长案例直接堆砌在单个文件中。            | **严重滞后与代码漂移**：<br/>1. 缺少 references/ 机制；<br/>2. 上下文消耗过大；<br/>3. 与主 skill 存在重大分歧。 | 1. 篇幅长达 728 行，未拆解 references；<br/>2. 缺少 `references/dual-brain-jev.md`、`references/batch-pipeline.md`、`references/visual-fallback.md` 模块化支撑；<br/>3. 其引用的多处参数仍为旧版格式。 |
 | 3    | `skills/browserpaw/recipes/README.md`      | 站点自动化配方贡献指南。                                                         | 尾部存在 4 行冗余空白代码块垃圾。                                                                                | 尾部行 52-56：包含了无内容的空代码标记 `\n\n`，属于编辑遗留垃圾。                                                                                                                                      |
-| 4    | `skills/browserpaw/config/mcp-config.json` | 客户端预置配置模板集合。                                                         | 缺少 `chrome_act_toward_goal` 的 `autoApprove`。                                                                 | 相比于 `skill/config/mcp-config.json`（行 74 已加入 `"chrome_act_toward_goal"`），此文件在 Roo-Code 模板中遗漏了该核心工具的免批配置。                                                                 |
+| 4    | `skills/browserpaw/config/mcp-config.json` | Client Side预置配置模板集合。                                                    | 缺少 `chrome_act_toward_goal` 的 `autoApprove`。                                                                 | 相比于 `skill/config/mcp-config.json`（行 74 已加入 `"chrome_act_toward_goal"`），此文件在 Roo-Code 模板中遗漏了该核心工具的免批配置。                                                                 |
 | 5    | `skills/browserpaw/references/`            | 深度专项技术规格书目录。                                                         | **完全缺失**！                                                                                                   | `skills/browserpaw/` 目录下根本不存在 `references/` 文件夹，导致 Agent 按规范寻找参考文档时报 404 文件不存在。                                                                                         |
 
 ---
@@ -128,7 +128,7 @@
 
 ## 3. 三处同源 Skill 体系差异清单与漂移根因推演
 
-### 3.1 三处目录文件清单与 MD5 哈希对比矩阵
+### 3.1 三处目录File Inventory与 MD5 哈希对比矩阵
 
 | 相对文件路径                      | 1. 根目录 `skill/`                 | 2. 根目录 `skills/browserpaw/`     | 3. 插件目录 `plugins/.../skills/browserpaw/` | 一致性状态                                          |
 | :-------------------------------- | :--------------------------------- | :--------------------------------- | :------------------------------------------- | :-------------------------------------------------- |
@@ -169,7 +169,7 @@ const targets = [
 
 当前代码库权威基准版本为：**`2.9.2`**（`package.json:3`）。
 
-### 4.1 已正确更新至 v2.9.2 的文件清单
+### 4.1 已正确更新至 v2.9.2 的File Inventory
 
 1. `package.json:3`: `"version": "2.9.2"`
 2. `app/native-server/package.json:3`: `"version": "2.9.2"`
@@ -184,19 +184,19 @@ const targets = [
 
 1. **`docs/ARCHITECTURE.md:3`**:
    - 声明：`> **Version**: 2.0.0 (Boost Hardened Release)`
-   - 现状：严重滞后（当前应更新为 2.9.2）。
+   - Status: 严重滞后（当前应更新为 2.9.2）。
 2. **`plugins/browserpaw/.codex-plugin/plugin.json:3`**:
    - 声明：`"version": "2.8.1"`
-   - 现状：滞后两个补丁版本，且许可证误写为 MIT。
+   - Status: 滞后两个补丁版本，且许可证误写为 MIT。
 3. **`README.md:99` 与 `README.zh-CN.md:94`**:
    - 声明：`browserpaw-extension-v2.8.0.zip`
-   - 现状：用户下载链接指向已废弃版本压缩包。
+   - Status: 用户下载链接指向已废弃版本压缩包。
 4. **`TESTING-NOTES.md:1`**:
    - 声明：`v2.8.0`（双脑集成篇章）
-   - 现状：缺少 v2.9.1 与 v2.9.2 的实战加固专节。
+   - Status: 缺少 v2.9.1 与 v2.9.2 的实战加固专节。
 5. **`docs/TROUBLESHOOTING.md:55` 与 `docs/TROUBLESHOOTING.zh-CN.md:54`**:
    - 声明：`BrowserPaw v2.3.8+`
-   - 现状：引用了历史补丁版本特性。
+   - Status: 引用了历史补丁版本特性。
 
 ---
 
@@ -214,7 +214,7 @@ const targets = [
    - `app/native-server`: Fastify 网桥宿主，负责 12306 端口监听、Stdio 管道转发、Session 隔离与 Jev 本地语义微循环；
    - `app/chrome-extension`: MV3 Service Worker，承载 48 个工具底层 CDP 原生执行、1:1 物理光标仿真与 DOM 紧凑剪枝索引。
 3. **动态 Profile 按需解锁机制**：
-   - 客户端调用非当前 Profile 的工具时，不会报错 `Tool not found`，而是自动触发分类解锁并通过 `notifications/tools/list_changed` 通知客户端刷新。
+   - Client Side调用非当前 Profile 的工具时，不会报错 `Tool not found`，而是自动触发分类解锁并通过 `notifications/tools/list_changed` 通知Client Side刷新。
 4. **16 项 MV3 与系统级加固防线**：
    - 涵盖 Sender ID 校验、纯原生 DOM 防 XSS、单 Frame 上下文隔离、CDP 引用计数管理、后台标签页视口离屏截屏、1MB Native Messaging 缓冲区截断防护、Windows 12306 僵尸进程防死锁等。
 
@@ -388,7 +388,7 @@ const targets = [
 | 模块名称                 | 所在物理路径            | 依赖的上游模块 (Dependencies)                             | 被下游模块依赖 (Dependents)                                              | 核心暴露契约与产物                                                             |
 | :----------------------- | :---------------------- | :-------------------------------------------------------- | :----------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
 | **chrome-mcp-shared**    | `packages/shared/`      | `@modelcontextprotocol/sdk`                               | `app/native-server`, `app/chrome-extension`, `scripts/gen-tools-doc.mjs` | 导出 `TOOL_SCHEMAS` (48), `TOOL_PROFILES`, 统一坐标类型与标准错误格式化        |
-| **app/native-server**    | `app/native-server/`    | `packages/shared`, Fastify, CDP SDK, Jev SDK              | AI 外部客户端 (Cursor, Claude, Hermes 等)                                | 监听 12306 端口提供 Streamable HTTP/SSE/Stdio 接口，内置 Jev 本地语义微循环    |
+| **app/native-server**    | `app/native-server/`    | `packages/shared`, Fastify, CDP SDK, Jev SDK              | AI 外部Client Side (Cursor, Claude, Hermes 等)                           | 监听 12306 端口提供 Streamable HTTP/SSE/Stdio 接口，内置 Jev 本地语义微循环    |
 | **app/chrome-extension** | `app/chrome-extension/` | `packages/shared`, WXT, Vue 3, Chrome Extension API (MV3) | Chrome 宿主浏览器, `app/native-server` (via Native Messaging)            | 编译出 `.output/chrome-mv3` 扩展产物，提供底层 100% isTrusted CDP 执行原语     |
 | **plugins/browserpaw**   | `plugins/browserpaw/`   | `app/native-server` (HTTP 接口), Python 3.10+             | Hermes Agent 运行时, Codex 平台                                          | 提供 `plugin.yaml`, `__init__.py` 自动握手及 `mcp-session-id` 会话保持         |
 | **skill 体系**           | `skill/`                | `packages/shared` 工具契约                                | AI Agent (Claude Desktop, Codex, Windsurf)                               | 提供 `SKILL.md` 及 `references/` 渐进式操作指南与配方                          |

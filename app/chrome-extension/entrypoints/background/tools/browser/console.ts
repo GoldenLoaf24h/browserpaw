@@ -16,14 +16,18 @@ interface ConsoleToolParams {
   windowId?: number;
   includeExceptions?: boolean;
   maxMessages?: number;
-  // 新增参数
+  // Additional parameters
   mode?: ConsoleMode;
-  buffer?: boolean; // mode="buffer" 的别名
-  clear?: boolean; // 读取前清空
-  clearAfterRead?: boolean; // 读取后清空（mcp-tools.js 风格）
+  buffer?: boolean; // Alias for mode="buffer"
+  clear?: boolean; // Clear before reading
+  clearAfterRead?: boolean; // Clear after reading (mcp-tools.js style)
   pattern?: string;
   onlyErrors?: boolean;
   limit?: number;
+  waitMs?: number;
+  durationMs?: number;
+  sessionId?: string;
+  sessionContext?: string;
 }
 
 interface ConsoleMessage {
@@ -65,7 +69,7 @@ interface ConsoleResult {
   droppedExceptionCount: number;
 }
 
-// 辅助函数
+// Helper functions
 
 function normalizeLimit(value: unknown, fallback: number): number {
   const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -76,7 +80,7 @@ function parseRegexPattern(pattern?: string): RegExp | undefined {
   if (typeof pattern !== 'string') return undefined;
   const trimmed = pattern.trim();
   if (!trimmed) return undefined;
-  // 支持 /pattern/flags 语法
+  // Support /pattern/flags syntax
   const match = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
   try {
     return match ? new RegExp(match[1], match[2]) : new RegExp(trimmed);
@@ -170,7 +174,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
       );
     }
 
-    // 解析正则表达式
+    // Parse regular expression
     let compiledPattern: RegExp | undefined;
     try {
       compiledPattern = parseRegexPattern(pattern);
@@ -180,24 +184,18 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     }
 
     try {
+      const sessionId = (args as any)?.sessionId || (args as any)?.sessionContext;
       if (typeof tabId === 'number') {
         // Use explicit tab
-        const t = await chrome.tabs.get(tabId);
+        const t = await this.tryGetTab(tabId, sessionId).catch(() => null);
         if (!t?.id) return createErrorResponse('Failed to identify target tab.');
         targetTab = t;
       } else if (url) {
         // Navigate to the specified URL (background by default)
         targetTab = await this.navigateToUrl(url, background !== false, windowId);
       } else {
-        // Use current active tab
-        const [activeTab] =
-          typeof windowId === 'number'
-            ? await chrome.tabs.query({ active: true, windowId })
-            : await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!activeTab?.id) {
-          return createErrorResponse('No active tab found and no URL provided.');
-        }
-        targetTab = activeTab;
+        // ARCH-05: Use session TabAffinity resolution
+        targetTab = await this.resolveAffinityTab({ windowId, sessionId });
       }
 
       if (!targetTab?.id) {
@@ -206,18 +204,18 @@ class ConsoleTool extends BaseBrowserToolExecutor {
 
       targetTabId = targetTab.id;
 
-      // 确定模式：buffer 参数是 mode="buffer" 的别名
+      // Determine mode: buffer param is alias for mode="buffer"
       const resolvedMode: ConsoleMode =
         mode === 'buffer' || buffer === true ? 'buffer' : 'snapshot';
 
-      // 计算有效的消息限制
+      // Calculate effective message limit
       const normalizedMaxMessages = normalizeLimit(maxMessages, DEFAULT_MAX_MESSAGES);
       const effectiveLimit =
         typeof limit === 'number'
           ? normalizeLimit(limit, normalizedMaxMessages)
           : normalizedMaxMessages;
 
-      // Buffer 模式
+      // Buffer mode
       if (resolvedMode === 'buffer') {
         try {
           await consoleBuffer.ensureStarted(targetTabId);
@@ -229,13 +227,13 @@ class ConsoleTool extends BaseBrowserToolExecutor {
           throw error;
         }
 
-        // 处理读取前清空请求
+        // Handle clear before read request
         let clearedBefore: { clearedMessages: number; clearedExceptions: number } | null = null;
         if (clear === true) {
           clearedBefore = consoleBuffer.clear(targetTabId, 'manual');
         }
 
-        // 读取缓冲区
+        // Read buffer
         const read = consoleBuffer.read(targetTabId, {
           pattern: compiledPattern,
           onlyErrors,
@@ -247,13 +245,13 @@ class ConsoleTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Console buffer is not available for this tab.');
         }
 
-        // 处理读取后清空请求（mcp-tools.js 风格，避免重复读取）
+        // Handle clear after read request (mcp-tools.js style, prevents duplicate reads)
         let clearedAfter: { clearedMessages: number; clearedExceptions: number } | null = null;
         if (clearAfterRead === true) {
           clearedAfter = consoleBuffer.clear(targetTabId, 'manual');
         }
 
-        // 构建清空摘要
+        // Build clear summary
         let clearedSummary = '';
         if (clearedBefore) {
           clearedSummary += ` Cleared ${clearedBefore.clearedMessages} messages and ${clearedBefore.clearedExceptions} exceptions before reading.`;
@@ -289,13 +287,21 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         };
       }
 
-      // Snapshot 模式（一次性捕获）
+      // Snapshot mode (one-shot capture)
+      const requestedWaitMs =
+        typeof args?.waitMs === 'number'
+          ? args.waitMs
+          : typeof (args as any)?.durationMs === 'number'
+            ? (args as any).durationMs
+            : 0;
+
       const result = await this.captureConsoleMessages(targetTabId, {
         includeExceptions,
         maxMessages: effectiveLimit,
+        waitMs: requestedWaitMs,
       });
 
-      // 应用过滤器
+      // Apply filters
       const filtered = applyResultFilters(result, {
         pattern: compiledPattern,
         onlyErrors,
@@ -322,7 +328,9 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     windowId?: number,
   ): Promise<chrome.tabs.Tab> {
     if (isPopupUrl(url)) {
-      throw new Error('Access denied: popup.html cannot be opened or navigated to by agent code paths.');
+      throw new Error(
+        'Access denied: popup.html cannot be opened or navigated to by agent code paths.',
+      );
     }
     // Check if URL is already open
     const existingTabs = await chrome.tabs.query({ url });
@@ -394,6 +402,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     options: {
       includeExceptions: boolean;
       maxMessages: number;
+      waitMs?: number;
     },
   ): Promise<ConsoleResult> {
     const { includeExceptions, maxMessages } = options;
@@ -449,8 +458,12 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         // Also enable Log domain to capture other log entries
         await cdpSessionManager.sendCommand(tabId, 'Log.enable');
 
-        // Wait for all messages to be flushed
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // PERF-03: Explicit observation window waitMs; snapshot defaults to micro-settle (50ms) instead of 2000ms hard wait
+        const flushDelay =
+          typeof options.waitMs === 'number' && options.waitMs > 0
+            ? Math.min(options.waitMs, 30000)
+            : 50;
+        await new Promise((resolve) => setTimeout(resolve, flushDelay));
 
         // Process collected messages
         // Helper to deeply serialize console arguments when possible
@@ -583,7 +596,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         // Clean up
         chrome.debugger.onEvent.removeListener(eventListener);
 
-        // 如果 buffer 模式正在使用这个 tab，不要关闭 Runtime/Log 域
+        // Do not disable Runtime/Log domains if buffer mode is active for this tab
         const keepDomainsEnabled = consoleBuffer.isCapturing(tabId);
         if (!keepDomainsEnabled) {
           try {

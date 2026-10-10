@@ -7,6 +7,10 @@ interface DoctorParams {
   verbose?: boolean;
 }
 
+// Fallback safely to 'unbuilt' when running under Vitest or outside bundled output
+const buildId =
+  typeof __BROWSERPAW_BUILD_ID__ !== 'undefined' ? __BROWSERPAW_BUILD_ID__ : 'unbuilt';
+
 class DoctorTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.DOCTOR;
 
@@ -104,6 +108,7 @@ class DoctorTool extends BaseBrowserToolExecutor {
                   ? {
                       extensionId: chrome.runtime.id,
                       manifestVersion: chrome.runtime.getManifest().version,
+                      buildId,
                     }
                   : {}),
               },

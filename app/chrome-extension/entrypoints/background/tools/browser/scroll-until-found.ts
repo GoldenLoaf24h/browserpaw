@@ -10,6 +10,8 @@ import { executeInPage } from './in-page-engine';
 export interface ScrollUntilFoundParams {
   query?: string;
   selector?: string;
+  role?: string;
+  actionOnFound?: 'none' | 'scroll_into_view' | 'click' | 'focus';
   isRegex?: boolean;
   maxSteps?: number;
   stepPx?: number;
@@ -54,6 +56,8 @@ export class ScrollUntilFoundTool extends BaseBrowserToolExecutor {
       const inPageOptions: ScrollUntilFoundOptions = {
         query: args.query,
         selector: args.selector,
+        role: args.role,
+        actionOnFound: args.actionOnFound,
         isRegex: args.isRegex,
         maxSteps: args.maxSteps,
         stepPx: args.stepPx,
@@ -73,6 +77,26 @@ export class ScrollUntilFoundTool extends BaseBrowserToolExecutor {
       const res = results?.[0]?.result;
       if (!res) {
         return createErrorResponse('Failed to execute scroll_until_found in active tab');
+      }
+
+      // TOOL01: For actionOnFound === 'click', trigger trusted interaction executor
+      if (args.actionOnFound === 'click' && res.found && typeof res.index === 'number') {
+        try {
+          const { interactIndexTool } = await import('./interact-index');
+          const clickRes = await interactIndexTool.execute({
+            tabId,
+            index: res.index,
+            action: 'click',
+            sessionId: args.sessionId || args.sessionContext,
+          });
+          if (clickRes.isError) {
+            const errMsg = clickRes.content?.[0]?.type === 'text' ? (clickRes.content[0] as any).text : 'Click action failed';
+            return createErrorResponse(`Target found at index [${res.index}], but actionOnFound click failed: ${errMsg}`);
+          }
+          res.message += ` (Auto-clicked on index [${res.index}] via trusted interaction executor)`;
+        } catch (clickErr) {
+          return createErrorResponse(`Target found at index [${res.index}], but actionOnFound click threw: ${clickErr instanceof Error ? clickErr.message : String(clickErr)}`);
+        }
       }
 
       return {

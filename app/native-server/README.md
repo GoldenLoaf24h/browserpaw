@@ -9,19 +9,18 @@ This package (`mcp-chrome-bridge`) is the Node.js native bridge and Model Contex
 ```
 app/native-server/
 ├── src/
-│   ├── index.ts                # Entrypoint: spins up Fastify HTTP/SSE or delegates to CLI
-│   ├── cli.ts                  # Command-line interface (starts stdio or daemon)
-│   ├── constant/               # Configuration defaults (Port 12306, timeouts, limits)
-│   ├── mcp/
-│   │   ├── mcp-server.ts       # HTTP/SSE MCP implementation with McpSessionManager
-│   │   ├── mcp-server-stdio.ts # Stdio transport MCP server with dynamic profile store
-│   │   └── trace-parser.ts     # DevTools performance trace ingestion
-│   ├── native-host.ts          # Chrome Native Messaging stdio pipe with 1000KB buffer guard
-│   ├── scripts/                # Browser auto-detection and native manifest installers
-│   └── server/
-│       ├── routes/             # Fastify route handlers (/sse, /mcp, /ping, /agent-control)
-│       └── server.test.ts      # Jest integration & security tests
-└── dist/                       # Compiled commonjs and esm outputs + shell wrappers
+│   ├── index.ts                   # Entrypoint: spins up Fastify HTTP/SSE or delegates to CLI
+│   ├── cli.ts                     # Command-line interface (starts stdio or daemon)
+│   ├── native-messaging-host.ts   # Chrome Native Messaging stdio pipe with 1000KB buffer guard
+│   ├── trace-analyzer.ts          # DevTools performance trace ingestion and profile analysis
+│   ├── file-handler.ts            # Safe file storage and path boundary validation
+│   ├── media-asset-store.ts       # Temporary in-memory media buffer manager
+│   ├── constant/                  # Configuration defaults (Port 12306, timeouts, limits)
+│   ├── jev/                       # Jev System 1 autonomous decision engine and heuristics
+│   ├── mcp/                       # MCP server implementations (mcp-server.ts, mcp-server-stdio.ts, session-manager.ts)
+│   ├── scripts/                   # Browser manifest installers (register.ts, register-dev.ts, doctor.ts)
+│   └── server/                    # Fastify control plane (server index, token.ts, jev-model-manager.ts)
+└── dist/                          # Compiled CJS/ESM artifacts and shell scripts
 ```
 
 ---

@@ -43,6 +43,17 @@ export class ActionHistoryManager {
     return list[list.length - 1];
   }
 
+  public removeAction(tabId: number, record: ActionRecord): boolean {
+    const list = this.historyByTab.get(tabId);
+    if (!list || list.length === 0) return false;
+    const idx = list.lastIndexOf(record);
+    if (idx !== -1) {
+      list.splice(idx, 1);
+      return true;
+    }
+    return false;
+  }
+
   public clear(tabId?: number): void {
     if (typeof tabId === 'number') {
       this.historyByTab.delete(tabId);

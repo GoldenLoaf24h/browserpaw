@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  sessionTabAffinity,
-  startHandoverTracking,
-} from '../utils/session-tab-affinity';
+import { sessionTabAffinity, startHandoverTracking } from '../utils/session-tab-affinity';
 import {
   inPageDOMPruner,
   inPageExtractDropdownOptions,
@@ -79,9 +76,10 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(sessionTabAffinity.getAffinity('test-session')).toBe(200);
     });
 
-    it('transfers affinity even when openerTabId is undefined (rel="noopener" / window.open without opener)', async () => {
+    it('transfers affinity even when openerTabId is undefined (rel="noopener" / window.open without opener) with webNavigation sourceTabId proof', async () => {
       const createdListeners: Array<(tab: any) => void> = [];
       const activatedListeners: Array<(activeInfo: any) => void> = [];
+      const navTargetListeners: Array<(details: any) => void> = [];
 
       (globalThis as any).chrome = {
         tabs: {
@@ -102,11 +100,26 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             }),
           },
         },
+        webNavigation: {
+          onCreatedNavigationTarget: {
+            addListener: vi.fn((fn) => navTargetListeners.push(fn)),
+            removeListener: vi.fn((fn) => {
+              const idx = navTargetListeners.indexOf(fn);
+              if (idx !== -1) navTargetListeners.splice(idx, 1);
+            }),
+          },
+        },
       };
 
       sessionTabAffinity.setAffinity('session-rel-noopener', 100);
 
       const tracker = startHandoverTracking(100, 'session-rel-noopener', { windowId: 1 });
+
+      // In real Chromium, target="_blank" rel="noopener" lacks tab.openerTabId,
+      // but fires webNavigation.onCreatedNavigationTarget with sourceTabId = 100!
+      for (const fn of [...navTargetListeners]) {
+        fn({ sourceTabId: 100, tabId: 300, url: 'https://example.com/target-blank-noopener' });
+      }
 
       // Child tab opened with rel="noopener" has NO openerTabId
       const noOpenerTab = { id: 300, openerTabId: undefined, windowId: 1, active: true };
@@ -171,12 +184,15 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       const tracker = startHandoverTracking(100, 'session-async-race', { windowId: 1 });
 
       // Child tab created and activated BEFORE query snapshot resolves
-      const childTab = { id: 400, windowId: 1, active: true };
+      const childTab = { id: 400, openerTabId: 100, windowId: 1, active: true };
       for (const fn of [...createdListeners]) fn(childTab);
       for (const fn of [...activatedListeners]) fn({ tabId: 400, windowId: 1 });
 
       // Now query resolves including both 100 and the new tab 400
-      resolveQuery!([{ id: 100, windowId: 1 }, { id: 400, windowId: 1 }]);
+      resolveQuery!([
+        { id: 100, windowId: 1 },
+        { id: 400, windowId: 1 },
+      ]);
 
       const result = await tracker.waitForHandover(500);
       expect(result).not.toBeNull();
@@ -194,7 +210,10 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           query: vi.fn(async (filter: any) => {
             if (filter?.windowId === 1) return [{ id: 100, windowId: 1 }];
             if (filter?.windowId === 2) return [{ id: 999, windowId: 2 }];
-            return [{ id: 100, windowId: 1 }, { id: 999, windowId: 2 }];
+            return [
+              { id: 100, windowId: 1 },
+              { id: 999, windowId: 2 },
+            ];
           }),
           get: vi.fn(async (id: number) => ({ id, windowId: id === 999 ? 2 : 1, active: true })),
           onCreated: {
@@ -246,6 +265,443 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       await new Promise((r) => setTimeout(r, 20));
       expect(groupMock).toHaveBeenCalledWith({ tabIds: [500], groupId: 55 });
     });
+
+    // =========================================================================
+    // BROWSER-SESSION-01 Reproduction Cases:
+    // User clicks a button in tab 100 that only mutates logs or fetches API.
+    // While tracking, the user independently opens a new tab 999 (e.g. GitHub)
+    // in window 1 without openerTabId or webNavigation sourceTabId proof.
+    // Handover MUST be rejected (return null), and affinity MUST remain bound to tab 100.
+    // =========================================================================
+    it('BROWSER-SESSION-01: does NOT handover affinity to concurrent user-created tab without opener or navigation proof', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn(async (id: number) => ({
+            id,
+            windowId: 1,
+            active: id === 999,
+            url: 'https://github.com/my-project',
+            title: 'GitHub: Where the world builds software',
+          })),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn((fn) => {
+              const idx = createdListeners.indexOf(fn);
+              if (idx !== -1) createdListeners.splice(idx, 1);
+            }),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn((fn) => {
+              const idx = activatedListeners.indexOf(fn);
+              if (idx !== -1) activatedListeners.splice(idx, 1);
+            }),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-srcdoc-log', 100);
+      expect(sessionTabAffinity.getAffinity('session-srcdoc-log')).toBe(100);
+
+      const tracker = startHandoverTracking(100, 'session-srcdoc-log', { windowId: 1 });
+
+      // Simulate concurrent user action: user opens a new tab in the same window (e.g. via Ctrl+T or bookmark)
+      // Tab 999 has NO openerTabId and NO parent navigation proof!
+      const userCreatedTab = {
+        id: 999,
+        openerTabId: undefined,
+        windowId: 1,
+        active: true,
+        url: 'https://github.com/my-project',
+        title: 'GitHub',
+      };
+      for (const fn of [...createdListeners]) fn(userCreatedTab);
+      for (const fn of [...activatedListeners]) fn({ tabId: 999, windowId: 1 });
+
+      // Handover MUST NOT occur; tracker must return null and affinity must remain on tab 100
+      const result = await tracker.waitForHandover(200);
+      expect(result).toBeNull();
+      expect(sessionTabAffinity.getAffinity('session-srcdoc-log')).toBe(100);
+    });
+
+    it('does NOT handover affinity when an existing user tab is activated', async () => {
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [
+            { id: 100, windowId: 1 },
+            { id: 500, windowId: 1, url: 'https://news.ycombinator.com', title: 'Hacker News' },
+          ]),
+          get: vi.fn(async (id: number) => ({
+            id,
+            windowId: 1,
+            active: id === 500,
+            url: 'https://news.ycombinator.com',
+            title: 'Hacker News',
+          })),
+          onCreated: { addListener: vi.fn(), removeListener: vi.fn() },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn((fn) => {
+              const idx = activatedListeners.indexOf(fn);
+              if (idx !== -1) activatedListeners.splice(idx, 1);
+            }),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-existing-tab', 100);
+      const tracker = startHandoverTracking(100, 'session-existing-tab', { windowId: 1 });
+
+      // User switches to existing tab 500
+      for (const fn of [...activatedListeners]) fn({ tabId: 500, windowId: 1 });
+
+      const result = await tracker.waitForHandover(150);
+      expect(result).toBeNull();
+      expect(sessionTabAffinity.getAffinity('session-existing-tab')).toBe(100);
+    });
+
+    it('transfers affinity when webNavigation proof arrives before OR after onCreated for valid rel="noopener"', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+      const navTargetListeners: Array<(details: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn(async (id: number) => ({ id, windowId: 1, active: id === 301 })),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+        webNavigation: {
+          onCreatedNavigationTarget: {
+            addListener: vi.fn((fn) => navTargetListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-proof-order', 100);
+      const tracker = startHandoverTracking(100, 'session-proof-order', { windowId: 1 });
+
+      // Scenario: onCreated fires FIRST without openerTabId, and webNavigation proof arrives slightly AFTER
+      const noOpenerTab = { id: 301, openerTabId: undefined, windowId: 1, active: true };
+      for (const fn of [...createdListeners]) fn(noOpenerTab);
+
+      // Proof arrives asynchronously after tab creation
+      for (const fn of [...navTargetListeners]) {
+        fn({ sourceTabId: 100, tabId: 301, url: 'https://example.com/item' });
+      }
+
+      for (const fn of [...activatedListeners]) fn({ tabId: 301, windowId: 1 });
+
+      const result = await tracker.waitForHandover(500);
+      expect(result).not.toBeNull();
+      expect(result?.handover).toBe(true);
+      expect(result?.newTabId).toBe(301);
+      expect(sessionTabAffinity.getAffinity('session-proof-order')).toBe(301);
+    });
+
+    it('transfers affinity when onCreated active=false, onActivated active=true arrives before navproof, and navproof arrives last', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+      const navTargetListeners: Array<(details: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn(async (id: number) => ({
+            id,
+            windowId: 1,
+            active: true,
+            url: 'https://example.com/activated-child',
+          })),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+        webNavigation: {
+          onCreatedNavigationTarget: {
+            addListener: vi.fn((fn) => navTargetListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-late-navproof', 100);
+      const tracker = startHandoverTracking(100, 'session-late-navproof', { windowId: 1 });
+
+      // Step 1: onCreated fires first with active = false (tab initially spawned in background)
+      const initialInactiveTab = { id: 305, openerTabId: undefined, windowId: 1, active: false };
+      for (const fn of [...createdListeners]) fn(initialInactiveTab);
+
+      // Step 2: onActivated fires next; tabs.get returns active = true, but navproof is NOT yet available
+      for (const fn of [...activatedListeners]) fn({ tabId: 305, windowId: 1 });
+
+      // Step 3: webNavigation.onCreatedNavigationTarget arrives LAST with sourceTabId proof = 100
+      for (const fn of [...navTargetListeners]) {
+        fn({ sourceTabId: 100, tabId: 305, url: 'https://example.com/activated-child' });
+      }
+
+      // Handover MUST successfully transfer to tab 305 based on fresh tab active state!
+      const result = await tracker.waitForHandover(500);
+      expect(result).not.toBeNull();
+      expect(result?.handover).toBe(true);
+      expect(result?.newTabId).toBe(305);
+      expect(sessionTabAffinity.getAffinity('session-late-navproof')).toBe(305);
+    });
+
+    it('does NOT handover affinity if webNavigation proof points to an unrelated sourceTabId', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+      const navTargetListeners: Array<(details: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn(async (id: number) => ({ id, windowId: 1, active: id === 302 })),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+        webNavigation: {
+          onCreatedNavigationTarget: {
+            addListener: vi.fn((fn) => navTargetListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-wrong-source', 100);
+      const tracker = startHandoverTracking(100, 'session-wrong-source', { windowId: 1 });
+
+      // Proof says tab 302 was spawned by unrelated tab 888 (NOT parent 100!)
+      for (const fn of [...navTargetListeners]) {
+        fn({ sourceTabId: 888, tabId: 302, url: 'https://external.com' });
+      }
+
+      const noOpenerTab = { id: 302, openerTabId: undefined, windowId: 1, active: true };
+      for (const fn of [...createdListeners]) fn(noOpenerTab);
+      for (const fn of [...activatedListeners]) fn({ tabId: 302, windowId: 1 });
+
+      const result = await tracker.waitForHandover(200);
+      expect(result).toBeNull();
+      expect(sessionTabAffinity.getAffinity('session-wrong-source')).toBe(100);
+    });
+
+    it('does NOT mutate affinity if delayed chrome.tabs.get callback resolves after tracker cancel', async () => {
+      let resolveDelayedGet: ((tab: any) => void) | null = null;
+      const delayedGetPromise = new Promise<any>((resolve) => {
+        resolveDelayedGet = resolve;
+      });
+
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn((id: number) => {
+            if (id === 909) return delayedGetPromise;
+            return Promise.resolve({ id, windowId: 1, active: true });
+          }),
+          onCreated: { addListener: vi.fn(), removeListener: vi.fn() },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-cancel-guard', 100);
+      const tracker = startHandoverTracking(100, 'session-cancel-guard', { windowId: 1 });
+
+      // Trigger onActivated which starts the async tabs.get(909)
+      for (const fn of [...activatedListeners]) fn({ tabId: 909, windowId: 1 });
+
+      // Tracker is cancelled before delayed get resolves
+      tracker.cancel();
+
+      // Now delayed tabs.get resolves with active tab 909
+      if (resolveDelayedGet) {
+        (resolveDelayedGet as any)({ id: 909, openerTabId: 100, windowId: 1, active: true });
+      }
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Affinity must remain safely on 100, not hijacked by cancelled tracker
+      expect(sessionTabAffinity.getAffinity('session-cancel-guard')).toBe(100);
+    });
+
+    it('multi-session isolation: does NOT hijack concurrent session bound to same parent tab during handover', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => [{ id: 100, windowId: 1 }]),
+          get: vi.fn(async (id: number) => ({
+            id,
+            windowId: 1,
+            active: id === 600,
+            openerTabId: 100,
+          })),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+        },
+      };
+
+      (sessionTabAffinity as any).initListeners();
+      sessionTabAffinity.setAffinity('session-A', 100);
+      sessionTabAffinity.setAffinity('session-B', 100);
+
+      const tracker = startHandoverTracking(100, 'session-A', { windowId: 1 });
+
+      expect(createdListeners.length).toBe(2);
+      expect(activatedListeners.length).toBe(2);
+
+      const childTab = { id: 600, openerTabId: 100, windowId: 1, active: true };
+      for (const fn of [...createdListeners]) fn(childTab);
+      for (const fn of [...activatedListeners]) fn({ tabId: 600, windowId: 1 });
+
+      const result = await tracker.waitForHandover(300);
+      expect(result).not.toBeNull();
+      expect(result?.newTabId).toBe(600);
+
+      expect(sessionTabAffinity.getAffinity('session-A')).toBe(600);
+      expect(sessionTabAffinity.getAffinity('session-B')).toBe(100);
+    });
+
+    it.each(['https://example.com/child', 'about:blank'])(
+      'BROWSER-SESSION-02: resolves a pending child URL before reporting handover (%s)',
+      async (finalUrl) => {
+        const createdListeners: Array<(tab: any) => void> = [];
+        (globalThis as any).chrome = {
+          tabs: {
+            get: vi.fn(async (id: number) => ({
+              id,
+              windowId: 1,
+              active: true,
+              url: finalUrl,
+              title: 'Child',
+            })),
+            onCreated: {
+              addListener: vi.fn((fn) => createdListeners.push(fn)),
+              removeListener: vi.fn(),
+            },
+            onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+            onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+          },
+        };
+        sessionTabAffinity.setAffinity('session-A', 100);
+        sessionTabAffinity.setAffinity('session-B', 100);
+        const tracker = startHandoverTracking(100, 'session-A', { windowId: 1 });
+        for (const listener of createdListeners) {
+          listener({
+            id: 601,
+            openerTabId: 100,
+            windowId: 1,
+            active: true,
+            url: '',
+            pendingUrl: 'https://example.com/child',
+          });
+        }
+        const result = await tracker.waitForHandover(100);
+        if (finalUrl === 'about:blank') {
+          expect(result).toBeNull();
+          expect(sessionTabAffinity.getAffinity('session-A')).toBe(100);
+        } else {
+          expect(result).toMatchObject({ handover: true, newTabId: 601, url: finalUrl });
+          expect(sessionTabAffinity.getAffinity('session-A')).toBe(601);
+        }
+        expect(sessionTabAffinity.getAffinity('session-B')).toBe(100);
+      },
+    );
+
+    it('tab lifecycle: aborts tracking when parentTabId is removed', async () => {
+      const removedListeners: Array<(tabId: number) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => []),
+          get: vi.fn(async () => null),
+          onCreated: { addListener: vi.fn(), removeListener: vi.fn() },
+          onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+          onRemoved: {
+            addListener: vi.fn((fn) => removedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-parent-closed', 100);
+      const tracker = startHandoverTracking(100, 'session-parent-closed', { windowId: 1 });
+
+      for (const fn of [...removedListeners]) fn(100);
+
+      const result = await tracker.waitForHandover(150);
+      expect(result).toBeNull();
+    });
+
+    it('tab lifecycle: does NOT handover to child tab if child tab was closed before handover resolves', async () => {
+      const createdListeners: Array<(tab: any) => void> = [];
+      const activatedListeners: Array<(activeInfo: any) => void> = [];
+
+      (globalThis as any).chrome = {
+        tabs: {
+          query: vi.fn(async () => []),
+          get: vi.fn(async (_id: number) => {
+            throw new Error('Tabs cannot be edited: tab was closed');
+          }),
+          onCreated: {
+            addListener: vi.fn((fn) => createdListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onActivated: {
+            addListener: vi.fn((fn) => activatedListeners.push(fn)),
+            removeListener: vi.fn(),
+          },
+          onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+        },
+      };
+
+      sessionTabAffinity.setAffinity('session-child-dead', 100);
+      const tracker = startHandoverTracking(100, 'session-child-dead', { windowId: 1 });
+
+      const deadChild = { id: 700, openerTabId: 100, windowId: 1, active: true };
+      for (const fn of [...createdListeners]) fn(deadChild);
+      for (const fn of [...activatedListeners]) fn({ tabId: 700, windowId: 1 });
+
+      const result = await tracker.waitForHandover(150);
+      expect(result).toBeNull();
+      expect(sessionTabAffinity.getAffinity('session-child-dead')).toBe(100);
+    });
   });
 
   // =========================================================================
@@ -280,7 +736,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             x: 50,
             y: top,
             toJSON: () => {},
-          } as DOMRect);
+          }) as DOMRect;
 
         const btn = document.createElement('button');
         btn.textContent = `Buy Item ${i + 1}`;
@@ -334,7 +790,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 50,
           y: 1000,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
       nav.appendChild(navLink);
       document.body.appendChild(nav);
 
@@ -352,7 +808,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 50,
           y: 1200,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
       footer.appendChild(footerBtn);
       document.body.appendChild(footer);
 
@@ -383,7 +839,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             x: 50,
             y: 200,
             toJSON: () => {},
-          } as DOMRect);
+          }) as DOMRect;
         const btn = document.createElement('button');
         btn.textContent = `Item ${i}`;
         btn.getBoundingClientRect = item.getBoundingClientRect;
@@ -415,7 +871,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 50,
           y: 100,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
       document.body.appendChild(scrollContainer);
 
       // Create 15 chat messages inside the 300px-high scroll container
@@ -436,7 +892,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             x: 60,
             y: topY,
             toJSON: () => {},
-          } as DOMRect);
+          }) as DOMRect;
         const textBtn = document.createElement('button');
         textBtn.textContent = `Message ${i}`;
         textBtn.getBoundingClientRect = msg.getBoundingClientRect;
@@ -474,7 +930,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             x: 100,
             y: topY,
             toJSON: () => {},
-          } as DOMRect);
+          }) as DOMRect;
         const link = document.createElement('a');
         link.href = '#';
         link.textContent = `${item.className} ${i}`;
@@ -485,7 +941,9 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
 
       const res = inPageDOMPruner({ virtualizeViewport: true });
       // Verify all 6 items appear in strictly alternating sequence in the output
-      const matches = Array.from(res.treeString.matchAll(/(post-card|sponsor-banner) \d/g)).map((m) => m[0]);
+      const matches = Array.from(res.treeString.matchAll(/(post-card|sponsor-banner) \d/g)).map(
+        (m) => m[0],
+      );
       expect(matches).toEqual([
         'post-card 0',
         'sponsor-banner 1',
@@ -520,7 +978,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
             x: 50,
             y: topY,
             toJSON: () => {},
-          } as DOMRect);
+          }) as DOMRect;
         const input = document.createElement('input');
         input.value = `Row value ${i}`;
         input.getBoundingClientRect = row.getBoundingClientRect;
@@ -620,7 +1078,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 0,
           y: 0,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
 
       const closeBtn = document.createElement('button');
       closeBtn.className = 'dialog-close popup-close';
@@ -636,11 +1094,12 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 450,
           y: 10,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
 
       let clicked = false;
       closeBtn.onclick = () => {
         clicked = true;
+        modal.style.display = 'none';
       };
 
       modal.appendChild(closeBtn);
@@ -650,6 +1109,8 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(dismissRes.dismissedCount).toBe(1);
       expect(clicked).toBe(true);
       expect(dismissRes.overlays[0].action).toBe('clicked_close_button');
+      expect(dismissRes.overlays[0].dismissed).toBe(true);
+      expect(dismissRes.overlays[0].needsPhysicalFallback).toBe(false);
     });
 
     it('verifies input commitment with generic button classes (btn-primary, btn-action, icon-search)', () => {
@@ -694,7 +1155,7 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 0,
           y: 0,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
 
       const headerBtn = document.createElement('button');
       headerBtn.className = 'el-dialog__headerbtn';
@@ -709,11 +1170,12 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
           x: 550,
           y: 10,
           toJSON: () => {},
-        } as DOMRect);
+        }) as DOMRect;
 
       let elClicked = false;
       headerBtn.onclick = () => {
         elClicked = true;
+        elDialog.style.display = 'none';
       };
       elDialog.appendChild(headerBtn);
       document.body.appendChild(elDialog);
@@ -722,6 +1184,8 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(dismissRes.dismissedCount).toBe(1);
       expect(elClicked).toBe(true);
       expect(dismissRes.overlays[0].buttonSelector).toContain('el-dialog__headerbtn');
+      expect(dismissRes.overlays[0].dismissed).toBe(true);
+      expect(dismissRes.overlays[0].needsPhysicalFallback).toBe(false);
     });
 
     it('aggregates subframe virtualization metrics into mergedData in ReadDOMTool', async () => {

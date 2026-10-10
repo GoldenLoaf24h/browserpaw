@@ -36,26 +36,26 @@ Frustrated by these roadblocks, I built BrowserPaw to solve all of these problem
 
 ## ⚡ What is BrowserPaw?
 
-BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 8 categories (navigation, perception, action, observation, management, diagnostics, network, crawl), with a minimal 14-tool core profile for everyday sessions.
+BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 8 categories (autonomous execution, navigation & tabs, perception & extraction, action & pipeline, observation & diagnostics, management, network, performance & health), defaulting to a minimal 14-tool core profile for everyday sessions to avoid token bloat and decision paralysis. Full tool exposure is enabled via `CHROME_MCP_TOOL_PROFILE=full` or dynamic activation through `chrome_tool_docs`.
 
 Two execution paths are available:
 
 1. **Deterministic tools** – indexed clicks, fills, batch pipelines, form wizards, screenshots, network capture, etc. The calling agent plans each step.
-2. **`chrome_act_toward_goal`** – a local perception-action micro-loop (~200–400ms/step). The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
+2. **`chrome_act_toward_goal`** – a local perception-action micro-loop without per-step MCP round-trips. The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
 
 ---
 
 ## 🎯 Key capabilities
 
 - **Session continuity** – Runs inside your existing Chrome. Google, GitHub, and SSO logins are already there; no profile copying, no re-authentication.
-- **Pruned, indexed DOM** – `chrome_read_dom` strips non-interactive and occluded nodes and assigns 1-based indices. On 1,000+ node pages this reduces node count by over 85% (test-validated), keeping snapshots small. A fast snapshot mode returns a viewport summary in ≤30 ms and ≤15 KB.
+- **Pruned, indexed DOM** – `chrome_read_dom` strips non-interactive and occluded nodes and assigns 1-based indices. On 1,000+ node pages this reduces node count by over 85% (test-validated), keeping snapshots small. A fast snapshot mode returns a viewport summary within an optimized budget target of 10–30 ms and ≤15 KB.
 - **Card flattening and viewport virtualization** – `flattenCards` collapses repetitive feed cards into one-line summaries; `virtualizeViewport` folds off-screen list items into count placeholders.
 - **Shadow DOM traversal** – Recursively walks open shadow roots; closed shadow hosts are tagged and interacted with at the host level. Accessible names are extracted from icon-only buttons (aria-label, title, SVG titles).
 - **Batch pipelines** – `chrome_batch_actions` runs multi-step click/fill/wait/assert/extract sequences in a single MCP round-trip. `chrome_form_pipeline` advances multi-step forms locally.
 - **Overlay dismissal** – `chrome_dismiss_overlay` closes marketing popups, cookie banners, and modals in one step, without dumping the DOM.
 - **Delta piggybacking** – `includeDelta: true` returns DOM mutations in the same response as an action, removing the need for a follow-up DOM read.
 - **Native event fidelity** – Clicks and keystrokes are dispatched as trusted CDP events (`isTrusted: true`), so React/Vue/Angular and Shadow DOM handlers fire normally.
-- **Coordinate fallback** – When DOM indexing fails (canvas, WebGL, icon-only UI), a screenshot grid plus `chrome_computer` provides coordinate-based control with 24 px snap-to-edge.
+- **Coordinate fallback** – When DOM indexing fails (canvas, WebGL, icon-only UI), a screenshot grid plus `chrome_computer` provides coordinate-based control with 24 px magnetic auto-snapping.
 - **Human handoff** – `chrome_request_human_intervention` dims the page, shows a banner, and parks the cursor so the user can complete 2FA or captchas; automation resumes afterward.
 - **Tab and window management** – Create, group, move, and close tabs, query history and bookmarks, and capture performance traces, all under the user's existing credentials.
 
@@ -92,7 +92,7 @@ The micro-loop is bounded: at most 60 steps in Jev mode (default 10), truncated 
 **Autonomous Jev Modes & Smart Gating:**
 
 - **Off**: Disabled by the user in the extension popup. `chrome_act_toward_goal` is automatically hidden from `tools/list`; if invoked directly, it is rejected and prompts for user authorization.
-- **Local**: Runs an offline, privacy-first decider model (`decider-2b`) locally on port 8009 with NVIDIA GPU acceleration (CUDA RTX) or CPU fallback. Hot-loads automatically on first use.
+- **Local**: Runs an offline, privacy-first decider model (`decider-2b`) locally on port 8009 with NVIDIA GPU acceleration (CUDA RTX) or CPU fallback. Once weights are downloaded via popup or setup script, the bridge manages process lifecycle and hot-loads automatically.
 - **Remote**: Uses TypeSafe Jev System One cloud inference. Set `TYPESAFE_API_KEY` (or configure via popup) with optional custom `Base URL` and custom fine-tuned `modelId`. Failing configurations return actionable diagnostic logs instead of silent heuristic fallback.
 
 ---
@@ -105,13 +105,13 @@ Paste this to your agent:
 
 > "Set up BrowserPaw: https://github.com/GoldenLoaf24h/browserpaw. Read INSTALL.md and follow the steps."
 
-Your agent will compile the project and register the OS native host automatically. Then simply open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `app/chrome-extension/.output/chrome-mv3`.
+Your agent will compile the project and register the OS native host automatically. Then simply open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `app/chrome-extension/.output/chrome-mv3` (or your configured local staging directory).
 
-### Option 2: Prebuilt release (No build required)
+### Option 2: Prebuilt extension (No extension build required)
 
 1. Download the latest `browserpaw-extension-v*.zip` and `browserpaw-skill-v*.zip` from [Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest).
 2. Unzip the extension to a local persistent directory, open `chrome://extensions`, enable Developer mode, and click **Load unpacked**.
-3. Register the native host once: run `node dist/scripts/register-dev.js` inside the server directory.
+3. The extension ZIP does not include the Native Messaging server. Clone the repository and follow [INSTALL.md](./INSTALL.md) to build and register the local bridge.
 4. Copy the full `skill/` directory (including its `references/` folder) into your agent's skills directory (Codex: `~/.codex/skills/browserpaw/`).
 
 ### Option 3: Build from source
@@ -119,10 +119,10 @@ Your agent will compile the project and register the OS native host automaticall
 ```bash
 git clone https://github.com/GoldenLoaf24h/browserpaw.git
 cd browserpaw && pnpm install && pnpm build
-cd app/native-server && node dist/scripts/register-dev.js
+node app/native-server/dist/scripts/register-dev.js
 ```
 
-Then load `app/chrome-extension/.output/chrome-mv3` into `chrome://extensions`.
+Then load `app/chrome-extension/.output/chrome-mv3` (or your configured staging directory) into `chrome://extensions`.
 
 ### Verification
 
@@ -147,7 +147,7 @@ All 50 tools are grouped below. For machine-readable schemas and parameter detai
 ### Navigation & tabs (7)
 
 - **`chrome_navigate`** – Open URL, refresh, history back/forward, background tabs.
-- **`chrome_switch_tab`** – Switch active tab or bind session affinity.
+- **`chrome_switch_tab`** – Switch active tab or bind session affinity (auto-handover strictly restricted to verified openerTabId or webNavigation lineage).
 - **`chrome_close_tabs`** – Close tabs by id, URL, or session (requires confirm for active tab).
 - **`chrome_move_tab`** – Reposition tabs or move across windows.
 - **`get_windows_and_tabs`** – List windows and tabs with state.
@@ -211,7 +211,7 @@ All 50 tools are grouped below. For machine-readable schemas and parameter detai
 
 ```text
 AI Client (any MCP-capable agent)
-         │  MCP over HTTP/SSE on 127.0.0.1:12306, or stdio
+         │  MCP over Streamable HTTP (/mcp), SSE (/sse) on 127.0.0.1:12306, or stdio
          ▼
 Native Messaging Bridge (Fastify + Stdio Host)
          ├── Fast Decision Engine (Jev micro-loop)
@@ -267,3 +267,8 @@ Users are solely responsible for ensuring that their automated browser workflows
 ### 🏷️ Trademarks & Non-Affiliation
 
 _Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of Microsoft Corporation. _OpenAI_ and _ChatGPT_ are trademarks of OpenAI, Inc. _TypeSafe_ is a trademark of TypeSafe, Inc. BrowserPaw is an independent open-source project and is not sponsored, endorsed, or affiliated with any of these entities. Third-party software attributions and licenses are documented in [NOTICE](./NOTICE).
+
+## 🛡️ Verification & Quality
+
+Development acceptance gates, build/deployment verification, and runtime identity standards are defined in [**`docs/QUALITY.md`**](./docs/QUALITY.md).
+Run `pnpm verify` to execute full static quality and build audits.

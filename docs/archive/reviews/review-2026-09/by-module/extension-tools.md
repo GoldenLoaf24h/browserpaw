@@ -7,11 +7,11 @@
 
 ---
 
-## 一、 模块概览与审查文件清单 (共 59 个文件)
+## 一、 模块概览与审查File Inventory (共 59 个文件)
 
 本模块承担 BrowserPaw 扩展的核心调度职责，包括与 Native Messaging Host 通信、保持 Service Worker 存活、CDP 会话管理、In-page 引擎分发，以及 53 个直接供 Agent 调用的浏览器控制与感知工具。
 
-| 序号 | 相对路径                                       | 行数 | 字符大小 | 核心职责定位                                                                      |
+| 序号 | 相对路径                                       | 行数 | 字符大小 | Core Responsibilities定位                                                         |
 | :--- | :--------------------------------------------- | :--- | :------- | :-------------------------------------------------------------------------------- |
 | 1    | `index.ts`                                     | 11   | 253 B    | Background Service Worker 入口，初始化 Native Host 监听                           |
 | 2    | `keepalive-manager.ts`                         | 85   | 2.3 KB   | MV3 SW 存活保活管理器（heartbeat 定时器与 alarms 备份）                           |
@@ -46,11 +46,11 @@
 | 31   | `tools/browser/scroll.ts`                      | 275  | 10.1 KB  | 物理滚轮滚动工具，调度 CDP Input.dispatchMouseEvent (mouseWheel)                  |
 | 32   | `tools/browser/smart-scroll.ts`                | 270  | 9.8 KB   | 智能容器滚动工具，自动寻找页面最主要可滚动容器并执行滚动                          |
 | 33   | `tools/browser/tab-favicon.ts`                 | 267  | 9.7 KB   | Agent 状态图标管理器，高亮当前受控标签页并在释放时还原 Favicon                    |
-| 34   | `tools/browser/tab-group-manager.ts`           | 255  | 8.3 KB   | 自动化标签组生命周期管理器，防止遗留孤儿分组                                      |
+| 34   | `tools/browser/tab-group-manager.ts`           | 255  | 8.3 KB   | 自动化标签组Lifecycle Management器，防止遗留孤儿分组                              |
 | 35   | `tools/browser/inspect-media.ts`               | 245  | 8.8 KB   | 页面多媒体资源提取与局部放大检查工具                                              |
 | 36   | `tools/browser/in-page-engine.ts`              | 244  | 8.7 KB   | 页面内嵌引擎分发器，解决 MV3 executeScript 无法直接调用模块函数的问题             |
 | 37   | `tools/browser/insert-media.ts`                | 239  | 8.3 KB   | 富文本编辑器多媒体剪贴板/拖拽模拟插入工具                                         |
-| 38   | `tools/browser/history.ts`                     | 233  | 7.3 KB   | 浏览器历史记录搜索与范围过滤工具                                                  |
+| 38   | `tools/browser/history.ts`                     | 233  | 7.3 KB   | 浏览器Historical Records搜索与范围过滤工具                                        |
 | 39   | `tools/browser/cdp-execute.ts`                 | 232  | 8.2 KB   | 工业级原生 CDP 指令透传工具，支持全协议指令直接调用                               |
 | 40   | `tools/browser/burst-interact.ts`              | 229  | 7.3 KB   | 连续点击与密集交互爆破工具                                                        |
 | 41   | `tools/browser/web-fetcher.ts`                 | 227  | 9.0 KB   | 网页可见文本与 HTML 内容快速提取工具                                              |
@@ -197,7 +197,7 @@
 
 ---
 
-### 2.2 P1 级：高概率异常路径 / 显著性能瓶颈 / 架构硬伤 / 资源泄漏
+### 2.2 P1 级：高概率异常路径 / 显著Performance Bottlenecks / 架构硬伤 / 资源泄漏
 
 ---
 
@@ -205,7 +205,7 @@
 
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\in-page-engine.ts:28-198`
-- **严重度**：`P1 性能瓶颈 / 架构缺陷 / 异常路径`
+- **严重度**：`P1 Performance Bottlenecks / 架构缺陷 / 异常路径`
 - **问题描述**：
   `executeInPage` 每次调用都必须经过 3 个阶段：① 发起执行并将结果 Promise 挂载到 `globalThis`，② 启动 10ms 间隔的 while 循环，每次循环都调用一次 `executeScript` 轮询 `box.settled`，③ 再次执行 `executeScript` 取出结果并清理。单次 `executeScript` 在 Chromium 中需要跨进程 IPC，耗时 15~~35ms。一个简单的 `read_dom` 或 `interact_index` 操作包含 6~~8 次 in-page 方法调用，累计产生 18~~24 次 `executeScript` 往返，净增加 300~~800ms 延迟。此外，轮询循环的 deadline 是当前时间 + 4000ms（`EXECUTE_TIMEOUT_MS = 4_000`），但在 Retrieve 阶段报错却硬编码为 `timeout: entrypoint did not settle in 15s`，对 Agent 提供了严重错误的超时诊断。
 - **证据与触发路径推演**：
@@ -266,7 +266,7 @@
 
 - **文件绝对路径:行号**：
   `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\entrypoints\background\tools\browser\dom-indexer.ts:2291-2320`
-- **严重度**：`P1 性能瓶颈 / O(N²) 复杂度`
+- **严重度**：`P1 Performance Bottlenecks / O(N²) 复杂度`
 - **问题描述**：
   在 DOM 剪枝遍历的大循环中（多达数百到数千个 candidate），针对每一个 candidate 节点，居然都调用一次 `cand.node.querySelectorAll('span, div, i, svg, polygon, circle, rect')`，随后遍历这些子元素并针对其 style 属性执行多个正则表达式匹配（检查是否为 diamond、circle、hex、triangle）。
 - **证据与触发路径推演**：
@@ -488,7 +488,7 @@
 - **【问题 19】`tools/browser/index.ts:10` 导出了私有内部工具，存在架构泄露**
   导出了 `networkDebuggerStartTool` 与 `networkCaptureStartTool` 等仅用于内部组合的组件，虽然在 `tools/index.ts` 中通过 `TOOL_SCHEMAS` 过滤避免了被外部直接调用，但仍污染了模块公共接口，易引发循环依赖。
 - **【问题 20】`native-host.ts:562` `forward_to_native` 消息未检查 `safePostMessage` 返回值**
-  在接收到 `forward_to_native` 消息时，代码写为 `safePostMessage(nativePort, message.message); sendResponse({ success: true });`。如果消息体因为过大被 `safePostMessage` 拦截，依旧向调用方虚假报告了 `{ success: true }`。
+  在接收到 `forward_to_native` 消息时，代码写为 `safePostMessage(nativePort, message.message); sendResponse({ success: true });`。如果消息体因为过大被 `safePostMessage` 拦截，依旧向Caller虚假报告了 `{ success: true }`。
 
 ---
 

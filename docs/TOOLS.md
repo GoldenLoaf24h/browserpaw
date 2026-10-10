@@ -79,7 +79,7 @@ Get all currently open browser windows and tabs
 
 ### `chrome_read_dom`
 
-Extract and prune interactive DOM tree with compact 1-based index assignment, viewport boundary filtering, and occlusion pruning. Supports scoped container targeting (selector) and noise exclusion (exclude) to eliminate full DOM dump overhead.
+Extract and prune interactive DOM tree with compact 1-based index assignment, viewport boundary filtering, and occlusion pruning. Supports scoped container targeting (selector) and noise exclusion (exclude) to eliminate full DOM dump overhead. Note on side-effects: while standard DOM extraction is read-only, optional parameter dismissOverlays modifies the live page by closing modals and removing overlay elements.
 
 - `selector` — CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.
 - `scope` — Alias for selector. CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.
@@ -158,7 +158,7 @@ Return compact parameter documentation for a category of BrowserPaw tools (navig
 
 ### `chrome_act_toward_goal`
 
-Autonomous semantic micro-loop that perceives, decides, and acts toward a natural-language goal within a local Native Server loop (~200-400ms/step). Powered by TypeSafe Jev System One with seamless fallback to heuristic scoring when no API key is available or on quota/network degradation. Automatically escalates ambiguous, destructive, or complex actions back to the macro planner with pre-fetched page context.
+Autonomous semantic micro-loop that perceives, decides, and acts toward a natural-language goal within a local Native Server loop without per-step MCP round-trip latency. Powered by TypeSafe Jev System One (Cloud or local resident CUDA GPU/MPS). Requires configured model; fails closed when unavailable. Automatically escalates ambiguous, destructive, or complex actions back to the macro planner with pre-fetched page context.
 
 - `goal` (required) — Natural language goal or objective to advance toward on the current page
 - `tabId` — Target tab ID (optional, defaults to active tab)
@@ -194,7 +194,7 @@ Click, hover, or interact with an element using its compact 1-based numeric inde
 - `waitForSettle` — Wait for DOM mutations to settle (quiet for 150ms or timeout) after interaction before returning (default: false)
 - `settleTimeoutMs` — Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)
 - `humanize` — Simulate realistic human-like cursor trajectory with micro-jitter before clicking (default: false)
-- `includeDelta` — Automatically capture and return DOM changes caused by this interaction in the delta field (default: false)
+- `includeDelta` — Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `pierceOverlay` — Automatically pierce non-opaque or transient backdrop masks/loading stubs when intercepted (default: true)
 - `waitForNetworkQuiescence` — Wait for in-flight network requests to settle after this interaction before returning (default: false)
@@ -215,14 +215,14 @@ Fill text into an input or textarea element using its compact 1-based numeric in
 - `windowId` — Target window ID (optional)
 - `waitForSettle` — Wait for DOM mutations to settle after filling text before returning (default: false)
 - `settleTimeoutMs` — Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)
-- `includeDelta` — Automatically capture and return DOM changes caused by filling in the delta field (default: false)
+- `includeDelta` — Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 
 ### `chrome_keyboard`
 
-Simulate keyboard input on a web page. Supports single keys (Enter, Tab, Escape), key combinations (Ctrl+C, Ctrl+V), and text input. Can target a specific element or send to the focused element.
+Simulate keyboard input on a web page. Supports single keys (Enter, Tab, Escape), standalone modifier keys (Control, Shift, Alt, Meta/Command), standard combinations (Ctrl+C, Ctrl+V, Shift+Tab), punctuation/symbol combinations (Ctrl+,, Ctrl++, Shift+,), and text input sequences. Can target a specific element or send to the focused element.
 
-- `keys` (required) — Keys or key combinations to simulate. Examples: "Enter", "Tab", "Ctrl+C", "Shift+Tab", "Hello World".
+- `keys` (required) — Keys or key combinations to simulate. Examples: "Enter", "Tab", "Ctrl+C", "Ctrl+,", "Shift+Tab", "Control", "Hello World".
 - `index` — Target element index (1-based integer from browserpaw_read_dom) to focus before sending keyboard events.
 - `selector` — CSS selector or XPath for target element to receive keyboard events.
 - `selectorType:css|xpath` — Type of selector (default: "css").
@@ -458,7 +458,7 @@ Performs automated client-side RAF auto-scrolling and live DOM / Shadow-DOM dete
 
 ### `chrome_console`
 
-Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~2s wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).
+Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).
 
 - `url` — URL to navigate to and capture console from. If not provided, uses the current active tab
 - `tabId` — Target an existing tab by ID (default: active tab).

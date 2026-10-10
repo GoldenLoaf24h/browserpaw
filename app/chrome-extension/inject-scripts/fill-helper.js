@@ -1,4 +1,3 @@
-/* eslint-disable */
 // fill-helper.js
 // This script is injected into the page to handle form filling operations
 
@@ -328,7 +327,25 @@ if (window.__FILL_HELPER_INITIALIZED__) {
     const elementAtPoint = document.elementFromPoint(centerX, centerY);
     if (!elementAtPoint) return false;
 
-    return element === elementAtPoint || element.contains(elementAtPoint);
+    if (element === elementAtPoint || element.contains(elementAtPoint)) {
+      return true;
+    }
+
+    // Deep piercing check for Shadow DOM (including nested shadow roots):
+    // If the top elementAtPoint is a shadow host, pierce inwards to check if
+    // the target element is reached, while strictly preserving occlusion blocking
+    // if an external modal/overlay covers the host.
+    let current = elementAtPoint;
+    while (current && current.shadowRoot) {
+      const inner = current.shadowRoot.elementFromPoint(centerX, centerY);
+      if (!inner || inner === current) break;
+      current = inner;
+      if (element === current || element.contains(current)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // Listen for messages from the extension

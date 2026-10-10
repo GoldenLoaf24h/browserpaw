@@ -52,7 +52,7 @@ export class McpSessionManager {
 
     this.sessions.set(sessionId, entry);
 
-    // Clean up on transport close
+    // Clean up on transport close (only if closing transport is the active one)
     const origClose = transport.onclose;
     transport.onclose = () => {
       try {
@@ -60,8 +60,11 @@ export class McpSessionManager {
           origClose();
         }
       } finally {
-        this.sessions.delete(sessionId);
-        clearSessionExtraTools(sessionId);
+        const current = this.sessions.get(sessionId);
+        if (current && current.transport === transport) {
+          this.sessions.delete(sessionId);
+          clearSessionExtraTools(sessionId);
+        }
       }
     };
 

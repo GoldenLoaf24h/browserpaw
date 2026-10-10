@@ -122,7 +122,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 
 ---
 
-### 【P1 级别：高概率异常路径 / 架构硬伤 / 显著性能瓶颈】
+### 【P1 级别：高概率异常路径 / 架构硬伤 / 显著Performance Bottlenecks】
 
 #### 3. `isKeyInvalidLatched` 为进程级全局单例且生产代码中无任何复位机制 (永不解开的锁)
 
@@ -161,7 +161,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\mcp\register-tools.ts:98`, `app/native-server/src/jev/jev-client.ts:285-298`
 - **严重度**：P1（配置迟钝 / 状态不一致）
 - **问题描述**：
-  在 `register-tools.ts` 中，`const fastDecisionEngine = new FastDecisionEngine();` 在模块加载时即被实例化。如果 Native Server 进程启动时尚未加载或注入 `TYPESAFE_API_KEY`，`this.client` 即被初始化为 `null`。即使后续进程环境变量被注入，`run()` 检查 `hasKey` 虽然为 `true`，但内部底层客户端因从不重新初始化，永远返回 `no_api_key`。
+  在 `register-tools.ts` 中，`const fastDecisionEngine = new FastDecisionEngine();` 在模块加载时即被实例化。如果 Native Server 进程启动时尚未加载或注入 `TYPESAFE_API_KEY`，`this.client` 即被初始化为 `null`。即使后续进程环境变量被注入，`run()` 检查 `hasKey` 虽然为 `true`，但内部底层Client Side因从不重新初始化，永远返回 `no_api_key`。
 - **证据与推演路径**：
   ```typescript
   // register-tools.ts:98
@@ -217,7 +217,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
   }
   ```
   **实测数据验证**：
-  输入目标：`"搜索iPhone15购买"`。
+  输入Target: `"搜索iPhone15购买"`。
   1. `rawWords` 为 `["搜索iphone15购买"]`；
   2. `cjkChars` 匹配得到 `["搜", "索", "购", "买"]`（长度为 4 >= 2）；
   3. 生成 token 为：`["搜索", "索购", "购买"]`。
@@ -299,7 +299,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
   甚至在 `jev-client.test.ts:38` 中还将此作为合规特性测试：
   `expect(isSensitiveElement('[8] link "Forgot password?"')).toBe(true);`
   **触发推演**：
-  用户目标：`"点击找回密码链接"` 或 `"Click Forgot password"`。
+  用户Target: `"点击找回密码链接"` 或 `"Click Forgot password"`。
   `buildState()` 将 `[8] link "Forgot password?"` 从 `elements` 中剔除。
   Jev 接收到的候选列表里完全没有第 8 项，只能猜测其它不相关链接或返回 `choice: 'none'`，最终触发 `escalate`。
 - **一句话净收益**：仅针对 `role="textbox"` / `<input>` 且其类型明确为 password 的输入框进行脱敏，放行普通链接与提示文本。
@@ -396,7 +396,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 #### 11. 单步 Prompt 结构膨胀：3 份全量备选元素副本（单步 300+ 选项）推高 Token 成本与网络延迟
 
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\jev-client.ts:133-166`
-- **严重度**：P1（性能瓶颈 / 成本浪费）
+- **严重度**：P1（Performance Bottlenecks / 成本浪费）
 - **问题描述**：
   在 `buildQuestions()` 中，为了在单个单步请求中同时推测动作与目标，构造了 `click_target`, `type_target`, `select_target` 三个问题。然而，这三个问题共用了同一个全量元素映射表 `targetCriteria`。如果当前视口有 100 个元素，每个问题都包含 101 个 criteria。即使明显是不可点击的文本或不可输入的按钮，也被复制了 3 次随请求发送。
 - **证据与推演路径**：
@@ -421,7 +421,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 #### 12. 零 DOM 缓存与感知增量复用，每步微循环均进行全量 `chrome_read_dom` 跨进程往返
 
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\fast-decision-engine.ts:241-268`
-- **严重度**：P1（性能瓶颈 / 违背 200~400ms 设计指标）
+- **严重度**：P1（Performance Bottlenecks / 违背 200~400ms 设计指标）
 - **问题描述**：
   在微循环的每一次迭代中，无论上一步动作执行了什么，系统都会盲目调用一次全量 `chrome_read_dom`。尽管底层的 `chrome_interact_index` 与 `chrome_fill_index` 已经传入了 `includeDelta: true` 并精准返回了 DOM 增量与视口变动 (`perceptiveDelta`)，FastDecisionEngine 却仅将其解析为 `mutated: true` 字符串，随后把增量数据完全丢弃，强行重新全树扫描。
 - **证据与推演路径**：
@@ -451,7 +451,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 - **文件绝对路径:行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\jev\heuristic-engine.ts:227`, `fast-decision-engine.ts:153`
 - **严重度**：P2
 - **问题描述**：
-  `ActTowardGoalParams` 提供了 `confidenceThreshold` 参数（默认 0.55），在 Jev 模式下生效。但一旦降级到 `HeuristicEngine`，其内部写死了 `if (confidence < 0.3)` 阈值，完全不接收外部参数，导致调用方配置的置信度门禁在降级路径上彻底失效。
+  `ActTowardGoalParams` 提供了 `confidenceThreshold` 参数（默认 0.55），在 Jev 模式下生效。但一旦降级到 `HeuristicEngine`，其内部写死了 `if (confidence < 0.3)` 阈值，完全不接收外部参数，导致Caller配置的置信度门禁在降级路径上彻底失效。
 - **一句话净收益**：将外部 `confidenceThreshold` 透传至启发式引擎，确保全局风控标准一致。
 
 ---
@@ -590,7 +590,7 @@ BrowserPaw 的 **分层双脑协同架构 (Hierarchical Dual-Brain Architecture)
 | **DEC-08** | `app/native-server/src/jev/jev-client.ts:370`             | 下拉菜单选项判定 | `score` (误用，应为 choice) | 为 `<select>` 的 options 挑选最佳匹配项                     |
 | **DEC-09** | `app/native-server/src/jev/heuristic-engine.ts:124-211`   | 规则候选元素优选 | 启发式综合打分              | 子串加权(+2.0)、Token重合比例、Role加权(+0.5)               |
 | **DEC-10** | `app/native-server/src/jev/heuristic-engine.ts:236-248`   | 规则动作映射     | 启发式规则判定              | 映射为 click, type, select, scroll_down                     |
-| **DEC-11** | `app/native-server/src/jev/heuristic-engine.ts:261-274`   | 规则目标达成推断 | 词汇覆盖率 (>=0.8)          | 粗糙的页面静态文案重合判定                                  |
+| **DEC-11** | `app/native-server/src/jev/heuristic-engine.ts:261-274`   | 规则目标达成推断 | 词汇Coverage (>=0.8)        | 粗糙的页面静态文案重合判定                                  |
 | **DEC-12** | `app/native-server/src/jev/heuristic-engine.ts:279-305`   | 规则卡滞推断     | 3 次连续结果比对            | 比对 urlChanged, mutated, visualDiff 判定卡顿               |
 | **DEC-13** | `app/native-server/src/jev/fast-decision-engine.ts:35-64` | 安全中断词识别   | 词边界正则提取              | 检查目标是否匹配用户自定义暂停词                            |
 | **DEC-14** | `app/native-server/src/mcp/register-tools.ts:189`         | 架构路由分流点   | 工具名称分发                | 拦截 `chrome_act_toward_goal` 本地闭环                      |
@@ -637,7 +637,7 @@ register-tools.ts
         └── fast-decision-engine.ts
               ├── @modelcontextprotocol/sdk/server/index.js (Server)
               ├── types.ts
-              ├── jev-client.ts (全量工具函数与客户端)
+              ├── jev-client.ts (全量工具函数与Client Side)
               └── heuristic-engine.ts (HeuristicEngine)
 ```
 

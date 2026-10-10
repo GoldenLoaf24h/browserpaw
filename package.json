@@ -1,6 +1,6 @@
 {
   "name": "browserpaw",
-  "version": "3.2.7",
+  "version": "4.0.0",
   "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
   "private": true,
   "author": "hangye",
@@ -13,7 +13,15 @@
     "url": "https://github.com/GoldenLoaf24h/browserpaw/issues"
   },
   "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
+    "verify": "node scripts/verify.mjs",
+    "verify:docs": "node scripts/validate-docs.mjs",
+    "build:deploy": "pnpm build && node scripts/extension-artifacts.mjs --deploy",
+    "verify:delivery": "node scripts/extension-artifacts.mjs --check-deployment",
     "build:shared": "pnpm --filter chrome-mcp-shared build",
     "build:native": "pnpm --filter mcp-chrome-bridge build",
     "build:extension": "pnpm --filter chrome-mcp-server build && node scripts/sync-extension-dist.mjs",
@@ -24,7 +32,7 @@
     "dev": "pnpm --filter chrome-mcp-shared build && pnpm -r --parallel dev",
     "test": "node --experimental-strip-types test/e2e/runner.ts",
     "test:e2e": "node --experimental-strip-types test/e2e/runner.ts",
-    "lint": "pnpm -r lint",
+    "lint": "eslint scripts bin --max-warnings=0 && pnpm -r lint",
     "lint:fix": "pnpm -r lint:fix",
     "format": "pnpm -r format",
     "clean:dist": "node scripts/clean.js dist",

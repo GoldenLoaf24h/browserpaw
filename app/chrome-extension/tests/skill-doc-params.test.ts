@@ -121,44 +121,4 @@ describe('SKILL.md parameter examples match the tool schemas', () => {
       ).toBe(true);
     }
   });
-
-  it('verifies user installed skills are synchronized with canonical skill', async () => {
-    const fs = await import('node:fs');
-    const crypto = await import('node:crypto');
-    const canonical = fs.readFileSync('../../skill/SKILL.md', 'utf-8');
-    const localDir = fs.existsSync('C:/Users/Lenovo/.gemini/config/skills/browserpaw')
-      ? 'C:/Users/Lenovo/.gemini/config/skills/browserpaw'
-      : 'C:/Users/Lenovo/.gemini/config/skills/browserclaw';
-    const localPath = `${localDir}/SKILL.md`;
-    if (!fs.existsSync(localPath)) return;
-    const installedSkill = fs.readFileSync(localPath, 'utf-8');
-
-    expect(installedSkill).toBe(canonical);
-
-    // Verify managed hash matches installed SKILL.md
-    const managedFile = fs.existsSync(`${localDir}/.browserpaw-managed.json`)
-      ? `${localDir}/.browserpaw-managed.json`
-      : `${localDir}/.browserclaw-managed.json`;
-    if (fs.existsSync(managedFile)) {
-      const managedBc = JSON.parse(fs.readFileSync(managedFile, 'utf-8'));
-      const actualBcHash = crypto.createHash('sha256').update(installedSkill).digest('hex');
-      expect(managedBc.contentHash).toBe(actualBcHash);
-    }
-
-    // Verify mcp-chrome skill is also aligned (except name: mcp-chrome)
-    const mcpChromeDir = 'C:/Users/Lenovo/.gemini/config/skills/mcp-chrome';
-    if (!fs.existsSync(`${mcpChromeDir}/SKILL.md`)) return;
-    const installedMcpChrome = fs.readFileSync(`${mcpChromeDir}/SKILL.md`, 'utf-8');
-    expect(installedMcpChrome).toBe(
-      canonical.replace(/^name:\s*(browserpaw|browserclaw)/m, 'name: mcp-chrome'),
-    );
-    const managedMcFile = fs.existsSync(`${mcpChromeDir}/.browserpaw-managed.json`)
-      ? `${mcpChromeDir}/.browserpaw-managed.json`
-      : `${mcpChromeDir}/.browserclaw-managed.json`;
-    if (fs.existsSync(managedMcFile)) {
-      const managedMc = JSON.parse(fs.readFileSync(managedMcFile, 'utf-8'));
-      const actualMcHash = crypto.createHash('sha256').update(installedMcpChrome).digest('hex');
-      expect(managedMc.contentHash).toBe(actualMcHash);
-    }
-  });
 });

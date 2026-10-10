@@ -411,7 +411,7 @@ export async function inPageScrollUntilFound(
     };
   }
 
-  const maxSteps = Math.min(Math.max(1, options?.maxSteps ?? 10), 50);
+  const maxSteps = Math.min(Math.max(1, options?.maxSteps ?? 10), 30);
   const stepPx = Math.min(Math.max(50, options?.stepPx ?? 800), 3000);
   const direction = options?.direction === 'up' ? 'up' : 'down';
   const settleMs = Math.min(Math.max(50, options?.settleMs ?? 150), 1000);
@@ -441,10 +441,53 @@ export async function inPageScrollUntilFound(
   function probeTarget(): Element | null {
     if (typeof document === 'undefined') return null;
 
+    const expectedRole = options?.role?.trim().toLowerCase();
+    function inferElementRole(el: Element): string | null {
+      const explicitRole = el.getAttribute('role')?.trim().toLowerCase();
+      if (explicitRole) return explicitRole;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'button') return 'button';
+      if (tag === 'a' && el.hasAttribute('href')) return 'link';
+      if (tag === 'input') {
+        const type = (el.getAttribute('type') || 'text').trim().toLowerCase();
+        if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'search') return 'searchbox';
+        if (['text', 'email', 'tel', 'url', 'number', ''].includes(type)) return 'textbox';
+        return null;
+      }
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'select') return 'combobox';
+      if (tag === 'article') return 'article';
+      if (tag === 'nav') return 'navigation';
+      if (tag === 'main') return 'main';
+      if (tag === 'header') return 'banner';
+      if (tag === 'footer') return 'contentinfo';
+      if (tag === 'aside') return 'complementary';
+      if (tag === 'form') return 'form';
+      if (tag === 'dialog') return 'dialog';
+      if (tag === 'img') return 'img';
+      if (/^h[1-6]$/.test(tag)) return 'heading';
+      if (tag === 'ul' || tag === 'ol') return 'list';
+      if (tag === 'li') return 'listitem';
+      if (tag === 'table') return 'table';
+      if (tag === 'tr') return 'row';
+      if (tag === 'td') return 'cell';
+      if (tag === 'th') return 'columnheader';
+      return null;
+    }
+    function roleMatches(el: Element): boolean {
+      if (!expectedRole) return true;
+      const actualRole = inferElementRole(el);
+      return actualRole === expectedRole;
+    }
+
     if (selector) {
       const candidates = querySelectorAllDeep(selector, document);
       for (const el of candidates) {
         if (!el || !(el instanceof Element)) continue;
+        if (!roleMatches(el)) continue;
         const rect = el.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           const style = window.getComputedStyle(el);
@@ -472,6 +515,7 @@ export async function inPageScrollUntilFound(
           ''
         ).trim();
         if (text && targetRegex.test(text)) {
+          if (!roleMatches(el)) continue;
           const rect = el.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
             const style = window.getComputedStyle(el);
@@ -515,10 +559,20 @@ export async function inPageScrollUntilFound(
 
     const hit = probeTarget();
     if (hit) {
-      try {
-        hit.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' as any });
-      } catch {}
-      await wait(50);
+      if (options?.actionOnFound === 'none') {
+        // actionOnFound none: do not force scrollIntoView
+      } else if (options?.actionOnFound === 'focus') {
+        // actionOnFound focus: focus within page with preventScroll to avoid implicit scrolling
+        try {
+          (hit as HTMLElement).focus?.({ preventScroll: true });
+        } catch {}
+      } else {
+        // default 'scroll_into_view' or 'click': center in viewport
+        try {
+          hit.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' as any });
+        } catch {}
+        await wait(50);
+      }
 
       // Resolve or allocate live 1-based index in isolatedMap
       let targetIndex: number | undefined;
@@ -7120,8 +7174,8 @@ export function inPageExtractMarkdown(includeLinks = true, fit = false): string 
     return true;
   }
 
-  // fit 模式：crawl4ai 式启发降噪（chrome fit-markdown 的浏览器内等价物）。
-  // 只删结构性噪声，不做 BM25/评分——agent 自己会过滤内容。
+  // fit mode: crawl4ai-style heuristic pruning (in-browser equivalent of chrome fit-markdown).
+  // Only removes structural noise without BM25/scoring agent filters content downstream.
   let fitRoot: ParentNode = document;
   const fitNoise = new Set<Element>();
   if (fit) {
@@ -8008,6 +8062,7 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
   reason?: string;
   dataUrl?: string;
   rect?: { x: number; y: number; width: number; height: number };
+  devicePixelRatio?: number;
   kind?: string;
   src?: string;
 }> {
@@ -8032,6 +8087,7 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
     },
     kind: entry.kind,
     src: entry.src,
+    devicePixelRatio: (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1,
   };
   try {
     if (entry.kind === 'canvas') {
@@ -9016,9 +9072,11 @@ export interface DismissedOverlayInfo {
   title?: string;
   buttonText?: string;
   buttonSelector?: string;
-  action: 'clicked_close_button' | 'dispatched_escape';
+  action: 'clicked_close_button' | 'dispatched_escape' | 'synthetic_attempted_still_present';
   x?: number;
   y?: number;
+  dismissed?: boolean;
+  needsPhysicalFallback?: boolean;
 }
 
 export interface DismissOverlaysResult {
@@ -9438,9 +9496,43 @@ export function inPageDismissOverlays(options?: { maxDismissals?: number }): Dis
       } catch {}
 
       clickedCloseButtons.add(closeButton);
-      dismissedContainers.add(container);
+      // Verify whether the overlay was actually dismissed / removed from visual viewport
+      const isStillPresent = (() => {
+        if (!container.isConnected) return false;
+        try {
+          const s = win.getComputedStyle(container);
+          if (
+            s.display === 'none' ||
+            s.visibility === 'hidden' ||
+            s.pointerEvents === 'none' ||
+            parseFloat(s.opacity || '1') <= 0.05
+          ) {
+            return false;
+          }
+        } catch {
+          return false;
+        }
+        const r = container.getBoundingClientRect();
+        if (
+          (r.width || container.offsetWidth || 0) < 10 ||
+          (r.height || container.offsetHeight || 0) < 10
+        ) {
+          return false;
+        }
+        try {
+          const topEl = doc.elementFromPoint(clickX, clickY);
+          if (!topEl || !container.contains(topEl)) {
+            return false;
+          }
+        } catch {}
+        return true;
+      })();
 
-      result.dismissedCount++;
+      if (!isStillPresent) {
+        dismissedContainers.add(container);
+        result.dismissedCount++;
+      }
+
       result.overlays.push({
         id: container.id || undefined,
         className:
@@ -9449,9 +9541,11 @@ export function inPageDismissOverlays(options?: { maxDismissals?: number }): Dis
         title: q.title,
         buttonText,
         buttonSelector: describeHitTarget(closeButton),
-        action: 'clicked_close_button',
+        action: isStillPresent ? 'synthetic_attempted_still_present' : 'clicked_close_button',
         x: clickX,
         y: clickY,
+        dismissed: !isStillPresent,
+        needsPhysicalFallback: isStillPresent,
       });
     } else {
       // If modal qualifies (role=dialog or high z-index), try Escape key
