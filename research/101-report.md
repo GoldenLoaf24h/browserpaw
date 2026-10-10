@@ -1,9 +1,11 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 集百家之长——顶级浏览器自动化开源项目深度剖析与架构演进终稿报告 (101-report.md)
 
-> **项目名称**: BrowserPaw (Monorepo)  
-> **报告类型**: 外部顶级开源项目深度剖析、横向对标与架构吸收方案报告  
-> **报告编制**: BrowserPaw 核心编排团队 (Orchestrator & Subagents)  
-> **编制依据**: §4 阶段六·终稿标准、§E 客观评估纪律与 §A 双重验证纪律  
+> **项目名称**: BrowserPaw (Monorepo)
+> **报告类型**: 外部顶级开源项目深度剖析、横向对标与架构吸收方案报告
+> **报告编制**: BrowserPaw 核心编排团队 (Orchestrator & Subagents)
+> **编制依据**: §4 阶段六·终稿标准、§E 客观评估纪律与 §A 双重验证纪律
 > **完成日期**: 2026-09-28
 
 ---

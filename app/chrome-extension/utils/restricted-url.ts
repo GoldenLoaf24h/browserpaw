@@ -31,16 +31,17 @@ export function isCloudMetadataUrl(url: string | undefined | null): boolean {
 
 export function isRestrictedChromeUrl(url: string | undefined | null): boolean {
   if (!url) return false;
+  const lowerUrl = url.trim().toLowerCase();
   return (
-    url.startsWith('chrome://') ||
-    url.startsWith('edge://') ||
-    url.startsWith('devtools://') ||
-    url.startsWith('chrome-extension://') ||
-    url.startsWith('view-source:') ||
-    url.startsWith('https://chrome.google.com/webstore') ||
-    url.startsWith('https://chromewebstore.google.com') ||
-    url.startsWith('https://microsoftedge.microsoft.com/') ||
-    isCloudMetadataUrl(url)
+    lowerUrl.startsWith('chrome://') ||
+    lowerUrl.startsWith('edge://') ||
+    lowerUrl.startsWith('devtools://') ||
+    lowerUrl.startsWith('chrome-extension://') ||
+    lowerUrl.startsWith('view-source:') ||
+    lowerUrl.startsWith('https://chrome.google.com/webstore') ||
+    lowerUrl.startsWith('https://chromewebstore.google.com') ||
+    lowerUrl.startsWith('https://microsoftedge.microsoft.com/') ||
+    isCloudMetadataUrl(lowerUrl)
   );
 }
 

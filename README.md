@@ -41,7 +41,7 @@ BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate 
 Two execution paths are available:
 
 1. **Deterministic tools** – indexed clicks, fills, batch pipelines, form wizards, screenshots, network capture, etc. The calling agent plans each step.
-2. **`chrome_act_toward_goal`** – a local perception-action micro-loop (~200–400ms/step). The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
+2. **`chrome_act_toward_goal`** – a local perception-action micro-loop without per-step MCP round-trips. The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
 
 ---
 
@@ -147,7 +147,7 @@ All 50 tools are grouped below. For machine-readable schemas and parameter detai
 ### Navigation & tabs (7)
 
 - **`chrome_navigate`** – Open URL, refresh, history back/forward, background tabs.
-- **`chrome_switch_tab`** – Switch active tab or bind session affinity.
+- **`chrome_switch_tab`** – Switch active tab or bind session affinity (auto-handover strictly restricted to verified openerTabId or webNavigation lineage).
 - **`chrome_close_tabs`** – Close tabs by id, URL, or session (requires confirm for active tab).
 - **`chrome_move_tab`** – Reposition tabs or move across windows.
 - **`get_windows_and_tabs`** – List windows and tabs with state.

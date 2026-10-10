@@ -4,10 +4,10 @@ import { COMMAND_NAME } from './constant';
 import { colorText, registerWithElevatedPermissions, writeNodePathFile } from './utils';
 
 /**
- * 主函数
+ * Main function
  */
 async function main(): Promise<void> {
-  console.log(colorText(`正在注册 ${COMMAND_NAME} Native Messaging主机...`, 'blue'));
+  console.log(colorText(`Registering ${COMMAND_NAME} Native Messaging host...`, 'blue'));
 
   try {
     // Write Node.js path before registration
@@ -23,5 +23,5 @@ async function main(): Promise<void> {
   }
 }
 
-// 执行主函数
+// Execute main function
 main();

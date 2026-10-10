@@ -1684,9 +1684,9 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
     name: TOOL_NAMES.BROWSER.READ_DOM,
     annotations: {
       title: 'Read DOM',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
       openWorldHint: true,
     },
     description:

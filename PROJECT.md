@@ -1,4 +1,4 @@
-﻿# BrowserPaw Project Specifications & Notes
+# BrowserPaw Project Specifications & Notes
 
 [Chinese Version (zh-CN)](./PROJECT.zh-CN.md)
 
@@ -53,3 +53,11 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 - **Plugin Integration**: 8 Pytest cases passing 100% (`plugins/browserpaw/tests/test_bridge_token.py`).
 - **TypeScript Checking**: 0 errors across all monorepo packages (`pnpm typecheck`).
 - **Total Automated Test Volume**: 835 / 835 tests passing (100% green).
+
+### Key Technical Invariants & Operational Semantics
+
+- **Keyboard Chords**: `chrome_keyboard` supports compound chords and normalized key names including `plus` (`+`), `comma` (`,`), and sequential aliases.
+- **DOM Perception & Mutation Boundary**: `chrome_read_dom` is strictly read-only by default (`dismissOverlays: false`). Passing `dismissOverlays: true` initiates active modal clicks and is a mutating side effect.
+- **Port Resolution Precedence**: Thin CLI (`bin/browserpaw.cjs`) evaluates `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). Native daemon defaults to 12306.
+- **Extension Auto-Sync**: Setting `BROWSERPAW_EXTENSION_SYNC_DIR` copies unpacked extension builds to the target browser profile during build.
+- **Browser Compatibility**: Production target is Google Chrome and compatible Chromium browsers. Edge and Brave are not independently tested.

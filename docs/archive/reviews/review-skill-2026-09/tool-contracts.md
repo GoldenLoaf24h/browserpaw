@@ -16,7 +16,7 @@
   - 元感知 (1): `chrome_tool_docs` (用于发现并解锁隐藏工具)
 - **`crawl` 档位 (12 个)**：批量爬取与结构化提取，包含 `chrome_javascript`, `chrome_storage`, `chrome_cdp_execute`, `chrome_network_request` 及 core 部分感知工具。
 - **`full` 档位 (49 个)**：暴露所有工具。
-- **自动解锁机制** ([register-tools.ts:140-160](/app/native-server/src/mcp/register-tools.ts:140))：调用未暴露工具不会报错不存在，服务端按分类自动解锁对应分组；也可调用 `chrome_tool_docs(category, activateForSession: true)` 手动解锁。
+- **自动解锁机制** ([register-tools.ts:140-160](/app/native-server/src/mcp/register-tools.ts:140))：调用未暴露工具不会报错不存在，Server Side按分类自动解锁对应分组；也可调用 `chrome_tool_docs(category, activateForSession: true)` 手动解锁。
 
 ---
 
@@ -97,7 +97,7 @@
 | **`chrome_tab_group_ungroup`**    | full | 解散标签组移出标签页             | `tabIds` (必填)                     | 移出管理。                                       |
 | **`chrome_tab_group_close`**      | full | 关闭整组标签页                   | `groupId` (必填)                    | 快速清理一整批任务标签。                         |
 | **`chrome_get_dropdown_options`** | full | 获取下拉菜单/Combobox 所有候选项 | `index`, `selector`                 | 辅助 fill_index 选值。                           |
-| **`chrome_history`**              | full | 检索历史记录                     | `text`, `startTime`, `maxResults`   | 快速定位曾访问过的 URL。                         |
+| **`chrome_history`**              | full | 检索Historical Records           | `text`, `startTime`, `maxResults`   | 快速定位曾访问过的 URL。                         |
 | **`chrome_bookmark_search`**      | full | 检索书签                         | `query`, `folderPath`               | 查找收藏夹地址。                                 |
 | **`chrome_bookmark_add`**         | full | 添加新书签                       | `url`, `title`, `parentId`          | 保存关键页面。                                   |
 | **`chrome_bookmark_delete`**      | full | 删除书签                         | `bookmarkId` (必填)                 | 清理无效书签。                                   |

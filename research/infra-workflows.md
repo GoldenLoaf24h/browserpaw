@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 基础设施与工作流长板测绘报告 (Type E: Stagehand, Skyvern, Steel-browser)
 
 > **调研背景与依据**: 本测绘由子代理 5 (Agent-InfraWorkflows) 执行，严格遵循 §A 双重验证纪律与 §B 粗筛门禁决策（`research/01-triage.md`）。本报告拒绝泛化平铺，专门针对 Type E 基础设施与工作流类项目的 3 大专属长板展开代码级深挖：

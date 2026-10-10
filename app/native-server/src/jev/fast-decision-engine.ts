@@ -55,7 +55,7 @@ export function findMatchingPauseKeyword(targetText: string, keywords?: string[]
         return cleanKw;
       }
     } else {
-      // Non-Latin/CJK characters (e.g. "确认提交", "发布", "付款") - substring match
+      // Non-Latin/CJK characters (e.g. CJK confirmation/submission keywords) - substring match
       if (textLower.includes(kwLower)) {
         return cleanKw;
       }

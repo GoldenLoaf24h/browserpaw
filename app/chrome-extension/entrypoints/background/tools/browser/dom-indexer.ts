@@ -7174,8 +7174,8 @@ export function inPageExtractMarkdown(includeLinks = true, fit = false): string 
     return true;
   }
 
-  // fit 模式：crawl4ai 式启发降噪（chrome fit-markdown 的浏览器内等价物）。
-  // 只删结构性噪声，不做 BM25/评分——agent 自己会过滤内容。
+  // fit mode: crawl4ai-style heuristic pruning (in-browser equivalent of chrome fit-markdown).
+  // Only removes structural noise without BM25/scoring agent filters content downstream.
   let fitRoot: ParentNode = document;
   const fitNoise = new Set<Element>();
   if (fit) {
@@ -9513,7 +9513,10 @@ export function inPageDismissOverlays(options?: { maxDismissals?: number }): Dis
           return false;
         }
         const r = container.getBoundingClientRect();
-        if ((r.width || container.offsetWidth || 0) < 10 || (r.height || container.offsetHeight || 0) < 10) {
+        if (
+          (r.width || container.offsetWidth || 0) < 10 ||
+          (r.height || container.offsetHeight || 0) < 10
+        ) {
           return false;
         }
         try {

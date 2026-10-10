@@ -830,6 +830,10 @@ onUnmounted(() => {
     clearInterval(progressTimer);
     progressTimer = null;
   }
+  if (manageBtnTimer) {
+    clearTimeout(manageBtnTimer);
+    manageBtnTimer = null;
+  }
 });
 </script>
 

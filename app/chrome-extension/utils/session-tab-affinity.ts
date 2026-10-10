@@ -29,12 +29,15 @@ interface TabLineageRecord {
   active: boolean;
   url?: string;
   title?: string;
+  sessionId?: string;
 }
 
 export class SessionTabAffinityManager {
   private affinityMap = new Map<string, number>();
   private tabLineage = new Map<number, TabLineageRecord>();
-  private activeHandoverTrackers = new Set<(tab: chrome.tabs.Tab, activated: boolean, isCreated?: boolean) => void>();
+  private activeHandoverTrackers = new Set<
+    (tab: chrome.tabs.Tab, activated: boolean, isCreated?: boolean) => void
+  >();
 
   constructor() {
     this.initListeners();
@@ -104,24 +107,35 @@ export class SessionTabAffinityManager {
                 return;
               }
 
-              const parentId = tab.openerTabId;
-              if (typeof parentId === 'number') {
-                this.tabLineage.set(tab.id, {
-                  parentTabId: parentId,
-                  createdAt: Date.now(),
-                  active: Boolean(tab.active),
-                  url: tab.url,
-                  title: tab.title,
-                });
-                if (tab.active) {
-                  this.handleChildTabActivated(tab.id, parentId, tab.url, tab.title);
-                }
-              }
-              // Notify active trackers
+              // Notify active trackers first so trackers can record the lineage session owner
               for (const tracker of this.activeHandoverTrackers) {
                 try {
                   tracker(tab, Boolean(tab.active), true);
                 } catch {}
+              }
+
+              const parentId = tab.openerTabId;
+              if (typeof parentId === 'number') {
+                const existingLineage = this.tabLineage.get(tab.id);
+                if (!existingLineage) {
+                  this.tabLineage.set(tab.id, {
+                    parentTabId: parentId,
+                    createdAt: Date.now(),
+                    active: Boolean(tab.active),
+                    url: tab.url,
+                    title: tab.title,
+                  });
+                }
+                const lineage = this.tabLineage.get(tab.id);
+                if (tab.active) {
+                  this.handleChildTabActivated(
+                    tab.id,
+                    parentId,
+                    tab.url,
+                    tab.title,
+                    lineage?.sessionId,
+                  );
+                }
               }
             }
           });
@@ -141,6 +155,7 @@ export class SessionTabAffinityManager {
                   lineage.parentTabId,
                   lineage.url,
                   lineage.title,
+                  lineage.sessionId,
                 );
               }
             }
@@ -187,19 +202,30 @@ export class SessionTabAffinityManager {
     parentTabId: number,
     url?: string,
     title?: string,
+    targetSessionId?: string,
   ): void {
     if (childTabId === parentTabId) return;
     if (isNewTabUrl(url) || title === 'New Tab' || title === '新标签页') return; // Never hand over affinity to blank/new tab
 
     const parentHadAffinity = Array.from(this.affinityMap.values()).includes(parentTabId);
     let modified = false;
-    for (const [sessionId, boundTabId] of this.affinityMap.entries()) {
-      if (boundTabId === parentTabId) {
-        this.affinityMap.set(sessionId, childTabId);
+    if (targetSessionId) {
+      if (
+        this.affinityMap.get(targetSessionId) === parentTabId ||
+        !this.affinityMap.has(targetSessionId)
+      ) {
+        this.affinityMap.set(targetSessionId, childTabId);
         modified = true;
-        console.log(
-          `[SessionTabAffinity] Auto Tab Affinity Handover: session [${sessionId}]顺延 from tab ${parentTabId} to child tab ${childTabId} (${url || 'about:blank'})`,
-        );
+      }
+    } else {
+      for (const [sessionId, boundTabId] of this.affinityMap.entries()) {
+        if (boundTabId === parentTabId) {
+          this.affinityMap.set(sessionId, childTabId);
+          modified = true;
+          console.log(
+            `[SessionTabAffinity] Auto Tab Affinity Handover: session [${sessionId}]顺延 from tab ${parentTabId} to child tab ${childTabId} (${url || 'about:blank'})`,
+          );
+        }
       }
     }
     if (modified) {
@@ -235,49 +261,24 @@ export class SessionTabAffinityManager {
   public startHandoverTracking(
     parentTabId: number,
     sessionId?: string,
-    options?: { windowId?: number },
+    _options?: { windowId?: number },
   ): TabHandoverTracker {
     const startTime = Date.now();
     const effectiveSessionId = sessionId;
-    const knownExistingTabIds = new Set<number>();
-    const newlySeenTabIds = new Set<number>();
+    const navConfirmedChildTabIds = new Set<number>();
     let detectedChildTab: chrome.tabs.Tab | null = null;
+    let isCancelled = false;
     let handoverResolved = false;
-    let targetWindowId: number | undefined = options?.windowId;
-
-    // Snapshot existing tabs in the window/current session
-    let initialQueryPromise: Promise<void> | null = null;
-    try {
-      if (typeof chrome !== 'undefined' && chrome.tabs) {
-        if (typeof targetWindowId !== 'number' && typeof chrome.tabs.get === 'function') {
-          chrome.tabs
-            .get(parentTabId)
-            .then((p) => {
-              if (p && typeof p.windowId === 'number') targetWindowId = p.windowId;
-            })
-            .catch(() => {});
-        }
-        if (typeof chrome.tabs.query === 'function') {
-          const queryFilter: chrome.tabs.QueryInfo = {};
-          if (typeof options?.windowId === 'number') {
-            queryFilter.windowId = options.windowId;
-          }
-          initialQueryPromise = chrome.tabs
-            .query(queryFilter)
-            .then((tabs) => {
-              for (const t of tabs) {
-                if (typeof t.id === 'number' && !newlySeenTabIds.has(t.id)) {
-                  knownExistingTabIds.add(t.id);
-                }
-              }
-            })
-            .catch(() => {});
-        }
-      }
-    } catch {}
 
     const listener = (tab: chrome.tabs.Tab, activated: boolean, isCreated = false) => {
-      if (handoverResolved || !tab || typeof tab.id !== 'number' || tab.id === parentTabId) return;
+      if (
+        isCancelled ||
+        handoverResolved ||
+        !tab ||
+        typeof tab.id !== 'number' ||
+        tab.id === parentTabId
+      )
+        return;
       if (
         isNewTabUrl(tab.url || (tab as any).pendingUrl) ||
         tab.title === 'New Tab' ||
@@ -285,25 +286,10 @@ export class SessionTabAffinityManager {
       )
         return;
 
-      // Window matching guard
-      if (
-        typeof targetWindowId === 'number' &&
-        typeof tab.windowId === 'number' &&
-        tab.windowId !== targetWindowId &&
-        tab.openerTabId !== parentTabId
-      ) {
-        return;
-      }
-
-      if (isCreated) {
-        newlySeenTabIds.add(tab.id);
-      }
-
       const isDirectOpener = tab.openerTabId === parentTabId;
-      const isNewTabInWindow =
-        isCreated && (knownExistingTabIds.size > 0 ? !knownExistingTabIds.has(tab.id) : true);
+      const isNavConfirmed = navConfirmedChildTabIds.has(tab.id);
 
-      if (isDirectOpener || isNewTabInWindow) {
+      if (isDirectOpener || isNavConfirmed) {
         // Record lineage
         this.tabLineage.set(tab.id, {
           parentTabId,
@@ -311,6 +297,7 @@ export class SessionTabAffinityManager {
           active: activated,
           url: tab.url,
           title: tab.title,
+          sessionId: effectiveSessionId,
         });
 
         if (activated) {
@@ -320,6 +307,28 @@ export class SessionTabAffinityManager {
     };
 
     this.activeHandoverTrackers.add(listener);
+
+    const onNavTarget = (details: { sourceTabId: number; tabId: number; url?: string }) => {
+      if (isCancelled || handoverResolved || !details) return;
+      if (details.sourceTabId === parentTabId && typeof details.tabId === 'number') {
+        navConfirmedChildTabIds.add(details.tabId);
+        if (typeof chrome !== 'undefined' && typeof chrome.tabs?.get === 'function') {
+          chrome.tabs
+            .get(details.tabId)
+            .then((freshTab) => {
+              if (
+                !isCancelled &&
+                !handoverResolved &&
+                freshTab &&
+                typeof freshTab.id === 'number'
+              ) {
+                listener(freshTab, Boolean(freshTab.active), false);
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    };
 
     const onCreated = (tab: chrome.tabs.Tab) => {
       listener(tab, Boolean(tab.active), true);
@@ -335,75 +344,108 @@ export class SessionTabAffinityManager {
       }
     };
 
-    if (typeof chrome !== 'undefined' && chrome.tabs) {
-      chrome.tabs.onCreated?.addListener?.(onCreated);
-      chrome.tabs.onActivated?.addListener?.(onActivated);
+    const onRemoved = (removedTabId: number) => {
+      if (removedTabId === parentTabId) {
+        cancel();
+      } else {
+        navConfirmedChildTabIds.delete(removedTabId);
+        if (detectedChildTab && detectedChildTab.id === removedTabId) {
+          detectedChildTab = null;
+        }
+      }
+    };
+
+    if (typeof chrome !== 'undefined') {
+      if (chrome.webNavigation?.onCreatedNavigationTarget?.addListener) {
+        chrome.webNavigation.onCreatedNavigationTarget.addListener(onNavTarget);
+      }
+      if (chrome.tabs) {
+        chrome.tabs.onCreated?.addListener?.(onCreated);
+        chrome.tabs.onActivated?.addListener?.(onActivated);
+        chrome.tabs.onRemoved?.addListener?.(onRemoved);
+      }
     }
 
     const cancel = () => {
+      isCancelled = true;
       this.activeHandoverTrackers.delete(listener);
-      if (typeof chrome !== 'undefined' && chrome.tabs) {
-        chrome.tabs.onCreated?.removeListener?.(onCreated);
-        chrome.tabs.onActivated?.removeListener?.(onActivated);
+      if (typeof chrome !== 'undefined') {
+        if (chrome.webNavigation?.onCreatedNavigationTarget?.removeListener) {
+          chrome.webNavigation.onCreatedNavigationTarget.removeListener(onNavTarget);
+        }
+        if (chrome.tabs) {
+          chrome.tabs.onCreated?.removeListener?.(onCreated);
+          chrome.tabs.onActivated?.removeListener?.(onActivated);
+          chrome.tabs.onRemoved?.removeListener?.(onRemoved);
+        }
       }
     };
 
     const waitForHandover = async (timeoutMs = 1200): Promise<TabHandoverInfo | null> => {
       try {
-        if (initialQueryPromise) {
-          await initialQueryPromise.catch(() => {});
-        }
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
+          if (isCancelled) return null;
           if (detectedChildTab && typeof detectedChildTab.id === 'number') {
             break;
           }
-
-          // Active check via chrome.tabs.query to catch tabs that activated without event
-          if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-            try {
-              const queryFilter: chrome.tabs.QueryInfo = { active: true };
-              const effectiveWin = targetWindowId ?? options?.windowId;
-              if (typeof effectiveWin === 'number') {
-                queryFilter.windowId = effectiveWin;
-              }
-              const activeTabs = await chrome.tabs.query(queryFilter);
-              const active = activeTabs[0];
-              if (
-                active &&
-                typeof active.id === 'number' &&
-                active.id !== parentTabId &&
-                !isNewTabUrl(active.url || (active as any).pendingUrl) &&
-                active.title !== 'New Tab' &&
-                active.title !== '新标签页' &&
-                (active.openerTabId === parentTabId ||
-                  (!knownExistingTabIds.has(active.id) && knownExistingTabIds.size > 0) ||
-                  newlySeenTabIds.has(active.id))
-              ) {
-                detectedChildTab = active;
-                break;
-              }
-            } catch {}
+          if (
+            !detectedChildTab &&
+            navConfirmedChildTabIds.size > 0 &&
+            typeof chrome !== 'undefined' &&
+            chrome.tabs?.get
+          ) {
+            for (const cid of navConfirmedChildTabIds) {
+              try {
+                const cTab = await chrome.tabs.get(cid);
+                if (
+                  cTab &&
+                  cTab.active &&
+                  !isNewTabUrl(cTab.url || (cTab as any).pendingUrl) &&
+                  cTab.title !== 'New Tab' &&
+                  cTab.title !== '新标签页'
+                ) {
+                  listener(cTab, true, false);
+                  if (detectedChildTab) break;
+                }
+              } catch {}
+            }
           }
           await new Promise((r) => setTimeout(r, 60));
         }
 
+        if (isCancelled) return null;
         if (detectedChildTab && typeof detectedChildTab.id === 'number') {
           handoverResolved = true;
           const childId = detectedChildTab.id;
 
-          // 1. Handover bound affinity for specific sessionId if passed
-          if (effectiveSessionId) {
-            this.setAffinity(effectiveSessionId, childId);
+          if (typeof chrome !== 'undefined' && typeof chrome.tabs?.get === 'function') {
+            try {
+              const liveCheck = await chrome.tabs.get(childId);
+              if (!liveCheck || typeof liveCheck.id !== 'number') {
+                return null;
+              }
+            } catch {
+              return null;
+            }
           }
 
-          // 2. Also handover all sessions bound to parentTabId
-          this.handleChildTabActivated(
-            childId,
-            parentTabId,
-            detectedChildTab.url,
-            detectedChildTab.title,
-          );
+          if (effectiveSessionId) {
+            this.handleChildTabActivated(
+              childId,
+              parentTabId,
+              detectedChildTab.url,
+              detectedChildTab.title,
+              effectiveSessionId,
+            );
+          } else {
+            this.handleChildTabActivated(
+              childId,
+              parentTabId,
+              detectedChildTab.url,
+              detectedChildTab.title,
+            );
+          }
 
           // 3. Briefly fetch updated tab state if url was blank or provisional
           let finalUrl = detectedChildTab.url;

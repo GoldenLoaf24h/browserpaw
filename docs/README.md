@@ -1,4 +1,4 @@
-﻿# BrowserPaw Documentation Hub 📚
+# BrowserPaw Documentation Hub 📚
 
 Welcome to the comprehensive documentation repository for **BrowserPaw** — the high-efficiency, zero-teleportation Chrome browser automation MCP server and AI agent skill monorepo.
 
@@ -49,12 +49,12 @@ graph TD
 
 ### 2. Operations, Configuration & Diagnostics
 
-| Document                                                     | Purpose                                 | Key Content                                                                                                                     |
-| :----------------------------------------------------------- | :-------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------ |
-| [**`mcp-cli-config.md`**](./mcp-cli-config.md)               | **MCP Client Configuration Matrix**     | Configuration templates (`claude_desktop_config.json`, `.cursor/mcp.json`, Windsurf, Codex) for Stdio and HTTP transport modes. |
-| [**`TROUBLESHOOTING.md`**](./TROUBLESHOOTING.md)             | **Troubleshooting & Diagnostics Guide** | Solutions for native host connection drops, CDP attachment limits, GPU VRAM allocation, and permission resolution. _(English)_  |
-| [**`TROUBLESHOOTING.zh-CN.md`**](./TROUBLESHOOTING.zh-CN.md) | **疑难排查与故障诊断手册**              | 针对国内网络镜像源配置、CUDA 驱动环境、Native Messaging 注册失败与无头模式的中文排查手册。                                      |
-| [**`CONTRIBUTING.md`**](./CONTRIBUTING.md)                   | **Contribution & Development Guide**    | Monorepo development workflows, conventional commits, linting rules, Vitest/Jest test suites, and pull request quality gates.   |
+| Document                                                     | Purpose                                 | Key Content                                                                                                                        |
+| :----------------------------------------------------------- | :-------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| [**`mcp-cli-config.md`**](./mcp-cli-config.md)               | **MCP Client Configuration Matrix**     | Configuration templates (`claude_desktop_config.json`, `.cursor/mcp.json`, Windsurf, Codex) for Stdio and HTTP transport modes.    |
+| [**`TROUBLESHOOTING.md`**](./TROUBLESHOOTING.md)             | **Troubleshooting & Diagnostics Guide** | Solutions for native host connection drops, CDP attachment limits, GPU VRAM allocation, and permission resolution. _(English)_     |
+| [**`TROUBLESHOOTING.zh-CN.md`**](./TROUBLESHOOTING.zh-CN.md) | **Chinese Diagnostics Manual**          | Step-by-step diagnostic workflows for domestic registry mirrors, CUDA environments, and native messaging connectivity. _(Chinese)_ |
+| [**`CONTRIBUTING.md`**](./CONTRIBUTING.md)                   | **Contribution & Development Guide**    | Monorepo development workflows, conventional commits, linting rules, Vitest/Jest test suites, and pull request quality gates.      |
 
 ---
 

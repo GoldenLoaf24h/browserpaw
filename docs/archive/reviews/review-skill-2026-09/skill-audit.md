@@ -28,7 +28,7 @@
 对照 packages/shared/src/tools.ts（当前活跃 49 工具）与底层实现，逐条排查 Skill 各文件中的不一致点：
 
 1. **skill/SKILL.md:133-136**
-   - **问题**：chrome_read_dom 输入参数清单遗漏了新增的核心提速参数 fast: boolean、format: "compact"|"html"|"fast" 与 legacyVisibility: boolean。
+   - **问题**：chrome_read_dom Input Arguments清单遗漏了新增的核心提速参数 fast: boolean、format: "compact"|"html"|"fast" 与 legacyVisibility: boolean。
    - **正确事实**：[packages/shared/src/tools.ts:1593](/packages/shared/src/tools.ts:1593) 及 [read-dom.ts:18](/app/chrome-extension/entrypoints/background/tools/browser/read-dom.ts:18) 已正式引入 fast-snapshot.ts 极速原子快照分支（10–30ms、≤15KB），Skill 未能暴露该核心能力。
 2. **skill/SKILL.md:139-143 与 skill/SKILL.md:30**
    - **问题**：chrome_dismiss_overlay 参数契约与默认值描述不精确。第 30 行推荐传参写为 { maxOverlays: 3 }，而第 140 行遗漏了 windowId 与 sessionContext。
@@ -40,17 +40,17 @@
    - **问题**：chrome_fill_index 与批处理填充未描述新增的底层防漂移与表单语义模糊恢复能力。
    - **正确事实**：当前填充逻辑已统一重构至 [fill-core.ts:1](/app/chrome-extension/entrypoints/background/tools/browser/fill-core.ts:1) 及 [form-semantic-matcher.ts:1](/app/chrome-extension/utils/form-semantic-matcher.ts:1)（由 fill-index.ts:101 与 batch-actions.ts:457 共同调用），具备 CDP 物理按键直推、失焦重试与模糊标签自愈特性，Skill 应指导 Agent 在填充时免去多余重试包裹。
 5. **skill/recipes/README.md:47-49**
-   - **问题**：网站踩坑应对中依然建议：“Gotcha: Has a full-screen cookie consent modal... Fix: Call chrome_read_dom and dismiss modal first”，方案过时繁琐。
+   - **问题**：网站踩坑应对中依然Recommendation: “Gotcha: Has a full-screen cookie consent modal... Fix: Call chrome_read_dom and dismiss modal first”，方案过时繁琐。
    - **正确事实**：[packages/shared/src/tools.ts:3114](/packages/shared/src/tools.ts:3114) 已新增 chrome_dismiss_overlay 独立工具，且 [packages/shared/src/tools.ts:493](/packages/shared/src/tools.ts:493) 中 chrome_navigate 和 chrome_read_dom 均已原生集成 dismissOverlays: true，无需先耗费 1 轮全量 dump DOM。
 6. **skill/config/mcp-config.json:36, 74-81**
    - **问题**：行 36 注释中声明全量工具为 full (48 tools) 口径陈旧；行 74–81 的 autoApprove 列表漏掉了新交互工具 chrome_dismiss_overlay。
-   - **正确事实**：当前全量工具为 49 个（代码证据 [packages/shared/src/tools.ts:60](/packages/shared/src/tools.ts:60) 及 [docs/TOOLS.md:7](/docs/TOOLS.md:7)）；chrome_dismiss_overlay 作为安全无副作用的清理工具应列入客户端自动审批推荐表。
+   - **正确事实**：当前全量工具为 49 个（代码证据 [packages/shared/src/tools.ts:60](/packages/shared/src/tools.ts:60) 及 [docs/TOOLS.md:7](/docs/TOOLS.md:7)）；chrome_dismiss_overlay 作为安全无Side Effects的清理工具应列入Client Side自动审批推荐表。
 7. **skill/config/mcp-config.json:31**
    - **问题**：stdio 启动参数中硬编码了开发者本机的绝对路径 D:\workspace\mcp-chrome-master\mcp-chrome-master\...。
-   - **正确事实**：作为通用的客户端集成配置模板，应使用占位符（如 <PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js），避免给外部使用者造成跨环境路径污染与启动失败。
+   - **正确事实**：作为通用的Client Side集成配置模板，应使用占位符（如 <PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js），避免给外部使用者造成跨环境路径污染与启动失败。
 8. **skill/references/dual-brain-jev.md:25, 39**
    - **问题**：使用了 LaTeX 数学公式语法 $\le$（$\le$250 lines 与 forced $\le 5$）。
-   - **正确事实**：通用 Markdown 及多平台客户端对 LaTeX 定界符渲染支持脆弱，违背了无 LaTeX 要求，应规范统一为 Unicode 符号 ≤。
+   - **正确事实**：通用 Markdown 及多平台Client Side对 LaTeX 定界符渲染支持脆弱，违背了无 LaTeX 要求，应规范统一为 Unicode 符号 ≤。
 9. **skill/references/visual-fallback.md:83**
    - **问题**：多模态动作列表遗漏了部分支持的操作类型（仅列出 11 种）。
    - **正确事实**：根据 [packages/shared/src/tools.ts:2856](/packages/shared/src/tools.ts:2856)，chrome_computer 的 action 枚举共包含 16 种动作（补全了 scroll_to, fill_form, resize_page, zoom, screenshot）。

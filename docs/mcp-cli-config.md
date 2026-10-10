@@ -133,6 +133,16 @@ hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 
 ---
 
+### 3.6 OpenAI Codex Plugin Integration
+
+BrowserPaw provides an official Codex plugin under `plugins/browserpaw/`:
+
+- **Metadata Manifest**: `plugins/browserpaw/.codex-plugin/plugin.json` explicitly declares the MCP transport mapping via `"mcpServers": "./.mcp.json"`.
+- **Authentication Contract**: `plugins/browserpaw/.mcp.json` declares `"bearer_token_env_var": "CHROME_MCP_TOKEN"`.
+- **Initialization**: When connecting to the Native Bridge (`http://127.0.0.1:12306/mcp` or `/sse`), pass `Authorization: Bearer <token>` using the high-entropy token initialized from `~/.chrome-mcp/bridge-token` (or the `CHROME_MCP_TOKEN` environment variable).
+
+---
+
 ## 4. Tool Profiles & Dynamic Session Activation
 
 To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
@@ -163,7 +173,7 @@ Supported categories: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagn
 
 Once connected, your agent will have access to high-precision browser automation tools:
 
-- `chrome_read_dom`: Retrieve 1-based pruned DOM index tree (85%+ token savings).
+- `chrome_read_dom`: Retrieve 1-based pruned DOM index tree (>= 85% DOM tree pruning on complex 1000+ node pages).
 - `chrome_interact_index`: Dispatch native click, hover, or drag (`isTrusted: true`).
 - `chrome_fill_index`: Fill form inputs with automatic old text clearing.
 - `chrome_batch_actions`: Pipeline multiple actions, assertions, and extractions with zero roundtrip latency.
@@ -176,10 +186,11 @@ Once connected, your agent will have access to high-precision browser automation
 
 ## 6. Environment Variables
 
-| Variable                            | Description                                                | Default                            |
-| :---------------------------------- | :--------------------------------------------------------- | :--------------------------------- |
-| `CHROME_MCP_HOST`                   | Bind address for Fastify server                            | `127.0.0.1`                        |
-| `CHROME_MCP_PORT` / `MCP_HTTP_PORT` | HTTP/SSE port for MCP server                               | `12306`                            |
-| `CHROME_MCP_TOKEN`                  | Overrides the token stored in `~/.chrome-mcp/bridge-token` | Auto-generated high-entropy string |
-| `CHROME_MCP_TOOL_PROFILE`           | Tool profile level (`core`, `crawl`, `full`)               | `core`                             |
-| `CHROME_MCP_NODE_PATH`              | Override Node.js executable path for native host           | Auto-detected                      |
+| Variable                            | Description                                                                                                                                              | Default                            |
+| :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------- |
+| `CHROME_MCP_HOST`                   | Bind address for Fastify server                                                                                                                          | `127.0.0.1`                        |
+| `CHROME_MCP_PORT` / `MCP_HTTP_PORT` | HTTP/SSE port for MCP server (Priority: `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > 12306; bounded 1-65535)                                                    | `12306`                            |
+| `CHROME_MCP_TOKEN`                  | Overrides the token stored in `~/.chrome-mcp/bridge-token`                                                                                               | Auto-generated high-entropy string |
+| `BROWSERPAW_EXTENSION_SYNC_DIR`     | Opt-in target directory for extension artifact sync; disabled by default; strictly guarded against repo root, ancestors, drive roots, and home directory | None (disabled)                    |
+| `CHROME_MCP_TOOL_PROFILE`           | Tool profile level (`core`, `crawl`, `full`)                                                                                                             | `core`                             |
+| `CHROME_MCP_NODE_PATH`              | Override Node.js executable path for native host                                                                                                         | Auto-detected                      |

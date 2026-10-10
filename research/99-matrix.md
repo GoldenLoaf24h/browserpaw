@@ -1,7 +1,9 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 技术全景横向对标决策总矩阵 (99-matrix.md)
 
-> **编制依据**: §4 阶段三·技术矩阵；汇集子代理在 Type A/B/C/D/E 9 篇深度测绘成果中的第一手源码证据。  
-> **验证基线**: §A 双重验证纪律（全部具备明确可回链的 `repo@path:line` 源码级坐标定位）。  
+> **编制依据**: §4 阶段三·技术矩阵；汇集子代理在 Type A/B/C/D/E 9 篇深度测绘成果中的第一手源码证据。
+> **验证基线**: §A 双重验证纪律（全部具备明确可回链的 `repo@path:line` 源码级坐标定位）。
 > **核心保护**: §0 与 00-current-architecture.md 标定的 5 大「本地优势，默认保护」模块。
 
 ---

@@ -34,5 +34,14 @@ jobs:
       - name: Type check
         run: pnpm typecheck
 
-      - name: Run unit tests
+      - name: Run extension unit tests
         run: pnpm --filter chrome-mcp-server test -- --run
+
+      - name: Run native server unit tests
+        run: pnpm --filter mcp-chrome-bridge test
+
+      - name: Run scripts regression tests
+        run: node --test scripts/*.test.mjs scripts/*.test.cjs
+
+      - name: Run simulated CDP in-memory mock integration suite
+        run: node --experimental-strip-types test/e2e/runner.ts

@@ -65,9 +65,11 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 
 - **Token 文件路径**：`~/.chrome-mcp/bridge-token`（Windows 下为 `C:\Users\<用户名>\.chrome-mcp\bridge-token`）
 - **核心环境变量**：
-  - `CHROME_MCP_TOKEN`：自定义鉴权 Token 字符串（覆盖自动生成的文件）。
+  - `CHROME_MCP_PORT` / `MCP_HTTP_PORT`：本地网桥监听端口覆盖（优先级：`CHROME_MCP_PORT` > `MCP_HTTP_PORT` > 12306，严格校验 1-65535 边界）。
+  - `CHROME_MCP_TOKEN`：自定义鉴权 Token 字符串（覆盖自动生成的文件 `~/.chrome-mcp/bridge-token`），Codex 插件中通过 `bearer_token_env_var: "CHROME_MCP_TOKEN"` 自动注入。
   - `CHROME_MCP_TOOL_PROFILE`：工具暴露分层 Profile。可选值：`core`（默认 14 个核心高频工具，~11.5k tokens）、`crawl`（12 个高速抓取抽取工具，~5.8k tokens）、`full`（全量 50 个工具，~19.5k tokens）。
   - `BROWSERPAW_TOOL_PREFIX`：工具命名空间前缀（`browserpaw_` 或 `chrome_`）。
+  - `BROWSERPAW_EXTENSION_SYNC_DIR`：构建产物同步显式 Opt-in 目标目录（`sync-extension-dist.mjs` 严格阻断仓库根、上层祖先、驱动器根及用户主目录）。
 
 > **提示**：若使用 `stdio` 模式，Native Server 会自动读取或生成该 Token，并在内部完成与 Chrome 扩展的握手。
 
@@ -228,9 +230,10 @@ _脚本会自动向操作系统注册表（Windows 注册表 `HKCU\Software\Goog
 
 | 工具名称                            | 核心参数                                     | 作用说明                                                                              | 推荐场景                                    |
 | :---------------------------------- | :------------------------------------------- | :------------------------------------------------------------------------------------ | :------------------------------------------ |
-| `chrome_read_dom`                   | `viewportOnly: true`                         | 获取极简剪枝 DOM 交互树与数字索引，Token 压缩 85%+                                    | **每个网页分析的第一步必调**                |
+| `chrome_read_dom`                   | `viewportOnly: true`                         | 获取极简剪枝 DOM 交互树与数字索引，复杂页面 DOM 节点剪枝 >=85%                        | **每个网页分析的第一步必调**                |
 | `chrome_interact_index`             | `index` 或 `coordinate: {x,y}`               | 派发物理级鼠标点击或悬停                                                              | 单个按钮点击、链接跳转                      |
 | `chrome_fill_index`                 | `index`, `text`, `clear: true`, `pressEnter` | 派发 CDP 原生物理级输入，自动清除旧值并填充文本，支持 `pressEnter: true` 自动提交     | 单输入框极速 1 回合填入并提交               |
+| `chrome_keyboard`                   | `keys` (如 `["Enter"]`, `["Ctrl+,"]`)        | 物理级按键事件，支持独立修饰键（Control、Shift）与符号组合键（Ctrl+,、Ctrl++）        | 快捷键触发、表单换行提交、组合操作          |
 | `chrome_batch_actions`              | `actions: [...]`, `waitForSettle: true`      | 在单次调用中按序编排多个点击、填充、按键与等待（含跨域 iframe 坐标转换）              | **多表单填充、连续复合操作的首选 (1 回合)** |
 | `chrome_screenshot`                 | `grid: true`, `targetIndex`, `format`        | 纯内存直通 base64 截取视口图像，绝不污染用户 Downloads 目录；可选叠加半透明坐标标尺   | Canvas 画布、复杂验证码或无 DOM 节点图形    |
 | `chrome_upload_file`                | `index` 或 `clickTargetIndex`, `filePath`    | 动态拦截弹窗或直接向文件输入框注入本地绝对路径                                        | 网页文件上传、头像更换                      |

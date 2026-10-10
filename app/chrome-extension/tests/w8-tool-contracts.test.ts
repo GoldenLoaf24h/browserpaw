@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { computerTool } from '../entrypoints/background/tools/browser/computer';
 import { scrollUntilFoundTool } from '../entrypoints/background/tools/browser/scroll-until-found';
 import { inPageScrollUntilFound } from '../entrypoints/background/tools/browser/dom-indexer';
-import { screenshotTool, clampCanvasDimensions, MAX_CANVAS_DIM, MAX_CANVAS_AREA } from '../entrypoints/background/tools/browser/screenshot';
+import {
+  screenshotTool,
+  clampCanvasDimensions,
+  MAX_CANVAS_DIM,
+  MAX_CANVAS_AREA,
+} from '../entrypoints/background/tools/browser/screenshot';
 import { inspectMediaTool } from '../entrypoints/background/tools/browser/inspect-media';
 import { tabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';
 import { screenshotContextManager, scaleCoordinates } from '@/utils/screenshot-context';
@@ -96,7 +101,9 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
       let curScrollTop = 0;
       Object.defineProperty(container, 'scrollTop', {
         get: () => curScrollTop,
-        set: (v) => { curScrollTop = v; },
+        set: (v) => {
+          curScrollTop = v;
+        },
       });
       container.scrollBy = (opts: any) => {
         curScrollTop += opts.top || 0;
@@ -118,19 +125,22 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
     it('TOOL-01: filters candidates by role correctly, ignoring password/hidden for textbox and matching native elements', async () => {
       const btn = document.createElement('button');
       btn.textContent = 'Confirm Payment';
-      btn.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 } as any);
+      btn.getBoundingClientRect = () =>
+        ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 }) as any;
       document.body.appendChild(btn);
 
       const hiddenInput = document.createElement('input');
       hiddenInput.setAttribute('type', 'hidden');
       hiddenInput.setAttribute('value', 'Confirm Payment');
-      hiddenInput.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 } as any);
+      hiddenInput.getBoundingClientRect = () =>
+        ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 }) as any;
       document.body.appendChild(hiddenInput);
 
       const textInput = document.createElement('input');
       textInput.setAttribute('type', 'text');
       textInput.setAttribute('value', 'Confirm Payment');
-      textInput.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 } as any);
+      textInput.getBoundingClientRect = () =>
+        ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 }) as any;
       document.body.appendChild(textInput);
 
       const roleBtnRes = await inPageScrollUntilFound({
@@ -164,9 +174,12 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
     it('TOOL-01: actionOnFound none does not call scrollIntoView', async () => {
       const el = document.createElement('div');
       el.textContent = 'Target Action None';
-      el.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 } as any);
+      el.getBoundingClientRect = () =>
+        ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 }) as any;
       let scrolled = false;
-      el.scrollIntoView = () => { scrolled = true; };
+      el.scrollIntoView = () => {
+        scrolled = true;
+      };
       document.body.appendChild(el);
 
       const res = await inPageScrollUntilFound({
@@ -184,12 +197,18 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
       const el = document.createElement('input');
       el.setAttribute('type', 'text');
       el.setAttribute('value', 'Focus Target');
-      el.getBoundingClientRect = () => ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 } as any);
+      el.getBoundingClientRect = () =>
+        ({ width: 100, height: 40, top: 10, left: 10, bottom: 50, right: 110 }) as any;
       let focused = false;
       let focusOptionsPassed: any = null;
       let scrolled = false;
-      el.focus = (opts?: any) => { focused = true; focusOptionsPassed = opts; };
-      el.scrollIntoView = () => { scrolled = true; };
+      el.focus = (opts?: any) => {
+        focused = true;
+        focusOptionsPassed = opts;
+      };
+      el.scrollIntoView = () => {
+        scrolled = true;
+      };
       document.body.appendChild(el);
 
       const res = await inPageScrollUntilFound({
@@ -208,7 +227,8 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
     it('TOOL-01: ScrollUntilFoundTool forwards role and actionOnFound and fails on failed auto-click without swallowing error', async () => {
       vi.spyOn(scrollUntilFoundTool as any, 'resolveAffinityTab').mockResolvedValue({ id: 99 });
 
-      const inPageEngineMod = await import('../entrypoints/background/tools/browser/in-page-engine');
+      const inPageEngineMod =
+        await import('../entrypoints/background/tools/browser/in-page-engine');
       vi.spyOn(inPageEngineMod, 'executeInPage').mockResolvedValue([
         {
           result: {
@@ -221,7 +241,8 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
         },
       ]);
 
-      const interactIndexMod = await import('../entrypoints/background/tools/browser/interact-index');
+      const interactIndexMod =
+        await import('../entrypoints/background/tools/browser/interact-index');
       vi.spyOn(interactIndexMod.interactIndexTool, 'execute').mockResolvedValue({
         content: [{ type: 'text', text: 'Element occluded' }],
         isError: true,
@@ -311,12 +332,15 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
       vi.spyOn(inspectMediaTool as any, 'resolveAffinityTab').mockResolvedValue({ id: 10 });
       vi.spyOn(inspectMediaTool as any, 'tryGetTab').mockResolvedValue({ id: 10 });
       vi.spyOn(inspectMediaTool as any, 'safeExecuteScript').mockResolvedValue([
-        { result: { found: false } }
+        { result: { found: false } },
       ]);
 
       const executeSpy = vi.spyOn(screenshotTool, 'execute').mockResolvedValue({
         content: [
-          { type: 'text', text: JSON.stringify({ success: true, imageWidth: 400, imageHeight: 300 }) },
+          {
+            type: 'text',
+            text: JSON.stringify({ success: true, imageWidth: 400, imageHeight: 300 }),
+          },
           { type: 'image', data: 'abc==', mimeType: 'image/png' },
         ],
         isError: false,
@@ -332,7 +356,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
         expect.objectContaining({
           zoom: 3.0,
           targetIndex: 1,
-        })
+        }),
       );
 
       const textItem = res.content.find((c: any) => c.type === 'text');
@@ -344,13 +368,15 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
   });
 
   describe('TOOL-02 & QUAL-05: tool annotations and descriptions', () => {
-    it('TOOL-02: read_dom annotations conservatively set readOnlyHint: false, idempotentHint: false, destructiveHint: true', () => {
+    it('TOOL-02: read_dom annotations reflect default read-only perception (readOnlyHint: true, destructiveHint: false, idempotentHint: true)', () => {
       const readDomSchema = RAW_TOOL_SCHEMAS.find((s) => s.name === 'chrome_read_dom');
       expect(readDomSchema).toBeDefined();
-      expect(readDomSchema?.annotations?.readOnlyHint).toBe(false);
-      expect(readDomSchema?.annotations?.destructiveHint).toBe(true);
-      expect(readDomSchema?.annotations?.idempotentHint).toBe(false);
-      expect(readDomSchema?.description).toContain('Optional dismissOverlays closes modals and removes overlay elements.');
+      expect(readDomSchema?.annotations?.readOnlyHint).toBe(true);
+      expect(readDomSchema?.annotations?.destructiveHint).toBe(false);
+      expect(readDomSchema?.annotations?.idempotentHint).toBe(true);
+      expect(readDomSchema?.description).toContain(
+        'Optional dismissOverlays closes modals and removes overlay elements.',
+      );
     });
 
     it('QUAL-05: console tool description accurately describes ~50ms settle instead of ~2s', () => {

@@ -1,4 +1,4 @@
-﻿# BrowserPaw 项目工程规范说明
+# BrowserPaw 项目工程规范说明
 
 [English Version](./PROJECT.md)
 
@@ -53,3 +53,11 @@ BrowserPaw 是一个面向 AI Agent 的 Chrome 浏览器自动化 MCP 服务器�
 - **Hermes 插件测试**：8 项 Pytest 100% 通过。
 - **TypeScript 类型检查**：全仓库 0 错误（`pnpm typecheck`）。
 - **自动化测试总数**：835 / 835 项测试全绿通过。
+
+### 关键技术不变量与运行时语义
+
+- **键盘组合键语义**：`chrome_keyboard` 支持复合按键组合与键名规范化，包括 `plus`（`+`）、`comma`（`,`）及序列别名。
+- **DOM 感知与突变边界**：`chrome_read_dom` 默认严格只读（`dismissOverlays: false`）；传入 `dismissOverlays: true` 会触发底层弹窗点击，产生主动突变副作用。
+- **端口解析优先级**：薄 CLI（`bin/browserpaw.cjs`）按 `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > 默认 `12306` 解析（有效范围 1~65535）；Native 守护进程默认监听 12306。
+- **扩展自动同步**：设置 `BROWSERPAW_EXTENSION_SYNC_DIR` 环境变量可在构建时将产物自动同步至指定的浏览器 Profile 目录。
+- **浏览器兼容范围**：生产目标为 Google Chrome 及兼容的 Chromium 环境；Edge 与 Brave 暂未独立测试验证。

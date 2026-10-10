@@ -28,10 +28,10 @@
 1. Windows 注册表写入正确性（HKCU/HKLM、64位注册表重定向、Chrome/Chromium 扩展 ID 匹配）
 2. 路径转义与批处理/Shell 执行边界（Windows 空格、命令行参数传递、日志轮转）
 3. 跨平台兼容性（macOS / Linux / Windows 路径与命令、换行符 CRLF/LF）
-4. Postinstall 生命周期副作用与打包边界（npm 发布白名单 files 缺陷、CI 阻断、安装死锁）
+4. Postinstall 生命周期Side Effects与打包边界（npm 发布白名单 files 缺陷、CI 阻断、安装死锁）
 5. 构建脚本 dist 输出正确性（tsc 输出、静态资源拷贝、权限设置）
 6. Doctor 诊断与 Report 逻辑正确性（误报、漏报、优先级与运行时实现漂移）
-7. CLI 客户端边界与通信（Token 读取、参数解析、HTTP/SSE 响应解析）
+7. CLI Client Side边界与通信（Token 读取、参数解析、HTTP/SSE 响应解析）
 
 ---
 
@@ -216,7 +216,7 @@
 - **严重度**：P1（CLI 参数损坏与脚本集成错误逃逸）
 - **问题描述**：`bin/browserpaw.cjs` 作为轻量级命令行代理，存在两处高危缺陷：
   1. **参数截断**：当解析 `key=val` 参数时，使用 `const [k, v] = rest[i].split('=')`。如果值本身包含等号（例如传入 URL 查询参数 `browserpaw chrome_navigate url=https://example.com?a=1&b=2` 或包含 Base64 等号填充），`split('=')` 将值切为多段，解构赋值 `[k, v]` 仅取第二段，导致从第二个等号起的所有内容全部丢失被截断。
-  2. **错误状态码逃逸**：当服务端返回 MCP JSON-RPC 错误（`parsed.error`）时，脚本在控制台打印了 `Error: ${parsed.error.message}`，但之后并未执行 `process.exit(1)`，而是以默认状态码 **0**（成功）退出！这导致在 Shell 脚本或自动化 CI 中，依赖 `browserpaw` 执行命令的判断逻辑完全无法捕获错误。
+  2. **错误状态码逃逸**：当Server Side返回 MCP JSON-RPC 错误（`parsed.error`）时，脚本在控制台打印了 `Error: ${parsed.error.message}`，但之后并未执行 `process.exit(1)`，而是以默认状态码 **0**（成功）退出！这导致在 Shell 脚本或自动化 CI 中，依赖 `browserpaw` 执行命令的判断逻辑完全无法捕获错误。
 - **代码证据与触发推演**：
   1. `bin/browserpaw.cjs:59-67`：
      ```javascript
@@ -295,7 +295,7 @@
 - **严重度**：P2（工程质量门禁虚设）
 - **问题描述**：BrowserPaw 作为深度依赖 OS 进程托管（Native Messaging Host）、Windows 注册表（HKCU/HKLM）、批处理和 Shell 脚本的项目，其 GitHub Actions CI 存在重大短板：
   1. CI 运行平台仅设置了 `ubuntu-latest`，没有任何 Windows 或 macOS runner；所有 Windows 专有脚本（bat、注册表、权限）均处于零自动化回归保护状态；
-  2. 测试步骤写死为：`pnpm --filter chrome-mcp-server test -- --run`，只测试了扩展端，**完全跳过了 native-server 的单元测试（Jest）**！
+  2. 测试步骤写死为：`pnpm --filter chrome-mcp-server test -- --run`，只测试了Extension Side，**完全跳过了 native-server 的单元测试（Jest）**！
 - **代码证据与触发推演**：
   1. `.github/workflows/ci.yml:10, 28`：
      ```yaml
@@ -353,7 +353,7 @@
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\server\token.ts:31-56`
 - **严重度**：P2（并发安全与跨环境鲁棒性）
-- **问题描述**（注：此处特指安装、启动分发与多进程协同视角，安全鉴权逻辑已由前序 Agent 审查）：
+- **问题描述**（Note: 此处特指安装、启动分发与多进程协同视角，安全鉴权逻辑已由前序 Agent 审查）：
   1. **并发竞争覆写**：`token.ts` 在安装和构建阶段不生成 token，而是在 Native Host 启动时惰性生成并写入 `~/.chrome-mcp/bridge-token`。如果在多进程或高并发启动场景下（例如 Chrome 扩展同时建立了两个 Native 通道或外部多个 Agent 并行尝试连接），多个进程同时发现文件不存在，各自生成不同的随机 token 竞争写入磁盘，后写者覆盖前者，导致先启动的进程内存中持有的 token 与磁盘不一致，后续外部 CLI 使用磁盘 token 请求先启动的进程时产生鉴权失败。
   2. **只读文件系统静默降级**：在 Docker 只读容器或受限沙箱环境中，磁盘写入异常被 catch 捕获后降级为内存临时 token（`ephemeral`）。由于无法落盘，外部 CLI（`bin/browserpaw.cjs`）从磁盘读不到 token，请求 12306 会持续收到 401，且无任何错误日志提示为什么 token 未能落盘。
   3. **Windows 权限位无效**：`fs.writeFileSync(TOKEN_FILE, generated, { mode: 0o600 })` 在 Windows NTFS 文件系统上不生效，无法限制同机多用户的读取权限。
@@ -375,7 +375,7 @@
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\native-server\src\scripts\register-dev.ts:3`
 - **严重度**：P3（代码规范与异常捕获）
 - **问题描述**：`register-dev.ts` 顶层直接调用异步函数 `registerUserLevelHostWithNodePath()`，但既未 `await`，也未添加 `.catch()`。一旦底层 I/O（如文件写入或注册表执行）失败抛出异常，会导致 Node.js 进程产生未处理的 Promise 拒绝（UnhandledPromiseRejection）。
-- **一句话净收益**：增加顶层 await 或 catch 错误处理，规范异步脚本生命周期。
+- **一句话净收益**：增加顶层 await 或 catch Error Handling，规范异步脚本生命周期。
 
 ---
 
@@ -433,7 +433,7 @@
   .github/workflows/ci.yml
     └── 当前仅触发 chrome-mcp-server 测试，完全脱节于 native-server
 
-[CLI 客户端]
+[CLI Client Side]
   bin/browserpaw.cjs
     ├── 依赖: node:http, node:fs, node:path, node:os
     ├── 外部依赖: ~/.chrome-mcp/bridge-token (读取 Token)

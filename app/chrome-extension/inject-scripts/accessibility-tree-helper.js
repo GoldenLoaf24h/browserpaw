@@ -1611,16 +1611,16 @@
             sendResponse({ success: false, error: `ref "${ref}" not found or expired` });
             return true;
           }
-          // 验证指纹：解析存储的指纹并与当前元素对比
+          // Verify fingerprint: parse stored fingerprint and compare against current element
           const parts = fingerprint.split('|');
           const storedTag = parts[0] || 'unknown';
           const currentTag = el.tagName ? String(el.tagName).toLowerCase() : 'unknown';
-          // Tag 必须匹配
+          // Tag names must match
           if (storedTag !== currentTag) {
             sendResponse({ success: true, match: false });
             return true;
           }
-          // 如果存储的指纹有 id，当前元素必须有相同的 id
+          // If stored fingerprint includes an id, current element must have the same id
           const storedIdPart = parts.find((p) => p.startsWith('id='));
           if (storedIdPart) {
             const storedId = storedIdPart.slice(3);

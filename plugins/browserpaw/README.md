@@ -4,7 +4,7 @@ Official plugin for **BrowserPaw** — High-efficiency, zero-hallucination Chrom
 
 ## Overview
 
-BrowserPaw transforms your daily Google Chrome browser into an ultra-fast, controllable, readable, and verifiable automation environment for AI agents. With its dual-brain architecture (Jev System 1 heuristic micro-loop + System 2 frontier reasoning), it achieves sub-second page interaction while cutting token consumption by 85%+.
+BrowserPaw transforms your daily Google Chrome browser into an ultra-fast, controllable, readable, and verifiable automation environment for AI agents. With its dual-brain architecture (Jev System 1 heuristic micro-loop + System 2 frontier reasoning), it achieves responsive page interaction while achieving >= 85% DOM tree pruning on complex 1000+ node pages without dropping interactive targets.
 
 ## Hermes Agent Installation
 
@@ -36,7 +36,7 @@ hermes plugins enable browserpaw
    pnpm --filter mcp-chrome-bridge dev
    ```
    The server listens on `http://127.0.0.1:12306/mcp` (or custom `BROWSERPAW_MCP_URL`).
-3. **Bridge token**: The native server requires a bearer token on every `/mcp` request. The plugin sends it automatically, resolving in order `BROWSERPAW_MCP_TOKEN`, `CHROME_MCP_TOKEN`, then the file `~/.chrome-mcp/bridge-token` the server writes on first start. If tools return an HTTP 401 error, set one of those variables or make sure that file is readable by the Hermes process.
+3. **Bridge token & Codex integration**: The native server requires a bearer token on every `/mcp` request. For Hermes, the plugin resolves in order `BROWSERPAW_MCP_TOKEN`, `CHROME_MCP_TOKEN`, then `~/.chrome-mcp/bridge-token`. For OpenAI Codex, `.codex-plugin/plugin.json` explicitly binds `"mcpServers": "./.mcp.json"`, which maps `"bearer_token_env_var": "CHROME_MCP_TOKEN"` for direct loopback authentication.
 4. **MCP 2024-11-05 Session Handshake**: The plugin automatically implements the MCP 2024-11-05 lifecycle handshake (`initialize` -> `notifications/initialized`), extracts and forwards the `mcp-session-id` HTTP header on all tool calls, and performs automatic session recovery/re-initialization if a session expires or returns HTTP 400/404. Manual session pinning is also supported via `BROWSERPAW_MCP_SESSION_ID` or `CHROME_MCP_SESSION_ID`.
 
 ## Core Provided Tools
@@ -53,7 +53,7 @@ hermes plugins enable browserpaw
 | `browserpaw_smart_scroll`         | Intelligent overflow-aware scrolling with remaining page calculation       |
 | `browserpaw_inspect_media`        | Direct extraction of images/canvas at native resolution                    |
 | `browserpaw_grep`                 | Targeted in-memory regex/text search across interactive elements           |
-| `browserpaw_get_markdown`         | Clean reader-mode markdown extraction (70% token savings)                  |
+| `browserpaw_get_markdown`         | Clean reader-mode markdown extraction for distilled article reading        |
 | `browserpaw_switch_tab`           | Switch active focus to a specific tab                                      |
 | `browserpaw_close_tabs`           | Safe tab closure with session affinity protection                          |
 | `browserpaw_get_windows_and_tabs` | Query all open windows, tab groups, and tabs                               |

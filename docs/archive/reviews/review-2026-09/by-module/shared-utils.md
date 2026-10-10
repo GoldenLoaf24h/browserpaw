@@ -1,4 +1,4 @@
-﻿# BrowserPaw 架构审查报告：Shared 共享包、Inject 注入脚本、Inpage 引擎与 Utils 层
+# BrowserPaw 架构审查报告：Shared 共享包、Inject 注入脚本、Inpage 引擎与 Utils 层
 
 **审查范围**：
 
@@ -99,7 +99,7 @@
   1. 页面执行点击触发 `window.confirm('Delete database?')`。
   2. CDP 广播 `Page.javascriptDialogOpening`，构造函数立即发送 `accept: true`。
   3. 数据库被物理删除。
-  4. `raceCdp` 或调用方原本期待捕获 `DialogOpenedError` 并交由用户确认或由 `chrome_handle_dialog` 执行 `accept: false`，但由于底层已光速提交 `accept: true` 且弹窗已关闭，任何防御拦截机制全部沦为摆设。
+  4. `raceCdp` 或Caller原本期待捕获 `DialogOpenedError` 并交由用户确认或由 `chrome_handle_dialog` 执行 `accept: false`，但由于底层已光速提交 `accept: true` 且弹窗已关闭，任何防御拦截机制全部沦为摆设。
 - **一句话净收益**：移除自动 `accept: true` 的破坏性逻辑，将 Dialog 挂起并记录，交由 `raceCdp` 抛出中断错误或由 `chrome_handle_dialog` 显式决定是否接受。
 
 ---
@@ -142,11 +142,11 @@
 
 ---
 
-### [P1] 显著性能瓶颈/架构硬伤：`cdp-session-manager.ts` `inFlightRequests` 对长轮询/SSE/Aborted 永久泄漏导致每次交互硬等 1000~2000ms
+### [P1] 显著Performance Bottlenecks/架构硬伤：`cdp-session-manager.ts` `inFlightRequests` 对长轮询/SSE/Aborted 永久泄漏导致每次交互硬等 1000~2000ms
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\utils\cdp-session-manager.ts:50-59` 与 `D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\utils\action-watchdog.ts:145-180`
-- **严重度**：P1（显著性能瓶颈 / 架构硬伤）
-- **问题描述**：`CDPSessionManager` 监听 `Network.requestWillBeSent` 将 `requestId` 加入 `inFlightRequests` Set，期望通过 `Network.loadingFinished` 和 `loadingFailed` 移除。但在现代 Web 应用中，**Server-Sent Events (SSE)、WebSocket 握手、无限长轮询、CORS OPTIONS 预检失败或客户端中止请求**，往往永远不会触发 `loadingFinished` 或 `loadingFailed`。这导致 `inFlightRequests` 中的请求 ID 永久残留且只增不减。进而使得 `hasInFlightRequests(tabId)` 永久返回 `true`。在 `action-watchdog.ts` 中，每次交互（click, fill, interact_index 等）调用 `waitForPageSettle` 时，都会因为 `hasActiveNet === true` 被迫进入 `waitForNetworkQuiescence`，并且**每次都必须硬等满完整的超时上限（1000ms~2000ms）**！不仅如此，还会导致 `inPageWaitForDOMSettle` 无法启用 30ms 自适应沉降，退化为 150ms 慢沉降，严重拖垮整个 Agent 执行效率。
+- **严重度**：P1（显著Performance Bottlenecks / 架构硬伤）
+- **问题描述**：`CDPSessionManager` 监听 `Network.requestWillBeSent` 将 `requestId` 加入 `inFlightRequests` Set，期望通过 `Network.loadingFinished` 和 `loadingFailed` 移除。但在现代 Web 应用中，**Server-Sent Events (SSE)、WebSocket 握手、无限长轮询、CORS OPTIONS 预检失败或Client Side中止请求**，往往永远不会触发 `loadingFinished` 或 `loadingFailed`。这导致 `inFlightRequests` 中的请求 ID 永久残留且只增不减。进而使得 `hasInFlightRequests(tabId)` 永久返回 `true`。在 `action-watchdog.ts` 中，每次交互（click, fill, interact_index 等）调用 `waitForPageSettle` 时，都会因为 `hasActiveNet === true` 被迫进入 `waitForNetworkQuiescence`，并且**每次都必须硬等满完整的超时上限（1000ms~2000ms）**！不仅如此，还会导致 `inPageWaitForDOMSettle` 无法启用 30ms 自适应沉降，退化为 150ms 慢沉降，严重拖垮整个 Agent 执行效率。
 - **代码证据与触发推演**：
   ```typescript
   // cdp-session-manager.ts:50
@@ -334,7 +334,7 @@
 ### [P2] 性能陷阱：`screenshot-helper.js` `document.querySelectorAll('*')` 遍历全树并计算样式引发严重布局抖动
 
 - **文件绝对路径与行号**：`D:\workspace\mcp-chrome-master\mcp-chrome-master\app\chrome-extension\inject-scripts\screenshot-helper.js:145-185`
-- **严重度**：P2（性能瓶颈）
+- **严重度**：P2（Performance Bottlenecks）
 - **问题描述**：在准备截图切片时，`categorizeFixedAndStickyElements` 通过 `document.querySelectorAll('*')` 获取整棵树的所有 DOM 节点，并对所有尺寸大于 1px 的节点逐一调用 `window.getComputedStyle(el)` 检查 `position` 是否为 `fixed` 或 `sticky`。在现代大型 Web 应用（如复杂后台看板、大型文档编辑页，节点数通常在 5,000~~20,000 个）中，成千上万次连续调用 `getComputedStyle` 会触发浏览器严重的强制同步重排（Forced Synchronous Layout Thrashing），直接导致页面卡死 500ms~~1500ms，甚至触发页面崩溃保护。
 - **代码证据**：
   ```javascript
@@ -490,4 +490,4 @@
    - **验证方法**：在控制台向 `network-helper` 发送 `sendPureNetworkRequest`，在 `formData` 中传递 `file:C:\Windows\System32\drivers\etc\hosts`，抓包观察 Native Host 是否返回文件内容并成功向外网服务器发送该文件。
 2. **`agent-cursor.content.ts` 在复杂 CSS Transform/Zoom 容器下的光标位置准确性**
    - **待验证点**：当宿主页面 `html` 或 `body` 设置了 `zoom`（如 80%）或 CSS 3D 变换时，Virtual Mouse Overlay（`position: fixed`）是否会受到层叠上下文包含块变换影响？
-   - **验证方法**：在测试用例中给 `body { zoom: 1.5; transform: scale(0.9); }`，触发 `AGENT_CURSOR_MOVE`，校验物理光标中心点与目标元素真实 ClientRect 误差。
+   - **验证方法**：在Test Cases中给 `body { zoom: 1.5; transform: scale(0.9); }`，触发 `AGENT_CURSOR_MOVE`，校验物理光标中心点与目标元素真实 ClientRect 误差。

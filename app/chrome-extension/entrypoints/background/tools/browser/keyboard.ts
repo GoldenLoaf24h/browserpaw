@@ -35,6 +35,17 @@ const NAMED_KEYS = new Set([
   'pageup',
   'pagedown',
   'insert',
+  'control',
+  'ctrl',
+  'alt',
+  'shift',
+  'meta',
+  'cmd',
+  'command',
+  '+',
+  'plus',
+  ',',
+  'comma',
   // Two-word spellings ("Page Down", "Arrow Up") are keys, not prose.
   'page up',
   'page down',
@@ -108,6 +119,17 @@ const CDP_KEY_DEFINITIONS: Record<string, CdpKeyDef> = {
   delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 },
   del: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 },
   insert: { key: 'Insert', code: 'Insert', windowsVirtualKeyCode: 45 },
+  '+': { key: '+', code: 'Equal', windowsVirtualKeyCode: 187, text: '+', unmodifiedText: '+' },
+  plus: { key: '+', code: 'Equal', windowsVirtualKeyCode: 187, text: '+', unmodifiedText: '+' },
+  ',': { key: ',', code: 'Comma', windowsVirtualKeyCode: 188, text: ',', unmodifiedText: ',' },
+  comma: { key: ',', code: 'Comma', windowsVirtualKeyCode: 188, text: ',', unmodifiedText: ',' },
+  ctrl: { key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 },
+  control: { key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 },
+  alt: { key: 'Alt', code: 'AltLeft', windowsVirtualKeyCode: 18 },
+  shift: { key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 },
+  meta: { key: 'Meta', code: 'MetaLeft', windowsVirtualKeyCode: 91 },
+  command: { key: 'Meta', code: 'MetaLeft', windowsVirtualKeyCode: 91 },
+  cmd: { key: 'Meta', code: 'MetaLeft', windowsVirtualKeyCode: 91 },
   space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ', unmodifiedText: ' ' },
   arrowup: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
   up: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
@@ -152,6 +174,123 @@ export function normalizeKeySequence(keys: string): string {
     return tokens.map((t) => TWO_WORD_KEYS[keyToken(t)] ?? t).join(',');
   }
   return raw;
+}
+
+export function splitKeySequence(str: string): string[] {
+  const trimmed = (str || '').trim();
+  if (!trimmed) return [];
+  if (trimmed === ',') return [','];
+
+  const results: string[] = [];
+  let current = '';
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    if (char === ',') {
+      const trimmedCurrent = current.trim();
+      const lastNonSpace = trimmedCurrent.slice(-1);
+      if (lastNonSpace === '+' && !trimmedCurrent.endsWith('++')) {
+        current += char;
+      } else if (!trimmedCurrent) {
+        results.push(',');
+        current = '';
+      } else {
+        results.push(trimmedCurrent);
+        current = '';
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (current.trim()) {
+    results.push(current.trim());
+  }
+
+  return results.filter(Boolean);
+}
+
+function parseCdpTargetCombinations(rawKeys: string): Array<{ def: CdpKeyDef; modifiers: number }> {
+  const trimmed = rawKeys.trim();
+  if (!trimmed) return [];
+
+  // Check direct single key definition first (e.g. "Page Down", "Arrow Down", "Enter")
+  const singleDef = CDP_KEY_DEFINITIONS[keyToken(trimmed)];
+  if (singleDef) {
+    return [{ def: singleDef, modifiers: 0 }];
+  }
+
+  // Normalize key sequence (collapses "Page Down" -> "PageDown", space-separated sequence -> comma-separated)
+  const normalized = normalizeKeySequence(trimmed);
+  const normalizedSingleDef = CDP_KEY_DEFINITIONS[keyToken(normalized)];
+  if (normalizedSingleDef) {
+    return [{ def: normalizedSingleDef, modifiers: 0 }];
+  }
+
+  let tokens = splitKeySequence(normalized);
+  if (tokens.length === 1 && !CDP_KEY_DEFINITIONS[keyToken(tokens[0])] && /\s+/.test(tokens[0])) {
+    tokens = tokens[0].split(/\s+/).filter(Boolean);
+  }
+
+  const targets: Array<{ def: CdpKeyDef; modifiers: number }> = [];
+  for (const token of tokens) {
+    if (!token) continue;
+    if (token === '+' || token === ',') {
+      const def = CDP_KEY_DEFINITIONS[token];
+      if (def) {
+        targets.push({ def, modifiers: 0 });
+        continue;
+      }
+    }
+
+    let modMask = 0;
+    let mainKey: string | null = null;
+
+    if (token.endsWith('++')) {
+      const modPrefix = token.slice(0, -2);
+      const modParts = modPrefix
+        .split('+')
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+      let allMods = true;
+      for (const m of modParts) {
+        if (m === 'ctrl' || m === 'control') modMask |= 2;
+        else if (m === 'alt') modMask |= 1;
+        else if (m === 'shift') modMask |= 8;
+        else if (m === 'meta' || m === 'command' || m === 'cmd') modMask |= 4;
+        else {
+          allMods = false;
+          break;
+        }
+      }
+      if (allMods && modParts.length > 0) {
+        mainKey = '+';
+      }
+    }
+
+    if (mainKey === null) {
+      const parts = token.split('+').map((p) => p.trim());
+      for (const p of parts) {
+        const lower = p.toLowerCase();
+        if (lower === 'ctrl' || lower === 'control') modMask |= 2;
+        else if (lower === 'alt') modMask |= 1;
+        else if (lower === 'shift') modMask |= 8;
+        else if (lower === 'meta' || lower === 'command' || lower === 'cmd') modMask |= 4;
+        else if (mainKey === null) mainKey = p;
+        else return [];
+      }
+      if (!mainKey && parts.length === 1) {
+        mainKey = parts[0];
+      }
+    }
+
+    if (!mainKey) return [];
+    const def = CDP_KEY_DEFINITIONS[keyToken(mainKey)];
+    if (!def) return [];
+    targets.push({ def, modifiers: modMask });
+  }
+
+  return targets;
 }
 
 interface KeyboardToolParams {
@@ -397,22 +536,12 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       if (!result || result.error) {
         try {
           const rawKeys = keys.trim();
-          const singleDef = CDP_KEY_DEFINITIONS[keyToken(rawKeys)];
-          let targetDefs: CdpKeyDef[] = [];
+          const targetCombos = parseCdpTargetCombinations(rawKeys);
 
-          if (singleDef) {
-            targetDefs = [singleDef];
-          } else {
-            const tokens = rawKeys.split(/[\s,]+/).filter(Boolean);
-            const resolved = tokens.map((t) => CDP_KEY_DEFINITIONS[keyToken(t)]);
-            if (resolved.length > 0 && resolved.every((d): d is CdpKeyDef => Boolean(d))) {
-              targetDefs = resolved;
-            }
-          }
-
-          if (targetDefs.length > 0) {
+          if (targetCombos.length > 0) {
             await cdpSessionManager.withSession(tab.id, 'keyboard', async () => {
-              for (const def of targetDefs) {
+              for (const combo of targetCombos) {
+                const def = combo.def;
                 await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
                   type: 'keyDown',
                   key: def.key,
@@ -421,6 +550,7 @@ class KeyboardTool extends BaseBrowserToolExecutor {
                   unmodifiedText: def.unmodifiedText,
                   windowsVirtualKeyCode: def.windowsVirtualKeyCode,
                   nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                  modifiers: combo.modifiers || undefined,
                 });
                 await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
                   type: 'keyUp',
@@ -428,13 +558,14 @@ class KeyboardTool extends BaseBrowserToolExecutor {
                   code: def.code,
                   windowsVirtualKeyCode: def.windowsVirtualKeyCode,
                   nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                  modifiers: combo.modifiers || undefined,
                 });
-                if (targetDefs.length > 1) {
+                if (targetCombos.length > 1) {
                   await new Promise((r) => setTimeout(r, Math.min(50, Math.max(10, delay))));
                 }
               }
             });
-            const keyNames = targetDefs.map((d) => d.key).join(', ');
+            const keyNames = targetCombos.map((c) => c.def.key).join(', ');
             return {
               content: [
                 {

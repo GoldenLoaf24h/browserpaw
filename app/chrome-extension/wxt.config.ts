@@ -18,10 +18,10 @@ const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'pr
 export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
   runner: {
-    // 方案1: 禁用自动启动（推荐）
+    // Option 1: Disable auto-open (recommended)
     disabled: true,
 
-    // 方案2: 如果要启用自动启动并使用现有配置，取消注释下面的配置
+    // Option 2: To enable auto-open with existing profile, uncomment below
     // chromiumArgs: [
     //   '--user-data-dir=' + homedir() + (process.platform === 'darwin'
     //     ? '/Library/Application Support/Google/Chrome'
@@ -65,7 +65,7 @@ export default defineConfig({
     web_accessible_resources: [
       {
         resources: [
-          '/inject-scripts/*', // 允许内容脚本注入的助手文件
+          '/inject-scripts/*', // Helper scripts accessible for content script injection
           '/images/*',
         ],
         matches: ['<all_urls>'],
@@ -108,13 +108,13 @@ export default defineConfig({
       }) as any,
     ],
     build: {
-      // 我们的构建产物需要兼容到es6
+      // Target ES6 compatibility for build outputs
       target: 'es2015',
-      // 非生产环境下生成sourcemap
+      // Generate sourcemaps in non-production environments
       sourcemap: env.mode !== 'production',
-      // 禁用gzip 压缩大小报告，因为压缩大型文件可能会很慢
+      // Disable gzip size reporting to prevent slow compression on large bundles
       reportCompressedSize: false,
-      // chunk大小超过1500kb是触发警告
+      // Warn when chunk size exceeds 1500kb
       chunkSizeWarningLimit: 1500,
       minify: false,
     },

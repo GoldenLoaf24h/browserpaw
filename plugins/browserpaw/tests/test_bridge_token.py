@@ -155,3 +155,22 @@ def test_401_returns_actionable_error_without_leaking_token(plugin, home, monkey
     assert '401' in out['error']
     assert 'BROWSERPAW_MCP_TOKEN' in out['error']
     assert 'supersecret' not in out['error']
+
+
+def test_codex_mcp_config_contract():
+    """Validates .mcp.json and .codex-plugin/plugin.json align with official Codex Plugin specs."""
+    mcp_path = Path(__file__).resolve().parents[1] / '.mcp.json'
+    assert mcp_path.exists(), '.mcp.json must exist at plugin root'
+    mcp_data = json.loads(mcp_path.read_text(encoding='utf-8'))
+    assert 'mcpServers' in mcp_data
+    assert 'browserpaw' in mcp_data['mcpServers']
+    server = mcp_data['mcpServers']['browserpaw']
+    assert server.get('type') == 'http'
+    assert server.get('url') == 'http://127.0.0.1:12306/mcp'
+    assert server.get('bearer_token_env_var') == 'CHROME_MCP_TOKEN'
+
+    plugin_json_path = Path(__file__).resolve().parents[1] / '.codex-plugin' / 'plugin.json'
+    assert plugin_json_path.exists(), 'plugin.json must exist in .codex-plugin'
+    plugin_data = json.loads(plugin_json_path.read_text(encoding='utf-8'))
+    assert plugin_data.get('version') == '4.0.0'
+    assert plugin_data.get('mcpServers') == './.mcp.json'

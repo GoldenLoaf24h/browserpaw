@@ -97,7 +97,7 @@ export interface PrunedDOMTreeResult {
   activeModal?: string;
   /** True when an open modal is trapping focus on the page */
   focusTrapped?: boolean;
-  /** True when an active modal is a secondary confirmation trap (e.g. "Discard draft?", "放弃帖子？") */
+  /** True when an active modal is a secondary confirmation prompt (e.g. "Discard draft?", "Discard post?") */
   isConfirmationTrap?: boolean;
   /** True if a container matching the requested selector was found */
   selectorMatched?: boolean;

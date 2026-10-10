@@ -18,6 +18,12 @@ try {
   }
 } catch {}
 
+function resolveTargetPort() {
+  const raw = process.env.CHROME_MCP_PORT || process.env.MCP_HTTP_PORT;
+  const p = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(p) && p > 0 && p <= 65535 ? p : 12306;
+}
+
 const args = process.argv.slice(2);
 
 if (args.length === 0 || args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
@@ -93,7 +99,7 @@ const postData = (payload, sessId) => {
     const req = http.request(
       {
         hostname: '127.0.0.1',
-        port: 12306,
+        port: resolveTargetPort(),
         path: '/mcp',
         method: 'POST',
         headers,

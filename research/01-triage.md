@@ -1,3 +1,5 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 调研对象粗筛与优先级决策矩阵 (01-triage.md)
 
 > **编制依据**: §B 粗筛门禁（防 token 平铺浪费）与 §2 调研对象清单

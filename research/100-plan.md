@@ -1,6 +1,8 @@
+> **Historical Research Snapshot**: This document preserves historical engineering research, architecture comparisons, and benchmarks. It is maintained in English for technical reference. Historical tool names and metrics reflect their state at the time of authoring.
+
 # 差距剖析、吸收规划与裁决报告 (100-plan.md)
 
-> **编制依据**: §4 阶段四·差距与方案；严格恪守 §E 客观评估纪律与 §F 分级判别准则。  
+> **编制依据**: §4 阶段四·差距与方案；严格恪守 §E 客观评估纪律与 §F 分级判别准则。
 > **候选总数**: 8 项；**自动实施队列**: 2 项 (占比 25.0%，严格 ≤ 40% 门禁线)；**仅入报告队列**: 5 项；**待验证队列**: 1 项。
 
 ---

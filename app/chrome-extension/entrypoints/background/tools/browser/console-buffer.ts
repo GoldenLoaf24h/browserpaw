@@ -1,10 +1,10 @@
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 
 /**
- * ConsoleBuffer - 持久化的控制台日志缓冲管理器
+ * ConsoleBuffer - Persistent console log buffer manager
  *
- * 为每个 tab 维护一个滚动缓冲区，持续收集控制台事件。
- * 当 tab 导航到新域名时会自动清空缓冲，避免不同站点日志混淆。
+ * Maintains a rolling buffer for each tab, continuously capturing console events.
+ * Automatically clears the buffer when navigating to a new origin to avoid mixing site logs.
  */
 
 const DEFAULT_MAX_BUFFER_MESSAGES = 2000;
@@ -104,13 +104,13 @@ function formatConsoleArgs(args: unknown[]): string {
 }
 
 /**
- * 从 CDP RemoteObject 提取安全的预览数据，丢弃 objectId 避免内存泄漏
+ * Extract safe preview data from CDP RemoteObject, discarding objectId to prevent memory leaks
  */
 function extractArgPreview(arg: unknown): unknown {
   const a = arg as Record<string, unknown>;
   if (!a || typeof a !== 'object') return arg;
 
-  // 只保留安全的字段，丢弃 objectId
+  // Retain only safe fields, discard objectId
   const preview: Record<string, unknown> = {
     type: a.type,
   };
@@ -157,14 +157,14 @@ class ConsoleBuffer {
   }
 
   /**
-   * 检查指定 tab 是否正在进行 buffer 模式的捕获
+   * Check if buffer mode capture is active for the specified tab
    */
   isCapturing(tabId: number): boolean {
     return this.buffers.has(tabId);
   }
 
   /**
-   * 确保指定 tab 的 buffer 捕获已启动
+   * Ensure buffer capture is started for the specified tab
    */
   async ensureStarted(tabId: number): Promise<void> {
     if (this.buffers.has(tabId)) return;
@@ -180,7 +180,7 @@ class ConsoleBuffer {
   }
 
   /**
-   * 清空指定 tab 的缓冲区
+   * Clear buffer for the specified tab
    */
   clear(
     tabId: number,
@@ -207,7 +207,7 @@ class ConsoleBuffer {
   }
 
   /**
-   * 读取指定 tab 的缓冲区内容
+   * Read buffer contents for the specified tab
    */
   read(tabId: number, options: ConsoleBufferReadOptions = {}): ConsoleBufferReadResult | null {
     const state = this.buffers.get(tabId);
@@ -218,7 +218,7 @@ class ConsoleBuffer {
     const totalBufferedMessages = state.messages.length;
     const totalBufferedExceptions = state.exceptions.length;
 
-    // 过滤消息
+    // Filter messages
     let messages = state.messages;
     if (onlyErrors) {
       messages = messages.filter((m) => isErrorLevel(m.level));
@@ -227,20 +227,20 @@ class ConsoleBuffer {
       messages = messages.filter((m) => matchesPattern(pattern, m.text || ''));
     }
 
-    // 按时间排序
+    // Sort by timestamp
     messages = [...messages].sort((a, b) => a.timestamp - b.timestamp);
 
-    // 应用 limit
+    // Apply limit
     let messageLimitReached = false;
     const normalizedLimit =
       typeof limit === 'number' && Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : null;
     if (normalizedLimit !== null && messages.length > normalizedLimit) {
       messageLimitReached = true;
-      // 保留最新的消息
+      // Keep latest messages
       messages = messages.slice(messages.length - normalizedLimit);
     }
 
-    // 过滤异常
+    // Filter exceptions
     let exceptions: BufferedConsoleException[] = [];
     if (includeExceptions) {
       exceptions = state.exceptions;
@@ -320,7 +320,7 @@ class ConsoleBuffer {
 
     if (typeof nextUrl === 'string') {
       const nextHost = extractHostname(nextUrl);
-      // 域名变化时清空缓冲
+      // Clear buffer when origin changes
       if (nextHost !== state.hostname) {
         this.clear(tabId, 'domain_changed');
         state.hostname = nextHost;
@@ -387,7 +387,7 @@ class ConsoleBuffer {
         url: safeString(callFrame?.url),
         lineNumber: safeNumber(callFrame?.lineNumber),
         stackTrace: stackTrace,
-        // 只存储安全的预览数据，避免内存泄漏
+        // Store only safe preview data to prevent memory leaks
         args: rawArgs.map(extractArgPreview),
       });
       this.trimMessages(state);

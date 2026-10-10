@@ -74,26 +74,26 @@ export function tokenizeGoal(text: string): string[] {
   const rawWords = normalized.split(/\s+/).filter(Boolean);
   const tokens: string[] = [];
 
-    for (const word of rawWords) {
-      if (STOPWORDS.has(word)) continue;
-      // Split mixed scripts BEFORE bigramming: the old code dropped embedded
-      // Latin/digit runs ("搜索iPhone15购买" lost "iphone15") and forged
-      // cross-word bigrams ("索购").
-      const segments = word.match(
-        /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+|[\p{L}\p{N}_-]+/gu,
-      );
-      if (!segments) continue;
-      for (const seg of segments) {
-        const cjkChars = seg.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu);
-        if (cjkChars && cjkChars.length >= 2 && cjkChars.length === seg.length) {
-          for (let i = 0; i < cjkChars.length - 1; i++) {
-            tokens.push(cjkChars[i] + cjkChars[i + 1]);
-          }
-        } else {
-          tokens.push(seg.toLowerCase());
+  for (const word of rawWords) {
+    if (STOPWORDS.has(word)) continue;
+    // Split mixed scripts BEFORE bigramming: the old code dropped embedded
+    // Latin/digit runs (e.g. mixed script phrases losing embedded Latin words) and forged
+    // cross-word bigrams.
+    const segments = word.match(
+      /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+|[\p{L}\p{N}_-]+/gu,
+    );
+    if (!segments) continue;
+    for (const seg of segments) {
+      const cjkChars = seg.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu);
+      if (cjkChars && cjkChars.length >= 2 && cjkChars.length === seg.length) {
+        for (let i = 0; i < cjkChars.length - 1; i++) {
+          tokens.push(cjkChars[i] + cjkChars[i + 1]);
         }
+      } else {
+        tokens.push(seg.toLowerCase());
       }
     }
+  }
 
   return tokens.length > 0 ? tokens : rawWords;
 }
@@ -295,7 +295,7 @@ export class HeuristicEngine {
     const goalTokens = tokenizeGoal(goal);
     if (goalTokens.length === 0) return false;
     // Static keyword coverage alone false-positives on pages that already
-    // contain the goal words ("点击用户登录" on a login page). Require at
+    // contain the goal words (e.g. login action button text on a login page). Require at
     // least one navigation or DOM mutation signal before declaring victory.
     if (!urlChangedInLastStep && !mutatedInLastStep) return false;
 
