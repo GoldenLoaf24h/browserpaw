@@ -210,8 +210,9 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
     );
 
     // Env overrides config
-    process.env.BROWSERPAW_EXTENSION_SYNC_DIR = 'C:\\env\\custom';
-    assert.strictEqual(resolveSyncTarget({ repoRoot: root }), 'C:\\env\\custom');
+    const envTarget = path.resolve(root, 'env', 'custom');
+    process.env.BROWSERPAW_EXTENSION_SYNC_DIR = envTarget;
+    assert.strictEqual(resolveSyncTarget({ repoRoot: root }), envTarget);
 
     if (prevEnv) process.env.BROWSERPAW_EXTENSION_SYNC_DIR = prevEnv;
     else delete process.env.BROWSERPAW_EXTENSION_SYNC_DIR;
