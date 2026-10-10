@@ -108,7 +108,7 @@ test('checkDocsIndexCoverage verifies canonical documents in docs/README.md', ()
 test('validateDocs full run on current repository succeeds', () => {
   const repoRoot = process.cwd();
   const report = validateDocs(repoRoot);
-  assert.equal(report.valid, true);
+  assert.equal(report.valid, true, JSON.stringify(report, null, 2));
   assert.equal(report.brokenLinks.length, 0);
   assert.equal(report.textIssues.length, 0);
   assert.ok(report.totalFilesChecked > 30);
