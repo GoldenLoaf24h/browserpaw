@@ -77,7 +77,7 @@ graph TD
 
 Historical records, phased handoffs, and audit logs are preserved in [`docs/archive/`](./archive/) to keep the active documentation clean and decluttered:
 
-- [**`archive/releases/`**](./archive/releases/): Past release notes (e.g. `RELEASE_NOTES_v3.1.0.md`).
+- [**`docs/releases/`**](./releases/): Versioned release records and the canonical change history.
 - [**`archive/handoffs/`**](./archive/handoffs/): Milestone handoff records and refactor phase notes.
 - [**`archive/testing/`**](./archive/testing/): Historical manual testing notes and edge-case execution logs.
 - [**`archive/reviews/`**](./archive/reviews/): Deep code reviews, security audits, and dependency evaluations from September 2026.
