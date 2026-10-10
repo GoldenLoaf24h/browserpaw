@@ -598,6 +598,52 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
       expect(sessionTabAffinity.getAffinity('session-B')).toBe(100);
     });
 
+    it.each(['https://example.com/child', 'about:blank'])(
+      'BROWSER-SESSION-02: resolves a pending child URL before reporting handover (%s)',
+      async (finalUrl) => {
+        const createdListeners: Array<(tab: any) => void> = [];
+        (globalThis as any).chrome = {
+          tabs: {
+            get: vi.fn(async (id: number) => ({
+              id,
+              windowId: 1,
+              active: true,
+              url: finalUrl,
+              title: 'Child',
+            })),
+            onCreated: {
+              addListener: vi.fn((fn) => createdListeners.push(fn)),
+              removeListener: vi.fn(),
+            },
+            onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+            onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+          },
+        };
+        sessionTabAffinity.setAffinity('session-A', 100);
+        sessionTabAffinity.setAffinity('session-B', 100);
+        const tracker = startHandoverTracking(100, 'session-A', { windowId: 1 });
+        for (const listener of createdListeners) {
+          listener({
+            id: 601,
+            openerTabId: 100,
+            windowId: 1,
+            active: true,
+            url: '',
+            pendingUrl: 'https://example.com/child',
+          });
+        }
+        const result = await tracker.waitForHandover(100);
+        if (finalUrl === 'about:blank') {
+          expect(result).toBeNull();
+          expect(sessionTabAffinity.getAffinity('session-A')).toBe(100);
+        } else {
+          expect(result).toMatchObject({ handover: true, newTabId: 601, url: finalUrl });
+          expect(sessionTabAffinity.getAffinity('session-A')).toBe(601);
+        }
+        expect(sessionTabAffinity.getAffinity('session-B')).toBe(100);
+      },
+    );
+
     it('tab lifecycle: aborts tracking when parentTabId is removed', async () => {
       const removedListeners: Array<(tabId: number) => void> = [];
 

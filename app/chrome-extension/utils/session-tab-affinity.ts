@@ -430,23 +430,6 @@ export class SessionTabAffinityManager {
             }
           }
 
-          if (effectiveSessionId) {
-            this.handleChildTabActivated(
-              childId,
-              parentTabId,
-              detectedChildTab.url,
-              detectedChildTab.title,
-              effectiveSessionId,
-            );
-          } else {
-            this.handleChildTabActivated(
-              childId,
-              parentTabId,
-              detectedChildTab.url,
-              detectedChildTab.title,
-            );
-          }
-
           // 3. Briefly fetch updated tab state if url was blank or provisional
           let finalUrl = detectedChildTab.url;
           let finalTitle = detectedChildTab.title;
@@ -476,6 +459,17 @@ export class SessionTabAffinityManager {
               await new Promise((r) => setTimeout(r, 60));
             }
           }
+
+          if (isNewTabUrl(finalUrl) || finalTitle === 'New Tab' || finalTitle === '新标签页') {
+            return null;
+          }
+          this.handleChildTabActivated(
+            childId,
+            parentTabId,
+            finalUrl,
+            finalTitle,
+            effectiveSessionId,
+          );
 
           return {
             handover: true,
