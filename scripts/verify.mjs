@@ -20,10 +20,10 @@ export const REQUIRED_STEP_NAMES = Object.freeze([
   'root-script-tests',
   'extension-vitest',
   'native-jest',
+  'build',
   'simulated-e2e',
   'plugin-pytest',
   'validate-docs',
-  'build',
   'extension-artifacts-check',
 ]);
 
@@ -611,7 +611,20 @@ export async function executeSteps(root = repoRoot) {
       },
     );
 
-    // Step 10: Simulated E2E Runner (mock, not live)
+    // Step 10: Build without deployment env side-effects. The simulated E2E suite
+    // validates the native distribution produced by this build.
+    recordStep('build', 'pnpm build (clean env)', () => {
+      const cleanEnv = { ...process.env };
+      delete cleanEnv.BROWSERPAW_EXTENSION_SYNC_DIR;
+      const res = runPnpm(['build'], { cwd: root, env: cleanEnv });
+      if (res.error) throw new Error(`Failed to spawn pnpm build: ${res.error.message}`);
+      if (res.status !== 0) {
+        throw new Error(`pnpm build failed (exit ${res.status}): \n${res.stdout + res.stderr}`);
+      }
+      return { status: 0 };
+    });
+
+    // Step 11: Simulated E2E Runner (mock, not live)
     recordStep('simulated-e2e', 'node --experimental-strip-types test/e2e/runner.ts', () => {
       const res = spawnSync(
         process.execPath,
@@ -633,7 +646,7 @@ export async function executeSteps(root = repoRoot) {
       return { mode: 'mock-simulated', exitCode: 0 };
     });
 
-    // Step 11: Python pytest (only fallback to uv on command ENOENT, disallow retry on test failure)
+    // Step 12: Python pytest (only fallback to uv on command ENOENT, disallow retry on test failure)
     recordStep('plugin-pytest', 'pytest plugins/browserpaw/tests --junitxml=<tmp>', () => {
       const junitXmlPath = path.join(tempDir, 'pytest-junit.xml');
       const pyCmd = process.env.PYTHON || 'python';
@@ -678,7 +691,7 @@ export async function executeSteps(root = repoRoot) {
       };
     });
 
-    // Step 12: Validate docs
+    // Step 13: Validate docs
     recordStep('validate-docs', 'node scripts/validate-docs.mjs', () => {
       const scriptPath = path.resolve(root, 'scripts/validate-docs.mjs');
       const res = spawnSync(process.execPath, [scriptPath], { cwd: root, encoding: 'utf-8' });
@@ -687,18 +700,6 @@ export async function executeSteps(root = repoRoot) {
         throw new Error(
           `validate-docs.mjs failed (exit ${res.status}): \n${res.stdout + res.stderr}`,
         );
-      }
-      return { status: 0 };
-    });
-
-    // Step 13: Build without deployment env side-effects
-    recordStep('build', 'pnpm build (clean env)', () => {
-      const cleanEnv = { ...process.env };
-      delete cleanEnv.BROWSERPAW_EXTENSION_SYNC_DIR;
-      const res = runPnpm(['build'], { cwd: root, env: cleanEnv });
-      if (res.error) throw new Error(`Failed to spawn pnpm build: ${res.error.message}`);
-      if (res.status !== 0) {
-        throw new Error(`pnpm build failed (exit ${res.status}): \n${res.stdout + res.stderr}`);
       }
       return { status: 0 };
     });
