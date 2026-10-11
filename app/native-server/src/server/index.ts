@@ -199,37 +199,7 @@ export class Server {
         return;
       }
 
-      const isLoopback =
-        request.ip === '127.0.0.1' ||
-        request.ip === '::1' ||
-        request.socket.remoteAddress === '127.0.0.1' ||
-        request.socket.remoteAddress === '::1' ||
-        request.socket.remoteAddress === '::ffff:127.0.0.1';
-
-      if (pathOnly === '/token' && isLoopback) {
-        return;
-      }
-
-      // Mutual trust for local host Hermes agent / automation scripts on loopback
-      const hasLocalTrust =
-        isLoopback &&
-        (request.headers['x-hermes-auth'] === 'local' ||
-          request.headers['x-hermes-auth'] === 'true' ||
-          request.headers['x-local-trust'] === 'true');
-
-      // Hardened: Disallow browser-origin requests from forging x-hermes-auth headers (Anti-CSRF)
-      const isBrowserRequest = Boolean(
-        request.headers['origin'] || request.headers['sec-fetch-mode'],
-      );
-      if (
-        hasLocalTrust &&
-        !isBrowserRequest &&
-        (pathOnly === '/eval' || pathOnly === '/execute-script' || pathOnly === '/call-tool')
-      ) {
-        return;
-      }
-
-      // 3. Extract candidate token
+      // 2. Extract candidate token
       let candidateToken: string | undefined;
       const authHeader = request.headers['authorization'];
       if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
@@ -273,39 +243,6 @@ export class Server {
       reply.status(HTTP_STATUS.OK).send({
         status: 'ok',
         message: 'pong',
-      });
-    });
-
-    // GET /token: Return current active bridge token for loopback clients (Hermes, local scripts)
-    this.fastify.get('/token', async (request: FastifyRequest, reply: FastifyReply) => {
-      const isLoopback =
-        request.ip === '127.0.0.1' ||
-        request.ip === '::1' ||
-        request.socket.remoteAddress === '127.0.0.1' ||
-        request.socket.remoteAddress === '::1' ||
-        request.socket.remoteAddress === '::ffff:127.0.0.1';
-
-      if (!isLoopback) {
-        return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-          error: 'Forbidden: /token is only accessible from local loopback (127.0.0.1)',
-        });
-      }
-
-      // Reject any browser request with Origin or Sec-Fetch headers
-      // (Extensions get token via Native Messaging host, not HTTP /token)
-      if (
-        request.headers['origin'] ||
-        request.headers['sec-fetch-mode'] ||
-        request.headers['sec-fetch-site']
-      ) {
-        return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-          error: 'Forbidden: Browser requests are not permitted to fetch credentials from /token',
-        });
-      }
-
-      return reply.status(HTTP_STATUS.OK).send({
-        status: 'ok',
-        token: getBridgeToken(),
       });
     });
   }

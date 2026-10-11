@@ -57,7 +57,7 @@ hermes plugins enable browserpaw
 | `browserpaw_switch_tab`           | Switch active focus to a specific tab                                      |
 | `browserpaw_close_tabs`           | Safe tab closure with session affinity protection                          |
 | `browserpaw_get_windows_and_tabs` | Query all open windows, tab groups, and tabs                               |
-| `browserpaw_tool_docs`            | Inspect documentation for all 50 BrowserPaw capabilities                   |
+| `browserpaw_tool_docs`            | Inspect documentation for the wider BrowserPaw tool surface                |
 
 ## Bundled Skill
 

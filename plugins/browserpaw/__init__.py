@@ -16,21 +16,13 @@ from typing import Any, Callable, Dict, List, Optional
 import urllib.error
 import urllib.request
 
-# Ensure UTF-8 output encoding across Windows consoles to eliminate GBK UnicodeEncodeError
-try:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    if hasattr(sys.stderr, 'reconfigure'):
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-except Exception:
-    pass
-
 logger = logging.getLogger(__name__)
 
 _plugin_config: Dict[str, Any] = {
     'native_server_port': 12306,
     'auth_token': None,
     'isolate_modal': False,
+    'secret_scope': None,
 }
 
 DEFAULT_URLS = [
@@ -38,10 +30,7 @@ DEFAULT_URLS = [
     'http://127.0.0.1:12306/mcp',
 ]
 
-# Same lookup order as app/native-server/src/server/token.ts::resolveBridgeToken,
-# with BROWSERPAW_MCP_TOKEN as a plugin-specific override.
-BRIDGE_TOKEN_ENV_VARS = ('BROWSERPAW_MCP_TOKEN', 'BROWSERCLAW_MCP_TOKEN', 'CHROME_MCP_TOKEN')
-BRIDGE_TOKEN_FILE = Path('.chrome-mcp') / 'bridge-token'
+BRIDGE_TOKEN_SECRET_NAME = 'BROWSERPAW_MCP_TOKEN'
 
 # Optional pre-configured session ID env vars
 SESSION_ID_ENV_VARS = ('BROWSERPAW_MCP_SESSION_ID', 'BROWSERCLAW_MCP_SESSION_ID', 'CHROME_MCP_SESSION_ID')
@@ -54,8 +43,8 @@ CLIENT_INFO = {
 
 _AUTH_HELP = (
     'BrowserPaw bridge rejected the request (HTTP 401): bridge token missing or invalid. '
-    'Set BROWSERPAW_MCP_TOKEN or CHROME_MCP_TOKEN to the token the native server uses, '
-    'or make sure ~/.chrome-mcp/bridge-token (written by the native server) is readable.'
+    'Configure the BROWSERPAW_MCP_TOKEN secret in your Hermes plugin settings with the '
+    'token the native server generated in ~/.chrome-mcp/bridge-token.'
 )
 
 # Session state management
@@ -296,39 +285,26 @@ def _ensure_session(url: str, force_refresh: bool = False) -> Optional[str]:
 
 
 def _bridge_token() -> Optional[str]:
-    """Resolve the native-bridge auth token, or None when nothing is configured.
+    """Resolve the native-bridge auth token from the Hermes secret scope.
 
-    Read lazily on every call: the file is tiny and the native server may
-    regenerate it between calls.
+    Catalog rule 11: credentials come only through Hermes. No environment
+    sniffing, no token file read, no loopback /token fetch.
     """
     cfg_token = _plugin_config.get('auth_token')
     if cfg_token:
         return str(cfg_token).strip()
-    for name in BRIDGE_TOKEN_ENV_VARS:
-        value = os.getenv(name, '').strip()
-        if value:
-            return value
-    try:
-        value = (Path.home() / BRIDGE_TOKEN_FILE).read_text(encoding='utf-8').strip()
-        if value:
-            return value
-    except OSError:
-        pass
 
-    # Loopback mutual-trust fallback: query native bridge token endpoint directly
+    secret = _plugin_config.get('secret_scope')
+    if secret is None:
+        return None
     try:
-        port = _plugin_config.get('native_server_port') or 12306
-        req = urllib.request.Request(
-            f'http://127.0.0.1:{port}/token',
-            headers={'x-hermes-auth': 'local', 'x-local-trust': 'true'},
-        )
-        with urllib.request.urlopen(req, timeout=0.5) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            token = data.get('token')
-            if token and isinstance(token, str):
-                return token.strip()
-    except Exception:
-        pass
+        value = secret.get_secret(BRIDGE_TOKEN_SECRET_NAME)
+    except Exception as exc:
+        logger.debug('Failed to read %s from Hermes secret scope: %s', BRIDGE_TOKEN_SECRET_NAME, exc)
+        return None
+    if value and isinstance(value, str):
+        return value.strip()
+    return None
 
     return None
 
@@ -1796,57 +1772,21 @@ BROWSERPAW_SPECS: Dict[str, Dict[str, Any]] = {
     "browserpaw_close_tabs": {"emoji": "❌"},
     "browserpaw_get_windows_and_tabs": {"emoji": "🪟"},
     "browserpaw_tool_docs": {"emoji": "📚"},
-    "browserpaw_javascript": {"emoji": "💻"},
-    "browserpaw_cdp_execute": {"emoji": "⚡"},
-    "browserpaw_console": {"emoji": "🖥️"},
-    "browserpaw_doctor": {"emoji": "🩺"},
-    "browserpaw_undo_last_action": {"emoji": "↩️"},
-    "browserpaw_upload_file": {"emoji": "📤"},
-    "browserpaw_insert_media": {"emoji": "📋"},
-    "browserpaw_handle_download": {"emoji": "📥"},
-    "browserpaw_handle_dialog": {"emoji": "💬"},
-    "browserpaw_request_human_intervention": {"emoji": "🙋"},
-    "browserpaw_dismiss_overlay": {"emoji": "🛡️"},
-    "browserpaw_keyboard": {"emoji": "⌨️"},
-    "browserpaw_computer": {"emoji": "🖱️"},
-    "browserpaw_form_pipeline": {"emoji": "📝"},
-    "browserpaw_get_dropdown_options": {"emoji": "🔽"},
-    "browserpaw_intercept_api": {"emoji": "📡"},
-    "browserpaw_network_request": {"emoji": "🌐"},
-    "browserpaw_network_capture": {"emoji": "🛰️"},
-    "browserpaw_tab_group_create": {"emoji": "🏷️"},
-    "browserpaw_tab_group_update": {"emoji": "🏷️"},
-    "browserpaw_tab_group_list": {"emoji": "📋"},
-    "browserpaw_tab_group_close": {"emoji": "❌"},
-    "browserpaw_tab_group_ungroup": {"emoji": "🔓"},
-    "browserpaw_move_tab": {"emoji": "📦"},
-    "browserpaw_attach_tab": {"emoji": "🔗"},
-    "browserpaw_detach_tab": {"emoji": "⛓️"},
-    "browserpaw_storage": {"emoji": "💾"},
-    "browserpaw_history": {"emoji": "🕒"},
-    "browserpaw_bookmark_search": {"emoji": "🔖"},
-    "browserpaw_bookmark_add": {"emoji": "⭐"},
-    "browserpaw_bookmark_delete": {"emoji": "🗑️"},
-    "browserpaw_performance_start_trace": {"emoji": "⏱️"},
-    "browserpaw_performance_stop_trace": {"emoji": "⏹️"},
-    "browserpaw_performance_analyze_insight": {"emoji": "📊"},
 }
 
 
 def register(ctx: Any) -> None:
     global _plugin_config
-    if hasattr(ctx, 'config') and ctx.config:
+    if hasattr(ctx, 'get_config'):
         try:
-            if hasattr(ctx.config, 'get'):
-                _plugin_config['native_server_port'] = int(ctx.config.get('native_server_port', 12306) or 12306)
-                _plugin_config['auth_token'] = ctx.config.get('auth_token', None)
-                _plugin_config['isolate_modal'] = bool(ctx.config.get('isolate_modal', False))
-            elif isinstance(ctx.config, dict):
-                _plugin_config['native_server_port'] = int(ctx.config.get('native_server_port', 12306) or 12306)
-                _plugin_config['auth_token'] = ctx.config.get('auth_token', None)
-                _plugin_config['isolate_modal'] = bool(ctx.config.get('isolate_modal', False))
+            _plugin_config['native_server_port'] = int(ctx.get_config('native_server_port', 12306) or 12306)
+            _plugin_config['isolate_modal'] = bool(ctx.get_config('isolate_modal', False))
         except Exception as exc:
-            logger.debug('Failed to parse plugin config: %s', exc)
+            logger.debug('Failed to read plugin config: %s', exc)
+
+    # Catalog rule 11: the bridge token is read from the Hermes secret scope only.
+    if hasattr(ctx, 'secret_scope'):
+        _plugin_config['secret_scope'] = ctx.secret_scope
 
     _register_bundled_skill(ctx)
 
@@ -1909,16 +1849,3 @@ def browserpaw_scroll_until_found(
         args['sessionId'] = session_id
 
     return _call_browserpaw('browserpaw_scroll_until_found', args)
-
-
-def browserpaw_eval(script: str, tab_id: Optional[int] = None) -> str:
-    """Execute raw JavaScript in the active tab context as a high-privilege fallback."""
-    args: Dict[str, Any] = {'code': script, 'script': script}
-    if tab_id is not None:
-        args['tabId'] = tab_id
-    return _call_browserpaw('browserpaw_javascript', args)
-
-
-def browserpaw_execute_script(script: str, tab_id: Optional[int] = None) -> str:
-    """Alias for browserpaw_eval."""
-    return browserpaw_eval(script, tab_id=tab_id)

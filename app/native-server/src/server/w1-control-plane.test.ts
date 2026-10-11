@@ -70,18 +70,17 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
       expect(res.body).toHaveProperty('error');
     });
 
-    test('BUG-13.2: /token rejects requests from normal web page Origin', async () => {
-      const res = await supertest(Server.getInstance().server)
-        .get('/token')
-        .set('Origin', 'http://localhost:3000');
-      expect(res.status).toBe(403);
+    test('BUG-13.2: /token no longer exists', async () => {
+      const res = await supertest(Server.getInstance().server).get('/token');
+      expect([401, 404]).toContain(res.status);
     });
 
-    test('BUG-13.3: /token rejects browser Sec-Fetch requests even on loopback', async () => {
+    test('BUG-13.3: /eval rejects the x-local-trust loopback bypass', async () => {
       const res = await supertest(Server.getInstance().server)
-        .get('/token')
-        .set('sec-fetch-mode', 'cors');
-      expect(res.status).toBe(403);
+        .post('/eval')
+        .set('x-local-trust', 'true')
+        .send({ script: '1 + 1' });
+      expect(res.status).toBe(401);
     });
 
     test('BUG-13.4: GET /jev/remote-config does NOT expose plaintext apiKey', async () => {
