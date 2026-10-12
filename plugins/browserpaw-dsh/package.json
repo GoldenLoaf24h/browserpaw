@@ -1,0 +1,17 @@
+{
+  "name": "dsh-browserpaw",
+  "version": "4.0.0",
+  "description": "DeepSeek Harness plugin for BrowserPaw: high-speed dual-brain Chrome automation with native CDP and local MCP bridge.",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "deepseek-harness",
+    "cordis-plugin",
+    "mcp",
+    "browserpaw",
+    "browser-automation"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": ">=0.2.0-rc.1"
+  }
+}

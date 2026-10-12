@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-config.json",
+  "description": "BrowserPaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserPaw over HTTP (recommended) or stdio.",
+  "configurations": {
+    "desktop_client_a": {
+      "filePath": {
+        "windows": "%APPDATA%\\<CLIENT>\\<mcp-config>.json",
+        "macos": "~/Library/Application Support/<CLIENT>/<mcp-config>.json",
+        "linux": "~/.config/<CLIENT>/<mcp-config>.json"
+      },
+      "config_http": {
+        "mcpServers": {
+          "browserpaw": {
+            "url": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            }
+          }
+        }
+      },
+      "config_stdio": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"],
+            "env": {
+              "CHROME_MCP_HOST": "127.0.0.1",
+              "_comment_profile": "CHROME_MCP_TOOL_PROFILE: core (14 tools) | crawl (12 tools) | full (49 tools). Omit for full.",
+              "CHROME_MCP_TOOL_PROFILE": "full"
+            }
+          }
+        }
+      }
+    },
+    "editor_client_a": {
+      "filePath": "<project>/.<client>/mcp.json or ~/.<client>/mcp.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "url": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            }
+          }
+        }
+      }
+    },
+    "editor_client_b": {
+      "filePath": "~/.<client>/mcp_config.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "serverUrl": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            }
+          }
+        }
+      }
+    },
+    "cline_and_roo_code": {
+      "filePath": "%APPDATA%\\<EDITOR>\\User\\globalStorage\\<vendor.extension>\\settings\\<mcp-settings>.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "url": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            },
+            "disabled": false,
+            "autoApprove": [
+              "browserpaw_act_toward_goal",
+              "browserpaw_read_dom",
+              "browserpaw_interact_index",
+              "browserpaw_fill_index",
+              "browserpaw_batch_actions",
+              "browserpaw_screenshot",
+              "browserpaw_smart_scroll",
+              "browserpaw_dismiss_overlay"
+            ]
+          }
+        }
+      }
+    },
+    "cli_client": {
+      "filePath": "~/.<cli-agent>/mcp_config.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "url": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            }
+          }
+        }
+      }
+    },
+    "generic_sse": {
+      "url": "http://127.0.0.1:12306/sse",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+      }
+    }
+  }
+}
