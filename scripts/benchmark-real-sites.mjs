@@ -1,20 +1,23 @@
 // benchmark-real-sites.mjs
 // Real-world practical test of Local Jev Decision Engine (decider-2b)
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const BRIDGE_URL = 'http://127.0.0.1:12306';
 const DECIDER_URL = 'http://127.0.0.1:8009/v1/systemone';
-const TOKEN = '560bde5b61794a588e93cd6d086d0b5a26a5b9ccef205cd293b78b1cc5ccdff8';
+const TOKEN = fs
+  .readFileSync(path.join(os.homedir(), '.chrome-mcp', 'bridge-token'), 'utf8')
+  .trim();
 
 async function callTool(name, args = {}) {
   const resp = await fetch(`${BRIDGE_URL}/call-tool`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${TOKEN}`,
-      'x-local-trust': 'true'
+      Authorization: `Bearer ${TOKEN}`,
     },
-    body: JSON.stringify({ name, args })
+    body: JSON.stringify({ name, args }),
   });
   const data = await resp.json();
   if (data?.data?.data?.content?.[0]?.text) {
@@ -31,7 +34,7 @@ async function askLocalDecider(goal, tabUrl, tabTitle, elements) {
   // Extract up to 35 compact elements with indices
   const candidateIndices = [];
   const targetCriteria = {};
-  
+
   for (const line of elements) {
     const match = line.match(/^\[(\d+)\]\s*(.+)$/);
     if (match) {
@@ -48,7 +51,7 @@ async function askLocalDecider(goal, tabUrl, tabTitle, elements) {
       task: goal,
       page: { url: (tabUrl || '').slice(0, 150), title: (tabTitle || '').slice(0, 100) },
       elements: elements.slice(0, 35),
-      history: []
+      history: [],
     },
     questions: {
       action: {
@@ -63,31 +66,33 @@ async function askLocalDecider(goal, tabUrl, tabTitle, elements) {
           back: 'Navigate back to the previous page',
           wait: 'Wait for page content to load or changes to settle',
           done: 'The goal has been fully accomplished on the current page',
-          escalate: 'Cannot proceed, ambiguous options, destructive action needed, or requires user intervention'
-        }
+          escalate:
+            'Cannot proceed, ambiguous options, destructive action needed, or requires user intervention',
+        },
       },
       click_target: {
         type: 'choice',
         instructions: 'Which element index [N] should be clicked to advance toward the task goal?',
-        criteria: targetCriteria
+        criteria: targetCriteria,
       },
       type_target: {
         type: 'choice',
         instructions: 'Which input or textarea element index [N] should receive text entry?',
-        criteria: targetCriteria
+        criteria: targetCriteria,
       },
       goal_done: {
         type: 'noul',
-        instructions: 'Has the overall task goal been completely and successfully achieved based on the current page state and history?'
-      }
-    }
+        instructions:
+          'Has the overall task goal been completely and successfully achieved based on the current page state and history?',
+      },
+    },
   };
 
   const t0 = performance.now();
   const resp = await fetch(DECIDER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
   const latencyMs = Math.round(performance.now() - t0);
   const result = await resp.json();
@@ -95,7 +100,7 @@ async function askLocalDecider(goal, tabUrl, tabTitle, elements) {
   return {
     status: resp.status,
     latencyMs,
-    answers: result.answers || {}
+    answers: result.answers || {},
   };
 }
 
@@ -110,26 +115,26 @@ async function runBenchmark() {
       name: 'Test 1: Code Repository (GitHub BrowserClaw)',
       navigateUrl: 'https://github.com/GoldenLoaf24h/browserclaw',
       goal: 'Find and click the "Issues" or "Pull requests" navigation tab to view project tickets',
-      expectedAction: 'click'
+      expectedAction: 'click',
     },
     {
       name: 'Test 2: Search Engine Query Entry (Bing Search)',
       navigateUrl: 'https://www.bing.com',
       goal: 'Type "DeepSeek V3" into the search box to perform a web search',
-      expectedAction: 'type'
+      expectedAction: 'type',
     },
     {
       name: 'Test 3: Knowledge Portal (Wikipedia Main Page)',
       navigateUrl: 'https://en.wikipedia.org/wiki/Main_Page',
       goal: 'Find the search input box to search for "Artificial Intelligence"',
-      expectedAction: 'type'
+      expectedAction: 'type',
     },
     {
       name: 'Test 4: Content Feed (Hacker News)',
       navigateUrl: 'https://news.ycombinator.com',
       goal: 'Click on the "new" link in the top navigation bar to read newest submissions',
-      expectedAction: 'click'
-    }
+      expectedAction: 'click',
+    },
   ];
 
   const results = [];
@@ -152,9 +157,9 @@ async function runBenchmark() {
       console.log(`Navigating to ${tc.navigateUrl}...`);
       await callTool('chrome_navigate', { url: tc.navigateUrl, tabId: testTabId });
       // Wait for page to settle
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2000));
     } else {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 1500));
     }
 
     // Read DOM
@@ -162,11 +167,16 @@ async function runBenchmark() {
     const domData = await callTool('chrome_read_dom', {
       tabId: testTabId,
       activeViewportOnly: true,
-      limit: 100
+      limit: 100,
     });
 
-    const treeLines = (domData?.treeString || '').split('\n').map(l => l.trim()).filter(Boolean);
-    console.log(`DOM read complete: ${treeLines.length} elements extracted. Title: "${domData?.tabTitle || ''}"`);
+    const treeLines = (domData?.treeString || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    console.log(
+      `DOM read complete: ${treeLines.length} elements extracted. Title: "${domData?.tabTitle || ''}"`,
+    );
 
     // Query Local Jev
     console.log(`Sending semantic decision query to local decider-2b...`);
@@ -183,15 +193,22 @@ async function runBenchmark() {
     const targetConf = chosenAction === 'type' ? typeAns?.confidence : clickAns?.confidence;
 
     // Resolve target line
-    const targetLine = treeLines.find(l => l.startsWith(`[${targetChosen}]`)) || `[${targetChosen}]`;
+    const targetLine =
+      treeLines.find((l) => l.startsWith(`[${targetChosen}]`)) || `[${targetChosen}]`;
 
     console.log(`[Result] Latency: ${decision.latencyMs} ms`);
-    console.log(`[Result] Action: "${chosenAction}" (confidence: ${(actionConf * 100).toFixed(1)}%)`);
-    console.log(`[Result] Target: ${targetLine} (confidence: ${((targetConf || 0) * 100).toFixed(1)}%)`);
+    console.log(
+      `[Result] Action: "${chosenAction}" (confidence: ${(actionConf * 100).toFixed(1)}%)`,
+    );
+    console.log(
+      `[Result] Target: ${targetLine} (confidence: ${((targetConf || 0) * 100).toFixed(1)}%)`,
+    );
     console.log(`[Result] Goal Done: ${((goalDone?.noul || 0) * 100).toFixed(1)}%`);
 
     const isActionMatch = chosenAction === tc.expectedAction;
-    console.log(`[Evaluation] Action Match Expected (${tc.expectedAction}): ${isActionMatch ? 'PASS ✅' : 'FAIL ❌'}`);
+    console.log(
+      `[Evaluation] Action Match Expected (${tc.expectedAction}): ${isActionMatch ? 'PASS ✅' : 'FAIL ❌'}`,
+    );
 
     results.push({
       caseName: tc.name,
@@ -204,7 +221,7 @@ async function runBenchmark() {
       targetElement: targetLine,
       targetConfidence: targetConf,
       goalDoneProb: goalDone?.noul,
-      isActionMatch
+      isActionMatch,
     });
     console.log('');
   }
@@ -213,13 +230,15 @@ async function runBenchmark() {
   console.log('================================================================');
   console.log('                     BENCHMARK SUMMARY REPORT                   ');
   console.log('================================================================');
-  console.table(results.map(r => ({
-    Scenario: r.caseName.split(':')[0],
-    Action: `${r.chosenAction} (${(r.actionConfidence * 100).toFixed(0)}%)`,
-    Target: r.targetElement.slice(0, 35),
-    Latency: `${(r.latencyMs / 1000).toFixed(1)}s`,
-    Status: r.isActionMatch ? 'PASS' : 'FAIL'
-  })));
+  console.table(
+    results.map((r) => ({
+      Scenario: r.caseName.split(':')[0],
+      Action: `${r.chosenAction} (${(r.actionConfidence * 100).toFixed(0)}%)`,
+      Target: r.targetElement.slice(0, 35),
+      Latency: `${(r.latencyMs / 1000).toFixed(1)}s`,
+      Status: r.isActionMatch ? 'PASS' : 'FAIL',
+    })),
+  );
 
   fs.writeFileSync('benchmark-results.json', JSON.stringify(results, null, 2));
   console.log('\nResults saved to benchmark-results.json');

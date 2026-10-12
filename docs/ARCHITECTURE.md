@@ -109,7 +109,7 @@ sequenceDiagram
     participant InPage as "Target Tab (Inpage Engine)"
 
     Agent->>Fastify: POST /mcp (tools/call chrome_interact_index)
-    Note over Fastify: Validates CHROME_MCP_TOKEN Bearer
+    Note over Fastify: Validates bridge-token Bearer
     Fastify->>Host: Dispatch Native Message
     Host->>SW: Standard IO Framed Message (4-byte length prefix)
     Note over SW: Enforces 1MB physical buffer defense and Sender Authentication

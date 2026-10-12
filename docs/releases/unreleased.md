@@ -14,6 +14,18 @@ This document tracks in-progress architectural updates, fixes, and documentation
 
 ## 📋 Queued Changes
 
+### Native Bridge Credential Security & Stdio Transport Architecture
+
+- **Default Stdio Transport**: Standardized all client configuration templates (Desktop, Editor, Cline, CLI, Hermes) on stdio (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) as the zero-config default without token or environment credential requirements.
+- **Sole Credential Initializer**: Native messaging bridge server is the sole producer of `~/.chrome-mcp/bridge-token`. Uses exclusive file creation (`wx` mode `0o600`), preserves valid existing 48-hex and 64-hex tokens, retries transient empty files asynchronously, and fails explicitly on corruption or permission errors without in-memory ephemeral fallback. Clients and doctor scripts never write, rewrite, or auto-generate tokens.
+- **Removed Environment Overrides**: Eliminated reliance on and writeback to `CHROME_MCP_TOKEN`, `BROWSERPAW_MCP_TOKEN`, and `CHROME_MCP_TOKEN_DIR`.
+- **Advanced Manual HTTP Transport**: Documented HTTP/SSE endpoints as advanced manual options requiring explicit authentication tokens (`Authorization: Bearer <token>` or `x-mcp-token`), with non-configurable loopback, Host, and Origin security guards.
+- **Hermes Integration Architecture**: Hermes defaults to `mcp_servers.browserpaw` in `config.yaml` using stdio (`node` + absolute script path, `enabled: true`) exposing all ~50 standard MCP tools. The optional legacy 16-tool plugin requires Hermes `>=0.21.5` and explicit user authorization via `plugins.entries.browserpaw.mcp_allowlist: ["browserpaw"]` (with optional `settings.isolate_modal` toggle); recommended strategy is to leave the optional plugin disabled to prevent duplicate tool registration.
+- **Session & Subagent Isolation**: Each external MCP client session maintains isolated state, while subagents sharing the same profile may share transport connections with background tab isolation and explicit `tabId` targeting.
+- **Read-only Credential Diagnostics & Scanner**: Doctor checks file readability and format, then authenticates with the local bridge without displaying or rewriting tokens. Its regression tests use temporary directories and mocked networking. Added automated regression scans preventing hardcoded credentials in source files.
+- **Credential Rotation Recovery**: HTTP 401 invalidates the stale stdio connection. Safe reads may reconnect once; mutating calls are never automatically replayed. New connections reread the credential file. Removed hardcoded credentials from benchmark and manual test scripts; scanner fixtures use synthetic credentials.
+- **Hermes Skill Scope**: Hermes skill generation uses a dedicated 16-tool template; shared reference and troubleshooting documents identify capabilities available only through standard MCP. The Codex manifest selects a separate full standard MCP skill distribution; DeepSeek keeps its full skill. Forwarded results preserve business errors, structured content, truncation markers, and standalone `MEDIA:` paths.
+
 ### Verification and Extension Delivery
 
 - Added `pnpm verify` as the complete acceptance gate: script syntax and regression tests, zero-warning lint, TypeScript and Vue checks, complete Vitest and Jest file sets, simulated E2E, plugin pytest, documentation checks, production build, and extension artifact checks.

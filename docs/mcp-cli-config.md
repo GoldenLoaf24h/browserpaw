@@ -8,12 +8,12 @@ This guide explains how to configure AI Agent CLIs (Claude Desktop, Claude Code,
 
 BrowserPaw exposes two primary MCP transport modes:
 
-1. **HTTP / SSE Transport (Recommended for high-concurrency & multi-client)**:
+1. **StdIO Transport (Default for trusted local clients, including multiple agents)**:
+   - Spawns the stdio adapter via Node.js; the adapter connects to the separately running Native Messaging Bridge using the local credential file.
+   - Automatically reads the local token and connects to the active Chrome extension.
+2. **HTTP / SSE Transport (Advanced manual loopback integration)**:
    - Endpoint: `http://127.0.0.1:12306/sse` (or `/mcp`)
    - Requires high-entropy token authentication via HTTP header.
-2. **StdIO Transport (Direct process pipe)**:
-   - Spawns the native bridge process directly via Node.js stdio pipe.
-   - Automatically reads the local token and connects to the active Chrome extension.
 
 ---
 
@@ -22,8 +22,8 @@ BrowserPaw exposes two primary MCP transport modes:
 To protect your local browser session against unauthorized local loopback exploitation, BrowserPaw strictly enforces token authentication:
 
 - **Token Location**: `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`)
-- **Custom Token**: Set the `CHROME_MCP_TOKEN` environment variable prior to starting the service.
-- **Reading the Token**:
+- **Token Lifecycle**: The Native Host is the sole creator of the token (preserving valid 48/64-hex tokens with `wx` exclusive lock; clients and doctor scripts never write or rewrite tokens; environment variable overrides like `CHROME_MCP_TOKEN` are not supported).
+- **Reading the Token (manual HTTP integrations only; unnecessary for stdio)**:
   ```bash
   # Windows PowerShell
   Get-Content "$HOME\.chrome-mcp\bridge-token"
@@ -114,16 +114,30 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 
 ### 3.5 Hermes Agent
 
-#### Option A: Native Hermes Plugin (Recommended)
+#### Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)
 
-Install directly from terminal into your active Hermes environment:
+Configure Hermes with native Stdio transport in `config.yaml` to expose all ~50 standard MCP tools:
+
+```yaml
+mcp_servers:
+  browserpaw:
+    command: 'node'
+    args: ['<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js']
+    enabled: true
+    env:
+      CHROME_MCP_TOOL_PROFILE: full
+```
+
+#### Option B: Optional Legacy 16-Tool Plugin
+
+If legacy 16-tool names are specifically required, install the optional plugin with explicit allowlist authorization in `config.yaml` (`plugins.entries.browserpaw.mcp_allowlist: ["browserpaw"]`, Hermes `>=0.21.5`, optional `settings.isolate_modal: false`). Recommended migration strategy is to leave the optional plugin disabled to avoid duplicate tools:
 
 ```bash
 hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
 hermes plugins enable browserpaw
 ```
 
-#### Option B: HTTP / SSE MCP Server Registration
+#### Option C: Advanced Manual HTTP / SSE Registration
 
 Connect Hermes to the running BrowserPaw HTTP bridge:
 
@@ -138,8 +152,7 @@ hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 BrowserPaw provides an official Codex plugin under `plugins/browserpaw/`:
 
 - **Metadata Manifest**: `plugins/browserpaw/.codex-plugin/plugin.json` explicitly declares the MCP transport mapping via `"mcpServers": "./.mcp.json"`.
-- **Authentication Contract**: `plugins/browserpaw/.mcp.json` declares `"bearer_token_env_var": "CHROME_MCP_TOKEN"`.
-- **Initialization**: When connecting to the Native Bridge (`http://127.0.0.1:12306/mcp` or `/sse`), pass `Authorization: Bearer <token>` using the high-entropy token initialized from `~/.chrome-mcp/bridge-token` (or the `CHROME_MCP_TOKEN` environment variable).
+- **Transport & Authentication**: Stdio mode (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) is the zero-config default. When manually connecting over HTTP (`http://127.0.0.1:12306/mcp` or `/sse`), pass `Authorization: Bearer <token>` using the high-entropy token generated in `~/.chrome-mcp/bridge-token` (with non-bypassable loopback, Host, and Origin guards).
 
 ---
 
@@ -186,11 +199,11 @@ Once connected, your agent will have access to high-precision browser automation
 
 ## 6. Environment Variables
 
-| Variable                            | Description                                                                                                                                              | Default                            |
-| :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------- |
-| `CHROME_MCP_HOST`                   | Bind address for Fastify server                                                                                                                          | `127.0.0.1`                        |
-| `CHROME_MCP_PORT` / `MCP_HTTP_PORT` | HTTP/SSE port for MCP server (Priority: `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > 12306; bounded 1-65535)                                                    | `12306`                            |
-| `CHROME_MCP_TOKEN`                  | Overrides the token stored in `~/.chrome-mcp/bridge-token`                                                                                               | Auto-generated high-entropy string |
-| `BROWSERPAW_EXTENSION_SYNC_DIR`     | Opt-in target directory for extension artifact sync; disabled by default; strictly guarded against repo root, ancestors, drive roots, and home directory | None (disabled)                    |
-| `CHROME_MCP_TOOL_PROFILE`           | Tool profile level (`core`, `crawl`, `full`)                                                                                                             | `core`                             |
-| `CHROME_MCP_NODE_PATH`              | Override Node.js executable path for native host                                                                                                         | Auto-detected                      |
+| Variable                            | Description                                                                                                                                              | Default            |
+| :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------- |
+| `CHROME_MCP_HOST`                   | Bind address for Fastify server                                                                                                                          | `127.0.0.1`        |
+| `CHROME_MCP_PORT` / `MCP_HTTP_PORT` | HTTP/SSE port for MCP server (Priority: `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > 12306; bounded 1-65535)                                                    | `12306`            |
+| `CHROME_MCP_TOKEN`                  | Deprecated / Ignored (Native Host is sole producer of `~/.chrome-mcp/bridge-token`)                                                                      | None (no override) |
+| `BROWSERPAW_EXTENSION_SYNC_DIR`     | Opt-in target directory for extension artifact sync; disabled by default; strictly guarded against repo root, ancestors, drive roots, and home directory | None (disabled)    |
+| `CHROME_MCP_TOOL_PROFILE`           | Tool profile level (`core`, `crawl`, `full`)                                                                                                             | `core`             |
+| `CHROME_MCP_NODE_PATH`              | Override Node.js executable path for native host                                                                                                         | Auto-detected      |

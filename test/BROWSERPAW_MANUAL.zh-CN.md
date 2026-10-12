@@ -43,7 +43,7 @@ HTTP 层必须带 token(`/ping` 与 CORS 预检 OPTIONS 除外)。三种等价�
 2. `x-mcp-token: <token>`
 3. `?token=<token>` 查询参数
 
-token 来源:`C:\Users\<user>\.chrome-mcp\bridge-token`。优先级:环境变量 `CHROME_MCP_TOKEN` > 该文件 > 自动生成;比较使用 timing-safe。无需其他认证,`mcp-session-id` 不是密钥而是会话句柄。
+token 来源:`C:\Users\<user>\.chrome-mcp\bridge-token`。Native 宿主服务为唯一初始化者（保留有效 48-hex 或 64-hex 凭据并通过 `wx` 独占创建，客户端不生成，不支持环境变量覆盖）；比较使用 timing-safe。无需其他认证,`mcp-session-id` 不是密钥而是会话句柄。
 
 ### 1.4 会话握手流程
 

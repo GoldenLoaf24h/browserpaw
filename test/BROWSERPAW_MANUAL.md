@@ -44,7 +44,7 @@ Every HTTP request (except `/ping` and CORS pre-flight `OPTIONS`) requires token
 3. Query parameter: `?token=<token>`
 
 **Token Source**: `~/.chrome-mcp/bridge-token` (on Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).  
-Precedence: Environment variable `CHROME_MCP_TOKEN` > file contents > auto-generated cryptographic token.
+The Native Server is the sole initializer of the bridge token (preserving valid 48-hex or 64-hex tokens with exclusive `wx` creation). Clients never generate tokens, and environment variable overrides are not supported.
 
 ### 1.4 Session Handshake Flow
 

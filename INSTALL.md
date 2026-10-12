@@ -74,7 +74,7 @@ This step requires a source checkout with the native server built. A prebuilt ex
 node app/native-server/dist/scripts/register-dev.js
 ```
 
-The registration script writes the Native Messaging manifest and browser registration. The bridge token is created by the Native Messaging server when it starts for the first time, not by this registration command. The token is stored at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).
+The registration script writes the Native Messaging manifest and browser registration. The bridge token is created exclusively by the Native Messaging server when it starts for the first time (preserving valid 48-hex or 64-hex tokens with exclusive `wx` creation; clients never generate tokens, and environment variable overrides are not supported). The token is stored at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).
 
 **What This Does:**
 
@@ -87,7 +87,7 @@ The registration script writes the Native Messaging manifest and browser registr
 
 ## Step 3: Connect to Your AI Agent Client
 
-BrowserPaw connects via **Direct Stdio** (best for Codex, Cursor, Claude Desktop) or **HTTP Transport** (for ChatGPT, Hermes remote, etc.). Choose your client configuration below:
+BrowserPaw connects via **Direct Stdio** (recommended for Codex Desktop, Hermes, Cursor, Claude Desktop, and CLI agents) or optional **HTTP Transport** (for custom authenticated loopback integrations). Choose your client configuration below:
 
 ### 3.1 Codex Desktop & ChatGPT (Stdio vs. Marketplace Plugin)
 
@@ -97,7 +97,7 @@ You can connect BrowserPaw either via Direct Stdio (recommended for CLI / local 
 
 Configure the Stdio MCP entry in Codex's `config.toml`:
 
-- **Bridge requirement**: The Stdio process forwards MCP requests to the local bridge. Google Chrome must be open with BrowserPaw enabled, and the bridge must be available before calling tools.
+- **Bridge requirement**: The Stdio process forwards MCP requests to the local bridge. Google Chrome must be open with BrowserPaw enabled, and the bridge must be available before calling tools. For Codex Desktop plugin migration, ensure `mcp-chrome-stdio` is available or configure absolute Node + script paths.
 - **Direct Environment Injection**: You can set the tool profile and Jev API key in the client configuration without changing global environment variables.
 
 **Configuration File Location:**
@@ -137,14 +137,40 @@ If installing through the ChatGPT Desktop or Codex Plugin Marketplace:
 
 ### 3.2 Hermes Agent
 
-- **Option A: Native Plugin (Recommended)**:
+- **Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)**:
+
+  Configure Hermes with native Stdio transport in your Hermes configuration (`config.yaml`) to expose all ~50 standard MCP tools:
+
+  ```yaml
+  mcp_servers:
+    browserpaw:
+      command: 'node'
+      args: ['<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js']
+      enabled: true
+      env:
+        CHROME_MCP_TOOL_PROFILE: full
+  ```
+
+- **Option B: Optional Legacy 16-Tool Plugin**:
+
+  If your workflow specifically requires legacy 16-tool names, Hermes provides an optional plugin (`plugins/browserpaw`). It requires Hermes `>=0.21.5` and explicit user authorization in `config.yaml`:
+
+  ```yaml
+  plugins:
+    entries:
+      browserpaw:
+        mcp_allowlist: ['browserpaw']
+  ```
+
+  You can optionally configure `settings.isolate_modal: false` as needed. To avoid duplicate tool definitions between MCP stdio and the plugin, our recommended migration strategy is to keep the optional plugin disabled unless legacy tool names are specifically required:
 
   ```bash
   hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
+  # Only enable if legacy 16-tool names are explicitly needed:
   hermes plugins enable browserpaw
   ```
 
-- **Option B: Direct MCP Server Add (HTTP Transport)**:
+- **Option C: Advanced Manual HTTP Transport**:
   ```bash
   hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
   ```

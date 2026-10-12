@@ -263,6 +263,50 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
 
 ---
 
+## Hermes Agent 与插件常见故障诊断
+
+### 1. `PermissionError: Plugin 'browserpaw' is not allowed to call MCP server 'browserpaw'`
+
+- **现象**：
+  在 Hermes Agent 中调用任何 `browserpaw_*` 工具时报错：
+  `PermissionError: Plugin 'browserpaw' is not allowed to call MCP server 'browserpaw'. Add it to plugins.entries.browserpaw.mcp_allowlist in config.yaml to grant access...`
+- **根因**：
+  Hermes `>=0.21.5` 对插件调用原生 MCP 工具执行基于白名单的 Default-Deny 默认拒绝机制。
+- **排查与修复**：
+  在 `~/.hermes/config.yaml`（或当前 Profile 的 `config.yaml`）中，为 `browserpaw` 显式声明 `mcp_allowlist`：
+  ```yaml
+  plugins:
+    enabled:
+      - browserpaw
+    entries:
+      browserpaw:
+        mcp_allowlist:
+          - browserpaw
+        settings:
+          isolate_modal: false
+  ```
+
+### 2. 工具范围：标准 MCP（50+ 工具）与可选插件（16 个包装工具）
+
+- **现象**：
+  在 Hermes 插件模式下请求高级底层工具（如 `chrome_click_coordinate`、`chrome_debugger`、`chrome_performance_start`）时提示工具不存在。
+- **根因**：
+  Hermes 可选插件仅暴露 16 个高频精选包装工具（`browserpaw_*`）。未包含在这 16 个工具中的高级功能在 Hermes 插件中不可用（**not available in the Hermes plugin; use standard MCP**）。
+- **解决方法**：
+  在 Hermes 的 `config.yaml` 中将 BrowserPaw 配置为标准 MCP 服务（推荐使用默认 stdio 通道）。标准 stdio 默认使用 `core` profile 并支持会话内通过 `chrome_tool_docs({ activateForSession: true })` 动态解锁；若希望启动即全量暴露 50 个工具，可在该服务的 env 中配置 `CHROME_MCP_TOOL_PROFILE: "full"`。
+
+### 3. 插件模式零凭据 / 零 Token 要求
+
+- **说明**：
+  Hermes 插件纯通过 `ctx.call_mcp` 委托宿主原生客户端执行。插件内部**无需配置任何 Token**（`BROWSERPAW_MCP_TOKEN`）或 Session 环境变量（`BROWSERPAW_MCP_SESSION_ID`）。本地端口与 Token 仅属于独立的 HTTP MCP 服务配置范畴，与插件无关。
+
+### 4. 模态框隔离自动注入 (`isolate_modal`)
+
+- **配置说明（可选）**：
+  默认值为 `false`。若希望在 `browserpaw_read_dom` 中自动隔离活动对话框，可在当前 Profile 的插件配置中设置 `settings.isolate_modal: true`。
+
+---
+
 ## 12. 常见工具报错代码与速查表
 
 | 错误特征                                                   | 根本原因                                                | 标准处理方案                                                                        |
@@ -272,7 +316,7 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
 | `CDP_DISPATCH_TIMEOUT`                                     | 目标 Tab 处于后台深度节流状态。                         | 重试调用，或临时将 Tab 切换至前台执行。                                             |
 | `Security check failed: Domain changed`                    | 截图后页面发生跨域跳转，坐标失效。                      | 重新调用 `chrome_read_dom` 或 `chrome_take_screenshot` 重新对齐。                   |
 | `Tool X is not exposed under the ... profile`              | 当前 profile 隐藏了该工具。                             | 调用 `chrome_tool_docs({ category: "<cat>", activateForSession: true })` 动态激活。 |
-| `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                                  | 查阅 `tools/list`（全量包含 49 个规范工具）。                                       |
+| `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                                  | 查阅 `tools/list`（全量包含 50 个规范工具）。                                       |
 | `captureScreenshot returned empty data for background tab` | 后台 Tab 已被关闭或被系统内存冻结 (Discarded)。         | 重新打开或导航至目标页面。                                                          |
 | `Failed to ... index [X] in cross-origin frame`            | 跨域子 iframe 已被卸载或受到严格沙箱 sandbox 属性限制。 | 使用 `chrome_read_dom({ filter: "interactive" })` 检查 frame 活性。                 |
 | `Message sender rejected / unauthenticated content script` | 扩展安全加固：拦截了非受信渠道的未授权调用。            | 确保请求源自 Native Bridge 合法管道。                                               |
@@ -320,5 +364,5 @@ pnpm build
 | :--------------------- | :----------------------------- | :------------------------------------------------------ |
 | **Chrome MV3 扩展**    | `app/chrome-extension/`        | `app/chrome-extension/.output/chrome-mv3`               |
 | **Native Bridge 服务** | `app/native-server/`           | `127.0.0.1:12306` (Token: `~/.chrome-mcp/bridge-token`) |
-| **MCP 工具契约定义**   | `packages/shared/src/tools.ts` | 49 个规范 MCP 工具 Schema                               |
+| **MCP 工具契约定义**   | `packages/shared/src/tools.ts` | 50 个规范 MCP 工具 Schema                               |
 | **诊断与自愈配置**     | `skill/config/`                | `doctor.mjs`, `mcp-config.json`, `repair.bat`           |

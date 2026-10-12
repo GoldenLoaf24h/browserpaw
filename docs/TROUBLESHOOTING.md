@@ -264,6 +264,50 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
 
 ---
 
+## Hermes Agent & Plugin Troubleshooting
+
+### 1. `PermissionError: Plugin 'browserpaw' is not allowed to call MCP server 'browserpaw'`
+
+- **Symptom**:
+  Invoking any `browserpaw_*` tool under Hermes Agent fails with:
+  `PermissionError: Plugin 'browserpaw' is not allowed to call MCP server 'browserpaw'. Add it to plugins.entries.browserpaw.mcp_allowlist in config.yaml to grant access (default is no MCP access).`
+- **Root Cause**:
+  Hermes `>=0.21.5` enforces capability-gated, default-deny security for plugin-originated MCP calls via `ctx.call_mcp`.
+- **Resolution**:
+  In your `~/.hermes/config.yaml`, grant the plugin permission by adding `mcp_allowlist`:
+  ```yaml
+  plugins:
+    enabled:
+      - browserpaw
+    entries:
+      browserpaw:
+        mcp_allowlist:
+          - browserpaw
+        settings:
+          isolate_modal: false
+  ```
+
+### 2. Tool Availability: 50+ Standard Tools vs 16 Plugin Wrappers
+
+- **Symptom**:
+  An agent requests advanced tools (such as `chrome_click_coordinate`, `chrome_debugger`, or `chrome_performance_start`) while in Hermes plugin mode and receives a tool-not-found error.
+- **Root Cause**:
+  The optional Hermes plugin provides 16 curated high-frequency automation tools (`browserpaw_*`). Any tool outside these 16 is **not available in the Hermes plugin; use standard MCP**.
+- **Resolution**:
+  Configure BrowserPaw as a standard MCP server in Hermes (`mcp_servers.browserpaw`) using default stdio. Standard stdio defaults to the `core` profile with dynamic unlocking via `chrome_tool_docs({ activateForSession: true })`; to statically expose the full 50 toolset from launch, configure `env: { CHROME_MCP_TOOL_PROFILE: "full" }`.
+
+### 3. Zero Plugin Tokens / Credentials Required
+
+- **Clarification**:
+  The Hermes optional plugin delegates directly through Hermes's native MCP client. The plugin itself requires **no tokens** (`BROWSERPAW_MCP_TOKEN`) and **no session environment variables** (`BROWSERPAW_MCP_SESSION_ID`). Local HTTP port and bearer token configurations belong strictly to external HTTP MCP server definitions, not the plugin.
+
+### 4. Modal Dialog Isolation (`isolate_modal`)
+
+- **Configuration (Optional)**:
+  Defaults to `false`. Set `settings.isolate_modal: true` under `plugins.entries.browserpaw` in your active Hermes profile configuration if you wish to automatically isolate active modal dialogs in `browserpaw_read_dom`.
+
+---
+
 ## 12. Error Code & Diagnostic Reference Table
 
 | Error Signature                                            | Root Cause                                                                 | Verified Action                                                           |
@@ -273,7 +317,7 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
 | `CDP_DISPATCH_TIMEOUT`                                     | Background tab execution timed out under heavy system throttling.          | Retry action or briefly switch tab to foreground.                         |
 | `Security check failed: Domain changed`                    | Navigation occurred between screenshot capture and coordinate action.      | Call `chrome_read_dom` or `chrome_take_screenshot` to re-align state.     |
 | `Tool X is not exposed under the ... profile`              | Tool is hidden under active profile (`core`/`crawl`).                      | Call `chrome_tool_docs({ category: "<cat>", activateForSession: true })`. |
-| `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` (49 canonical tools available).                      |
+| `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` (50 canonical tools available).                      |
 | `captureScreenshot returned empty data for background tab` | Background tab was closed or discarded by Chrome memory saver.             | Re-open or navigate to target URL.                                        |
 | `Failed to ... index [X] in cross-origin frame`            | Child iframe was unmounted or restricted by sandbox permissions.           | Inspect frame status using `chrome_read_dom({ filter: "interactive" })`.  |
 | `Message sender rejected / unauthenticated content script` | Security guard blocked unauthorized message sender (`_sender.tab`).        | Ensure requests originate from authentic native bridge channels.          |
@@ -321,5 +365,5 @@ pnpm build
 | :----------------------- | :----------------------------- | :------------------------------------------------------ |
 | **Chrome MV3 Extension** | `app/chrome-extension/`        | `app/chrome-extension/.output/chrome-mv3`               |
 | **Native Bridge Server** | `app/native-server/`           | `127.0.0.1:12306` (Token: `~/.chrome-mcp/bridge-token`) |
-| **Shared Tool Schemas**  | `packages/shared/src/tools.ts` | 49 canonical MCP tool definitions                       |
+| **Shared Tool Schemas**  | `packages/shared/src/tools.ts` | 50 canonical MCP tool definitions                       |
 | **Diagnostics & Repair** | `skill/config/`                | `doctor.mjs`, `mcp-config.json`, `repair.bat`           |

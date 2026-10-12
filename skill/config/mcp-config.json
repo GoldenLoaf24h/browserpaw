@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/mcp-config.json",
-  "description": "BrowserPaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserPaw over HTTP (recommended) or stdio.",
+  "description": "BrowserPaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserPaw over stdio (recommended zero-config) or advanced manual HTTP.",
   "configurations": {
     "desktop_client_a": {
       "filePath": {
@@ -8,25 +8,21 @@
         "macos": "~/Library/Application Support/<CLIENT>/<mcp-config>.json",
         "linux": "~/.config/<CLIENT>/<mcp-config>.json"
       },
-      "config_http": {
+      "config_stdio": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+          }
+        }
+      },
+      "config_http_advanced_optional": {
+        "_comment": "Advanced manual HTTP connection example (not recommended as default, requires active bridge-token from ~/.chrome-mcp/bridge-token).",
         "mcpServers": {
           "browserpaw": {
             "url": "http://127.0.0.1:12306/mcp",
             "headers": {
               "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
-            }
-          }
-        }
-      },
-      "config_stdio": {
-        "mcpServers": {
-          "browserpaw": {
-            "command": "node",
-            "args": ["<PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"],
-            "env": {
-              "CHROME_MCP_HOST": "127.0.0.1",
-              "_comment_profile": "CHROME_MCP_TOOL_PROFILE: core (14 tools) | crawl (12 tools) | full (49 tools). Omit for full.",
-              "CHROME_MCP_TOOL_PROFILE": "full"
             }
           }
         }
@@ -37,10 +33,8 @@
       "config": {
         "mcpServers": {
           "browserpaw": {
-            "url": "http://127.0.0.1:12306/mcp",
-            "headers": {
-              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
-            }
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
           }
         }
       }
@@ -50,10 +44,8 @@
       "config": {
         "mcpServers": {
           "browserpaw": {
-            "serverUrl": "http://127.0.0.1:12306/mcp",
-            "headers": {
-              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
-            }
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
           }
         }
       }
@@ -63,10 +55,10 @@
       "config": {
         "mcpServers": {
           "browserpaw": {
-            "url": "http://127.0.0.1:12306/mcp",
-            "headers": {
-              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
-            },
+            "command": "node",
+            "args": [
+              "<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"
+            ],
             "disabled": false,
             "autoApprove": [
               "chrome_act_toward_goal",
@@ -87,18 +79,25 @@
       "config": {
         "mcpServers": {
           "browserpaw": {
-            "url": "http://127.0.0.1:12306/mcp",
-            "headers": {
-              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
-            }
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
           }
         }
       }
     },
-    "generic_sse": {
-      "url": "http://127.0.0.1:12306/sse",
-      "headers": {
-        "Authorization": "Bearer PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+    "advanced_manual_http": {
+      "_comment": "Advanced manual HTTP/SSE connection examples (not recommended as default, requires active bridge-token from ~/.chrome-mcp/bridge-token).",
+      "http": {
+        "url": "http://127.0.0.1:12306/mcp",
+        "headers": {
+          "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+        }
+      },
+      "sse": {
+        "url": "http://127.0.0.1:12306/sse",
+        "headers": {
+          "Authorization": "Bearer PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+        }
       }
     }
   }

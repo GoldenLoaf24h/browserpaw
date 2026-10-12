@@ -256,7 +256,7 @@ node skill/config/doctor.mjs
 
 ```text
 AI 智能体 (Cursor / Claude / Codex)
-         │  MCP 协议 (HTTP / SSE / Stdio) @ 127.0.0.1:12306
+         │  MCP 协议 (默认 Stdio 零配置，或高级手动 HTTP/SSE @ 127.0.0.1:12306)
          ▼
 本地原生网桥 (Fastify + Stdio 宿主)
          ├── 极速决策引擎 (Jev 客户端 + 零依赖启发式降级 + 语义微循环)

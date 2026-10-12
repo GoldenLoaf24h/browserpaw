@@ -63,15 +63,15 @@ Copy the configuration snippet matching your agent platform into your MCP config
 
 BrowserPaw enforces local token authentication to prevent unauthorized loopback access:
 
-- **Token File Location**: `~/.chrome-mcp/bridge-token` (on Windows: `C:\Users\<username>\.chrome-mcp\bridge-token`)
+- **Default Stdio Transport**: Stdio transport (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) is the recommended zero-config default across all clients, requiring no tokens or environment credentials.
+- **Token File Location**: `~/.chrome-mcp/bridge-token` (on Windows: `C:\Users\<username>\.chrome-mcp\bridge-token`). The Native Server is the sole producer (preserving valid 48/64-hex tokens with exclusive `wx` lock; clients and doctor scripts never write tokens; environment variable overrides like `CHROME_MCP_TOKEN` or `BROWSERPAW_MCP_TOKEN` are ignored).
 - **Environment Variables**:
   - `CHROME_MCP_PORT` / `MCP_HTTP_PORT`: Port override for Native Bridge (Priority: `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > `12306`, validated to integer range 1–65535).
-  - `CHROME_MCP_TOKEN`: Custom auth token string (overrides the generated token file `~/.chrome-mcp/bridge-token`). Required for Codex `.mcp.json` (`bearer_token_env_var: "CHROME_MCP_TOKEN"`).
   - `CHROME_MCP_TOOL_PROFILE`: Tool exposure profile. Values: `core` (14 tools, default ~11.5k tokens), `crawl` (12 tools, ~5.8k tokens), or `full` (all 50 tools, ~19.5k tokens).
   - `BROWSERPAW_TOOL_PREFIX`: Namespace prefix for tool names (`browserpaw_` or `chrome_`).
   - `BROWSERPAW_EXTENSION_SYNC_DIR`: Opt-in destination directory for `sync-extension-dist.mjs` (strictly guarded against repo root, ancestors, drive roots, and user home directory).
 
-> **Note**: In `stdio` transport mode, the Native Server automatically generates or reads this token and completes internal handshakes with Chrome.
+> **Note**: When connecting via optional advanced HTTP/SSE transport, the client must supply `Authorization: Bearer <token>` matching `~/.chrome-mcp/bridge-token`. Loopback, Host, and Origin security guards remain mandatory.
 
 ---
 

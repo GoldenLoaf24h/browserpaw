@@ -179,6 +179,26 @@ Windows 用户亦可直接双击运行 [`skill/config/repair.bat`](./repair.bat)
 
 ---
 
+### 12. Hermes Agent 集成与插件排错说明
+
+- **默认 Stdio MCP 连接**：在 Hermes Agent 中，推荐将 BrowserPaw 配置为标准 `stdio` 客户端（`mcp-chrome-stdio`）。该模式默认使用 `core` profile 并支持动态解锁，配置 `env: { CHROME_MCP_TOOL_PROFILE: "full" }` 可全量开放 50 个工具，无需本地 HTTP 端口或 Bearer Token。
+- **可选插件（16 个包装工具）**：Hermes 可选插件（`browserpaw`）通过 `ctx.call_mcp` 暴露 16 个高频工具（`browserpaw_*`）。未包含在此 16 个工具中的高级功能在 Hermes 插件中不可用（**not available in the Hermes plugin; use standard MCP**）。
+- **工具调用 PermissionError 异常**：Hermes `>=0.21.5` 执行默认拒绝策略。必须在 `~/.hermes/config.yaml` 中配置 `mcp_allowlist` 授权：
+  ```yaml
+  plugins:
+    enabled:
+      - browserpaw
+    entries:
+      browserpaw:
+        mcp_allowlist:
+          - browserpaw
+        settings:
+          isolate_modal: false
+  ```
+- **零插件凭据**：Hermes 插件纯委托原生客户端运行，插件自身**不需要任何 Token**（`BROWSERPAW_MCP_TOKEN`）或 Session 环境变量（`BROWSERPAW_MCP_SESSION_ID`）。本地端口与 Token 仅属于外部 HTTP MCP 服务定义范畴。
+
+---
+
 ## 技术支持与目录对照
 
 | 组件                   | 源码路径                       | 独立免编译目录                                          |

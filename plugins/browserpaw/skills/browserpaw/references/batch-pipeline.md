@@ -1,3 +1,5 @@
+> **Tool Availability Notice**: Standard BrowserPaw MCP exposes the full 50 toolset (under full profile; stdio defaults to core). The optional Hermes plugin exposes 16 curated wrapper tools (`browserpaw_*`). Other tools are not available in the Hermes plugin; use standard MCP.
+
 # Pipelined Automation Reference (`browserpaw_batch_actions` & `browserpaw_form_pipeline`)
 
 This reference documents BrowserPaw's pipelined execution engines for multi-step workflows, atomic assertions, and zero-RTT form filling.

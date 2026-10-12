@@ -1,3 +1,5 @@
+> **Tool Availability Notice**: Standard BrowserPaw MCP exposes the full 50 toolset (under full profile; stdio defaults to core). The optional Hermes plugin exposes 16 curated wrapper tools (`browserpaw_*`). Other tools are not available in the Hermes plugin; use standard MCP.
+
 # Visual Fallback & Multimodal Coordination Reference (PCIE)
 
 This reference documents the secondary visual execution engine for canvas games, WebGL visualizations, unlabeled SVG icons, or anti-bot DOM-obfuscated layouts.

@@ -1,6 +1,11 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 // run-mcp-act.mjs
 const BRIDGE_URL = 'http://127.0.0.1:12306';
-const TOKEN = '560bde5b61794a588e93cd6d086d0b5a26a5b9ccef205cd293b78b1cc5ccdff8';
+const tokenPath = path.join(os.homedir(), '.chrome-mcp', 'bridge-token');
+const TOKEN = fs.readFileSync(tokenPath, 'utf8').trim();
 
 async function callMcpTool(name, args = {}) {
   const t0 = performance.now();
@@ -8,10 +13,9 @@ async function callMcpTool(name, args = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${TOKEN}`,
-      'x-local-trust': 'true'
+      Authorization: `Bearer ${TOKEN}`,
     },
-    body: JSON.stringify({ name, args })
+    body: JSON.stringify({ name, args }),
   });
   const data = await resp.json();
   const elapsed = Math.round(performance.now() - t0);
@@ -32,7 +36,7 @@ async function main() {
   const { elapsed, data } = await callMcpTool('chrome_act_toward_goal', {
     goal,
     tabId,
-    maxSteps
+    maxSteps,
   });
 
   console.log(`\nCompleted in ${elapsed} ms`);

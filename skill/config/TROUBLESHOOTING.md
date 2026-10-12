@@ -158,6 +158,26 @@ Windows users can also double-click [`skill/config/repair.bat`](./repair.bat) or
 
 ---
 
+### 12. Hermes Agent Integration & Plugin Diagnostics
+
+- **Default Stdio Connection**: In Hermes Agent, connect BrowserPaw as a standard MCP server using the default `stdio` transport (`mcp-chrome-stdio`). Standard stdio defaults to `core` profile with dynamic unlocking; configure `env: { CHROME_MCP_TOOL_PROFILE: "full" }` to expose the complete 50 toolset without requiring local HTTP ports or bearer tokens.
+- **Optional Plugin (16 Curated Wrappers)**: The Hermes optional plugin (`browserpaw`) delegates to the native MCP client via `ctx.call_mcp`, exposing 16 high-frequency automation tools (`browserpaw_*`). Any tool outside these 16 is **not available in the Hermes plugin; use standard MCP**.
+- **PermissionError on Tool Calls**: Hermes `>=0.21.5` enforces default-deny security. You must authorize the plugin in `~/.hermes/config.yaml` by setting `mcp_allowlist`:
+  ```yaml
+  plugins:
+    enabled:
+      - browserpaw
+    entries:
+      browserpaw:
+        mcp_allowlist:
+          - browserpaw
+        settings:
+          isolate_modal: false
+  ```
+- **Zero Plugin Credentials**: The plugin delegates directly to Hermes's native MCP client. No local tokens (`BROWSERPAW_MCP_TOKEN`) or session environment variables (`BROWSERPAW_MCP_SESSION_ID`) are required for plugin operation.
+
+---
+
 ## Directory & Component Map
 
 | Component                | Source Path                    | Artifact / Runtime Endpoint                             |

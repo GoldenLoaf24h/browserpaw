@@ -211,7 +211,7 @@ All 50 tools are grouped below. For machine-readable schemas and parameter detai
 
 ```text
 AI Client (any MCP-capable agent)
-         │  MCP over Streamable HTTP (/mcp), SSE (/sse) on 127.0.0.1:12306, or stdio
+         │  MCP over Stdio (recommended zero-config) or HTTP/SSE on 127.0.0.1:12306
          ▼
 Native Messaging Bridge (Fastify + Stdio Host)
          ├── Fast Decision Engine (Jev micro-loop)

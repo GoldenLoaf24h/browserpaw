@@ -16,11 +16,10 @@
  *   node doctor.mjs --fix  # Diagnose and auto-repair common defects
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
+import { existsSync, readFileSync, cpSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve, delimiter } from 'node:path';
 import { execSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 
 const AUTO_FIX = process.argv.includes('--fix');
 const PORT = 12306;
@@ -30,10 +29,11 @@ const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
 const REPO_ROOT = resolve(process.cwd());
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
 // Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths
-const STANDALONE_EXT_DIRS = (process.env.BROWSERPAW_STANDALONE_DIRS
-  ? process.env.BROWSERPAW_STANDALONE_DIRS.split(delimiter).map((d) => d.trim()).filter(Boolean)
-  : []
-);
+const STANDALONE_EXT_DIRS = process.env.BROWSERPAW_STANDALONE_DIRS
+  ? process.env.BROWSERPAW_STANDALONE_DIRS.split(delimiter)
+      .map((d) => d.trim())
+      .filter(Boolean)
+  : [];
 
 console.log('\n================================================================');
 console.log('         BrowserPaw System Healthcheck & Repair');
@@ -64,22 +64,23 @@ report(true, `Node.js Environment: ${nodeVer} on ${platform()}`);
 
 // 2. Bridge Token Check
 let token = '';
-if (existsSync(TOKEN_PATH)) {
+try {
   token = readFileSync(TOKEN_PATH, 'utf8').trim();
-  report(token.length >= 16, `Bridge Token Found: ${TOKEN_PATH}`, `Token length: ${token.length} chars`);
-} else {
-  if (AUTO_FIX) {
-    try {
-      if (!existsSync(TOKEN_DIR)) mkdirSync(TOKEN_DIR, { recursive: true });
-      token = randomBytes(24).toString('hex');
-      writeFileSync(TOKEN_PATH, token, 'utf8');
-      report(true, `Bridge Token Created (Auto-Fix): ${TOKEN_PATH}`, `New token: ${token.slice(0, 8)}...`);
-    } catch (e) {
-      report(false, `Bridge Token Missing & Auto-Fix Failed`, e.message);
-    }
-  } else {
-    report(false, `Bridge Token Missing: ${TOKEN_PATH}`, 'Run with --fix to automatically generate a secure token.');
-  }
+  const valid = /^(?:[a-f0-9]{48}|[a-f0-9]{64})$/i.test(token);
+  report(
+    valid,
+    `Bridge Credential: ${TOKEN_PATH}`,
+    valid
+      ? 'Readable and valid.'
+      : 'Invalid format. Native must initialize a valid credential; doctor never rewrites it.',
+  );
+  if (!valid) token = '';
+} catch (e) {
+  report(
+    false,
+    `Bridge Credential Unavailable: ${TOKEN_PATH}`,
+    `${e.code || 'READ_ERROR'}. Start the native host to initialize missing credentials; check file permissions for read failures.`,
+  );
 }
 
 // 3. Fastify HTTP Service Connectivity
@@ -90,7 +91,11 @@ try {
   if (res.ok) {
     pingRes = await res.json();
     httpOnline = true;
-    report(true, `Native Bridge Server is Listening (Port ${PORT})`, `Response: ${JSON.stringify(pingRes)}`);
+    report(
+      true,
+      `Native Bridge Server is Listening (Port ${PORT})`,
+      `Response: ${JSON.stringify(pingRes)}`,
+    );
   } else {
     report(false, `Native Bridge Server returned HTTP ${res.status}`);
   }
@@ -101,7 +106,9 @@ try {
       const netstat = execSync(`netstat -ano | findstr :${PORT}`, { encoding: 'utf8' });
       console.log('       Active listeners found on port:', netstat.trim());
     } catch {
-      console.log('       Port 12306 is free. Chrome extension will auto-start bridge on browser open.');
+      console.log(
+        '       Port 12306 is free. Chrome extension will auto-start bridge on browser open.',
+      );
     }
   }
 }
@@ -113,16 +120,48 @@ if (httpOnline && token) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-mcp-token': token,
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json, text/event-stream',
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'doctor', version: '1.0' } } }),
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'doctor', version: '1.0' },
+        },
+      }),
       signal: AbortSignal.timeout(3000),
     });
     if (res.status === 401) {
-      report(false, `Token Authentication Failed (401 Unauthorized)`, 'Token in file does not match server memory. Server restart recommended.');
+      report(
+        false,
+        `Token Authentication Failed (401 Unauthorized)`,
+        'Token in file does not match server memory. Server restart recommended.',
+      );
     } else {
-      const initBody = await res.json();
-      report(true, `Token Authentication & MCP Initialize OK`, `Server: ${initBody.result?.serverInfo?.name || 'mcp-chrome'} (v${initBody.result?.serverInfo?.version || '1.0'})`);
+      const body = await res.text();
+      const json = body.trim().startsWith('{')
+        ? body
+        : body
+            .split('\n')
+            .find((line) => line.startsWith('data: '))
+            ?.slice(6);
+      const initBody = json ? JSON.parse(json) : null;
+      report(
+        res.ok && !!initBody?.result?.serverInfo && !initBody?.error,
+        `Token Authentication & MCP Initialize`,
+        `HTTP ${res.status}`,
+      );
+      const sessionId = res.headers.get('mcp-session-id');
+      if (sessionId)
+        await fetch(`${BASE_URL}/mcp`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}`, 'mcp-session-id': sessionId },
+          signal: AbortSignal.timeout(3000),
+        });
     }
   } catch (e) {
     report(false, `MCP Handshake Error`, e.message);
@@ -131,12 +170,23 @@ if (httpOnline && token) {
 
 // 5. Chrome Extension Build Output & Synchronization
 let buildOk = false;
-if (existsSync(join(EXT_SRC_OUTPUT, 'manifest.json')) && existsSync(join(EXT_SRC_OUTPUT, 'background.js'))) {
+if (
+  existsSync(join(EXT_SRC_OUTPUT, 'manifest.json')) &&
+  existsSync(join(EXT_SRC_OUTPUT, 'background.js'))
+) {
   const manifest = JSON.parse(readFileSync(join(EXT_SRC_OUTPUT, 'manifest.json'), 'utf8'));
   buildOk = true;
-  report(true, `Extension Build Found: ${EXT_SRC_OUTPUT}`, `Version: ${manifest.version}, Manifest: V${manifest.manifest_version}`);
+  report(
+    true,
+    `Extension Build Found: ${EXT_SRC_OUTPUT}`,
+    `Version: ${manifest.version}, Manifest: V${manifest.manifest_version}`,
+  );
 } else {
-  report(false, `Extension Build Missing at ${EXT_SRC_OUTPUT}`, 'Run: pnpm --filter chrome-mcp-server build');
+  report(
+    false,
+    `Extension Build Missing at ${EXT_SRC_OUTPUT}`,
+    'Run: pnpm --filter chrome-mcp-server build',
+  );
 }
 
 // Check Standalone Load Directories
@@ -190,7 +240,10 @@ for (const dir of STANDALONE_EXT_DIRS) {
 // 6. Chrome Native Messaging Host Registration (Windows Registry Check)
 if (platform() === 'win32') {
   try {
-    const regQuery = execSync('reg query "HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.chromemcp.nativehost" /ve', { encoding: 'utf8' });
+    const regQuery = execSync(
+      'reg query "HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.chromemcp.nativehost" /ve',
+      { encoding: 'utf8' },
+    );
     const match = regQuery.match(/REG_SZ\s+(.*)/);
     const manifestPath = match ? match[1].trim() : '';
     if (manifestPath && existsSync(manifestPath)) {
@@ -199,7 +252,11 @@ if (platform() === 'win32') {
       report(false, `Native Messaging Host Manifest File Missing: ${manifestPath}`);
     }
   } catch {
-    report(false, `Native Messaging Host Registry Key Missing`, 'Run: node app/native-server/dist/scripts/register.js');
+    report(
+      false,
+      `Native Messaging Host Registry Key Missing`,
+      'Run: node app/native-server/dist/scripts/register.js',
+    );
     if (AUTO_FIX) {
       try {
         const regScript = join(REPO_ROOT, 'app', 'native-server', 'dist', 'scripts', 'register.js');
@@ -224,7 +281,11 @@ if (modelDownloaded) {
   try {
     const fs = await import('node:fs');
     const sizeMB = Math.round(fs.statSync(JEV_WEIGHTS_PATH).size / (1024 * 1024));
-    report(true, `Jev Decision Model Found: ${JEV_MODEL_DIR}`, `Weights: model.safetensors (${sizeMB} MB)`);
+    report(
+      true,
+      `Jev Decision Model Found: ${JEV_MODEL_DIR}`,
+      `Weights: model.safetensors (${sizeMB} MB)`,
+    );
   } catch {
     report(true, `Jev Decision Model Found: ${JEV_MODEL_DIR}`);
   }
@@ -240,12 +301,22 @@ if (modelDownloaded) {
 try {
   const localRes = await fetch('http://127.0.0.1:8009/ping', { signal: AbortSignal.timeout(800) });
   if (localRes.ok || localRes.status === 404) {
-    report(true, `Local Jev Decider Service Listening on Port 8009`, `Endpoint: http://127.0.0.1:8009/v1/systemone`);
+    report(
+      true,
+      `Local Jev Decider Service Listening on Port 8009`,
+      `Endpoint: http://127.0.0.1:8009/v1/systemone`,
+    );
   } else {
-    report(true, `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`);
+    report(
+      true,
+      `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`,
+    );
   }
 } catch {
-  report(true, `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`);
+  report(
+    true,
+    `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`,
+  );
 }
 
 console.log('\n----------------------------------------------------------------');
