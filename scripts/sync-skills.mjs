@@ -51,7 +51,7 @@ function copyDir(src, dest, isPlugin = false) {
       const text = fs.readFileSync(srcPath, 'utf-8')
         .replaceAll('chrome_', 'browserpaw_')
         .replaceAll('get_windows_and_tabs', 'browserpaw_get_windows_and_tabs');
-      fs.writeFileSync(destPath, Buffer.from(text, 'utf-8'));
+      fs.writeFileSync(destPath, Buffer.from(text.replace(/\r\n/g, '\n'), 'utf-8'));
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
