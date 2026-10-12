@@ -10,6 +10,7 @@ const rootSkill = path.join(repoRoot, 'skill');
 const targets = [
   { dir: path.join(repoRoot, 'skills', 'browserpaw') },
   { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'skills', 'browserpaw'), isPlugin: true },
+  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'), isPlugin: true },
 ];
 
 function assertSafePath(targetPath) {
