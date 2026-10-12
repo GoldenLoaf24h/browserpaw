@@ -1,1 +1,4 @@
 *.onnx filter=lfs diff=lfs merge=lfs -text
+
+skill/** text eol=lf
+plugins/**/skills/** text eol=lf
