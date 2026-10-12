@@ -29,15 +29,46 @@ hermes plugins enable browserpaw
 ## Prerequisites
 
 1. **Load BrowserPaw Extension**: In Chrome, navigate to `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `app/chrome-extension/.output/chrome-mv3` directory (or release archive).
-2. **Start Native Bridge**: Run the native MCP bridge:
-   ```bash
-   node app/native-server/dist/index.js
-   # or for development:
-   pnpm --filter mcp-chrome-bridge dev
-   ```
-   The server listens on `http://127.0.0.1:12306/mcp` (or custom `BROWSERPAW_MCP_URL`).
-3. **Bridge token & Codex integration**: The native server requires a bearer token on every `/mcp` request. For Hermes, the plugin resolves in order `BROWSERPAW_MCP_TOKEN`, `CHROME_MCP_TOKEN`, then `~/.chrome-mcp/bridge-token`. For OpenAI Codex, `.codex-plugin/plugin.json` explicitly binds `"mcpServers": "./.mcp.json"`, which maps `"bearer_token_env_var": "CHROME_MCP_TOKEN"` for direct loopback authentication.
-4. **MCP 2024-11-05 Session Handshake**: The plugin automatically implements the MCP 2024-11-05 lifecycle handshake (`initialize` -> `notifications/initialized`), extracts and forwards the `mcp-session-id` HTTP header on all tool calls, and performs automatic session recovery/re-initialization if a session expires or returns HTTP 400/404. Manual session pinning is also supported via `BROWSERPAW_MCP_SESSION_ID` or `CHROME_MCP_SESSION_ID`.
+2. **MCP Connection Modes**:
+   - **Standard Stdio MCP (Default for Hermes)**: Hermes spawns `mcp-chrome-stdio` via its built-in MCP client. The stdio bridge reads the local credential file and connects to the separately installed Native Bridge on loopback port 12306; no token is copied into client or plugin settings.
+   - **HTTP/SSE MCP Endpoint**: The native bridge can also listen on `http://127.0.0.1:12306/mcp` when accessed across processes or over the loopback network.
+3. **Hermes Plugin Architecture (>=0.21.5)**:
+   - Configure the underlying standard MCP server first, after completing [Native Messaging Host installation](../../INSTALL.md):
+     ```yaml
+     mcp_servers:
+       browserpaw:
+         command: node
+         args: ['<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js']
+         enabled: true
+         env:
+           CHROME_MCP_TOOL_PROFILE: full
+     ```
+     Use an absolute Node executable path if `node` is unavailable to the client. Leave the optional plugin disabled unless you need its legacy tool names.
+   - The plugin delegates all execution through Hermes's native MCP client via `ctx.call_mcp('browserpaw', ...)`.
+   - **Zero Plugin Credentials**: The plugin needs no local secret tokens or session environment variables (`BROWSERPAW_MCP_TOKEN`, `BROWSERPAW_MCP_SESSION_ID`). All connection lifecycle, auth, and retries are managed by Hermes's native MCP layer.
+   - **Operator Authorization**: Under Hermes's default-deny security model, you must grant the plugin permission to invoke the `browserpaw` MCP server in your `~/.hermes/config.yaml`:
+     ```yaml
+     plugins:
+       enabled:
+         - browserpaw
+       entries:
+         browserpaw:
+           mcp_allowlist:
+             - browserpaw
+           settings:
+             isolate_modal: false
+     ```
+     _If `mcp_allowlist` is omitted, tool calls are blocked with a `PermissionError` before touching the transport._
+   - **Modal Isolation (Optional)**: Defaults to `false`. Set `settings.isolate_modal: true` (or `config.isolate_modal: true`) in your plugin entry if you wish to automatically isolate active modal dialogs in `browserpaw_read_dom`.
+
+## Tool Scope: Standard MCP vs Optional Hermes Plugin
+
+BrowserPaw provides two interfaces tailored to agent capabilities:
+
+- **Standard MCP (50 Tool Surface)**: Standard stdio MCP connection defaults to the `core` profile with dynamic runtime unlocking via `chrome_tool_docs({ activateForSession: true })`. To expose the full 50 toolset statically from startup, configure `env: { CHROME_MCP_TOOL_PROFILE: "full" }` in your `mcp_servers.browserpaw` entry.
+- **Optional Hermes Plugin (16 Curated Wrappers)**: Curated high-frequency tools prefixed with `browserpaw_*` exposed directly into Hermes's prompt registry.
+
+> **Important**: Any advanced tool not listed among the 16 curated plugin tools below is **not available in the Hermes plugin; use standard MCP** to access the complete toolset.
 
 ## Core Provided Tools
 
@@ -51,6 +82,7 @@ hermes plugins enable browserpaw
 | `browserpaw_batch_actions`        | Atomic pipeline of actions (click, fill, assert, extract) in one roundtrip |
 | `browserpaw_screenshot`           | High-resolution full-page or viewport capture                              |
 | `browserpaw_smart_scroll`         | Intelligent overflow-aware scrolling with remaining page calculation       |
+| `browserpaw_scroll_until_found`   | Scroll until a requested element is found                                  |
 | `browserpaw_inspect_media`        | Direct extraction of images/canvas at native resolution                    |
 | `browserpaw_grep`                 | Targeted in-memory regex/text search across interactive elements           |
 | `browserpaw_get_markdown`         | Clean reader-mode markdown extraction for distilled article reading        |
@@ -61,11 +93,13 @@ hermes plugins enable browserpaw
 
 ## Bundled Skill
 
-This plugin bundles the complete `browserpaw` operator skill, loaded automatically via Hermes's namespaced skill system:
+This plugin bundles an operator skill limited to its 16 tools, loaded automatically via Hermes's namespaced skill system. For the full standard MCP surface, install the canonical `skill/` directory instead:
 
 ```text
 skill_view("browserpaw:browserpaw")
 ```
+
+The Codex manifest points to the separate `mcp-skills/` distribution, which preserves the full canonical standard MCP skill and its `chrome_*` tool names. Hermes loads the curated `skills/browserpaw/` distribution.
 
 ## License
 

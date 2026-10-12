@@ -10,7 +10,7 @@
   "repository": "https://github.com/GoldenLoaf24h/browserpaw",
   "license": "AGPL-3.0",
   "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"],
-  "skills": "./skills/",
+  "skills": "./mcp-skills/",
   "interface": {
     "displayName": "BrowserPaw",
     "shortDescription": "Control your own browser with Agent",

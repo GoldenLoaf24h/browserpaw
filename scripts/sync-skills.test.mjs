@@ -10,12 +10,16 @@ const syncScript = path.join(repoRoot, 'scripts', 'sync-skills.mjs');
 const scriptSource = fs.readFileSync(syncScript, 'utf-8');
 
 // 1. 静态阻断：禁止硬编码外部路径、Hermes 同步及 managed hash（严禁实跑旧脚本）
-assert.ok(!scriptSource.includes('hermesPluginDir') && !scriptSource.includes('.browserpaw-managed.json'));
+assert.ok(
+  !scriptSource.includes('hermesPluginDir') && !scriptSource.includes('.browserpaw-managed.json'),
+);
 assert.ok(!scriptSource.includes('C:/Users') && !scriptSource.includes('D:/workspace/browserpaw'));
 
-const canonicalSkill = '# browserpaw\nUse chrome_interact_index & chrome_fill_index with get_windows_and_tabs.\n';
+const canonicalSkill =
+  '# browserpaw\nUse chrome_interact_index & chrome_fill_index with get_windows_and_tabs.\n';
 const canonicalRecipe = 'Run chrome_fill_index to write text.\n';
-const expectedPluginSkill = '# browserpaw\nUse browserpaw_interact_index & browserpaw_fill_index with browserpaw_get_windows_and_tabs.\n';
+const expectedPluginSkill =
+  '# browserpaw\nUse browserpaw_interact_index & browserpaw_fill_index with browserpaw_get_windows_and_tabs.\n';
 const expectedPluginRecipe = 'Run browserpaw_fill_index to write text.\n';
 
 function createSandbox() {
@@ -28,7 +32,10 @@ function createSandbox() {
   return root;
 }
 const runScript = (sandbox, cwd = sandbox) =>
-  spawnSync(process.execPath, [path.join(sandbox, 'scripts', 'sync-skills.mjs')], { cwd, encoding: 'utf-8' });
+  spawnSync(process.execPath, [path.join(sandbox, 'scripts', 'sync-skills.mjs')], {
+    cwd,
+    encoding: 'utf-8',
+  });
 
 // 2. 异 cwd 运行与两个镜像 exact equal 完整内容校验
 const sandbox = createSandbox();
@@ -39,14 +46,130 @@ try {
   assert.strictEqual(fs.readdirSync(outsideCwd).length, 0);
 
   const m1Skill = fs.readFileSync(path.join(sandbox, 'skills', 'browserpaw', 'SKILL.md'), 'utf-8');
-  const m1Recipe = fs.readFileSync(path.join(sandbox, 'skills', 'browserpaw', 'recipes', 'act.md'), 'utf-8');
+  const m1Recipe = fs.readFileSync(
+    path.join(sandbox, 'skills', 'browserpaw', 'recipes', 'act.md'),
+    'utf-8',
+  );
   assert.strictEqual(m1Skill, canonicalSkill);
   assert.strictEqual(m1Recipe, canonicalRecipe);
 
-  const m2Skill = fs.readFileSync(path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'SKILL.md'), 'utf-8');
-  const m2Recipe = fs.readFileSync(path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'recipes', 'act.md'), 'utf-8');
+  const m2Skill = fs.readFileSync(
+    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'SKILL.md'),
+    'utf-8',
+  );
+  const m2Recipe = fs.readFileSync(
+    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'recipes', 'act.md'),
+    'utf-8',
+  );
   assert.strictEqual(m2Skill, expectedPluginSkill);
   assert.strictEqual(m2Recipe, expectedPluginRecipe);
+
+  // 2b. Verify scope banner on plugin references and TROUBLESHOOTING files
+  const testRef = '# Reference\nDetailed tool guide.\n';
+  const testTrouble = '# Troubleshooting\nFAQ.\n';
+  fs.mkdirSync(path.join(sandbox, 'skill', 'references'), { recursive: true });
+  fs.mkdirSync(path.join(sandbox, 'skill', 'config'), { recursive: true });
+  fs.writeFileSync(path.join(sandbox, 'skill', 'references', 'tools.md'), testRef);
+  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'TROUBLESHOOTING.md'), testTrouble);
+  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'TROUBLESHOOTING.zh-CN.md'), testTrouble);
+  const testJson = '{"tool": "chrome_navigate"}';
+  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'test.json'), testJson);
+  const res2 = runScript(sandbox);
+  assert.strictEqual(res2.status, 0, res2.stderr);
+
+  // Standard target: NO banner
+  const m1Ref = fs.readFileSync(
+    path.join(sandbox, 'skills', 'browserpaw', 'references', 'tools.md'),
+    'utf-8',
+  );
+  assert.strictEqual(m1Ref, testRef);
+
+  // Plugin target: EN banner on references and TROUBLESHOOTING.md, ZH banner on .zh-CN.md
+  const m2Ref = fs.readFileSync(
+    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'references', 'tools.md'),
+    'utf-8',
+  );
+  assert.ok(m2Ref.includes('not available in the Hermes plugin; use standard MCP'));
+  assert.ok(m2Ref.includes(testRef));
+  const m2Trouble = fs.readFileSync(
+    path.join(
+      sandbox,
+      'plugins',
+      'browserpaw',
+      'skills',
+      'browserpaw',
+      'config',
+      'TROUBLESHOOTING.md',
+    ),
+    'utf-8',
+  );
+  assert.ok(m2Trouble.includes('not available in the Hermes plugin; use standard MCP'));
+  const m2TroubleZh = fs.readFileSync(
+    path.join(
+      sandbox,
+      'plugins',
+      'browserpaw',
+      'skills',
+      'browserpaw',
+      'config',
+      'TROUBLESHOOTING.zh-CN.md',
+    ),
+    'utf-8',
+  );
+  assert.ok(m2TroubleZh.includes('工具可用性说明'));
+  assert.ok(m2TroubleZh.includes('not available in the Hermes plugin; use standard MCP'));
+
+  // JSON files must NEVER receive markdown banners and must remain valid JSON
+  const m2Json = fs.readFileSync(
+    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'config', 'test.json'),
+    'utf-8',
+  );
+  assert.strictEqual(JSON.parse(m2Json).tool, 'browserpaw_navigate');
+
+  // 2c. Verify HERMES_PLUGIN_SKILL.md takes precedence for plugin SKILL.md and is not copied to mirrors
+  const hermesCustomSkill = '# browserpaw hermes 16 curated tools\n';
+  fs.writeFileSync(path.join(sandbox, 'skill', 'HERMES_PLUGIN_SKILL.md'), hermesCustomSkill);
+  const res3 = runScript(sandbox);
+  assert.strictEqual(res3.status, 0, res3.stderr);
+  assert.strictEqual(
+    fs.readFileSync(
+      path.join(sandbox, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw', 'SKILL.md'),
+      'utf-8',
+    ),
+    canonicalSkill,
+  );
+  assert.strictEqual(
+    fs.readFileSync(
+      path.join(sandbox, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw', 'SKILL.md'),
+      'utf-8',
+    ),
+    expectedPluginSkill,
+  );
+
+  // Standard target: still canonical skill, HERMES_PLUGIN_SKILL.md not copied
+  assert.strictEqual(
+    fs.readFileSync(path.join(sandbox, 'skills', 'browserpaw', 'SKILL.md'), 'utf-8'),
+    canonicalSkill,
+  );
+  assert.strictEqual(
+    fs.existsSync(path.join(sandbox, 'skills', 'browserpaw', 'HERMES_PLUGIN_SKILL.md')),
+    false,
+  );
+
+  // Plugin target: uses HERMES_PLUGIN_SKILL.md, not copied as separate file
+  assert.strictEqual(
+    fs.readFileSync(
+      path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'SKILL.md'),
+      'utf-8',
+    ),
+    hermesCustomSkill,
+  );
+  assert.strictEqual(
+    fs.existsSync(
+      path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'HERMES_PLUGIN_SKILL.md'),
+    ),
+    false,
+  );
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.rmSync(outsideCwd, { recursive: true, force: true });

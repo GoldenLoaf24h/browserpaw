@@ -1,419 +1,14 @@
-"""BrowserPaw — Native Hermes Agent Plugin.
-
-Ultra-fast dual-brain Chrome browser automation with 1-based DOM indexing,
-Set-of-Mark 2.0 visual fallbacks, Jev System 1 micro-loop, and local MCP bridge.
-"""
+"""BrowserPaw optional Hermes tools, delegated through the public MCP client."""
 from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 import re
-import sys
-import threading
-from typing import Any, Callable, Dict, List, Optional
-import urllib.error
-import urllib.request
+from typing import Any, Callable, Dict
 
 logger = logging.getLogger(__name__)
 
-_plugin_config: Dict[str, Any] = {
-    'native_server_port': 12306,
-    'isolate_modal': False,
-}
-
-DEFAULT_URLS = [
-    os.getenv('BROWSERPAW_MCP_URL', 'http://127.0.0.1:12306/mcp'),
-    'http://127.0.0.1:12306/mcp',
-]
-
-BRIDGE_TOKEN_SECRET_NAME = 'BROWSERPAW_MCP_TOKEN'
-
-# Optional pre-configured session ID env vars
-SESSION_ID_ENV_VARS = ('BROWSERPAW_MCP_SESSION_ID', 'BROWSERCLAW_MCP_SESSION_ID', 'CHROME_MCP_SESSION_ID')
-
-MCP_PROTOCOL_VERSION = '2024-11-05'
-CLIENT_INFO = {
-    'name': 'browserpaw-python-plugin',
-    'version': '4.0.0',
-}
-
-_AUTH_HELP = (
-    'BrowserPaw bridge rejected the request (HTTP 401): bridge token missing or invalid. '
-    'Configure the BROWSERPAW_MCP_TOKEN secret in your Hermes plugin settings with the '
-    'token the native server generated in ~/.chrome-mcp/bridge-token.'
-)
-
-# Session state management
-_session_lock = threading.RLock()
-_active_session_id: Optional[str] = None
-_active_session_url: Optional[str] = None
-_invalid_configured_sessions: set[str] = set()
-_request_counter: int = 0
-
-
-def _next_request_id() -> int:
-    """Return incrementing request id for JSON-RPC 2.0 messages."""
-    global _request_counter
-    with _session_lock:
-        _request_counter += 1
-        return _request_counter
-
-
-def _get_configured_session_id() -> Optional[str]:
-    """Check if a session ID is pre-configured via environment variable and not known to be invalid."""
-    for name in SESSION_ID_ENV_VARS:
-        val = os.getenv(name, '').strip()
-        if val and val not in _invalid_configured_sessions:
-            return val
-    return None
-
-
-def _get_active_session_id() -> Optional[str]:
-    """Retrieve active session id, if any."""
-    with _session_lock:
-        return _active_session_id or _get_configured_session_id()
-
-
-def _set_active_session_id(session_id: Optional[str], url: Optional[str] = None) -> None:
-    """Explicitly update active session id (used internally or by tests)."""
-    global _active_session_id, _active_session_url
-    with _session_lock:
-        _active_session_id = session_id
-        _active_session_url = url
-
-
-def _reset_session(clear_invalid: bool = False) -> None:
-    """Invalidate currently cached session to trigger re-initialization on next call."""
-    global _active_session_id, _active_session_url
-    with _session_lock:
-        if clear_invalid:
-            _invalid_configured_sessions.clear()
-        else:
-            if _active_session_id:
-                _invalid_configured_sessions.add(_active_session_id)
-            for name in SESSION_ID_ENV_VARS:
-                val = os.getenv(name, '').strip()
-                if val:
-                    _invalid_configured_sessions.add(val)
-        _active_session_id = None
-        _active_session_url = None
-
-
-def _get_target_urls() -> List[str]:
-    """Return deduplicated list of target MCP endpoints."""
-    urls: List[str] = []
-    env_url = os.getenv('BROWSERPAW_MCP_URL', '').strip()
-    if env_url:
-        urls.append(env_url)
-    port = _plugin_config.get('native_server_port') or 12306
-    default_url = f'http://127.0.0.1:{port}/mcp'
-    if default_url not in urls:
-        urls.append(default_url)
-    return urls
-
-
-def _extract_result_or_error(raw: str) -> str:
-    """Extract JSON-RPC result or error string from SSE stream or JSON response."""
-    if 'data: ' in raw:
-        for line in raw.splitlines():
-            if line.startswith('data: '):
-                try:
-                    parsed = json.loads(line[6:].strip())
-                    if 'result' in parsed:
-                        return json.dumps(parsed['result'], ensure_ascii=False)
-                    elif 'error' in parsed:
-                        return json.dumps({'error': parsed['error']}, ensure_ascii=False)
-                except Exception:
-                    pass
-    try:
-        parsed = json.loads(raw)
-        if 'result' in parsed:
-            return json.dumps(parsed['result'], ensure_ascii=False)
-        elif 'error' in parsed:
-            return json.dumps({'error': parsed['error']}, ensure_ascii=False)
-    except Exception:
-        pass
-    return raw
-
-
-def _perform_handshake(url: str, token: Optional[str]) -> str:
-    """Execute MCP 2024-11-05 initialize handshake and send notifications/initialized.
-
-    Returns the session ID issued by the server.
-    """
-    req_id = _next_request_id()
-    init_payload = json.dumps({
-        'jsonrpc': '2.0',
-        'id': req_id,
-        'method': 'initialize',
-        'params': {
-            'protocolVersion': MCP_PROTOCOL_VERSION,
-            'capabilities': {
-                'roots': {'listChanged': False},
-                'sampling': {},
-            },
-            'clientInfo': CLIENT_INFO,
-        },
-    }).encode('utf-8')
-
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-    }
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-
-    init_req = urllib.request.Request(
-        url,
-        data=init_payload,
-        headers=headers,
-        method='POST',
-    )
-
-    session_id = None
-    try:
-        with urllib.request.urlopen(init_req, timeout=30) as resp:
-            resp_headers = getattr(resp, 'headers', None)
-            if resp_headers:
-                session_id = (
-                    resp_headers.get('mcp-session-id')
-                    or resp_headers.get('Mcp-Session-Id')
-                    or (getattr(resp, 'getheader', lambda k: None)('mcp-session-id'))
-                    or (getattr(resp, 'getheader', lambda k: None)('Mcp-Session-Id'))
-                )
-
-            raw = resp.read().decode('utf-8', errors='replace')
-            if raw:
-                try:
-                    if 'data: ' in raw:
-                        for line in raw.splitlines():
-                            if line.startswith('data: '):
-                                line_data = line[6:].strip()
-                                if not line_data:
-                                    continue
-                                parsed = json.loads(line_data)
-                                if 'error' in parsed:
-                                    err = parsed['error']
-                                    err_msg = err.get('message', str(err)) if isinstance(err, dict) else str(err)
-                                    raise RuntimeError(f'MCP initialize rejected: {err_msg}')
-                                if not session_id:
-                                    session_id = parsed.get('result', {}).get('sessionId')
-                                if session_id:
-                                    break
-                    else:
-                        parsed = json.loads(raw)
-                        if 'error' in parsed:
-                            err = parsed['error']
-                            err_msg = err.get('message', str(err)) if isinstance(err, dict) else str(err)
-                            raise RuntimeError(f'MCP initialize rejected: {err_msg}')
-                        if not session_id:
-                            session_id = parsed.get('result', {}).get('sessionId')
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            raise
-        err_body = ''
-        try:
-            err_body = exc.read().decode('utf-8', errors='replace').strip()
-        except Exception:
-            pass
-        logger.warning('MCP initialize handshake HTTP %d: %s', exc.code, err_body or exc.reason)
-        raise RuntimeError(f'MCP initialize handshake failed (HTTP {exc.code}): {err_body or exc.reason}') from exc
-
-    session_id = (session_id or '').strip()
-
-    # Step 2: Send notifications/initialized according to MCP lifecycle spec
-    notify_payload = json.dumps({
-        'jsonrpc': '2.0',
-        'method': 'notifications/initialized',
-    }).encode('utf-8')
-
-    notify_headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'mcp-protocol-version': MCP_PROTOCOL_VERSION,
-    }
-    if session_id:
-        notify_headers['mcp-session-id'] = session_id
-    if token:
-        notify_headers['Authorization'] = f'Bearer {token}'
-
-    notify_req = urllib.request.Request(
-        url,
-        data=notify_payload,
-        headers=notify_headers,
-        method='POST',
-    )
-
-    try:
-        with urllib.request.urlopen(notify_req, timeout=10) as _:
-            # Handshake notification acknowledged; do not read indefinitely on SSE keepalive
-            pass
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            raise
-        logger.debug('notifications/initialized HTTP error (ignored): %s', exc)
-    except Exception as exc:
-        logger.debug('notifications/initialized warning (ignored): %s', exc)
-
-    return session_id
-
-
-def _ensure_session(url: str, force_refresh: bool = False) -> Optional[str]:
-    """Ensure an active MCP session exists for the target URL."""
-    configured = _get_configured_session_id()
-    if configured and not force_refresh:
-        return configured
-
-    global _active_session_id, _active_session_url
-    with _session_lock:
-        if not force_refresh and _active_session_id and _active_session_url == url:
-            return _active_session_id
-
-        token = _bridge_token()
-        session_id = _perform_handshake(url, token)
-        _active_session_id = session_id or None
-        _active_session_url = url
-        return _active_session_id
-
-
-def _bridge_token() -> Optional[str]:
-    """Resolve the native-bridge auth token from Hermes.
-
-    Catalog rule 11: credentials come only through Hermes.
-    """
-    try:
-        from agent.secret_scope import get_secret
-        value = get_secret(BRIDGE_TOKEN_SECRET_NAME)
-    except Exception as exc:
-        logger.debug('Failed to read %s from Hermes secret scope: %s', BRIDGE_TOKEN_SECRET_NAME, exc)
-        return None
-    if value and isinstance(value, str):
-        return value.strip()
-    return None
-
-def _call_browserpaw(tool_name: str, arguments: dict) -> str:
-    if tool_name == 'browserpaw_read_dom' and isinstance(arguments, dict):
-        if 'isolateModal' not in arguments and _plugin_config.get('isolate_modal'):
-            arguments['isolateModal'] = True
-    remote_name = tool_name
-    if tool_name == 'browserpaw_get_windows_and_tabs':
-        remote_name = 'get_windows_and_tabs'
-    elif tool_name.startswith('browserpaw_'):
-        remote_name = 'chrome_' + tool_name[len('browserpaw_'):]
-
-    token = _bridge_token()
-    last_error = None
-    urls = _get_target_urls()
-
-    for url in urls:
-        for attempt in range(2):
-            try:
-                session_id = _ensure_session(url, force_refresh=(attempt > 0))
-
-                req_id = _next_request_id()
-                payload = json.dumps({
-                    'jsonrpc': '2.0',
-                    'id': req_id,
-                    'method': 'tools/call',
-                    'params': {
-                        'name': remote_name,
-                        'arguments': arguments or {},
-                    },
-                }).encode('utf-8')
-
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json, text/event-stream',
-                    'mcp-protocol-version': MCP_PROTOCOL_VERSION,
-                }
-                if token:
-                    headers['Authorization'] = f'Bearer {token}'
-                if session_id:
-                    headers['mcp-session-id'] = session_id
-
-                req = urllib.request.Request(
-                    url,
-                    data=payload,
-                    headers=headers,
-                    method='POST',
-                )
-
-                with urllib.request.urlopen(req, timeout=45) as resp:
-                    raw = resp.read().decode('utf-8', errors='replace')
-                    res_str = _extract_result_or_error(raw)
-                    try:
-                        res_obj = json.loads(res_str)
-                        if isinstance(res_obj, dict) and 'error' in res_obj:
-                            err_msg = str(res_obj.get('error', '')).lower()
-                            if ('session' in err_msg or 'not initialized' in err_msg) and attempt == 0:
-                                logger.info(
-                                    'BrowserPaw MCP session invalid in payload (%s). Re-initializing...',
-                                    err_msg,
-                                )
-                                _reset_session()
-                                continue
-                    except Exception:
-                        pass
-                    return res_str
-
-            except RuntimeError as e:
-                if attempt == 0:
-                    logger.info('BrowserPaw handshake error (%s). Retrying...', e)
-                    _reset_session()
-                    continue
-                return json.dumps({'error': str(e)}, ensure_ascii=False)
-
-            except urllib.error.HTTPError as e:
-                if e.code == 401:
-                    return json.dumps({'error': _AUTH_HELP})
-
-                err_body = ''
-                try:
-                    err_body = e.read().decode('utf-8', errors='replace').strip()
-                except Exception:
-                    pass
-
-                # Session expired or invalid session header (HTTP 400 or 404)
-                if e.code in (400, 404) and attempt == 0:
-                    logger.info(
-                        'BrowserPaw MCP session invalid or expired (HTTP %d). Re-initializing session...',
-                        e.code,
-                    )
-                    _reset_session()
-                    continue
-
-                if err_body:
-                    try:
-                        err_parsed = json.loads(err_body)
-                        if isinstance(err_parsed, dict):
-                            msg = err_parsed.get('error') or err_parsed.get('message')
-                            hint = err_parsed.get('hint')
-                            if hint and msg:
-                                return json.dumps({'error': f'{msg} ({hint})'}, ensure_ascii=False)
-                            return json.dumps(err_parsed, ensure_ascii=False)
-                    except Exception:
-                        pass
-                    return json.dumps({'error': f'BrowserPaw HTTP {e.code}: {err_body}'}, ensure_ascii=False)
-
-                last_error = f'HTTP {e.code}'
-                break
-            except urllib.error.URLError as e:
-                last_error = str(e)
-                break
-            except Exception as e:
-                last_error = str(e)
-                break
-
-    port = _plugin_config.get('native_server_port') or 12306
-    return json.dumps({
-        'error': f'BrowserPaw server not reachable ({last_error}). Ensure Chrome extension is loaded and native server is running on http://127.0.0.1:{port}/mcp.',
-    })
 
 def _register_bundled_skill(ctx: Any) -> None:
     skill_md = Path(__file__).resolve().parent / 'skills' / 'browserpaw' / 'SKILL.md'
@@ -1733,12 +1328,31 @@ TOOL_DEFINITIONS = {
     }
 }
 
-def _make_handler(tool_name: str) -> Callable:
+def _make_handler(ctx: Any, tool_name: str) -> Callable:
     def handler(args: dict, **kwargs: Any) -> str:
         try:
-            return _call_browserpaw(tool_name, args)
+            arguments = dict(args)
+            if tool_name == 'browserpaw_read_dom' and 'isolateModal' not in arguments:
+                if ctx.get_config('isolate_modal', False):
+                    arguments['isolateModal'] = True
+            remote_name = (
+                'get_windows_and_tabs' if tool_name == 'browserpaw_get_windows_and_tabs'
+                else 'chrome_' + tool_name.removeprefix('browserpaw_')
+            )
+            envelope = ctx.call_mcp('browserpaw', remote_name, arguments, timeout=120)
+            output = json.dumps(envelope, ensure_ascii=False)
+            result = envelope.get('result')
+            error = envelope.get('error')
+            media_targets = [m for m in (result, error) if isinstance(m, str)]
+            media = []
+            for target in media_targets:
+                # Hermes masks MEDIA inside JSON strings; expose its cache paths as raw lines.
+                media.extend(re.findall(r'(?m)^[ \t]*(MEDIA:[^\r\n]+)', target))
+            if media:
+                output += '\n' + '\n'.join(media)
+            return output
         except Exception as e:
-            return json.dumps({'error': str(e)}, ensure_ascii=False)
+            return json.dumps({'ok': False, 'error': str(e)}, ensure_ascii=False)
     return handler
 
 # ── BROWSERPAW CANONICAL SPECS ───────────────────────────────────────
@@ -1764,15 +1378,6 @@ BROWSERPAW_SPECS: Dict[str, Dict[str, Any]] = {
 
 
 def register(ctx: Any) -> None:
-    global _plugin_config
-    if hasattr(ctx, 'get_config'):
-        try:
-            _plugin_config['native_server_port'] = int(ctx.get_config('native_server_port', 12306) or 12306)
-            _plugin_config['isolate_modal'] = bool(ctx.get_config('isolate_modal', False))
-        except Exception as exc:
-            logger.debug('Failed to read plugin config: %s', exc)
-
-
     _register_bundled_skill(ctx)
 
     for tool_name, meta in TOOL_DEFINITIONS.items():
@@ -1783,7 +1388,7 @@ def register(ctx: Any) -> None:
             'description': meta['description'],
             'parameters': meta['inputSchema'],
         }
-        handler = _make_handler(tool_name)
+        handler = _make_handler(ctx, tool_name)
         if hasattr(ctx, 'register_tool'):
             ctx.register_tool(
                 name=tool_name,
@@ -1793,44 +1398,3 @@ def register(ctx: Any) -> None:
                 description=meta['description'],
                 emoji=emoji,
             )
-
-
-def browserpaw_scroll_until_found(
-    query: Optional[str] = None,
-    selector: Optional[str] = None,
-    is_regex: bool = False,
-    max_steps: int = 10,
-    step_px: int = 800,
-    direction: str = 'down',
-    timeout_ms: int = 15000,
-    container_selector: Optional[str] = None,
-    settle_ms: int = 150,
-    tab_id: Optional[int] = None,
-    session_id: Optional[str] = None,
-) -> str:
-    """Scroll step-by-step in the active page until an element matching query or selector is found.
-
-    Executes in-page client-side RAF/step scrolling, waiting for virtual lists to render at each step,
-    probing open and shadow DOM trees. Upon finding, stops scrolling, centers the element in the viewport,
-    and returns its 1-based index and safe coordinates.
-    """
-    args: Dict[str, Any] = {
-        'isRegex': is_regex,
-        'maxSteps': max_steps,
-        'stepPx': step_px,
-        'direction': direction,
-        'timeoutMs': timeout_ms,
-        'settleMs': settle_ms,
-    }
-    if query:
-        args['query'] = query
-    if selector:
-        args['selector'] = selector
-    if container_selector:
-        args['containerSelector'] = container_selector
-    if tab_id is not None:
-        args['tabId'] = tab_id
-    if session_id:
-        args['sessionId'] = session_id
-
-    return _call_browserpaw('browserpaw_scroll_until_found', args)

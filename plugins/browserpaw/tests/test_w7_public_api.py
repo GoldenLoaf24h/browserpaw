@@ -65,22 +65,17 @@ def test_tool03_response_body_fidelity(plugin):
         "error": "chrome_runtime_not_found"
     })
 
-    with mock.patch('urllib.request.urlopen') as mock_urlopen, \
-         mock.patch.object(plugin, '_ensure_session', return_value='test-session-id'):
-        mock_resp = mock.MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "content": [{"type": "text", "text": raw_response}]
-            }
-        }).encode('utf-8')
-        mock_resp.__enter__.return_value = mock_resp
-        mock_urlopen.return_value = mock_resp
+    mock_ctx = mock.MagicMock()
+    mock_ctx.call_mcp.return_value = {
+        'ok': True,
+        'result': raw_response,
+    }
 
-        result = plugin._call_browserpaw('browserpaw_read_dom', {})
-        assert 'const chrome_example = 1' in result, f"chrome_example was mutated: {result}"
-        assert 'chrome_app' in result, f"chrome_app was mutated: {result}"
-        assert 'chrome://extensions' in result, f"chrome://extensions was mutated: {result}"
-        assert 'get_windows_and_tabs' in result, f"get_windows_and_tabs was mutated: {result}"
-        assert 'chrome_runtime_not_found' in result, f"chrome_runtime_not_found was mutated: {result}"
+    handler = plugin._make_handler(mock_ctx, 'browserpaw_read_dom')
+    result = handler({})
+
+    assert 'const chrome_example = 1' in result, f"chrome_example was mutated: {result}"
+    assert 'chrome_app' in result, f"chrome_app was mutated: {result}"
+    assert 'chrome://extensions' in result, f"chrome://extensions was mutated: {result}"
+    assert 'get_windows_and_tabs' in result, f"get_windows_and_tabs was mutated: {result}"
+    assert 'chrome_runtime_not_found' in result, f"chrome_runtime_not_found was mutated: {result}"

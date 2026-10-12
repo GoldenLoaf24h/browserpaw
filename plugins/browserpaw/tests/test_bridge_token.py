@@ -1,158 +1,112 @@
-"""Tests for native-bridge token resolution in the Hermes plugin.
+"""Tests for BrowserPaw security, isolation, and forwarding contract.
 
-Run from the repo root:
-    python -m pytest -q plugins/browserpaw/tests
+Verifies:
+- No secret-scope or environment token lookups.
+- Environment variables (tokens, session IDs) are ignored.
+- Input arguments dictionary is never mutated.
+- PermissionError and other errors are cleanly surfaced without leaking tokens.
+- .mcp.json and plugin.json contract alignment.
 """
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
 import sys
-import urllib.request
 from pathlib import Path
 from unittest import mock
-
 import pytest
 
 PLUGIN_INIT = Path(__file__).resolve().parents[1] / '__init__.py'
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def plugin():
-    spec = importlib.util.spec_from_file_location('browserpaw_plugin_under_test', PLUGIN_INIT)
+    spec = importlib.util.spec_from_file_location('browserpaw_sec_test', PLUGIN_INIT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
-@pytest.fixture(autouse=True)
-def reset_plugin_session(plugin):
-    plugin._reset_session(clear_invalid=True)
-    yield
-    plugin._reset_session(clear_invalid=True)
+
+def test_no_secret_scope_or_env_token_access(plugin, monkeypatch):
+    """Verify tool calls make NO secret-scope requests and ignore token/session env vars."""
+    fake_secret_mod = mock.MagicMock()
+    fake_secret_mod.get_secret = mock.MagicMock(side_effect=AssertionError("Must not access secret scope"))
+    monkeypatch.setitem(sys.modules, 'agent.secret_scope', fake_secret_mod)
+
+    monkeypatch.setenv('BROWSERPAW_MCP_TOKEN', 'leaked_token_123')
+    monkeypatch.setenv('CHROME_MCP_TOKEN', 'leaked_token_456')
+    monkeypatch.setenv('BROWSERPAW_MCP_SESSION_ID', 'leaked_sess_789')
+    monkeypatch.setenv('CHROME_MCP_SESSION_ID', 'leaked_sess_000')
+
+    mock_ctx = mock.MagicMock()
+    mock_ctx.call_mcp.return_value = {'ok': True, 'result': 'tabs_ok'}
+
+    handler = plugin._make_handler(mock_ctx, 'browserpaw_get_windows_and_tabs')
+    res = handler({})
+
+    assert fake_secret_mod.get_secret.call_count == 0
+    parsed = json.loads(res.splitlines()[0])
+    assert parsed.get('ok') is True
+    assert parsed.get('result') == 'tabs_ok'
+    assert 'leaked_token' not in res
+    assert 'leaked_sess' not in res
 
 
+def test_input_arguments_not_mutated(plugin):
+    """Verify handler creates a clean arguments copy and never mutates caller input."""
+    original_args = {'tabId': 1, 'url': 'https://example.com'}
+    original_copy = dict(original_args)
+
+    mock_ctx = mock.MagicMock()
+    mock_ctx.get_config.return_value = True
+    mock_ctx.call_mcp.return_value = {'ok': True, 'result': 'read_done'}
+
+    # Test with read_dom which adds isolateModal
+    read_dom_args = {'tabId': 1}
+    read_dom_copy = dict(read_dom_args)
+
+    handler = plugin._make_handler(mock_ctx, 'browserpaw_read_dom')
+    handler(read_dom_args)
+
+    assert read_dom_args == read_dom_copy, 'Caller args dictionary was mutated'
+    assert 'isolateModal' not in read_dom_args, 'isolateModal leaked into caller input dict'
+
+    # Test with navigate
+    handler_nav = plugin._make_handler(mock_ctx, 'browserpaw_navigate')
+    handler_nav(original_args)
+
+    assert original_args == original_copy, 'Caller args dictionary was mutated'
 
 
-def _mock_secret_scope(token):
-    mod = mock.MagicMock()
-    mod.get_secret = mock.MagicMock(return_value=token)
-    return mod
-
-
-def test_token_from_secret_scope(plugin):
-    fake = _mock_secret_scope("secret123")
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        assert plugin._bridge_token() == "secret123"
-    fake.get_secret.assert_called_once_with("BROWSERPAW_MCP_TOKEN")
-
-
-def test_token_stripped(plugin):
-    fake = _mock_secret_scope("  pawtoken\n")
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        assert plugin._bridge_token() == "pawtoken"
-
-
-def test_none_when_secret_missing(plugin):
-    fake = _mock_secret_scope(None)
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        assert plugin._bridge_token() is None
-
-
-def test_none_when_import_fails(plugin):
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": None}):
-        assert plugin._bridge_token() is None
-
-
-class _FakeResponse:
-    def __init__(self, payload: dict, headers: Optional[dict] = None):
-        self._data = json.dumps(payload).encode('utf-8')
-        self._stream = io.BytesIO(self._data)
-        self.headers = headers or {'mcp-session-id': 'sess-test-123'}
-
-    def read(self, *args, **kwargs):
-        return self._stream.read(*args, **kwargs)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-
-def _fake_response(payload: dict, headers: Optional[dict] = None) -> _FakeResponse:
-    return _FakeResponse(payload, headers)
-
-
-def test_call_sends_bearer_header(plugin):
-    captured = []
-
-    fake = _mock_secret_scope("secret123")
-
-    def fake_urlopen(req, timeout=None):
-        captured.append(req)
-        return _fake_response({'jsonrpc': '2.0', 'id': 1, 'result': {}})
-
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-            out = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
-
-    assert json.loads(out) == {}
-    # All MCP lifecycle requests (initialize, notifications/initialized, tools/call) must carry Bearer token
-    assert len(captured) >= 1
-    for req in captured:
-        assert req.get_header('Authorization') == 'Bearer secret123'
-
-    # Verify tools/call request was dispatched with expected tool name
-    tool_req = next(
-        r for r in captured
-        if json.loads(r.data.decode('utf-8') if isinstance(r.data, bytes) else r.data).get('method') == 'tools/call'
+def test_permission_error_on_missing_allowlist(plugin):
+    """Verify PermissionError from ctx.call_mcp is captured into error envelope."""
+    mock_ctx = mock.MagicMock()
+    perm_err = PermissionError(
+        "Plugin 'browserpaw' is not allowed to call MCP server 'browserpaw'. "
+        "Add it to plugins.entries.browserpaw.mcp_allowlist in config.yaml to grant access."
     )
-    assert json.loads(tool_req.data)['params']['name'] == 'get_windows_and_tabs'
+    mock_ctx.call_mcp.side_effect = perm_err
 
-    # Verify subsequent call within active session makes exactly 1 tools/call request
-    captured.clear()
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-            out2 = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
-    assert json.loads(out2) == {}
-    assert len(captured) == 1
-    assert captured[0].get_header('Authorization') == 'Bearer secret123'
+    handler = plugin._make_handler(mock_ctx, 'browserpaw_read_dom')
+    res = handler({'tabId': 1})
+    parsed = json.loads(res.splitlines()[0])
+
+    assert parsed.get('ok') is False
+    assert 'plugins.entries.browserpaw.mcp_allowlist' in parsed.get('error', '')
 
 
-def test_call_without_token_sends_no_auth_header(plugin):
-    captured = []
+def test_generic_exception_surfaced_in_error_envelope(plugin):
+    """Verify unexpected exceptions return a structured error envelope rather than crashing."""
+    mock_ctx = mock.MagicMock()
+    mock_ctx.call_mcp.side_effect = RuntimeError("Transport died")
 
-    fake = _mock_secret_scope(None)
+    handler = plugin._make_handler(mock_ctx, 'browserpaw_switch_tab')
+    res = handler({'tabId': 2})
+    parsed = json.loads(res.splitlines()[0])
 
-    def fake_urlopen(req, timeout=None):
-        captured.append(req)
-        return _fake_response({'result': {}})
-
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-            plugin._call_browserpaw('browserpaw_navigate', {'url': 'https://example.com'})
-
-    assert len(captured) >= 1
-    for req in captured:
-        assert req.get_header('Authorization') is None
-
-
-def test_401_returns_actionable_error_without_leaking_token(plugin):
-
-    fake = _mock_secret_scope("supersecret")
-
-    def fake_urlopen(req, timeout=None):
-        raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', None, io.BytesIO(b''))
-
-    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
-        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-            out = json.loads(plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {}))
-
-    assert '401' in out['error']
-    assert 'BROWSERPAW_MCP_TOKEN' in out['error']
-    assert 'supersecret' not in out['error']
+    assert parsed.get('ok') is False
+    assert 'Transport died' in parsed.get('error', '')
 
 
 def test_codex_mcp_config_contract():
@@ -163,12 +117,15 @@ def test_codex_mcp_config_contract():
     assert 'mcpServers' in mcp_data
     assert 'browserpaw' in mcp_data['mcpServers']
     server = mcp_data['mcpServers']['browserpaw']
-    assert server.get('type') == 'http'
-    assert server.get('url') == 'http://127.0.0.1:12306/mcp'
-    assert server.get('bearer_token_env_var') == 'CHROME_MCP_TOKEN'
+    assert server.get('type') == 'stdio'
+    assert server.get('command') == 'mcp-chrome-stdio'
+    assert 'bearer_token_env_var' not in server
 
     plugin_json_path = Path(__file__).resolve().parents[1] / '.codex-plugin' / 'plugin.json'
     assert plugin_json_path.exists(), 'plugin.json must exist in .codex-plugin'
     plugin_data = json.loads(plugin_json_path.read_text(encoding='utf-8'))
     assert plugin_data.get('version') == '4.0.0'
     assert plugin_data.get('mcpServers') == './.mcp.json'
+    assert plugin_data.get('skills') == './mcp-skills/'
+    standard_skill = Path(__file__).resolve().parents[1] / 'mcp-skills' / 'browserpaw' / 'SKILL.md'
+    assert 'chrome_read_dom' in standard_skill.read_text(encoding='utf-8')
