@@ -1,18 +1,21 @@
+jest.mock('node:os', () => ({
+  ...jest.requireActual<typeof os>('node:os'),
+  homedir: () => TEST_ISOLATED_DIR,
+}));
+
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
 // Create dedicated isolated temporary root for this test run
 const TEST_ISOLATED_DIR = path.join(os.tmpdir(), 'browserpaw-w1-iso-' + Date.now());
-const TEST_TOKEN_DIR = path.join(TEST_ISOLATED_DIR, 'token');
+const TEST_TOKEN_DIR = path.join(TEST_ISOLATED_DIR, '.chrome-mcp');
 const TEST_BROWSERPAW_DIR = path.join(TEST_ISOLATED_DIR, 'browserpaw');
 
 fs.mkdirSync(TEST_TOKEN_DIR, { recursive: true });
 fs.mkdirSync(TEST_BROWSERPAW_DIR, { recursive: true });
 
-process.env.CHROME_MCP_TOKEN_DIR = TEST_TOKEN_DIR;
 process.env.BROWSERPAW_HOME = TEST_BROWSERPAW_DIR;
-process.env.CHROME_MCP_TOKEN = 'w1-isolated-test-fixed-token-12345678';
 
 import { describe, expect, test, afterAll, beforeAll, jest } from '@jest/globals';
 
@@ -55,9 +58,7 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
     await Server.stop();
     await new Promise((r) => setTimeout(r, 150));
     clearBridgeTokenCache();
-    delete process.env.CHROME_MCP_TOKEN_DIR;
     delete process.env.BROWSERPAW_HOME;
-    delete process.env.CHROME_MCP_TOKEN;
     try {
       fs.rmSync(TEST_ISOLATED_DIR, { recursive: true, force: true });
     } catch {}

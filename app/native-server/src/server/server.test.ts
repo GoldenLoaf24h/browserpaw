@@ -1,4 +1,4 @@
-import { describe, expect, test, afterAll, beforeAll } from '@jest/globals';
+import { describe, expect, test, afterAll, beforeAll, jest } from '@jest/globals';
 import supertest from 'supertest';
 import Server from './index';
 import nativeMessagingHostInstance from '../native-messaging-host';
@@ -19,17 +19,34 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 
-const TEST_PORT = 14567;
+jest.mock('node:os', () => {
+  const actual = jest.requireActual('node:os') as typeof os;
+  const nodePath = jest.requireActual('node:path') as typeof path;
+  return {
+    ...actual,
+    homedir: () => nodePath.join(actual.tmpdir(), `browserpaw-server-test-${process.pid}`),
+  };
+});
+
+let TEST_PORT = 0;
 
 describe('Fastify MCP Native Server Integration Tests', () => {
   beforeAll(async () => {
     Server.setNativeHost(nativeMessagingHostInstance);
     nativeMessagingHostInstance.setServer(Server);
-    await Server.start(TEST_PORT, nativeMessagingHostInstance);
+    const listen = jest.spyOn(Server.getInstance(), 'listen');
+    await Promise.all([
+      Server.start(TEST_PORT, nativeMessagingHostInstance),
+      Server.start(TEST_PORT, nativeMessagingHostInstance),
+    ]);
+    TEST_PORT = (Server.getInstance().server.address() as { port: number }).port;
+    expect(listen).toHaveBeenCalledTimes(1);
+    listen.mockRestore();
   });
 
   afterAll(async () => {
     await Server.stop();
+    fs.rmSync(os.homedir(), { recursive: true, force: true });
   });
 
   test('GET /ping 应返回正确响应', async () => {

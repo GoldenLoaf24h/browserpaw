@@ -25,10 +25,91 @@ import {
   getLogDir,
 } from './utils';
 import { NATIVE_SERVER_PORT } from '../constant';
+import { readBridgeToken, TOKEN_FILE } from '../server/token';
 
 const EXPECTED_PORT = 12306;
 const SCHEMA_VERSION = 1;
 const MIN_NODE_MAJOR_VERSION = 20;
+
+export async function checkBridgeCredentials(): Promise<DoctorCheckResult[]> {
+  let token: string;
+  try {
+    token = readBridgeToken();
+  } catch (error) {
+    return [
+      {
+        id: 'bridge.credential',
+        title: 'Bridge credential',
+        status: 'error',
+        message: stringifyError(error),
+        details: { path: TOKEN_FILE },
+      },
+    ];
+  }
+  const checks: DoctorCheckResult[] = [
+    {
+      id: 'bridge.credential',
+      title: 'Bridge credential',
+      status: 'ok',
+      message: 'Credential file is readable and valid.',
+      details: { path: TOKEN_FILE },
+    },
+  ];
+  const url = `http://127.0.0.1:${EXPECTED_PORT}/mcp`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'browserpaw-doctor', version: '1' },
+        },
+      }),
+      signal: AbortSignal.timeout(1500),
+      redirect: 'error',
+    });
+    const body = await response.text();
+    const raw = body.trim().startsWith('{')
+      ? body
+      : body
+          .split('\n')
+          .find((line) => line.startsWith('data: '))
+          ?.slice(6);
+    const result = raw ? JSON.parse(raw) : null;
+    const ok = response.ok && !!result?.result?.serverInfo && !result?.error;
+    checks.push({
+      id: 'bridge.authentication',
+      title: 'Bridge authentication',
+      status: ok ? 'ok' : 'error',
+      message: `MCP initialize: HTTP ${response.status}${response.status === 401 ? ' (credential rejected)' : ok ? '' : ' (handshake failed)'}`,
+    });
+    const sessionId = response.headers.get('mcp-session-id');
+    if (sessionId)
+      await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, 'mcp-session-id': sessionId },
+        signal: AbortSignal.timeout(1500),
+        redirect: 'error',
+      });
+  } catch (error) {
+    checks.push({
+      id: 'bridge.authentication',
+      title: 'Bridge authentication',
+      status: 'error',
+      message: `MCP handshake unavailable: ${stringifyError(error)}`,
+    });
+  }
+  return checks;
+}
 
 // ============================================================================
 // Types
@@ -651,6 +732,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   );
 
   const checks: DoctorCheckResult[] = [];
+  checks.push(...(await checkBridgeCredentials()));
   const nextSteps: string[] = [];
 
   // Check 1: Installation info
@@ -1076,8 +1158,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     for (const check of report.checks) {
       console.log(`${statusBadge(check.status)}    ${check.title}: ${check.message}`);
       const fix = (check.details as Record<string, unknown> | undefined)?.fix as
-        | string[]
-        | undefined;
+        string[] | undefined;
       if (check.status !== 'ok' && fix && fix.length > 0) {
         console.log(`        Fix: ${fix[0]}`);
       }

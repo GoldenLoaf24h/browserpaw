@@ -27,9 +27,9 @@ import { mcpSessionManager } from '../mcp/session-manager';
 import { handleToolCall } from '../mcp/register-tools';
 import { NativeMessageType } from 'chrome-mcp-shared';
 
-import { resolveBridgeToken, getBridgeToken, isValidBridgeToken } from './token';
+import { initializeBridgeToken, getBridgeToken, isValidBridgeToken } from './token';
 import { jevModelManager, JevMode } from './jev-model-manager';
-export { resolveBridgeToken, getBridgeToken, isValidBridgeToken, jevModelManager };
+export { getBridgeToken, isValidBridgeToken, jevModelManager };
 
 export function safeWriteError(
   reply: FastifyReply,
@@ -79,6 +79,7 @@ export { MediaAssetEntry, mediaAssetStore };
 export class Server {
   private fastify: FastifyInstance;
   public isRunning = false;
+  private startPromise: Promise<void> | null = null;
   private nativeHost: NativeMessagingHost | null = null;
 
   constructor() {
@@ -897,26 +898,33 @@ export class Server {
     if (this.isRunning) {
       return;
     }
+    if (this.startPromise) return this.startPromise;
 
-    try {
-      const token = resolveBridgeToken();
+    this.startPromise = (async () => {
+      try {
+        await initializeBridgeToken();
 
-      await this.fastify.listen({ port, host: SERVER_CONFIG.HOST });
+        await this.fastify.listen({ port, host: SERVER_CONFIG.HOST });
 
-      // Set port environment variables after successful listen for Chrome MCP URL resolution
-      process.env.CHROME_MCP_PORT = String(port);
-      process.env.MCP_HTTP_PORT = String(port);
-      process.env.CHROME_MCP_TOKEN = token;
+        // Set port environment variables after successful listen for Chrome MCP URL resolution
+        process.env.CHROME_MCP_PORT = String(port);
+        process.env.MCP_HTTP_PORT = String(port);
 
-      this.isRunning = true;
+        this.isRunning = true;
 
-      // Eager background warm-up of local Jev decider service if model is present and mode is local
-      if (jevModelManager.getActiveMode() === 'local' && jevModelManager.isModelDownloaded()) {
-        jevModelManager.ensureLocalServiceRunning().catch(() => {});
+        // Eager background warm-up of local Jev decider service if model is present and mode is local
+        if (jevModelManager.getActiveMode() === 'local' && jevModelManager.isModelDownloaded()) {
+          jevModelManager.ensureLocalServiceRunning().catch(() => {});
+        }
+      } catch (err) {
+        this.isRunning = false;
+        throw err;
       }
-    } catch (err) {
-      this.isRunning = false;
-      throw err;
+    })();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
     }
   }
 

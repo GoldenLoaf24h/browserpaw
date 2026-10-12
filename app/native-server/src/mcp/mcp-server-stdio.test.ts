@@ -1,6 +1,7 @@
 import { describe, expect, it, jest, beforeAll, afterAll } from '@jest/globals';
 import os from 'os';
 import path from 'path';
+import * as tokenModule from '../server/token';
 if (!process.env.BROWSERPAW_HOME) {
   process.env.BROWSERPAW_HOME = path.join(os.tmpdir(), '.browserpaw-stdio-test');
 }
@@ -16,12 +17,14 @@ import {
 let globalOrigConnect: any = null;
 beforeAll(() => {
   globalOrigConnect = Client.prototype.connect;
+  jest.spyOn(tokenModule, 'readBridgeToken').mockReturnValue('a'.repeat(64));
   Client.prototype.connect = jest.fn().mockImplementation(async function (this: any) {
     return Promise.resolve();
   }) as any;
 });
 
 afterAll(() => {
+  jest.restoreAllMocks();
   if (globalOrigConnect) {
     Client.prototype.connect = globalOrigConnect;
   }
@@ -35,6 +38,101 @@ import {
 } from './mcp-server-stdio';
 
 describe('mcp-server-stdio: BUG-18, BUG-19, and PERF-02', () => {
+  it.each(['http://example.com/mcp', 'https://127.0.0.1/mcp', 'http://user@localhost/mcp'])(
+    'rejects unsafe bridge URL %s before reading local credentials',
+    async (url) => {
+      const previous = process.env.MCP_SERVER_URL;
+      const read = jest.mocked(tokenModule.readBridgeToken);
+      const before = read.mock.calls.length;
+      process.env.MCP_SERVER_URL = url;
+      try {
+        resetMcpClientForTesting();
+        const { ensureMcpClient } = await import('./mcp-server-stdio');
+        expect(await ensureMcpClient()).toBeNull();
+        expect(read.mock.calls.length).toBe(before);
+      } finally {
+        if (previous === undefined) delete process.env.MCP_SERVER_URL;
+        else process.env.MCP_SERVER_URL = previous;
+        resetMcpClientForTesting();
+      }
+    },
+  );
+
+  it('invalidates a rejected credential without replaying a write and rereads it on the next call', async () => {
+    resetMcpClientForTesting();
+    const handlers: Array<(req: any) => Promise<any>> = [];
+    setupTools({
+      setRequestHandler: (_schema: any, handler: any) => handlers.push(handler),
+    } as any);
+    const read = jest.mocked(tokenModule.readBridgeToken);
+    const readsBefore = read.mock.calls.length;
+    const call = jest
+      .spyOn(Client.prototype, 'callTool')
+      .mockRejectedValueOnce(new StreamableHTTPError(401, 'bridge token missing or invalid'))
+      .mockResolvedValue({ content: [{ type: 'text', text: 'new credential accepted' }] });
+    try {
+      const failed = await handlers[1]({
+        params: {
+          name: 'chrome_interact_index',
+          arguments: { tabId: 42, index: 1, action: 'click' },
+        },
+      });
+      expect(failed.isError).toBe(true);
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(getActiveMcpClient()).toBeNull();
+      read.mockReturnValueOnce('b'.repeat(64));
+      const next = await handlers[1]({ params: { name: 'get_windows_and_tabs', arguments: {} } });
+      expect(next.isError).not.toBe(true);
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(read.mock.calls.length).toBe(readsBefore + 2);
+    } finally {
+      call.mockRestore();
+      await getActiveMcpClient()?.close();
+      resetMcpClientForTesting();
+    }
+  });
+
+  it('rereads credentials and retries a safe read once after HTTP 401', async () => {
+    resetMcpClientForTesting();
+    const handlers: Array<(req: any) => Promise<any>> = [];
+    setupTools({
+      setRequestHandler: (_schema: any, handler: any) => handlers.push(handler),
+    } as any);
+    const read = jest.mocked(tokenModule.readBridgeToken);
+    const readsBefore = read.mock.calls.length;
+    const call = jest
+      .spyOn(Client.prototype, 'callTool')
+      .mockRejectedValueOnce(new StreamableHTTPError(401, 'bridge token missing or invalid'))
+      .mockResolvedValue({ content: [{ type: 'text', text: 'new credential accepted' }] });
+    try {
+      const result = await handlers[1]({ params: { name: 'get_windows_and_tabs', arguments: {} } });
+      expect(result.isError).not.toBe(true);
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(read.mock.calls.length).toBe(readsBefore + 2);
+    } finally {
+      call.mockRestore();
+      await getActiveMcpClient()?.close();
+      resetMcpClientForTesting();
+    }
+  });
+
+  it('reads the credential again when establishing a replacement connection', async () => {
+    const read = jest.mocked(tokenModule.readBridgeToken);
+    const before = read.mock.calls.length;
+    const { ensureMcpClient } = await import('./mcp-server-stdio');
+    resetMcpClientForTesting();
+    const first = await ensureMcpClient();
+    read.mockReturnValueOnce('b'.repeat(64));
+    resetMcpClientForTesting();
+    const second = await ensureMcpClient();
+    expect(first).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(read.mock.calls.length).toBe(before + 2);
+    await first?.close();
+    await second?.close();
+    resetMcpClientForTesting();
+  });
+
   it('BUG-19: does NOT blindly retry mutating tool on connection loss, returns unknown state error', async () => {
     const handlers: Record<string, (req: any) => Promise<any>> = {};
     const mockServer = {
@@ -694,7 +792,7 @@ describe('mcp-server-stdio: NEW-STDIO-SESSION-01 transport session recovery and 
     }
   });
 
-  it('NEW-STDIO-SESSION-01: does NOT retry generic 400, business 404, or 401/403 authorization errors', async () => {
+  it('NEW-STDIO-SESSION-01: does NOT retry generic 400, business 404, or 403 authorization errors', async () => {
     const makeMock = (err: any) => ({
       ping: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       callTool: (jest.fn() as any).mockRejectedValue(err),
@@ -705,7 +803,6 @@ describe('mcp-server-stdio: NEW-STDIO-SESSION-01 transport session recovery and 
     const nonRetryableErrors = [
       new Error('Element not found on page (404)'),
       new StreamableHTTPError(400, 'Bad Request: invalid parameter format'),
-      new StreamableHTTPError(401, 'Unauthorized bridge token'),
       new StreamableHTTPError(403, 'Forbidden host'),
     ];
 

@@ -28,7 +28,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { resolveBridgeToken } from '../server/token';
+import { readBridgeToken } from '../server/token';
 import { jevModelManager } from '../server/jev-model-manager';
 
 let stdioMcpServer: Server | null = null;
@@ -36,6 +36,7 @@ let mcpClient: Client | null = null;
 let mcpClientGeneration = 0;
 let currentClientGeneration = 0;
 let connectingPromise: Promise<{ client: Client | null; generation: number }> | null = null;
+let connectionError: unknown = null;
 
 export const getMcpClientGeneration = () => mcpClientGeneration;
 export const getActiveMcpClient = () => mcpClient;
@@ -48,6 +49,7 @@ export const resetMcpClientForTesting = () => {
   connectingPromise = null;
   currentClientGeneration = 0;
   mcpClientGeneration = 0;
+  connectionError = null;
 };
 
 // Profile contract: resolved at startup (default is 'core', set CHROME_MCP_TOOL_PROFILE=full to expose all tools).
@@ -96,27 +98,34 @@ export const ensureMcpClient = async (): Promise<Client | null> => {
   thisPromise = (async () => {
     let localClient: Client | null = null;
     try {
-      const targetUrl = resolveTargetUrl();
-      const token = resolveBridgeToken();
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+      const targetUrl = new URL(resolveTargetUrl());
+      if (
+        targetUrl.protocol !== 'http:' ||
+        !['127.0.0.1', 'localhost', '[::1]'].includes(targetUrl.hostname) ||
+        targetUrl.username ||
+        targetUrl.password
+      ) {
+        throw new Error('BrowserPaw credentials may only be sent to a local HTTP bridge.');
       }
+      const token = readBridgeToken();
+      const headers = { Authorization: `Bearer ${token}` };
       localClient = new Client(
         { name: 'Mcp Chrome Proxy', version: '1.0.0' },
         { capabilities: {} },
       );
-      const transport = new StreamableHTTPClientTransport(new URL(targetUrl), {
-        requestInit: { headers },
+      const transport = new StreamableHTTPClientTransport(targetUrl, {
+        requestInit: { headers, redirect: 'error' },
       });
       await localClient.connect(transport);
       // Only publish to module-level mcpClient if this generation is still current
       if (currentClientGeneration === thisGeneration) {
         mcpClient = localClient;
         mcpClientGeneration = thisGeneration;
+        connectionError = null;
       }
       return { client: localClient, generation: thisGeneration };
     } catch (error) {
+      if (currentClientGeneration === thisGeneration) connectionError = error;
       try {
         await localClient?.close();
       } catch {}
@@ -263,7 +272,8 @@ const isConnectionError = (err: any): boolean => {
   const code = String(err?.code || '').toLowerCase();
   return (
     (err instanceof StreamableHTTPError &&
-      (err.code === 404 ||
+      (err.code === 401 ||
+        err.code === 404 ||
         (err.code === 400 && /invalid (or missing mcp session id|sse session)/i.test(msg)))) ||
     code === 'econnreset' ||
     code === 'econnrefused' ||
@@ -350,7 +360,7 @@ const handleToolCall = async (name: string, args: any): Promise<CallToolResult> 
   const executeCall = async (): Promise<CallToolResult> => {
     const client = await ensureMcpClient();
     if (!client) {
-      throw new Error('Failed to connect to MCP server');
+      throw connectionError || new Error('Failed to connect to MCP server');
     }
     activeCallClient = client;
     activeCallGeneration = mcpClientGeneration;

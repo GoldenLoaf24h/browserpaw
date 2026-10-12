@@ -7,7 +7,9 @@ try {
   nativeMessagingHostInstance.setServer(serverInstance); // NativeHost needs setServer method
   nativeMessagingHostInstance.start();
   // Ensure Fastify HTTP bridge is listening on 12306 immediately
-  serverInstance.start(12306, nativeMessagingHostInstance).catch(() => {});
+  serverInstance.start(12306, nativeMessagingHostInstance).catch((error) => {
+    console.error('Native bridge startup failed:', error);
+  });
 } catch (error) {
   process.exit(1);
 }
@@ -25,8 +27,7 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-process.on('exit', (code) => {
-});
+process.on('exit', (code) => {});
 
 process.on('uncaughtException', (error) => {
   process.exit(1);

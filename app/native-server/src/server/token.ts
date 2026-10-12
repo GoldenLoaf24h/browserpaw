@@ -3,63 +3,75 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
-export const TOKEN_DIR = process.env.CHROME_MCP_TOKEN_DIR
-  ? process.env.CHROME_MCP_TOKEN_DIR
-  : path.join(os.homedir(), '.chrome-mcp');
+export const TOKEN_DIR = path.join(os.homedir(), '.chrome-mcp');
 export const TOKEN_FILE = path.join(TOKEN_DIR, 'bridge-token');
+
+const TOKEN_PATTERN = /^[0-9a-fA-F]{48}$|^[0-9a-fA-F]{64}$/;
+
+export function isValidTokenFormat(token: unknown): token is string {
+  return typeof token === 'string' && TOKEN_PATTERN.test(token.trim());
+}
 
 let cachedToken: string | null = null;
 
-/**
- * Resolves or generates the high-entropy bridge token.
- * Priority:
- * 1. process.env.CHROME_MCP_TOKEN
- * 2. ~/.chrome-mcp/bridge-token file
- * 3. Fresh crypto random hex token persisted to ~/.chrome-mcp/bridge-token with 0600 permissions
- */
-export function resolveBridgeToken(): string {
-  if (cachedToken) {
-    return cachedToken;
-  }
+export async function initializeBridgeToken(): Promise<string> {
+  await fs.promises.mkdir(TOKEN_DIR, { recursive: true, mode: 0o700 });
 
-  // 1. Environment variable override
-  if (process.env.CHROME_MCP_TOKEN && process.env.CHROME_MCP_TOKEN.trim().length > 0) {
-    cachedToken = process.env.CHROME_MCP_TOKEN.trim();
-    return cachedToken;
-  }
-
-  // 2. File lookup in ~/.chrome-mcp/bridge-token
   try {
-    if (!fs.existsSync(TOKEN_DIR)) {
-      fs.mkdirSync(TOKEN_DIR, { recursive: true, mode: 0o700 });
-    }
-
-    if (fs.existsSync(TOKEN_FILE)) {
-      const content = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
-      if (content.length >= 16) {
-        cachedToken = content;
-        process.env.CHROME_MCP_TOKEN = cachedToken;
-        return cachedToken;
+    let content = await fs.promises.readFile(TOKEN_FILE, 'utf8');
+    if (content.trim().length === 0) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        content = await fs.promises.readFile(TOKEN_FILE, 'utf8');
+        if (content.trim().length > 0) break;
       }
     }
-
-    const generated = crypto.randomBytes(32).toString('hex');
-    fs.writeFileSync(TOKEN_FILE, generated, { encoding: 'utf8', mode: 0o600 });
-    cachedToken = generated;
-    process.env.CHROME_MCP_TOKEN = cachedToken;
+    const trimmed = content.trim();
+    if (!isValidTokenFormat(trimmed)) {
+      throw new Error('Corrupt bridge token in ' + TOKEN_FILE + ': format invalid');
+    }
+    cachedToken = trimmed;
     return cachedToken;
-  } catch {
-    // If disk write fails (e.g. read-only fs), generate in-memory token
-    const ephemeral = crypto.randomBytes(32).toString('hex');
-    cachedToken = ephemeral;
-    process.env.CHROME_MCP_TOKEN = cachedToken;
-    return cachedToken;
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') {
+      throw err;
+    }
   }
+
+  const freshToken = crypto.randomBytes(32).toString('hex');
+  try {
+    await fs.promises.writeFile(TOKEN_FILE, freshToken, {
+      flag: 'wx',
+      mode: 0o600,
+      encoding: 'utf8',
+    });
+    cachedToken = freshToken;
+    return cachedToken;
+  } catch (writeErr: any) {
+    if (writeErr.code === 'EEXIST') {
+      return await initializeBridgeToken();
+    }
+    throw writeErr;
+  }
+}
+
+export function readBridgeToken(): string {
+  let content: string;
+  try {
+    content = fs.readFileSync(TOKEN_FILE, 'utf8');
+  } catch (err: any) {
+    throw new Error('Bridge token not found or unreadable at ' + TOKEN_FILE + ': ' + err.message);
+  }
+  const trimmed = content.trim();
+  if (!isValidTokenFormat(trimmed)) {
+    throw new Error('Corrupt bridge token in ' + TOKEN_FILE + ': format invalid');
+  }
+  return trimmed;
 }
 
 export function getBridgeToken(): string {
   if (!cachedToken) {
-    return resolveBridgeToken();
+    throw new Error('Bridge token not initialized. Native server must initialize the token first.');
   }
   return cachedToken;
 }
@@ -68,12 +80,14 @@ export function clearBridgeTokenCache(): void {
   cachedToken = null;
 }
 
-/**
- * Validates a provided token against the active bridge token using timing-safe comparison.
- */
 export function isValidBridgeToken(provided?: string | null): boolean {
   if (!provided || typeof provided !== 'string') return false;
-  const expected = getBridgeToken();
+  let expected: string;
+  try {
+    expected = getBridgeToken();
+  } catch {
+    return false;
+  }
   const pBuf = Buffer.from(provided);
   const eBuf = Buffer.from(expected);
   if (pBuf.length !== eBuf.length) return false;
