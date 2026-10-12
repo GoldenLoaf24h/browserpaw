@@ -31,10 +31,6 @@ config_schema:
     type: number
     default: 12306
     description: 'Port where the BrowserPaw Native Server is listening (default: 12306)'
-  auth_token:
-    type: secret
-    env: BROWSERPAW_MCP_TOKEN
-    description: 'Authentication token for connecting to BrowserPaw native server'
   isolate_modal:
     type: boolean
     default: false

@@ -9,7 +9,6 @@ import importlib.util
 import io
 import json
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -27,52 +26,43 @@ def plugin():
     spec.loader.exec_module(module)
     return module
 
-
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
-    monkeypatch.delenv('BROWSERPAW_MCP_TOKEN', raising=False)
-    monkeypatch.delenv('CHROME_MCP_TOKEN', raising=False)
-    monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: (_ for _ in ()).throw(urllib.error.URLError('offline in unit test')))
-    return tmp_path
-
-
-def _write_token_file(home: Path, text: str) -> None:
-    (home / '.chrome-mcp').mkdir()
-    (home / '.chrome-mcp' / 'bridge-token').write_text(text, encoding='utf-8')
-
-
-def test_none_when_nothing_configured(plugin, home):
-    assert plugin._bridge_token() is None
-
-
-def test_file_fallback_is_stripped(plugin, home):
-    _write_token_file(home, '  filetoken\n')
-    assert plugin._bridge_token() == 'filetoken'
-
-
-def test_empty_file_yields_none(plugin, home):
-    _write_token_file(home, '\n')
-    assert plugin._bridge_token() is None
-
-
-def test_chrome_env_beats_file(plugin, home, monkeypatch):
-    _write_token_file(home, 'filetoken')
-    monkeypatch.setenv('CHROME_MCP_TOKEN', 'chrometoken')
-    assert plugin._bridge_token() == 'chrometoken'
-
-
-def test_browserpaw_env_beats_chrome_env(plugin, home, monkeypatch):
-    monkeypatch.setenv('CHROME_MCP_TOKEN', 'chrometoken')
-    monkeypatch.setenv('BROWSERPAW_MCP_TOKEN', ' pawtoken ')
-    assert plugin._bridge_token() == 'pawtoken'
-
-
 @pytest.fixture(autouse=True)
 def reset_plugin_session(plugin):
     plugin._reset_session(clear_invalid=True)
     yield
     plugin._reset_session(clear_invalid=True)
+
+
+
+
+def _mock_secret_scope(token):
+    mod = mock.MagicMock()
+    mod.get_secret = mock.MagicMock(return_value=token)
+    return mod
+
+
+def test_token_from_secret_scope(plugin):
+    fake = _mock_secret_scope("secret123")
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        assert plugin._bridge_token() == "secret123"
+    fake.get_secret.assert_called_once_with("BROWSERPAW_MCP_TOKEN")
+
+
+def test_token_stripped(plugin):
+    fake = _mock_secret_scope("  pawtoken\n")
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        assert plugin._bridge_token() == "pawtoken"
+
+
+def test_none_when_secret_missing(plugin):
+    fake = _mock_secret_scope(None)
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        assert plugin._bridge_token() is None
+
+
+def test_none_when_import_fails(plugin):
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": None}):
+        assert plugin._bridge_token() is None
 
 
 class _FakeResponse:
@@ -95,16 +85,18 @@ def _fake_response(payload: dict, headers: Optional[dict] = None) -> _FakeRespon
     return _FakeResponse(payload, headers)
 
 
-def test_call_sends_bearer_header(plugin, home, monkeypatch):
-    monkeypatch.setenv('BROWSERPAW_MCP_TOKEN', 'secret123')
+def test_call_sends_bearer_header(plugin):
     captured = []
+
+    fake = _mock_secret_scope("secret123")
 
     def fake_urlopen(req, timeout=None):
         captured.append(req)
         return _fake_response({'jsonrpc': '2.0', 'id': 1, 'result': {}})
 
-    with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-        out = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
+            out = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
 
     assert json.loads(out) == {}
     # All MCP lifecycle requests (initialize, notifications/initialized, tools/call) must carry Bearer token
@@ -121,36 +113,42 @@ def test_call_sends_bearer_header(plugin, home, monkeypatch):
 
     # Verify subsequent call within active session makes exactly 1 tools/call request
     captured.clear()
-    with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-        out2 = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
+            out2 = plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
     assert json.loads(out2) == {}
     assert len(captured) == 1
     assert captured[0].get_header('Authorization') == 'Bearer secret123'
 
 
-def test_call_without_token_sends_no_auth_header(plugin, home):
+def test_call_without_token_sends_no_auth_header(plugin):
     captured = []
+
+    fake = _mock_secret_scope(None)
 
     def fake_urlopen(req, timeout=None):
         captured.append(req)
         return _fake_response({'result': {}})
 
-    with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-        plugin._call_browserpaw('browserpaw_navigate', {'url': 'https://example.com'})
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
+            plugin._call_browserpaw('browserpaw_navigate', {'url': 'https://example.com'})
 
     assert len(captured) >= 1
     for req in captured:
         assert req.get_header('Authorization') is None
 
 
-def test_401_returns_actionable_error_without_leaking_token(plugin, home, monkeypatch):
-    monkeypatch.setenv('BROWSERPAW_MCP_TOKEN', 'supersecret')
+def test_401_returns_actionable_error_without_leaking_token(plugin):
+
+    fake = _mock_secret_scope("supersecret")
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', None, io.BytesIO(b''))
 
-    with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
-        out = json.loads(plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {}))
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        with mock.patch.object(urllib.request, 'urlopen', fake_urlopen):
+            out = json.loads(plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {}))
 
     assert '401' in out['error']
     assert 'BROWSERPAW_MCP_TOKEN' in out['error']

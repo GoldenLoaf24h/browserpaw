@@ -20,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 _plugin_config: Dict[str, Any] = {
     'native_server_port': 12306,
-    'auth_token': None,
     'isolate_modal': False,
-    'secret_scope': None,
 }
 
 DEFAULT_URLS = [
@@ -285,29 +283,19 @@ def _ensure_session(url: str, force_refresh: bool = False) -> Optional[str]:
 
 
 def _bridge_token() -> Optional[str]:
-    """Resolve the native-bridge auth token from the Hermes secret scope.
+    """Resolve the native-bridge auth token from Hermes.
 
-    Catalog rule 11: credentials come only through Hermes. No environment
-    sniffing, no token file read, no loopback /token fetch.
+    Catalog rule 11: credentials come only through Hermes.
     """
-    cfg_token = _plugin_config.get('auth_token')
-    if cfg_token:
-        return str(cfg_token).strip()
-
-    secret = _plugin_config.get('secret_scope')
-    if secret is None:
-        return None
     try:
-        value = secret.get_secret(BRIDGE_TOKEN_SECRET_NAME)
+        from agent.secret_scope import get_secret
+        value = get_secret(BRIDGE_TOKEN_SECRET_NAME)
     except Exception as exc:
         logger.debug('Failed to read %s from Hermes secret scope: %s', BRIDGE_TOKEN_SECRET_NAME, exc)
         return None
     if value and isinstance(value, str):
         return value.strip()
     return None
-
-    return None
-
 
 def _call_browserpaw(tool_name: str, arguments: dict) -> str:
     if tool_name == 'browserpaw_read_dom' and isinstance(arguments, dict):
@@ -1784,9 +1772,6 @@ def register(ctx: Any) -> None:
         except Exception as exc:
             logger.debug('Failed to read plugin config: %s', exc)
 
-    # Catalog rule 11: the bridge token is read from the Hermes secret scope only.
-    if hasattr(ctx, 'secret_scope'):
-        _plugin_config['secret_scope'] = ctx.secret_scope
 
     _register_bundled_skill(ctx)
 

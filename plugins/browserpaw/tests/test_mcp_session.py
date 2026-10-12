@@ -266,7 +266,8 @@ def test_automatic_recovery_on_http_404_session_expired(plugin):
 
 def test_token_auth_carried_across_handshake_and_tool_calls(plugin, monkeypatch):
     """Verify Authorization: Bearer <token> is sent on initialize, notifications, and tool calls."""
-    monkeypatch.setenv('BROWSERPAW_MCP_TOKEN', 'token-abc-999')
+    fake = mock.MagicMock()
+    fake.get_secret = mock.MagicMock(return_value="token-abc-999")
     captured_auth_headers = []
 
     def mock_urlopen(req, timeout=None):
@@ -281,8 +282,9 @@ def test_token_auth_carried_across_handshake_and_tool_calls(plugin, monkeypatch)
             return MockHTTPResponse({'result': {'auth': 'ok'}})
         raise ValueError(f'Unexpected method: {method}')
 
-    with mock.patch.object(urllib.request, 'urlopen', mock_urlopen):
-        plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
+    with mock.patch.dict("sys.modules", {"agent.secret_scope": fake}):
+        with mock.patch.object(urllib.request, 'urlopen', mock_urlopen):
+            plugin._call_browserpaw('browserpaw_get_windows_and_tabs', {})
 
     assert len(captured_auth_headers) == 3
     assert all(h == 'Bearer token-abc-999' for h in captured_auth_headers)
