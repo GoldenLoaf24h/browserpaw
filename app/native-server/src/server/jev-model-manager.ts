@@ -19,6 +19,7 @@ import {
   promises as fsPromises,
   readFileSync,
   writeFileSync,
+  chmodSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -71,7 +72,7 @@ export interface ModelStatusInfo {
   localServiceOnline: boolean;
   models?: string[];
   activeModel?: string;
-  remoteConfig?: { baseUrl?: string; apiKey?: string; modelId?: string };
+  remoteConfig?: { baseUrl?: string; modelId?: string; hasApiKey?: boolean };
   idleTimeoutMs?: number;
   lastActivityTime?: number;
 }
@@ -247,13 +248,26 @@ export class JevModelManager {
     }
     try {
       const dir = getBrowserpawHome();
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
       const payload = {
         ...this.remoteConfig,
         activeMode: this.activeMode,
         activeModel: this.activeModelName,
       };
-      writeFileSync(CONFIG_FILE, JSON.stringify(payload, null, 2), 'utf8');
+      writeFileSync(CONFIG_FILE, JSON.stringify(payload, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      // The config carries a plaintext apiKey; writeFileSync keeps the old mode of an
+      // existing file, so tighten it explicitly. POSIX only - Node's mode bits do not
+      // map onto NTFS ACLs.
+      if (process.platform !== 'win32') {
+        try {
+          chmodSync(CONFIG_FILE, 0o600);
+        } catch {
+          // Ignore
+        }
+      }
     } catch {
       // Ignore
     }
@@ -277,7 +291,8 @@ export class JevModelManager {
   private ensureModelDir(): void {
     try {
       if (!existsSync(MODELS_ROOT_DIR)) {
-        mkdirSync(MODELS_ROOT_DIR, { recursive: true });
+        // Same B-10 intent as saveConfig(): the BrowserPaw home must not be group/world readable.
+        mkdirSync(MODELS_ROOT_DIR, { recursive: true, mode: 0o700 });
       }
     } catch {
       // Ignore
@@ -394,6 +409,15 @@ export class JevModelManager {
     return {
       ...this.remoteConfig,
       modelId: sanitizedModelId,
+    };
+  }
+
+  public getPublicRemoteConfig(): { baseUrl?: string; modelId?: string; hasApiKey: boolean } {
+    const config = this.getRemoteConfig();
+    return {
+      baseUrl: config.baseUrl,
+      modelId: config.modelId,
+      hasApiKey: Boolean(config.apiKey),
     };
   }
 
@@ -914,7 +938,7 @@ export class JevModelManager {
       localServiceOnline,
       models: this.listModels(),
       activeModel,
-      remoteConfig: this.getRemoteConfig(),
+      remoteConfig: this.getPublicRemoteConfig(),
       idleTimeoutMs: JevModelManager.IDLE_TIMEOUT_MS,
       lastActivityTime: this.lastActivityTime,
     };

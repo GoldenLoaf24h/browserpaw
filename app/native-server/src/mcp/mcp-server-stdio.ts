@@ -353,6 +353,16 @@ export const isSafeReadOnlyCall = (toolName: string, args: any): boolean => {
 const handleToolCall = async (name: string, args: any): Promise<CallToolResult> => {
   jevModelManager.onToolInvocation();
   const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
+  let callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS;
+  if (getBaseToolName(name) === 'act_toward_goal' && args && typeof args === 'object') {
+    const rawTimeout = Number(args.timeoutMs);
+    if (Number.isFinite(rawTimeout) && rawTimeout > 0) {
+      callTimeoutMs = Math.min(
+        Math.max(DEFAULT_CALL_TIMEOUT_MS, Math.floor(rawTimeout) + 15_000),
+        315_000,
+      );
+    }
+  }
 
   let activeCallClient: Client | null = null;
   let activeCallGeneration = 0;
@@ -365,7 +375,7 @@ const handleToolCall = async (name: string, args: any): Promise<CallToolResult> 
     activeCallClient = client;
     activeCallGeneration = mcpClientGeneration;
     const result = await client.callTool({ name, arguments: args }, undefined, {
-      timeout: DEFAULT_CALL_TIMEOUT_MS,
+      timeout: callTimeoutMs,
     });
     return result as CallToolResult;
   };

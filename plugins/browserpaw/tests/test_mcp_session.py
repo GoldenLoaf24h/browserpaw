@@ -265,3 +265,42 @@ def test_business_error_structured_content_truncated_and_media_preserved(plugin)
     assert envelope.get('truncated') is True
     assert lines[1].startswith('MEDIA:')
     assert 'failed_crop.png' in lines[1]
+
+
+def test_act_toward_goal_custom_timeout_scaling(plugin):
+    """F-01: Verify act_toward_goal scales timeout dynamically with margin up to 315s, while default remains 120s."""
+    mock_ctx = mock.MagicMock()
+    mock_ctx.call_mcp.return_value = {"ok": True}
+
+    goal_handler = plugin._make_handler(mock_ctx, "browserpaw_act_toward_goal")
+
+    # 1. 240s goal -> 240 + 15 = 255s
+    goal_handler({"goal": "Search for socks", "timeoutMs": 240000})
+    call_args = mock_ctx.call_mcp.call_args
+    timeout = call_args[1].get("timeout") if call_args[1] else call_args[0][3]
+    assert timeout == 255
+
+    # 2. 300s goal -> 300 + 15 = 315s (clamped to max 315s)
+    goal_handler({"goal": "Search for socks", "timeoutMs": 300000})
+    call_args = mock_ctx.call_mcp.call_args
+    timeout = call_args[1].get("timeout") if call_args[1] else call_args[0][3]
+    assert timeout == 315
+
+    # 3. 600s goal -> clamped to 315s
+    goal_handler({"goal": "Search for socks", "timeoutMs": 600000})
+    call_args = mock_ctx.call_mcp.call_args
+    timeout = call_args[1].get("timeout") if call_args[1] else call_args[0][3]
+    assert timeout == 315
+
+    # 4. 90s goal (default schema) -> 90 + 15 = 105 <= 120 -> 120s
+    goal_handler({"goal": "Search for socks", "timeoutMs": 90000})
+    call_args = mock_ctx.call_mcp.call_args
+    timeout = call_args[1].get("timeout") if call_args[1] else call_args[0][3]
+    assert timeout == 120
+
+    # 5. Non-goal tool (e.g. read_dom) with timeoutMs -> must NOT scale, stays default 120s
+    dom_handler = plugin._make_handler(mock_ctx, "browserpaw_read_dom")
+    dom_handler({"timeoutMs": 240000})
+    call_args = mock_ctx.call_mcp.call_args
+    timeout = call_args[1].get("timeout") if call_args[1] else call_args[0][3]
+    assert timeout == 120

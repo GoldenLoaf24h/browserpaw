@@ -271,6 +271,18 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       let currentIndex = (mergedData.indexedElements?.length || 0) + 1;
       let currentAssetIndex = (mergedData.assets?.length || 0) + 1;
       const subframeLines: string[] = [];
+      const assetRoutes = new Map<number, { frameId: number; localIndex: number }>();
+
+      if (mainData.assets) {
+        for (const a of mainData.assets) {
+          if (typeof a.index === 'number') {
+            assetRoutes.set(a.index, {
+              frameId: mainFrame?.frameId ?? 0,
+              localIndex: (a.index || 1) - 1,
+            });
+          }
+        }
+      }
 
       for (const r of results) {
         if (r === mainFrame || !r.result) continue;
@@ -340,11 +352,17 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           if (!mergedData.assets) mergedData.assets = [];
           // Subframe asset geometry is viewport-local to that frame; tag them
           // with frameId and remapped index so downstream crop/fetch can resolve without collision.
-          for (const a of subData.assets) {
+          for (let localIdx = 0; localIdx < subData.assets.length; localIdx++) {
+            const a = subData.assets[localIdx];
+            const globalIndex = currentAssetIndex++;
             mergedData.assets.push({
               ...a,
-              index: currentAssetIndex++,
+              index: globalIndex,
               src: a.src ? `${a.src}#@frame=${r.frameId}` : undefined,
+            });
+            assetRoutes.set(globalIndex, {
+              frameId: r.frameId,
+              localIndex: (typeof a.index === 'number' ? a.index : localIdx + 1) - 1,
             });
           }
         }
@@ -362,13 +380,17 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
             const axNodes = axRes.nodes;
             const axRoleMap = new Map<string, { role?: string; name?: string; value?: string }>();
             const axIdMap = new Map<string, { role?: string; name?: string; value?: string }>();
+            const axNameCounts = new Map<string, number>();
+
             for (const n of axNodes) {
               const roleVal = n.role?.value;
               const nameVal = n.name?.value;
               const valVal = n.value?.value;
               const info = { role: roleVal, name: nameVal, value: valVal };
               if (nameVal) {
-                axRoleMap.set(nameVal.trim().toLowerCase(), info);
+                const norm = nameVal.trim().toLowerCase();
+                axNameCounts.set(norm, (axNameCounts.get(norm) || 0) + 1);
+                axRoleMap.set(norm, info);
               }
               if (Array.isArray(n.properties)) {
                 for (const p of n.properties) {
@@ -376,6 +398,21 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                     axIdMap.set(String(p.value.value).trim().toLowerCase(), info);
                   }
                 }
+              }
+            }
+
+            const domTextCounts = new Map<string, number>();
+            if (Array.isArray(mergedData.indexedElements)) {
+              for (const el of mergedData.indexedElements) {
+                const t = (
+                  el.text ||
+                  el.attributes?.['aria-label'] ||
+                  el.attributes?.['title'] ||
+                  ''
+                )
+                  .trim()
+                  .toLowerCase();
+                if (t) domTextCounts.set(t, (domTextCounts.get(t) || 0) + 1);
               }
             }
 
@@ -392,9 +429,19 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                   .trim()
                   .toLowerCase();
                 const elId = (el.attributes?.id || '').trim().toLowerCase();
-                const axInfo =
-                  (elId ? axIdMap.get(elId) : undefined) ||
-                  (elText ? axRoleMap.get(elText) : undefined);
+
+                let axInfo: { role?: string; name?: string; value?: string } | undefined =
+                  undefined;
+                if (elId && axIdMap.has(elId)) {
+                  axInfo = axIdMap.get(elId);
+                } else if (elText) {
+                  const axCount = axNameCounts.get(elText) || 0;
+                  const domCount = domTextCounts.get(elText) || 0;
+                  if (axCount <= 1 && domCount <= 1) {
+                    axInfo = axRoleMap.get(elText);
+                  }
+                }
+
                 if (axInfo) {
                   if (axInfo.role === 'button' || axInfo.role === 'link') {
                     if (el.tagName.toLowerCase() === 'div' || el.tagName.toLowerCase() === 'span') {
@@ -476,6 +523,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           elementCount: mergedData.elementCount,
           elements: mergedData.indexedElements,
           representation: 'standard',
+          assetRoutes,
         });
 
         if (diff.isDelta && diff.unchanged) {
@@ -542,14 +590,13 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         elementCount: mergedData.elementCount,
         elements: mergedData.indexedElements,
         representation: 'standard',
+        assetRoutes,
       });
 
       // Pagination cursor support (P1-6)
-      // Pagination slices the pruned tree lines, which are the primary payload.
-      // It previously sliced only indexedElements, so a paginated read still
-      // shipped the whole tree and saved almost nothing on large pages.
-      const allTreeLines = mergedData.treeString ? mergedData.treeString.split('\n') : [];
-      const totalElements = allTreeLines.length;
+      // Decouple pagination from non-element banner and asset lines
+      const totalElements =
+        (mergedData.indexedElements || []).length || mergedData.elementCount || 0;
       const cursor = typeof args.cursor === 'number' ? Math.max(0, args.cursor) : 0;
       const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
 
@@ -560,10 +607,33 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
 
       if (limit !== undefined) {
         const end = Math.min(cursor + limit, totalElements);
-        treeString = allTreeLines.slice(cursor, end).join('\n');
         returnElements = returnElements.slice(cursor, end);
         hasMore = end < totalElements;
         nextCursor = hasMore ? end : undefined;
+
+        const allTreeLines = mergedData.treeString ? mergedData.treeString.split('\n') : [];
+        const allowedIndices = new Set(returnElements.map((e) => e.index));
+        const hasIndexedLines = allTreeLines.some((l) => /^\[\d+\]/.test(l));
+        if (hasIndexedLines) {
+          const slicedLines: string[] = [];
+          let passedElements = false;
+          for (const line of allTreeLines) {
+            const m = line.match(/^\[(\d+)\]/);
+            if (m) {
+              passedElements = true;
+              if (allowedIndices.has(parseInt(m[1], 10))) {
+                slicedLines.push(line);
+              }
+            } else if (!passedElements && cursor === 0) {
+              slicedLines.push(line);
+            } else if (passedElements && !hasMore) {
+              slicedLines.push(line);
+            }
+          }
+          treeString = slicedLines.join('\n');
+        } else {
+          treeString = allTreeLines.slice(cursor, end).join('\n');
+        }
       }
 
       const resultPayload: Record<string, any> = {

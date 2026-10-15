@@ -21,6 +21,7 @@ import { parseUnifiedCoordinate, type PolymorphicCoordinate } from '@/utils/coor
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { animateAgentCursor, animateAgentCursorClick, setAgentCursorNote } from './agent-cursor';
 import { executeInPage } from './in-page-engine';
+import { createMousePressGuard, isCdpOutcomeUncertainError } from '@/utils/race-cdp';
 
 type MouseButton = 'left' | 'right' | 'middle';
 
@@ -365,7 +366,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
 
       // If any coordinate is in document space (e.g. from fullPage screenshot), align viewport
       if (res1?.isDocumentSpace || res2?.isDocumentSpace) {
-        const scrollRes = await executeInPage({ tabId }, 'inPageGetScrollState', []).catch(() => null);
+        const scrollRes = await executeInPage({ tabId }, 'inPageGetScrollState', []).catch(
+          () => null,
+        );
         const scrollState = scrollRes?.[0]?.result;
         if (
           !scrollState ||
@@ -374,7 +377,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
           typeof scrollState.viewportWidth !== 'number' ||
           typeof scrollState.viewportHeight !== 'number'
         ) {
-          return { error: 'Failed to retrieve page scroll geometry for document space coordinates' };
+          return {
+            error: 'Failed to retrieve page scroll geometry for document space coordinates',
+          };
         }
 
         const vh = scrollState.viewportHeight;
@@ -424,15 +429,20 @@ class ComputerTool extends BaseBrowserToolExecutor {
           let targetY = curScrollY;
 
           if (needScrollX) {
-            const desiredX = res1 && res2 ? (res1.x + res2.x) / 2 - vw / 2 : (res1 || res2!).x - vw / 2;
+            const desiredX =
+              res1 && res2 ? (res1.x + res2.x) / 2 - vw / 2 : (res1 || res2!).x - vw / 2;
             targetX = Math.round(Math.max(range.minX, Math.min(range.maxX, desiredX)));
           }
           if (needScrollY) {
-            const desiredY = res1 && res2 ? (res1.y + res2.y) / 2 - vh / 2 : (res1 || res2!).y - vh / 2;
+            const desiredY =
+              res1 && res2 ? (res1.y + res2.y) / 2 - vh / 2 : (res1 || res2!).y - vh / 2;
             targetY = Math.round(Math.max(range.minY, Math.min(range.maxY, desiredY)));
           }
 
-          const instantRes = await executeInPage({ tabId }, 'inPageInstantScrollTo', [targetX, targetY]).catch(() => null);
+          const instantRes = await executeInPage({ tabId }, 'inPageInstantScrollTo', [
+            targetX,
+            targetY,
+          ]).catch(() => null);
           const scrollOutcome = instantRes?.[0]?.result;
           if (
             !scrollOutcome ||
@@ -447,7 +457,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
         }
 
         // Verify that after scrolling, points are genuinely visible in current viewport (fail closed, no blind clamp)
-        const toViewport = (r: { x: number; y: number; isDocumentSpace?: boolean }): Coordinates | null => {
+        const toViewport = (r: {
+          x: number;
+          y: number;
+          isDocumentSpace?: boolean;
+        }): Coordinates | null => {
           if (!r.isDocumentSpace) return { x: r.x, y: r.y };
           const vx = Math.round(r.x - curScrollX);
           const vy = Math.round(r.y - curScrollY);
@@ -475,7 +489,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
       };
     };
 
-        // Helper to project coordinates (synchronous, for region/zoom or fallback; absolute CSS viewport, zero-offset)
+    // Helper to project coordinates (synchronous, for region/zoom or fallback; absolute CSS viewport, zero-offset)
     const project = (c?: any): Coordinates | undefined => {
       if (!c) return undefined;
       const parsed = parseUnifiedCoordinate(c, { originX: 0, originY: 0 });
@@ -707,7 +721,6 @@ class ComputerTool extends BaseBrowserToolExecutor {
         if (!params.coordinates)
           return createErrorResponse('Provide ref, selector, or coordinates for click action');
 
-
         const pr = await projectCoords(params.coordinates);
         if (pr.error || !pr.p1) {
           return createErrorResponse(pr.error || 'Failed to resolve coordinates');
@@ -750,25 +763,33 @@ class ComputerTool extends BaseBrowserToolExecutor {
             });
             await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
             for (let i = 1; i <= clickCount; i++) {
-              await CDPHelper.dispatchMouseEvent(tabId, {
-                type: 'mousePressed',
-                x: coord.x,
-                y: coord.y,
-                button,
-                buttons: button === 'left' ? 1 : 2,
-                clickCount: i,
-                modifiers: modifiersMask,
-              });
-              await dwell(params.dwellMs);
-              await CDPHelper.dispatchMouseEvent(tabId, {
-                type: 'mouseReleased',
-                x: coord.x,
-                y: coord.y,
-                button,
-                buttons: 0,
-                clickCount: i,
-                modifiers: modifiersMask,
-              });
+              const guard = createMousePressGuard(
+                (eventParams) => CDPHelper.dispatchMouseEvent(tabId, eventParams),
+                {
+                  type: 'mouseReleased',
+                  x: coord.x,
+                  y: coord.y,
+                  button,
+                  buttons: 0,
+                  clickCount: i,
+                  modifiers: modifiersMask,
+                },
+              );
+              try {
+                await guard.press({
+                  type: 'mousePressed',
+                  x: coord.x,
+                  y: coord.y,
+                  button,
+                  buttons: button === 'left' ? 1 : 2,
+                  clickCount: i,
+                  modifiers: modifiersMask,
+                });
+                await dwell(params.dwellMs);
+                await guard.release();
+              } finally {
+                await guard.compensate();
+              }
             }
           });
           return {
@@ -807,10 +828,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
           return createErrorResponse(
             'Provide ref, selector, or coordinates for double/triple click',
           );
-        let coord = (undefined as any);
+        let coord = undefined as any;
         if (params.coordinates) {
           const pr = await projectCoords(params.coordinates);
-          if (pr.error || !pr.p1) return createErrorResponse(pr.error || 'Failed to resolve coordinates');
+          if (pr.error || !pr.p1)
+            return createErrorResponse(pr.error || 'Failed to resolve coordinates');
           coord = pr.p1;
         }
         // If ref is provided, resolve center via accessibility helper
@@ -894,25 +916,33 @@ class ComputerTool extends BaseBrowserToolExecutor {
             });
             for (let i = 1; i <= clickCount; i++) {
               await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
-              await CDPHelper.dispatchMouseEvent(tabId, {
-                type: 'mousePressed',
-                x: coord.x,
-                y: coord.y,
-                button,
-                buttons: 1,
-                clickCount: i,
-                modifiers: modifiersMask,
-              });
-              await new Promise((r) => setTimeout(r, 35));
-              await CDPHelper.dispatchMouseEvent(tabId, {
-                type: 'mouseReleased',
-                x: coord.x,
-                y: coord.y,
-                button,
-                buttons: 0,
-                clickCount: i,
-                modifiers: modifiersMask,
-              });
+              const guard = createMousePressGuard(
+                (eventParams) => CDPHelper.dispatchMouseEvent(tabId, eventParams),
+                {
+                  type: 'mouseReleased',
+                  x: coord.x,
+                  y: coord.y,
+                  button,
+                  buttons: 0,
+                  clickCount: i,
+                  modifiers: modifiersMask,
+                },
+              );
+              try {
+                await guard.press({
+                  type: 'mousePressed',
+                  x: coord.x,
+                  y: coord.y,
+                  button,
+                  buttons: 1,
+                  clickCount: i,
+                  modifiers: modifiersMask,
+                });
+                await new Promise((r) => setTimeout(r, 35));
+                await guard.release();
+              } finally {
+                await guard.compensate();
+              }
               if (i < clickCount) {
                 await new Promise((r) => setTimeout(r, 50));
               }
@@ -1008,56 +1038,64 @@ class ComputerTool extends BaseBrowserToolExecutor {
             await new Promise((r) => setTimeout(r, 100));
 
             // 2. Mouse press and hold for 200ms physical delay to trigger HTML5 dragstart
-            await CDPHelper.dispatchMouseEvent(tabId, {
-              type: 'mousePressed',
-              x: start.x,
-              y: start.y,
-              button: 'left',
-              buttons: 1,
-              clickCount: 1,
-            });
-            await new Promise((r) => setTimeout(r, 200));
-
-            // Launch visual cursor glide towards drop destination concurrently with physical trajectory
-            const cursorDragArrivalPromise = animateAgentCursor(tabId, end.x, end.y, {
-              waitForArrival: true,
-              timeoutMs: 350,
-              actionNote: dragNote,
-            });
-
-            // 3. Move along trajectory with intermediate steps so drag and dragover events fire
-            const dragSteps = 5;
-            for (let i = 1; i <= dragSteps; i++) {
-              const curX = Math.round(start.x + (end.x - start.x) * (i / dragSteps));
-              const curY = Math.round(start.y + (end.y - start.y) * (i / dragSteps));
-              await CDPHelper.dispatchMouseEvent(tabId, {
-                type: 'mouseMoved',
-                x: curX,
-                y: curY,
+            const dragGuard = createMousePressGuard(
+              (eventParams) => CDPHelper.dispatchMouseEvent(tabId, eventParams),
+              {
+                type: 'mouseReleased',
+                x: end.x,
+                y: end.y,
+                button: 'left',
+                buttons: 0,
+                clickCount: 1,
+              },
+            );
+            try {
+              await dragGuard.press({
+                type: 'mousePressed',
+                x: start.x,
+                y: start.y,
                 button: 'left',
                 buttons: 1,
+                clickCount: 1,
               });
-              await new Promise((r) => setTimeout(r, 50));
+              await new Promise((r) => setTimeout(r, 200));
+
+              // Launch visual cursor glide towards drop destination concurrently with physical trajectory
+              const cursorDragArrivalPromise = animateAgentCursor(tabId, end.x, end.y, {
+                waitForArrival: true,
+                timeoutMs: 350,
+                actionNote: dragNote,
+              });
+
+              // 3. Move along trajectory with intermediate steps so drag and dragover events fire
+              const dragSteps = 5;
+              for (let i = 1; i <= dragSteps; i++) {
+                const curX = Math.round(start.x + (end.x - start.x) * (i / dragSteps));
+                const curY = Math.round(start.y + (end.y - start.y) * (i / dragSteps));
+                await CDPHelper.dispatchMouseEvent(tabId, {
+                  type: 'mouseMoved',
+                  x: curX,
+                  y: curY,
+                  button: 'left',
+                  buttons: 1,
+                });
+                await new Promise((r) => setTimeout(r, 50));
+              }
+
+              // Ensure visual cursor has arrived at drop destination before releasing
+              await cursorDragArrivalPromise;
+
+              // 4. Physical hover pause at destination (300ms) ensuring drop target processes dragover
+              await new Promise((r) => setTimeout(r, 300));
+
+              // 5. Release mouse at end position to trigger drop event
+              await dragGuard.release();
+
+              // 6. Settle delay after drop (500ms) ensuring UI framework state reconciliation
+              await new Promise((r) => setTimeout(r, 500));
+            } finally {
+              await dragGuard.compensate();
             }
-
-            // Ensure visual cursor has arrived at drop destination before releasing
-            await cursorDragArrivalPromise;
-
-            // 4. Physical hover pause at destination (300ms) ensuring drop target processes dragover
-            await new Promise((r) => setTimeout(r, 300));
-
-            // 5. Release mouse at end position to trigger drop event
-            await CDPHelper.dispatchMouseEvent(tabId, {
-              type: 'mouseReleased',
-              x: end.x,
-              y: end.y,
-              button: 'left',
-              buttons: 0,
-              clickCount: 1,
-            });
-
-            // 6. Settle delay after drop (500ms) ensuring UI framework state reconciliation
-            await new Promise((r) => setTimeout(r, 500));
           });
           return {
             content: [
@@ -1075,10 +1113,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
       case 'scroll': {
         if (!params.coordinates && !params.ref)
           return createErrorResponse('Provide ref or coordinates for scroll');
-        let coord = (undefined as any);
+        let coord = undefined as any;
         if (params.coordinates) {
           const pr = await projectCoords(params.coordinates);
-          if (pr.error || !pr.p1) return createErrorResponse(pr.error || 'Failed to resolve coordinates');
+          if (pr.error || !pr.p1)
+            return createErrorResponse(pr.error || 'Failed to resolve coordinates');
           coord = pr.p1;
         }
         if (params.ref) {
@@ -1192,6 +1231,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
             isError: false,
           };
         } catch (e) {
+          if (isCdpOutcomeUncertainError(e)) {
+            // The text may already have been inserted; retrying it through the
+            // DOM keyboard tool would type it twice.
+            return createErrorResponse(
+              `Type action outcome unknown: ${e instanceof Error ? e.message : String(e)}; the text may already be inserted, not retrying via DOM keyboard fallback`,
+            );
+          }
           // Fallback to DOM-based keyboard tool
           const res = await keyboardTool.execute({
             keys: params.text.split('').join(','),
@@ -1259,9 +1305,10 @@ class ComputerTool extends BaseBrowserToolExecutor {
             }
             const ok = !r.isError && innerOk;
             if (!ok && !errMsg) {
-              errMsg = r.isError && Array.isArray(r.content) && r.content[0]?.type === 'text'
-                ? r.content[0].text
-                : 'failed';
+              errMsg =
+                r.isError && Array.isArray(r.content) && r.content[0]?.type === 'text'
+                  ? r.content[0].text
+                  : 'failed';
             }
             results.push({
               ref: item.ref,
@@ -1338,6 +1385,11 @@ class ComputerTool extends BaseBrowserToolExecutor {
             isError: false,
           };
         } catch (e) {
+          if (isCdpOutcomeUncertainError(e)) {
+            return createErrorResponse(
+              `Key action outcome unknown: ${e instanceof Error ? e.message : String(e)}; the key event(s) may already be dispatched, not retrying via DOM keyboard fallback`,
+            );
+          }
           // Fallback to DOM keyboard simulation (comma-separated combinations)
           const keysStr = tokens.join(',');
           const repeatedKeys =

@@ -54,9 +54,11 @@ node bin/browserpaw.cjs
 
 Configure the starting tool profile with the `CHROME_MCP_TOOL_PROFILE` environment variable:
 
-- **`core`** (default): 14 ultra-lean semantic navigation and DOM interaction tools (~11.5k tokens, cutting prompt tokens by >40% and eliminating decision paralysis).
-- **`full`**: All 50 tools exposed (~19.5k tokens).
-- **`crawl`**: 12 lightweight web scraping and content extraction tools (~5.8k tokens).
+- **`core`** (default): 14 ultra-lean semantic navigation and DOM interaction tools (estimated ~9.2k prompt characters/4, cutting the prompt footprint by >40% and eliminating decision paralysis).
+- **`full`**: All 50 tools exposed (estimated ~20.3k prompt characters/4).
+- **`crawl`**: 12 lightweight web scraping and content extraction tools (estimated ~6.1k prompt characters/4).
+
+Profile counts are Core 14 / Crawl 12 / Full 50; the 50 canonical tools are 49 extension-executed tools plus the single native-server tool `chrome_act_toward_goal`. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 
 ### Auto-Unlock on Call & Dynamic Activation
 

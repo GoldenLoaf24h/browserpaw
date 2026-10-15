@@ -168,6 +168,9 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
           (outcome.tagName === 'input' && !outcome.isComposer && !outcome.isEditor),
         );
 
+        const submitOutcomeUnknown =
+          outcome.submitResult?.status === 'unknown' || (outcome as any).status === 'unknown';
+
         const submitAlreadyHandled = Boolean(
           args.submit === true &&
           outcome.autoSubmitHandled &&
@@ -175,6 +178,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
         );
 
         if (
+          !submitOutcomeUnknown &&
           !urlChanged &&
           !submitAlreadyHandled &&
           (args.submit === true || args.pressEnter === true) &&
@@ -226,7 +230,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
         }
 
         if (args.submit === true || args.pressEnter === true) {
-          if (outcome.submitted === undefined) {
+          if (outcome.submitted === undefined && !submitOutcomeUnknown) {
             outcome.submitted = true;
             outcome.submitMethod = outcome.submitMethod || 'pressEnter';
           }
@@ -251,8 +255,13 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
         (outcome as any).pressEnter = Boolean(
           args.pressEnter || (args.submit && (outcome as any).submitMethod === 'pressEnter'),
         );
-        if (args.pressEnter === true || (outcome as any).submitMethod === 'pressEnter') {
+        if (
+          !submitOutcomeUnknown &&
+          (args.pressEnter === true || (outcome as any).submitMethod === 'pressEnter')
+        ) {
           (outcome as any).pressEnterDispatched = true;
+        } else if (submitOutcomeUnknown) {
+          (outcome as any).pressEnterDispatched = false;
         }
 
         if (

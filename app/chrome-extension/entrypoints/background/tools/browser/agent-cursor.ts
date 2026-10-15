@@ -16,10 +16,10 @@ const pendingArrivals = new Map<number, PendingArrival>();
 
 // Listen for arrival notifications from content scripts
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender) => {
     if (message?.type === 'AGENT_CURSOR_ARRIVED' && typeof message.moveSequence === 'number') {
       const item = pendingArrivals.get(message.moveSequence);
-      if (item) {
+      if (item && _sender?.id === chrome.runtime.id && _sender?.tab?.id === item.tabId) {
         clearTimeout(item.timer);
         pendingArrivals.delete(message.moveSequence);
         item.resolver();

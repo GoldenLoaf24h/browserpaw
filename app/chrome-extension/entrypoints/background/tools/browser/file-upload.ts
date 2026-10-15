@@ -5,6 +5,7 @@ import { cdpSessionManager } from '../../../../utils/cdp-session-manager';
 import { DIAGNOSTIC_REFRESH_GUIDANCE } from './dom-indexer';
 import { executeInPage } from './in-page-engine';
 import { sendFileOperationToNative, cancelFileOperation } from '../../native-host';
+import { dispatchMousePressRelease } from '../../../../utils/race-cdp';
 
 interface FileUploadToolParams {
   selector?: string; // CSS selector for the file input element
@@ -164,20 +165,12 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
             );
             const coord = coordResults?.find((r) => r.result?.success)?.result;
             if (coord?.x && coord?.y) {
-              await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-                type: 'mousePressed',
-                x: coord.x,
-                y: coord.y,
-                button: 'left',
-                clickCount: 1,
-              });
-              await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-                type: 'mouseReleased',
-                x: coord.x,
-                y: coord.y,
-                button: 'left',
-                clickCount: 1,
-              });
+              await dispatchMousePressRelease(
+                (eventParams) =>
+                  cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', eventParams),
+                { type: 'mousePressed', x: coord.x, y: coord.y, button: 'left', clickCount: 1 },
+                { type: 'mouseReleased', x: coord.x, y: coord.y, button: 'left', clickCount: 1 },
+              );
               clicked = true;
             } else {
               // Fallback to inPageInteractIndex click

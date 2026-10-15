@@ -459,4 +459,59 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
     expect(bgSrc).toContain('lastTabCursorPositions.get(tabId) || lastGlobalCursorPosition');
     expect(bgSrc).toContain('cleanupTabCursorState(updatedTabId, true)');
   });
+  it('A-01: arrival message with mismatched sender id or mismatched sender tab id does not release the waiter', async () => {
+    let messageListener: any = null;
+    let sentMsg: any = null;
+    vi.resetModules();
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'valid-extension-id',
+        onMessage: {
+          addListener: vi.fn((fn) => {
+            messageListener = fn;
+          }),
+        },
+      },
+      tabs: {
+        sendMessage: vi.fn().mockImplementation(async (_tabId, msg) => {
+          sentMsg = msg;
+          return { ok: true };
+        }),
+        onRemoved: { addListener: vi.fn() },
+        onUpdated: { addListener: vi.fn() },
+      },
+    };
+    const mod = await import('../entrypoints/background/tools/browser/agent-cursor');
+    let resolved = false;
+    const waitPromise = mod
+      .animateAgentCursor(501, 100, 200, { waitForArrival: true, timeoutMs: 250 })
+      .then(() => {
+        resolved = true;
+      });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sentMsg).toBeTruthy();
+    const seq = sentMsg.moveSequence;
+    // Mismatched sender extension ID: must NOT release waiter
+    messageListener(
+      { type: 'AGENT_CURSOR_ARRIVED', moveSequence: seq },
+      { id: 'mismatched-extension-id', tab: { id: 501 } },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resolved).toBe(false);
+    // Mismatched sender tab ID: must NOT release waiter
+    messageListener(
+      { type: 'AGENT_CURSOR_ARRIVED', moveSequence: seq },
+      { id: 'valid-extension-id', tab: { id: 999 } },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resolved).toBe(false);
+    // Valid sender extension ID and tab ID: releases waiter
+    messageListener(
+      { type: 'AGENT_CURSOR_ARRIVED', moveSequence: seq },
+      { id: 'valid-extension-id', tab: { id: 501 } },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resolved).toBe(true);
+    await waitPromise;
+  });
 });

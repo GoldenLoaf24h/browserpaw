@@ -44,8 +44,8 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - **Single Acceptance Contract**: Authored [`docs/QUALITY.md`](../QUALITY.md) codifying verification interfaces (`pnpm verify`, `pnpm build:deploy`, `pnpm verify:delivery`), deployment checks, and the invariant that staged disk files do not constitute live Chrome execution evidence.
 - **Documentation Policy**: Authored [`docs/DOCUMENTATION.md`](../DOCUMENTATION.md) setting rules for doc ownership, active vs. archived partitioning, canonical English and preserved translations, and release notes templates.
 - **Release Ledger & Migration**:
-  - Centralized version records for all 31 historical git tags into [`docs/releases/`](./README.md) with `Tagged (history reconstructed from git)` status.
-  - Migrated legacy root release notes to [`docs/releases/v3.2.0.md`](./v3.2.0.md), [`docs/releases/v3.2.7.md`](./v3.2.7.md), [`docs/releases/v3.3.0.md`](./v3.3.0.md) (explicitly marked as local draft), and [`docs/releases/v4.0.0.md`](./v4.0.0.md) (working draft).
+  - Centralized version records for every historical git tag into [`docs/releases/`](./README.md) with `Tagged (history reconstructed from git)` status.
+  - Migrated legacy root release notes to [`docs/releases/v3.2.0.md`](./v3.2.0.md), [`docs/releases/v3.2.7.md`](./v3.2.7.md), [`docs/releases/v3.3.0.md`](./v3.3.0.md) (explicitly marked as local draft), and [`docs/releases/v4.0.0.md`](./v4.0.0.md).
   - Eliminated duplicate root release files and added a concise [`CHANGELOG.md`](../../CHANGELOG.md) pointer.
 - **Installation & Setup Clarity**: Updated [`INSTALL.md`](../../INSTALL.md) to replace hardcoded local deployment paths with explicit configuration instructions via `browserpaw.local.json` (`extensionSyncDir`) or `BROWSERPAW_EXTENSION_SYNC_DIR`.
 - **Automated Docs Governance**: Implemented [`scripts/validate-docs.mjs`](../../scripts/validate-docs.mjs) and its test suite [`scripts/validate-docs.test.mjs`](../../scripts/validate-docs.test.mjs) verifying markdown link validity, illegal control characters, literal newline escapes, active index coverage, package version parity, and tag record completeness.

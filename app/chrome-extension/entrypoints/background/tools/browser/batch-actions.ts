@@ -16,6 +16,8 @@ import {
   raceCdp as raceCdpBatch,
   DialogOpenedError,
   createDialogInterruptResponse,
+  createMousePressGuard,
+  isCdpOutcomeUncertainError,
 } from '@/utils/race-cdp';
 import { resolveTargetLocation } from './unified-locator';
 import { captureDeltaIfRequested, ensureSnapshotBaseline } from '@/utils/delta-helper';
@@ -367,23 +369,31 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
 
                   if (item.type === 'click') {
                     await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mousePressed',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 1,
-                      clickCount: 1,
-                    });
-                    await new Promise((r) => setTimeout(r, 35));
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mouseReleased',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 0,
-                      clickCount: 1,
-                    });
+                    const clickGuard = createMousePressGuard(
+                      (eventParams) => raceCdpBatch(tabId, 'Input.dispatchMouseEvent', eventParams),
+                      {
+                        type: 'mouseReleased',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 0,
+                        clickCount: 1,
+                      },
+                    );
+                    try {
+                      await clickGuard.press({
+                        type: 'mousePressed',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 1,
+                        clickCount: 1,
+                      });
+                      await new Promise((r) => setTimeout(r, 35));
+                      await clickGuard.release();
+                    } finally {
+                      await clickGuard.compensate();
+                    }
                     if (maskPierced) {
                       try {
                         await executeInPage({ tabId }, 'inPageDispatchSyntheticClick', [
@@ -395,42 +405,58 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     }
                   } else if (item.type === 'double_click') {
                     await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mousePressed',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 1,
-                      clickCount: 1,
-                    });
-                    await new Promise((r) => setTimeout(r, 35));
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mouseReleased',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 0,
-                      clickCount: 1,
-                    });
+                    const firstClickGuard = createMousePressGuard(
+                      (eventParams) => raceCdpBatch(tabId, 'Input.dispatchMouseEvent', eventParams),
+                      {
+                        type: 'mouseReleased',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 0,
+                        clickCount: 1,
+                      },
+                    );
+                    try {
+                      await firstClickGuard.press({
+                        type: 'mousePressed',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 1,
+                        clickCount: 1,
+                      });
+                      await new Promise((r) => setTimeout(r, 35));
+                      await firstClickGuard.release();
+                    } finally {
+                      await firstClickGuard.compensate();
+                    }
                     await new Promise((r) => setTimeout(r, 40));
                     await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mousePressed',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 1,
-                      clickCount: 2,
-                    });
-                    await new Promise((r) => setTimeout(r, 35));
-                    await raceCdpBatch(tabId, 'Input.dispatchMouseEvent', {
-                      type: 'mouseReleased',
-                      x: targetX,
-                      y: targetY,
-                      button: 'left',
-                      buttons: 0,
-                      clickCount: 2,
-                    });
+                    const secondClickGuard = createMousePressGuard(
+                      (eventParams) => raceCdpBatch(tabId, 'Input.dispatchMouseEvent', eventParams),
+                      {
+                        type: 'mouseReleased',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 0,
+                        clickCount: 2,
+                      },
+                    );
+                    try {
+                      await secondClickGuard.press({
+                        type: 'mousePressed',
+                        x: targetX,
+                        y: targetY,
+                        button: 'left',
+                        buttons: 1,
+                        clickCount: 2,
+                      });
+                      await new Promise((r) => setTimeout(r, 35));
+                      await secondClickGuard.release();
+                    } finally {
+                      await secondClickGuard.compensate();
+                    }
                   } else if (item.type === 'right_click') {
                     await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);
                     try {
@@ -694,6 +720,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   if (scrollErr instanceof DialogOpenedError) {
                     throw scrollErr;
                   }
+                  // An unacknowledged wheel may already have scrolled; fail the
+                  // step instead of issuing a second, cumulative scroll.
+                  if (isCdpOutcomeUncertainError(scrollErr)) {
+                    throw scrollErr;
+                  }
                 }
 
                 if (!cdpScrolled) {
@@ -738,7 +769,12 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   if (!modifierDefs.length && keyDef.text && keyDef.text.length === 1) {
                     try {
                       await raceCdpBatch(tabId, 'Input.insertText', { text: keyDef.text });
-                    } catch {
+                    } catch (insertErr) {
+                      // Uncertain delivery may already have inserted the text; never
+                      // issue the key event fallback in that case or it doubles.
+                      if (isCdpOutcomeUncertainError(insertErr)) {
+                        throw insertErr;
+                      }
                       await raceCdpBatch(tabId, 'Input.dispatchKeyEvent', {
                         type: 'keyDown',
                         key: keyDef.key,

@@ -354,18 +354,41 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     }
   }
 
+  private static readonly TAB_READY_TIMEOUT_MS = 15000;
+
   private async waitForTabReady(tabId: number): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      let timerId: ReturnType<typeof setTimeout> | undefined;
+      const startTime = Date.now();
+
+      const cleanup = () => {
+        if (timerId !== undefined) {
+          clearTimeout(timerId);
+          timerId = undefined;
+        }
+      };
+
       const checkTab = async () => {
         try {
+          if (Date.now() - startTime >= ConsoleTool.TAB_READY_TIMEOUT_MS) {
+            cleanup();
+            reject(
+              new Error(
+                `TAB_READY_TIMEOUT: tab ${tabId} did not reach complete within ${ConsoleTool.TAB_READY_TIMEOUT_MS}ms`,
+              ),
+            );
+            return;
+          }
           const tab = await chrome.tabs.get(tabId);
           if (tab.status === 'complete') {
+            cleanup();
             resolve();
           } else {
-            setTimeout(checkTab, 100);
+            timerId = setTimeout(checkTab, 100);
           }
         } catch (error) {
           // Tab might be closed, resolve anyway
+          cleanup();
           resolve();
         }
       };

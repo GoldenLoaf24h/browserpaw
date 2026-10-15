@@ -121,6 +121,16 @@ if (typeof window !== 'undefined') {
 let originalOverflowStyle = '';
 let hiddenFixedElements = [];
 
+// querySelectorAll('*') does not cross shadow boundaries; walk open shadow roots
+// (nested included) so shadow-DOM fixed/sticky elements are captured too.
+function collectElementsIncludingShadowRoots(root, out = []) {
+  for (const el of root.querySelectorAll('*')) {
+    out.push(el);
+    if (el.shadowRoot) collectElementsIncludingShadowRoots(el.shadowRoot, out);
+  }
+  return out;
+}
+
 /**
  * Categorize fixed, sticky, header, and floating footer elements
  */
@@ -133,7 +143,7 @@ function categorizeFixedAndStickyElements() {
   const viewportHeight = window.innerHeight;
   const viewportWidth = window.innerWidth;
 
-  document.querySelectorAll('*').forEach((el) => {
+  collectElementsIncludingShadowRoots(document).forEach((el) => {
     const tag = el.tagName;
     if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'LINK') return;
     if (el.id && (el.id.startsWith('chrome-mcp-') || el.id.startsWith('__mcp_'))) return;

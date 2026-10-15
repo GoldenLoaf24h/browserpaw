@@ -193,18 +193,25 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
   /**
    * Send message to tab
    */
-  protected async sendMessageToTab(tabId: number, message: any, frameId?: number): Promise<any> {
+  protected async sendMessageToTab(
+    tabId: number,
+    message: any,
+    frameId?: number,
+    timeoutMs = 5000,
+  ): Promise<any> {
+    let timerHandle: ReturnType<typeof setTimeout> | undefined;
+    const effectiveTimeout = Math.min(Math.max(Number(timeoutMs) || 5000, 1), 300000);
     try {
-      // ponytail: never await before the race — a dead/crashed frame would
-      // otherwise suspend here forever and the 5s guard below never fires.
+      // ponytail: never await before the race - a dead/crashed frame would
+      // otherwise suspend here forever and the guard below never fires.
       const send =
         typeof frameId === 'number'
           ? chrome.tabs.sendMessage(tabId, message, { frameId })
           : chrome.tabs.sendMessage(tabId, message);
       const response = await Promise.race([
         Promise.resolve(send),
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          timerHandle = setTimeout(
             () =>
               reject(
                 new Error(
@@ -214,9 +221,9 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
                     tabId,
                 ),
               ),
-            5000,
-          ),
-        ),
+            effectiveTimeout,
+          );
+        }),
       ]);
 
       if (response && response.error) {
@@ -234,6 +241,10 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
         throw error;
       }
       throw new Error(errorMessage);
+    } finally {
+      if (timerHandle !== undefined) {
+        clearTimeout(timerHandle);
+      }
     }
   }
 

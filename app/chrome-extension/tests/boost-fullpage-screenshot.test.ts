@@ -260,6 +260,91 @@ describe('GoFullPage Industrial Full-Page Screenshot Engine', () => {
       expect(header.style.cssText).toBe(origCss);
       expect(sendResponse).toHaveBeenCalledWith({ success: true });
     });
+
+    it('captures fixed/sticky elements inside open shadow roots (nested) and restores them on reset', () => {
+      // Open shadow root with a fixed header, a sticky bar, and a nested open shadow root
+      const shadowHost = document.createElement('div');
+      shadowHost.id = 'shadow-host';
+      document.body.appendChild(shadowHost);
+      const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+      shadowRoot.innerHTML = `
+        <div id="shadow-header" style="position: fixed; top: 0; left: 0; width: 100%; height: 60px;">Shadow Header</div>
+        <div id="shadow-sticky" style="position: sticky; top: 60px; height: 40px;">Shadow Sticky</div>
+        <div id="nested-shadow-host"></div>
+      `;
+      const nestedHost = shadowRoot.getElementById('nested-shadow-host')!;
+      const nestedRoot = nestedHost.attachShadow({ mode: 'open' });
+      nestedRoot.innerHTML =
+        '<div id="nested-fixed" style="position: fixed; bottom: 0; left: 0; width: 100%; height: 50px;">Nested Fixed</div>';
+
+      const stubBox = (
+        el: Element,
+        box: {
+          top: number;
+          bottom: number;
+          left: number;
+          right: number;
+          width: number;
+          height: number;
+        },
+      ) => {
+        el.getBoundingClientRect = () => ({
+          ...box,
+          x: box.left,
+          y: box.top,
+          toJSON: () => {},
+        });
+        Object.defineProperty(el, 'offsetWidth', { value: box.width, configurable: true });
+        Object.defineProperty(el, 'offsetHeight', { value: box.height, configurable: true });
+      };
+
+      const shadowHeader = shadowRoot.getElementById('shadow-header')!;
+      const shadowSticky = shadowRoot.getElementById('shadow-sticky')!;
+      const nestedFixed = nestedRoot.getElementById('nested-fixed')!;
+      stubBox(shadowHeader, { top: 0, bottom: 60, left: 0, right: 1024, width: 1024, height: 60 });
+      stubBox(shadowSticky, {
+        top: 60,
+        bottom: 100,
+        left: 0,
+        right: 1024,
+        width: 1024,
+        height: 40,
+      });
+      // Docked at the bottom of the current viewport, whatever innerHeight the suite left behind
+      const viewportHeight = window.innerHeight;
+      stubBox(nestedFixed, {
+        top: viewportHeight - 50,
+        bottom: viewportHeight,
+        left: 0,
+        right: 1024,
+        width: 1024,
+        height: 50,
+      });
+
+      const origShadowHeaderCss = shadowHeader.style.cssText;
+      const origShadowStickyCss = shadowSticky.style.cssText;
+      const origNestedFixedCss = nestedFixed.style.cssText;
+
+      const messageListeners = (chrome.runtime.onMessage.addListener as any).mock.calls;
+      const lastListener = messageListeners[messageListeners.length - 1][0];
+
+      lastListener({ action: 'prepareSlice', stepIndex: 1, isLastStep: false }, {}, vi.fn());
+
+      // Fixed header inside a shadow root is hidden exactly like a light-DOM header
+      expect(shadowHeader.style.visibility).toBe('hidden');
+      // Sticky inside a shadow root is converted to relative
+      expect(shadowSticky.style.position).toBe('relative');
+      // Fixed element inside a nested open shadow root is captured too
+      expect(nestedFixed.style.visibility).toBe('hidden');
+
+      lastListener({ action: 'resetPageAfterCapture', scrollX: 0, scrollY: 0 }, {}, vi.fn());
+
+      // StyleStack rollback restores shadow-DOM inline styles and preserves the original id
+      expect(shadowHeader.style.cssText).toBe(origShadowHeaderCss);
+      expect(shadowSticky.style.cssText).toBe(origShadowStickyCss);
+      expect(nestedFixed.style.cssText).toBe(origNestedFixedCss);
+      expect(shadowSticky.getAttribute('id')).toBe('shadow-sticky');
+    });
   });
 
   describe('2. Canvas Dimension Safety & Boundary Scaling', () => {
@@ -325,48 +410,52 @@ describe('GoFullPage Industrial Full-Page Screenshot Engine', () => {
       });
 
       const sentMessages: any[] = [];
-      (screenshotTool as any).sendMessageToTab = vi.fn().mockImplementation(async (_tabId: number, msg: any) => {
-        sentMessages.push(msg);
-        if (msg.action === 'preparePageForCapture') {
+      (screenshotTool as any).sendMessageToTab = vi
+        .fn()
+        .mockImplementation(async (_tabId: number, msg: any) => {
+          sentMessages.push(msg);
+          if (msg.action === 'preparePageForCapture') {
+            return { success: true };
+          }
+          if (msg.action === 'warmupPage') {
+            // Warmup settled height: expanded to 1800px
+            return { success: true, totalWidth: 1280, totalHeight: 1800 };
+          }
+          if (msg.action === 'getPageDetails') {
+            return {
+              totalWidth: 1280,
+              totalHeight: 1800,
+              viewportWidth: 1280,
+              viewportHeight: 600,
+              devicePixelRatio: 1,
+              currentScrollX: 0,
+              currentScrollY: 0,
+            };
+          }
+          if (msg.action === 'prepareSlice') {
+            return { success: true };
+          }
+          if (msg.action === 'scrollPage') {
+            return {
+              success: true,
+              newScrollX: 0,
+              newScrollY: msg.y,
+              totalHeight: 1800,
+              totalWidth: 1280,
+            };
+          }
+          if (msg.action === 'resetPageAfterCapture') {
+            return { success: true };
+          }
           return { success: true };
-        }
-        if (msg.action === 'warmupPage') {
-          // Warmup settled height: expanded to 1800px
-          return { success: true, totalWidth: 1280, totalHeight: 1800 };
-        }
-        if (msg.action === 'getPageDetails') {
-          return {
-            totalWidth: 1280,
-            totalHeight: 1800,
-            viewportWidth: 1280,
-            viewportHeight: 600,
-            devicePixelRatio: 1,
-            currentScrollX: 0,
-            currentScrollY: 0,
-          };
-        }
-        if (msg.action === 'prepareSlice') {
-          return { success: true };
-        }
-        if (msg.action === 'scrollPage') {
-          return {
-            success: true,
-            newScrollX: 0,
-            newScrollY: msg.y,
-            totalHeight: 1800,
-            totalWidth: 1280,
-          };
-        }
-        if (msg.action === 'resetPageAfterCapture') {
-          return { success: true };
-        }
-        return { success: true };
-      });
+        });
 
       (screenshotTool as any).injectContentScript = vi.fn().mockResolvedValue(undefined);
-      (chrome.tabs as any).captureVisibleTab = vi.fn().mockResolvedValue(
-        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-      );
+      (chrome.tabs as any).captureVisibleTab = vi
+        .fn()
+        .mockResolvedValue(
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        );
 
       const res = await screenshotTool.execute({
         name: 'full_page_test',
@@ -419,26 +508,37 @@ describe('GoFullPage Industrial Full-Page Screenshot Engine', () => {
         active: true,
       });
 
-      (screenshotTool as any).sendMessageToTab = vi.fn().mockImplementation(async (_tabId: number, msg: any) => {
-        if (msg.action === 'preparePageForCapture') return { success: true };
-        if (msg.action === 'warmupPage') return { success: true, totalWidth: 1280, totalHeight: 1200 };
-        if (msg.action === 'getPageDetails') {
+      (screenshotTool as any).sendMessageToTab = vi
+        .fn()
+        .mockImplementation(async (_tabId: number, msg: any) => {
+          if (msg.action === 'preparePageForCapture') return { success: true };
+          if (msg.action === 'warmupPage')
+            return { success: true, totalWidth: 1280, totalHeight: 1200 };
+          if (msg.action === 'getPageDetails') {
+            return {
+              totalWidth: 1280,
+              totalHeight: 1200,
+              viewportWidth: 1280,
+              viewportHeight: 600,
+              devicePixelRatio: 1,
+              currentScrollX: 0,
+              currentScrollY: 0,
+            };
+          }
           return {
-            totalWidth: 1280,
+            success: true,
+            newScrollX: 0,
+            newScrollY: msg.y,
             totalHeight: 1200,
-            viewportWidth: 1280,
-            viewportHeight: 600,
-            devicePixelRatio: 1,
-            currentScrollX: 0,
-            currentScrollY: 0,
+            totalWidth: 1280,
           };
-        }
-        return { success: true, newScrollX: 0, newScrollY: msg.y, totalHeight: 1200, totalWidth: 1280 };
-      });
+        });
       (screenshotTool as any).injectContentScript = vi.fn().mockResolvedValue(undefined);
-      (chrome.tabs as any).captureVisibleTab = vi.fn().mockResolvedValue(
-        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-      );
+      (chrome.tabs as any).captureVisibleTab = vi
+        .fn()
+        .mockResolvedValue(
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        );
 
       const res = await screenshotTool.execute({ fullPage: true });
       expect(res.isError).toBe(false);
@@ -459,28 +559,30 @@ describe('GoFullPage Industrial Full-Page Screenshot Engine', () => {
       });
 
       let didCallReset = false;
-      (screenshotTool as any).sendMessageToTab = vi.fn().mockImplementation(async (_tabId: number, msg: any) => {
-        if (msg.action === 'preparePageForCapture') return { success: true };
-        if (msg.action === 'getPageDetails') {
-          return {
-            totalWidth: 1280,
-            totalHeight: 1200,
-            viewportWidth: 1280,
-            viewportHeight: 600,
-            devicePixelRatio: 1,
-            currentScrollX: 0,
-            currentScrollY: 0,
-          };
-        }
-        if (msg.action === 'warmupPage') {
-          throw new Error('Simulated network failure during warmup');
-        }
-        if (msg.action === 'resetPageAfterCapture') {
-          didCallReset = true;
+      (screenshotTool as any).sendMessageToTab = vi
+        .fn()
+        .mockImplementation(async (_tabId: number, msg: any) => {
+          if (msg.action === 'preparePageForCapture') return { success: true };
+          if (msg.action === 'getPageDetails') {
+            return {
+              totalWidth: 1280,
+              totalHeight: 1200,
+              viewportWidth: 1280,
+              viewportHeight: 600,
+              devicePixelRatio: 1,
+              currentScrollX: 0,
+              currentScrollY: 0,
+            };
+          }
+          if (msg.action === 'warmupPage') {
+            throw new Error('Simulated network failure during warmup');
+          }
+          if (msg.action === 'resetPageAfterCapture') {
+            didCallReset = true;
+            return { success: true };
+          }
           return { success: true };
-        }
-        return { success: true };
-      });
+        });
       (screenshotTool as any).injectContentScript = vi.fn().mockResolvedValue(undefined);
 
       await screenshotTool.execute({ fullPage: true });

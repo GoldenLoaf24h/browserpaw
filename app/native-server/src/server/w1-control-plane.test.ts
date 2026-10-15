@@ -127,6 +127,53 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
       expect(getRes.body.baseUrl).toBe('https://api.new-endpoint.com/v1');
     });
 
+    test('B-01.1: GET /jev/model-status is unauthenticated and does NOT expose plaintext apiKey in remoteConfig', async () => {
+      const syntheticKey = 'sk-test-fake-key-998877';
+      jevModelManager.setRemoteConfig({
+        baseUrl: 'https://api.typesafe.ai/v1',
+        apiKey: syntheticKey,
+        modelId: 'decider-2b',
+      });
+
+      const res = await supertest(Server.getInstance().server).get('/jev/model-status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.remoteConfig).toBeDefined();
+      expect(res.body.remoteConfig.apiKey).toBeUndefined();
+      expect(res.body.remoteConfig.hasApiKey).toBe(true);
+      expect(JSON.stringify(res.body)).not.toContain(syntheticKey);
+    });
+
+    test('B-01.2: POST /jev/remote-config response does NOT expose plaintext apiKey', async () => {
+      const syntheticKey = 'sk-test-fake-key-998877';
+      const postRes = await supertest(Server.getInstance().server)
+        .post('/jev/remote-config')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
+        .send({
+          baseUrl: 'https://api.typesafe.ai/v1',
+          apiKey: syntheticKey,
+          modelId: 'decider-2b',
+        });
+
+      expect(postRes.status).toBe(200);
+      expect(postRes.body.success).toBe(true);
+      expect(postRes.body.remoteConfig).toBeDefined();
+      expect(postRes.body.remoteConfig.apiKey).toBeUndefined();
+      expect(postRes.body.remoteConfig.hasApiKey).toBe(true);
+      expect(JSON.stringify(postRes.body)).not.toContain(syntheticKey);
+    });
+
+    test('B-01.3: jevModelManager.getRemoteConfig() preserves internal raw apiKey for Jev client', () => {
+      const syntheticKey = 'sk-test-fake-key-998877';
+      jevModelManager.setRemoteConfig({
+        baseUrl: 'https://api.typesafe.ai/v1',
+        apiKey: syntheticKey,
+        modelId: 'decider-2b',
+      });
+      const internalConfig = jevModelManager.getRemoteConfig();
+      expect(internalConfig.apiKey).toBe(syntheticKey);
+    });
+
     test('BUG-13.6: Reject invalid extension Origin and untrusted Host header', async () => {
       const badOriginRes = await supertest(Server.getInstance().server)
         .post('/jev/set-mode')

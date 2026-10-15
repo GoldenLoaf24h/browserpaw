@@ -71,6 +71,16 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(res.text).toContain('<redacted_base64>');
       expect(res.redacted).toBe(true);
     });
+
+    it('still redacts embedded Base64 payloads with padding or + markers (D-08)', () => {
+      const paddedSlash = 'blob MxvLoHCIYlWF/a32UYvZPTkFzbmeWJYaChkhlvIAMgvInA== end';
+      const plusOnly = `blob ${'+//v'.repeat(11)} end`;
+      for (const input of [paddedSlash, plusOnly]) {
+        const res = sanitizeText(input);
+        expect(res.text).toContain('<redacted_base64>');
+        expect(res.redacted).toBe(true);
+      }
+    });
   });
 
   describe('2. False-Positive Prevention Tests (Must NOT redact non-sensitive identifiers/hashes)', () => {
@@ -115,6 +125,32 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       const res = sanitizeText(md5);
       expect(res.text).toBe(md5);
       expect(res.redacted).toBe(false);
+    });
+
+    it('does NOT redact long absolute paths or deep URLs (D-08)', () => {
+      const preserved = [
+        'some/very/long/filesystem/path/to/the/target/directory',
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpaw-audit-20261014',
+        'https://cdn.example.com/assets/product/hero/image/renditions/large',
+      ];
+      for (const input of preserved) {
+        const res = sanitizeText(input);
+        expect(res.text).toBe(input);
+        expect(res.redacted).toBe(false);
+      }
+    });
+
+    it('does NOT redact benign keys containing short marker substrings (D-09)', () => {
+      const payload = {
+        author: 'Ada Lovelace',
+        aside: 'sidebar note',
+        president: 'Grace Hopper',
+        considered: true,
+        autocomplete: 'on',
+      };
+      const result = sanitizeValue(payload);
+      expect(result.redacted).toBe(false);
+      expect(result.value).toEqual(payload);
     });
   });
 
@@ -167,6 +203,49 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(parsed.auth).toBe('<redacted>');
       expect(parsed.commit).toBe('c3ab8ff13720e8ad9047dd39466b3c8974e592c2');
       expect(parsed.serviceName).toBe('AbstractAnnotationConfigDispatcherServletInitializer');
+    });
+
+    it('still redacts genuine short-marker keys (D-09)', () => {
+      const payload = {
+        auth: 'Bearer abc',
+        sid: 'abc123',
+        user_sid: 'abc123',
+        oauthState: 'xyz',
+        csrfToken: 'tok',
+        sessionId: 'sess',
+      };
+      const result = sanitizeValue(payload);
+      const out = result.value as Record<string, unknown>;
+      for (const key of Object.keys(payload)) {
+        expect(out[key]).toBe('<redacted>');
+      }
+      expect(result.redacted).toBe(true);
+    });
+
+    it('serializes diamond-shaped DAG references without [Circular] (D-09)', () => {
+      const shared = { label: 'shared node' };
+      const result = sanitizeValue({ a: shared, b: shared, list: [shared] });
+      const out = result.value as any;
+      expect(out.a).toEqual({ label: 'shared node' });
+      expect(out.b).toEqual({ label: 'shared node' });
+      expect(out.list[0]).toEqual({ label: 'shared node' });
+      expect(JSON.stringify(result.value)).not.toContain('[Circular]');
+    });
+
+    it('still marks genuine cycles, including inside shared nodes (D-09)', () => {
+      const cyclic: any = { name: 'root' };
+      cyclic.self = cyclic;
+      const cycleOut = sanitizeValue(cyclic).value as any;
+      expect(cycleOut.name).toBe('root');
+      expect(cycleOut.self).toBe('[Circular]');
+
+      const shared: any = { label: 'shared' };
+      shared.self = shared;
+      const dagOut = sanitizeValue({ a: shared, b: shared }).value as any;
+      expect(dagOut.a.label).toBe('shared');
+      expect(dagOut.a.self).toBe('[Circular]');
+      expect(dagOut.b.label).toBe('shared');
+      expect(dagOut.b.self).toBe('[Circular]');
     });
   });
 });

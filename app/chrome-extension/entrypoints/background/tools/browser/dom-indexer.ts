@@ -1050,49 +1050,58 @@ function selfHealFindElement(fp: ElementFingerprint): Element | null {
 
 export function findIndexedElement(index: number | string): Element | null {
   const numIdx = typeof index === 'string' && /^\d+$/.test(index) ? parseInt(index, 10) : index;
-  const isolatedMap = getIsolatedIndexMap();
-  if (isolatedMap.has(index as any) || isolatedMap.has(numIdx as any)) {
-    const el = derefElement(isolatedMap.get(index as any) ?? isolatedMap.get(numIdx as any));
-    if (el && (typeof Element === 'undefined' || el instanceof Element)) {
-      const doc = typeof document !== 'undefined' ? document : undefined;
-      const isConnected =
-        typeof (el as any).isConnected === 'boolean'
-          ? (el as any).isConnected
-          : doc && typeof doc.contains === 'function'
-            ? doc.contains(el) ||
-              (typeof el.getRootNode === 'function' &&
-                typeof ShadowRoot !== 'undefined' &&
-                el.getRootNode() instanceof ShadowRoot)
-            : !doc;
-      if (isConnected) {
+  const isExplicitFast = typeof index === 'string' && index.startsWith('e');
+  const g = globalThis as any;
+  const lastSnapshotType = g[Symbol.for('__browser_use_last_snapshot_type__')];
+  const clawFast = g.__pawFast || g.__clawFast;
+
+  const isConnectedElement = (el: any): boolean => {
+    if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) return false;
+    const doc = typeof document !== 'undefined' ? document : undefined;
+    return typeof (el as any).isConnected === 'boolean'
+      ? (el as any).isConnected
+      : doc && typeof doc.contains === 'function'
+        ? doc.contains(el) ||
+          (typeof el.getRootNode === 'function' &&
+            typeof ShadowRoot !== 'undefined' &&
+            el.getRootNode() instanceof ShadowRoot)
+        : !doc;
+  };
+
+  // If explicit fast action id ('e1') or last snapshot was fast, resolve via fast actionElements first
+  if (isExplicitFast || lastSnapshotType === 'fast') {
+    if (clawFast?.actionElements) {
+      const el =
+        clawFast.actionElements.get(index) ||
+        (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
+      if (isConnectedElement(el)) {
         return el;
       }
     }
   }
 
-  // Fast Snapshot lookup (__pawFast / __clawFast)
-  const g = globalThis as any;
-  const clawFast = g.__pawFast || g.__clawFast;
-  if (clawFast) {
+  // Standard isolatedMap lookup
+  const isolatedMap = getIsolatedIndexMap();
+  if (
+    isolatedMap.has(index as any) ||
+    (typeof numIdx === 'number' && isolatedMap.has(numIdx as any))
+  ) {
+    const el = derefElement(
+      isolatedMap.get(index as any) ??
+        (typeof numIdx === 'number' ? isolatedMap.get(numIdx as any) : undefined),
+    );
+    if (isConnectedElement(el)) {
+      return el;
+    }
+  }
+
+  // Fallback to fast actionElements (never traversal nodes) if not explicit fast and standard didn't match
+  if (!isExplicitFast && lastSnapshotType !== 'fast' && clawFast?.actionElements) {
     const el =
-      clawFast.actionElements?.get(index) ||
-      clawFast.actionElements?.get(numIdx) ||
-      clawFast.nodes?.get(index) ||
-      clawFast.nodes?.get(numIdx);
-    if (el && (typeof Element === 'undefined' || el instanceof Element)) {
-      const doc = typeof document !== 'undefined' ? document : undefined;
-      const isConnected =
-        typeof (el as any).isConnected === 'boolean'
-          ? (el as any).isConnected
-          : doc && typeof doc.contains === 'function'
-            ? doc.contains(el) ||
-              (typeof el.getRootNode === 'function' &&
-                typeof ShadowRoot !== 'undefined' &&
-                el.getRootNode() instanceof ShadowRoot)
-            : !doc;
-      if (isConnected) {
-        return el;
-      }
+      clawFast.actionElements.get(index) ||
+      (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
+    if (isConnectedElement(el)) {
+      return el;
     }
   }
 
@@ -1106,14 +1115,6 @@ export function findIndexedElement(index: number | string): Element | null {
         return recovered;
       }
     }
-  }
-
-  // Graceful fallback: deep query across shadow boundaries
-  if (typeof document !== 'undefined') {
-    try {
-      const fallback = querySelectorDeep(`[data-mcp-idx="${index}"]`, document);
-      if (fallback) return fallback;
-    } catch {}
   }
 
   return null;
@@ -1314,6 +1315,13 @@ export function inPageReindexFrame(offset: number, highlight = false): boolean {
   const isolatedMap = getIsolatedIndexMap();
   const entries = Array.from(isolatedMap.entries()).sort((a, b) => a[0] - b[0]);
   isolatedMap.clear();
+
+  const fpMap = getIndexFingerprintMap();
+  const fpEntries = Array.from(fpMap.entries()).sort((a, b) => a[0] - b[0]);
+  fpMap.clear();
+  for (const [oldIdx, fp] of fpEntries) {
+    fpMap.set(oldIdx + offset, fp);
+  }
 
   const reindexedElements: IndexedElement[] = [];
 
@@ -2434,6 +2442,15 @@ export function inPageDOMPruner(options?: {
   if (startingIndex === 1) {
     isolatedMap.clear();
     getIndexFingerprintMap().clear();
+    const g = globalThis as any;
+    g[Symbol.for('__browser_use_last_snapshot_type__')] = 'standard';
+    const fast = g.__pawFast || g.__clawFast;
+    if (fast) {
+      fast.actionElements?.clear();
+      fast.nodes?.clear();
+      fast.ids = typeof WeakMap !== 'undefined' ? new WeakMap() : new Map();
+      fast.next = 1;
+    }
   }
 
   let nextIndex = startingIndex;

@@ -44,10 +44,21 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
       );
     }
 
+    // Fail closed across documents: the recorded element belongs to the document
+    // that was current when the action ran. Once the tab committed a navigation or
+    // changed history state, replaying the record could write into a different page.
+    if (lastAction.documentEpoch !== actionHistoryManager.getDocumentEpoch(tabId)) {
+      return createErrorResponse(
+        'Undo rejected: the tab navigated (or changed history state) after this action was recorded, so the recorded element may belong to a different document. No change was made.',
+      );
+    }
+
     try {
       if (lastAction.type === 'navigate') {
         if (typeof chrome === 'undefined' || !chrome.tabs?.goBack) {
-          return createErrorResponse('chrome.tabs.goBack API is unavailable; cannot undo navigation.');
+          return createErrorResponse(
+            'chrome.tabs.goBack API is unavailable; cannot undo navigation.',
+          );
         }
         await chrome.tabs.goBack(tabId);
         actionHistoryManager.removeAction(tabId, lastAction);
@@ -101,7 +112,24 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
 
               const inputEl = el as HTMLInputElement | HTMLTextAreaElement;
               const val = restoreValue ?? '';
-              inputEl.value = val;
+              // React-style controlled inputs install a value tracker on the node; a
+              // plain `inputEl.value = val` updates that tracker too, so the synthetic
+              // input event is deduped and the framework keeps its stale state. Write
+              // through the native prototype setter to bypass the tracker (matching
+              // prototype for textarea).
+              const proto =
+                inputEl instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : inputEl instanceof HTMLInputElement
+                    ? HTMLInputElement.prototype
+                    : null;
+              const nativeValueSetter =
+                proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+              if (nativeValueSetter) {
+                nativeValueSetter.call(inputEl, val);
+              } else {
+                inputEl.value = val;
+              }
               inputEl.dispatchEvent(new Event('input', { bubbles: true }));
               inputEl.dispatchEvent(new Event('change', { bubbles: true }));
               return { success: true, restoredValue: val };

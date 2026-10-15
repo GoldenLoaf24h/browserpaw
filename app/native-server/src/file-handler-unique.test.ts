@@ -1,3 +1,4 @@
+import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import fileHandler from './file-handler';
@@ -99,5 +100,47 @@ describe('BUG-16: Concurrent temporary upload files must use unique request pref
 
     fs.rmSync(activeUuidDir, { recursive: true, force: true });
     fs.rmSync(nonUuidDir, { recursive: true, force: true });
+  });
+});
+
+describe('B-02: Sensitive path protection in readMediaFile and symlink traversal', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'browserpaw-b02-test-'));
+  const fakeBrowserpawDir = path.join(tmpRoot, '.browserpaw');
+  const fakeRemoteJson = path.join(fakeBrowserpawDir, 'jev-remote.json');
+  const fakeChromeMcpDir = path.join(tmpRoot, '.chrome-mcp');
+  const fakeBridgeToken = path.join(fakeChromeMcpDir, 'bridge-token');
+  const innocentSymlink = path.join(tmpRoot, 'innocent-avatar.png');
+
+  beforeAll(() => {
+    fs.mkdirSync(fakeBrowserpawDir, { recursive: true });
+    fs.writeFileSync(fakeRemoteJson, JSON.stringify({ apiKey: 'sk-secret-do-not-leak' }));
+    fs.mkdirSync(fakeChromeMcpDir, { recursive: true });
+    fs.writeFileSync(fakeBridgeToken, 'dummy-token-secret-12345');
+    try {
+      fs.symlinkSync(fakeRemoteJson, innocentSymlink, 'file');
+    } catch {}
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('rejects direct access to .browserpaw/jev-remote.json in readMediaFile', async () => {
+    const res = await fileHandler.readMediaFile(fakeRemoteJson);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Access to sensitive directories is prohibited');
+  });
+
+  it('rejects direct access to .chrome-mcp/bridge-token in readMediaFile', async () => {
+    const res = await fileHandler.readMediaFile(fakeBridgeToken);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Access to sensitive directories is prohibited');
+  });
+
+  it('rejects symlink pointing to sensitive path in readMediaFile', async () => {
+    if (!fs.existsSync(innocentSymlink)) return;
+    const res = await fileHandler.readMediaFile(innocentSymlink);
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('Access to sensitive directories is prohibited');
   });
 });

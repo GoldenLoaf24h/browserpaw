@@ -290,4 +290,87 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
       }
     }
   });
+
+  test('17. writes jev-remote.json as 0600 inside a 0700 home directory', async () => {
+    const { existsSync, mkdtempSync, readFileSync, rmSync, statSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const originalHome = process.env.BROWSERPAW_HOME;
+    const originalNodeEnv = process.env.NODE_ENV;
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'jev-config-mode-'));
+    const bpHome = join(tmpRoot, 'bp-home');
+    const configFile = join(bpHome, 'jev-remote.json');
+
+    process.env.BROWSERPAW_HOME = bpHome;
+    // saveConfig() is a no-op under NODE_ENV=test, so exercise the real write path.
+    process.env.NODE_ENV = 'production';
+    try {
+      let isolatedMod: any;
+      jest.isolateModules(() => {
+        isolatedMod = require('./jev-model-manager');
+      });
+
+      isolatedMod.jevModelManager.setRemoteConfig({
+        baseUrl: 'https://example.invalid',
+        apiKey: 'secret-key',
+        modelId: 'jev-latest',
+      });
+
+      expect(existsSync(configFile)).toBe(true);
+      expect(JSON.parse(readFileSync(configFile, 'utf8')).apiKey).toBe('secret-key');
+
+      if (process.platform !== 'win32') {
+        // POSIX mode bits only. Node's mode argument does not model NTFS ACLs, so this
+        // assertion is intentionally skipped on Windows (see B-10 residual risk).
+        expect(statSync(configFile).mode & 0o777).toBe(0o600);
+        expect(statSync(bpHome).mode & 0o777).toBe(0o700);
+      }
+    } finally {
+      if (originalHome !== undefined) process.env.BROWSERPAW_HOME = originalHome;
+      else delete process.env.BROWSERPAW_HOME;
+      if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+      else delete process.env.NODE_ENV;
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('18. tightens a pre-existing world-readable jev-remote.json on the next save', async () => {
+    const { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const originalHome = process.env.BROWSERPAW_HOME;
+    const originalNodeEnv = process.env.NODE_ENV;
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'jev-config-repair-'));
+    const bpHome = join(tmpRoot, 'bp-home');
+    const configFile = join(bpHome, 'jev-remote.json');
+    mkdirSync(bpHome, { recursive: true });
+    writeFileSync(configFile, JSON.stringify({ modelId: 'jev-latest' }), {
+      encoding: 'utf8',
+      mode: 0o644,
+    });
+
+    process.env.BROWSERPAW_HOME = bpHome;
+    process.env.NODE_ENV = 'production';
+    try {
+      let isolatedMod: any;
+      jest.isolateModules(() => {
+        isolatedMod = require('./jev-model-manager');
+      });
+
+      isolatedMod.jevModelManager.setActiveModel('decider-2b');
+
+      if (process.platform !== 'win32') {
+        // writeFileSync() does not change the mode of an existing file; only chmodSync() repairs it.
+        expect(statSync(configFile).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      if (originalHome !== undefined) process.env.BROWSERPAW_HOME = originalHome;
+      else delete process.env.BROWSERPAW_HOME;
+      if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+      else delete process.env.NODE_ENV;
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });

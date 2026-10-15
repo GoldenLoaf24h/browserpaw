@@ -57,7 +57,7 @@ echo [INFO] Endpoint: http://127.0.0.1:%PORT%/v1/systemone
 echo.
 
 set "DECIDER_MODEL=%MODEL_DIR%"
-set "DECIDER_DEVICE=cuda"
+if not defined DECIDER_DEVICE set "DECIDER_DEVICE=auto"
 set "DECIDER_WARMUP=0"
 "%PYTHON_BIN%" -m uvicorn decider.serve:app --host 127.0.0.1 --port %PORT%
 

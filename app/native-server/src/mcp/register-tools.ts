@@ -1,3 +1,4 @@
+import { assertNotSensitivePath } from '../file-handler';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
@@ -48,7 +49,11 @@ export async function prepareMediaArgsIfNeeded(name: string, args: any): Promise
       targetPath = args.fileUrl.replace(/^file:\/\/\/?/, '');
     }
   }
-  if (!targetPath || args.base64Data || args.mediaUrl) return;
+  if (!targetPath) return;
+
+  assertNotSensitivePath(targetPath);
+
+  if (args.base64Data || args.mediaUrl) return;
 
   try {
     const resolvedPath = path.resolve(targetPath);

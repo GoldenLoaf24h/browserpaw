@@ -11,7 +11,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { EXTENSION_ID, HOST_NAME, COMMAND_NAME } from './constant';
+import { HOST_NAME, COMMAND_NAME } from './constant';
 import {
   BrowserType,
   detectInstalledBrowsers,
@@ -24,7 +24,7 @@ import {
   tryRegisterUserLevelHost,
   getLogDir,
 } from './utils';
-import { NATIVE_SERVER_PORT } from '../constant';
+import { getAllowedExtensionIds, NATIVE_SERVER_PORT } from '../constant';
 import { readBridgeToken, TOKEN_FILE } from '../server/token';
 
 const EXPECTED_PORT = 12306;
@@ -253,6 +253,22 @@ function normalizeComparablePath(filePath: string): string {
     return path.normalize(filePath).toLowerCase();
   }
   return path.normalize(filePath);
+}
+
+/**
+ * Return the expected extension origins that a manifest's `allowed_origins` is missing.
+ * Exported so custom CHROME_EXTENSION_ID setups can be covered directly.
+ */
+export function findMissingManifestOrigins(
+  allowedOrigins: unknown,
+  expectedOrigins: string[],
+): string[] {
+  const present = new Set(
+    Array.isArray(allowedOrigins)
+      ? allowedOrigins.filter((origin): origin is string => typeof origin === 'string')
+      : [],
+  );
+  return expectedOrigins.filter((origin) => !present.has(origin));
 }
 
 function stripOuterQuotes(input: string): string {
@@ -883,7 +899,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   });
 
   // Check 5: Manifest checks per browser
-  const expectedOrigin = `chrome-extension://${EXTENSION_ID}/`;
+  const expectedOrigins = getAllowedExtensionIds().map((id) => `chrome-extension://${id}/`);
   for (const browser of browsersToCheck) {
     const config = getBrowserConfig(browser);
     const candidates = [config.userManifestPath, config.systemManifestPath];
@@ -931,9 +947,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       if (actual !== expected) issues.push('path does not match installed wrapper');
       if (!fs.existsSync(manifest.path)) issues.push('path target does not exist');
     }
-    const allowedOrigins = manifest.allowed_origins;
-    if (!Array.isArray(allowedOrigins) || !allowedOrigins.includes(expectedOrigin)) {
-      issues.push(`allowed_origins missing ${expectedOrigin}`);
+    const missingOrigins = findMissingManifestOrigins(manifest.allowed_origins, expectedOrigins);
+    if (missingOrigins.length > 0) {
+      issues.push(`allowed_origins missing ${missingOrigins.join(', ')}`);
     }
 
     checks.push({
@@ -944,7 +960,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       details: {
         path: found,
         expectedWrapperPath: wrapperPath,
-        expectedOrigin,
+        expectedOrigins,
         fix: issues.length === 0 ? undefined : [`${COMMAND_NAME} register --browser ${browser}`],
       },
     });

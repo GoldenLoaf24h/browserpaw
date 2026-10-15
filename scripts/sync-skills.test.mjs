@@ -9,7 +9,7 @@ const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const syncScript = path.join(repoRoot, 'scripts', 'sync-skills.mjs');
 const scriptSource = fs.readFileSync(syncScript, 'utf-8');
 
-// 1. 静态阻断：禁止硬编码外部路径、Hermes 同步及 managed hash（严禁实跑旧脚本）
+// 1. Static guard: forbid hardcoded external paths, Hermes sync, and managed hash (never run the legacy script)
 assert.ok(
   !scriptSource.includes('hermesPluginDir') && !scriptSource.includes('.browserpaw-managed.json'),
 );
@@ -37,7 +37,7 @@ const runScript = (sandbox, cwd = sandbox) =>
     encoding: 'utf-8',
   });
 
-// 2. 异 cwd 运行与两个镜像 exact equal 完整内容校验
+// 2. Run from a foreign cwd and assert both mirrors are byte-exact
 const sandbox = createSandbox();
 const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-out-'));
 try {
@@ -116,7 +116,8 @@ try {
     ),
     'utf-8',
   );
-  assert.ok(m2TroubleZh.includes('工具可用性说明'));
+  // zh-CN mirrors carry the English canonical banner only (redirect-stub policy)
+  assert.ok(!m2TroubleZh.includes('工具可用性说明'));
   assert.ok(m2TroubleZh.includes('not available in the Hermes plugin; use standard MCP'));
 
   // JSON files must NEVER receive markdown banners and must remain valid JSON
@@ -175,7 +176,7 @@ try {
   fs.rmSync(outsideCwd, { recursive: true, force: true });
 }
 
-// 3. 目标端：外部 directory junction 与 dangling link fail-closed 拦截
+// 3. Target side: fail-closed on external directory junctions and dangling links
 const jBox = createSandbox();
 const extProbe = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-ext-'));
 const sentinel = path.join(extProbe, 'probe.txt');
@@ -202,7 +203,7 @@ try {
   fs.rmSync(jBox, { recursive: true, force: true });
 }
 
-// 4. 源端 (source)：skill 内部 directory junction 与文件 symlink 指向仓外凭据防御
+// 4. Source side: reject in-skill directory junctions and file symlinks pointing to out-of-repo credentials
 const srcBox = createSandbox();
 const srcSecretProbe = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-src-secret-'));
 const secretDir = path.join(srcSecretProbe, 'creds');
@@ -237,7 +238,7 @@ try {
   fs.rmSync(srcBox, { recursive: true, force: true });
 }
 
-// 5. 内部 canonical link 循环/覆写防御
+// 5. Guard against internal canonical link loops and overwrites
 const canBox = createSandbox();
 const canLink = path.join(canBox, 'skills', 'browserpaw');
 fs.mkdirSync(path.dirname(canLink), { recursive: true });
@@ -250,7 +251,7 @@ try {
   fs.rmSync(canBox, { recursive: true, force: true });
 }
 
-// 6. 前缀欺骗：真实执行生产 script 验证拦截同名前缀伪装目录
+// 6. Prefix spoofing: run the production script to verify it blocks a same-prefix disguised directory
 const prefBox = createSandbox();
 const spoofDir = prefBox + '-fake';
 fs.mkdirSync(spoofDir, { recursive: true });

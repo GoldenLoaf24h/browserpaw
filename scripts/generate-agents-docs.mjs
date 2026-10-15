@@ -1,7 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 
-const GENERATED_DATE = '2026-09-25';
+const GENERATED_DATE = new Date().toLocaleDateString('en-CA');
+
+// Only committed files are documented; local scratch output (logs, zips, ignored config) must not
+// leak into the generated Key Files tables.
+const trackedFiles = new Set(
+  execSync('git ls-files', { encoding: 'utf-8' })
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((f) => f.replace(/\\/g, '/')),
+);
 
 // Directory metadata catalog providing domain-specific intelligence for each directory
 const METADATA = {
@@ -12,12 +23,12 @@ const METADATA = {
       { name: 'package.json', desc: 'Monorepo root scripts, dependencies, workspaces, and metadata' },
       { name: 'pnpm-workspace.yaml', desc: 'PNPM workspace definition configuring packages and apps' },
       { name: 'README.md', desc: 'Project overview, quick start, architecture highlights, and setup guide' },
-      { name: 'README.zh-CN.md', desc: 'Chinese translation of README with Windows-specific quickstart instructions' },
+      { name: 'README.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese README' },
       { name: 'PROJECT.md', desc: 'Engineering specifications, quality gates, and architecture summaries' },
-      { name: 'PROJECT.zh-CN.md', desc: 'Chinese translation of engineering specifications' },
+      { name: 'PROJECT.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese PROJECT' },
       { name: 'TEST_INFRA.md', desc: 'Comprehensive E2E test infrastructure specification and test matrix' },
       { name: 'AGENT_CONFIG_GUIDE.md', desc: 'Client configuration instructions for Claude, Cursor, and Windsurf' },
-      { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'Chinese translation of client configuration guide' },
+      { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese config guide' },
       { name: 'INSTALL.md', desc: 'Installation instructions for the native messaging host and extension' },
       { name: 'PRIVACY.md', desc: 'Privacy notice detailing data locality and local-only processing guarantees' },
       { name: 'CHANGELOG.md', desc: 'Concise pointer to the centralized release archive in docs/releases/' },
@@ -46,7 +57,7 @@ const METADATA = {
     keyFiles: [],
     instructions: [
       'Coordinate IPC protocol changes between chrome-extension and native-server simultaneously.',
-      'Respect the 1MB Native Messaging buffer ceiling across all IPC boundaries.'
+      'Respect the 1MB Native Messaging ceiling across all IPC boundaries: Chrome caps Host-to-Extension messages at 1MB, and the native host defensively mirrors that same 1MB limit on stdin/stdout.'
     ],
     testing: 'Test both packages: `pnpm --filter chrome-mcp-server test` and `pnpm --filter mcp-chrome-bridge test`.',
     patterns: 'Native Messaging StdIO framing (4-byte length header + JSON payload).',
@@ -56,7 +67,7 @@ const METADATA = {
 
   'app/chrome-extension': {
     title: 'chrome-extension',
-    purpose: 'Chrome MV3 Extension frontend and background service worker built with WXT framework, Vue 3, and TailwindCSS. Executes in-page DOM indexing, virtual cursor rendering, and 48 tool actions.',
+    purpose: 'Chrome MV3 Extension frontend and background service worker built with WXT framework, Vue 3, and TailwindCSS. Executes in-page DOM indexing, virtual cursor rendering, and 49 extension tool executors.',
     keyFiles: [
       { name: 'package.json', desc: 'Chrome extension workspace package definition and npm scripts' },
       { name: 'wxt.config.ts', desc: 'WXT build and manifest generation configuration for Manifest V3' },
@@ -240,7 +251,7 @@ const METADATA = {
 
   'app/chrome-extension/entrypoints/background/tools/browser': {
     title: 'browser',
-    purpose: 'Comprehensive implementation of all 48 browser tool executors, covering DOM reading, interactive clicks, fills, screenshots, CDP commands, network captures, tab management, and human handoffs.',
+    purpose: 'Comprehensive implementation of the browser tool executors, covering DOM reading, interactive clicks, fills, screenshots, CDP commands, network captures, tab management, and human handoffs.',
     keyFiles: [
       { name: 'agent-cursor.ts', desc: 'Controls virtual blue cursor animation and positioning in the webpage' },
       { name: 'attach-tab.ts', desc: 'Attaches automation focus to an existing or newly created tab' },
@@ -688,16 +699,16 @@ const METADATA = {
       { name: 'ARCHITECTURE.md', desc: 'Comprehensive 3-tier architecture, IPC protocols, and design decisions' },
       { name: 'TOOLS.md', desc: 'Auto-generated reference for all 50 canonical tools and arguments' },
       { name: 'TROUBLESHOOTING.md', desc: 'Diagnostic checklists for connection issues, token mismatch, and CDP' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Chinese translation of troubleshooting playbook' },
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese playbook' },
       { name: 'CONTRIBUTING.md', desc: 'Guidelines for contributors covering workflows and PR protocols' },
       { name: 'mcp-cli-config.md', desc: 'MCP configuration snippets for various CLI environments' }
     ],
     instructions: [
       'Do not edit docs/TOOLS.md manually; regenerate it using `node scripts/gen-tools-doc.mjs`.',
-      'Keep English and Chinese troubleshooting documentation in parity when resolving operational bugs.'
+      'Active documentation is English-only; `*.zh-CN.md` files are English redirect stubs kept so external inbound links keep resolving.'
     ],
     testing: 'Verify markdown link validity and table formatting.',
-    patterns: 'Bilingual documentation (English canonical, Chinese mirror); clear ASCII diagrams.',
+    patterns: 'English canonical documentation with redirect stubs for retired translations; clear ASCII diagrams.',
     internalDeps: ['scripts/gen-tools-doc.mjs'],
     externalDeps: ['Markdown / GitHub-flavored markdown']
   },
@@ -893,20 +904,20 @@ const METADATA = {
 
   'packages/shared/src': {
     title: 'src',
-    purpose: 'Source files for canonical 49 tool schemas, profile definitions (Core 14, Crawl 12, Full 49), coordinate types, error formatting, and version constants.',
+    purpose: 'Source files for canonical 50 tool schemas (49 extension + 1 native), profile definitions (Core 14, Crawl 12, Full 50), coordinate types, error formatting, and version constants.',
     keyFiles: [
       { name: 'constants.ts', desc: 'Shared operational constants and magic numbers' },
       { name: 'coordinate.ts', desc: 'Coordinate model normalization supporting [x,y] and {x,y}' },
       { name: 'error-format.ts', desc: 'Standardized error response formatter with stack control' },
       { name: 'index.ts', desc: 'Barrel export for shared contracts and tools' },
       { name: 'tool-name-resolver.ts', desc: 'Resolves alias tool names to canonical implementations' },
-      { name: 'tool-profiles.ts', desc: 'Tool subset definitions for Core (14), Crawl (12), and Full (49) profiles' },
-      { name: 'tools.ts', desc: 'Canonical schema definitions for all 49 BrowserPaw tools' },
+      { name: 'tool-profiles.ts', desc: 'Tool subset definitions for Core (14), Crawl (12), and Full (50) profiles' },
+      { name: 'tools.ts', desc: 'Canonical schema definitions for all 50 BrowserPaw tools' },
       { name: 'types.ts', desc: 'Universal coordinate, batch action, and diff payload interfaces' },
       { name: 'version.ts', desc: 'Single source of truth version constant' }
     ],
     instructions: [
-      'tools.ts contains all 49 canonical tool schemas — any tool argument change must begin here.',
+      'tools.ts contains all 50 canonical tool schemas — any tool argument change must begin here.',
       'tool-profiles.ts defines the tool subsets for core, crawl, and full profiles.',
       'error-format.ts provides standardized error reporting with stack control.'
     ],
@@ -985,7 +996,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Plugin troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Chinese translation of plugin troubleshooting guide' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
     ],
     instructions: ['Mirrored from skill/config.'],
     testing: 'Verify file parity.',
@@ -1148,7 +1159,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Skill troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Chinese translation of skill troubleshooting guide' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
     ],
     instructions: [
       'doctor.mjs performs automated connectivity checks for MCP and native host.',
@@ -1182,7 +1193,7 @@ const METADATA = {
     keyFiles: [
       { name: 'batch-pipeline.md', desc: 'Comprehensive guide to chrome_batch_actions zero-roundtrip pipeline' },
       { name: 'dual-brain-jev.md', desc: 'Guide to dual-brain local decision loops and Jev heuristics' },
-      { name: 'tool-cheatsheet.md', desc: 'Quick-reference guide for all 49 tools with sample calls' },
+      { name: 'tool-cheatsheet.md', desc: 'Quick-reference guide for all 50 tools with sample calls' },
       { name: 'visual-fallback.md', desc: 'Guide for visual screenshot and coordinate fallbacks' }
     ],
     instructions: [
@@ -1234,7 +1245,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Troubleshooting documentation' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Chinese translation of troubleshooting documentation' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
     ],
     instructions: ['Mirrored from skill/config.'],
     testing: 'Verify sync script output.',
@@ -1660,8 +1671,15 @@ function generateAgentsMd(dirPath) {
 
   // Inspect physical directory contents
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const dirPrefix = isRoot ? '' : dirPath.replace(/\\/g, '/') + '/';
   const files = entries
-    .filter(e => e.isFile() && e.name !== 'AGENTS.md' && !e.name.startsWith('.'))
+    .filter(
+      e =>
+        e.isFile() &&
+        e.name !== 'AGENTS.md' &&
+        !e.name.startsWith('.') &&
+        trackedFiles.has(dirPrefix + e.name),
+    )
     .map(e => e.name)
     .sort();
 
@@ -1764,10 +1782,20 @@ const sortedDirs = allDirs.sort((a, b) => {
   return a.localeCompare(b);
 });
 
-console.log(`Generating AGENTS.md across ${sortedDirs.length} directories in hierarchical order...`);
+// Optional path arguments restrict the write set; without them the whole tree is regenerated.
+const requested = process.argv.slice(2).map((p) => p.replace(/\\/g, '/').replace(/\/+$/, '') || '.');
+const writeDirs = requested.length > 0 ? sortedDirs.filter((d) => requested.includes(d)) : sortedDirs;
+for (const dir of requested) {
+  if (!sortedDirs.includes(dir)) {
+    console.error(`Unknown directory: ${dir}`);
+    process.exit(1);
+  }
+}
+
+console.log(`Generating AGENTS.md across ${writeDirs.length} directories in hierarchical order...`);
 
 let writtenCount = 0;
-for (const dir of sortedDirs) {
+for (const dir of writeDirs) {
   const targetPath = path.join(dir, 'AGENTS.md');
   const markdown = generateAgentsMd(dir);
   fs.writeFileSync(targetPath, markdown, 'utf-8');

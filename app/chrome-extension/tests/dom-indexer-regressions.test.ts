@@ -1,11 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   inPageDOMPruner,
   inPageFocusIndex,
   inPageGetElementCoordinates,
   getIsolatedIndexMap,
+  getIndexFingerprintMap,
+  findIndexedElement,
+  inPageReindexFrame,
   wrapElement,
 } from '../entrypoints/background/tools/browser/dom-indexer';
+import {
+  fastSnapshot,
+  getClawFastCache,
+} from '../entrypoints/background/tools/browser/fast-snapshot';
+import { readDOMTool } from '../entrypoints/background/tools/browser/read-dom';
+import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import {
   isLiteralText,
   normalizeKeySequence,
@@ -265,6 +274,141 @@ describe('dom-indexer regressions', () => {
       const key = Symbol.for('__browser_use_safe_click_point_map__');
 
       expect((globalThis as any)[key]).toBe(safeClickPointWeakMap);
+    });
+  });
+
+  describe('D-03: inPageReindexFrame subframe index migration and self-healing', () => {
+    it('migrates getIndexFingerprintMap keys when offsetting subframe indices', () => {
+      document.body.innerHTML = '<button id="btn-save">Save</button>';
+      const btn = document.getElementById('btn-save')!;
+
+      const isolatedMap = getIsolatedIndexMap();
+      isolatedMap.clear();
+      isolatedMap.set(1, wrapElement(btn));
+
+      const fpMap = getIndexFingerprintMap();
+      fpMap.clear();
+      fpMap.set(1, {
+        tag: 'button',
+        id: 'btn-save',
+        text: 'Save',
+        role: 'button',
+        isInteractive: true,
+      });
+
+      // Shift indices by offset +10 (subframe reindexing)
+      inPageReindexFrame(10);
+
+      // Verify fingerprint map entries were migrated from 1 -> 11
+      expect(fpMap.get(1)).toBeUndefined();
+      expect(fpMap.get(11)).toBeDefined();
+      expect(fpMap.get(11)?.id).toBe('btn-save');
+
+      // Simulate DOM element disconnection / React re-render: replace DOM node
+      btn.remove();
+      const newBtn = document.createElement('button');
+      newBtn.id = 'btn-save';
+      newBtn.textContent = 'Save';
+      document.body.appendChild(newBtn);
+
+      // Self-healing should recover the new element using the reindexed fingerprint key (11)
+      const recovered = findIndexedElement(11);
+      expect(recovered).toBe(newBtn);
+    });
+  });
+
+  describe('D-20: fast snapshot must not corrupt the standard action index namespace', () => {
+    let prevRect: any;
+
+    const resetFastCache = () => {
+      const cache = getClawFastCache();
+      cache.ids = new WeakMap<Element, number>();
+      cache.nodes.clear();
+      cache.actionElements?.clear();
+      cache.next = 1;
+    };
+
+    beforeEach(() => {
+      prevRect = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () {
+        return {
+          x: 10,
+          y: 10,
+          left: 10,
+          top: 10,
+          right: 110,
+          bottom: 60,
+          width: 100,
+          height: 50,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+      resetFastCache();
+    });
+
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = prevRect;
+      document.body.innerHTML = '';
+      getIsolatedIndexMap().clear();
+      getIndexFingerprintMap().clear();
+      (globalThis as any)[Symbol.for('__browser_use_last_snapshot_type__')] = undefined;
+      resetFastCache();
+    });
+
+    it('read_dom({fast:true}) keeps action index 2 on the input whose fast node id is 1', async () => {
+      document.body.innerHTML = '<input id="field"><button id="btn">Save</button>';
+      const input = document.getElementById('field')!;
+      const button = document.getElementById('btn')!;
+
+      vi.spyOn(readDOMTool as any, 'resolveAffinityTab').mockResolvedValue({
+        id: 1,
+        url: 'https://x.test',
+        title: 'X',
+      });
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (_target: any, fnName: string, fnArgs?: any[]) => {
+          if (fnName === 'inPageFastSnapshot') {
+            return [{ frameId: 0, result: fastSnapshot(fnArgs?.[0]) }] as any;
+          }
+          return [] as any;
+        },
+      );
+
+      const res = await readDOMTool.execute({ fast: true, tabId: 1 } as any);
+      expect(res.isError).toBe(false);
+      const payload = JSON.parse(res.content[0].text as string);
+
+      // Action 2 is the input's "Open" click action; its node identity is 1.
+      // That divergence is what the old code mis-resolved through the standard map.
+      const openAction = payload.actions.find((a: any) => a.id === 'e2');
+      expect(openAction).toBeDefined();
+      expect(openAction.node).toBe(1);
+      expect(openAction.node).not.toBe(2);
+
+      expect(findIndexedElement(2)).toBe(input);
+      expect(findIndexedElement(3)).toBe(button);
+    });
+
+    it('standard -> fast -> standard keeps both index namespaces isolated', () => {
+      document.body.innerHTML = '<input id="field"><button id="btn">Save</button>';
+      const input = document.getElementById('field')!;
+      const button = document.getElementById('btn')!;
+
+      inPageDOMPruner();
+      expect(findIndexedElement(1)).toBe(input);
+      expect(findIndexedElement(2)).toBe(button);
+
+      const fast = fastSnapshot();
+      expect(fast).toBeTruthy();
+      // Fast snapshot must never publish traversal node ids into the standard map.
+      expect(getIsolatedIndexMap().size).toBe(0);
+      expect(fast!.actions.find((a) => a.id === 'e2')!.node).not.toBe(2);
+      // Index 2 is the input's "Open" action, not the standard-indexed button.
+      expect(findIndexedElement(2)).toBe(input);
+
+      inPageDOMPruner();
+      expect(findIndexedElement(1)).toBe(input);
+      expect(findIndexedElement(2)).toBe(button);
     });
   });
 });

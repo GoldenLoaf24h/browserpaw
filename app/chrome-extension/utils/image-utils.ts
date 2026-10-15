@@ -448,6 +448,7 @@ export interface CoordinateGridOptions {
   normalized1000?: boolean;
   originX?: number;
   originY?: number;
+  viewportScale?: number;
 }
 
 /**
@@ -482,6 +483,7 @@ export async function overlayCoordinateGrid(
     const stepPx = Math.max(10, Math.round(gridStepCss * dpr));
     const ox = Math.round((options?.originX ?? 0) * dpr);
     const oy = Math.round((options?.originY ?? 0) * dpr);
+    const viewportScale = options?.viewportScale ?? 1;
     const isClassic = options?.style === 'classic';
     const isCrosshairOnly = options?.style === 'crosshair';
 
@@ -562,10 +564,10 @@ export async function overlayCoordinateGrid(
       for (let y = intersectionInterval; y < canvas.height; y += intersectionInterval) {
         const xCss = Math.round(x / dpr);
         const yCss = Math.round(y / dpr);
-        const globalX = Math.round((x + ox) / dpr);
-        const globalY = Math.round((y + oy) / dpr);
+        const globalX = Math.round(x / dpr / viewportScale + ox / dpr);
+        const globalY = Math.round(y / dpr / viewportScale + oy / dpr);
 
-        let label = ox !== 0 || oy !== 0 ? `(${globalX},${globalY})` : `(${xCss},${yCss})`;
+        let label = `(${globalX},${globalY})`;
         if (options?.normalized1000) {
           const normY = Math.round((yCss / (canvas.height / dpr)) * 1000);
           const normX = Math.round((xCss / (canvas.width / dpr)) * 1000);
@@ -634,7 +636,7 @@ export async function overlayCoordinateGrid(
           const normX = Math.round((x / canvas.width) * 1000);
           label = `${normX}`;
         } else {
-          const globalX = Math.round(xCss + (options?.originX ?? 0));
+          const globalX = Math.round(xCss / viewportScale + (options?.originX ?? 0));
           label = `${globalX}`;
         }
         ctx.fillStyle = '#facc15'; // bright amber
@@ -667,7 +669,7 @@ export async function overlayCoordinateGrid(
           const normY = Math.round((y / canvas.height) * 1000);
           label = `${normY}`;
         } else {
-          const globalY = Math.round(yCss + (options?.originY ?? 0));
+          const globalY = Math.round(yCss / viewportScale + (options?.originY ?? 0));
           label = `${globalY}`;
         }
         ctx.fillStyle = '#facc15'; // bright amber

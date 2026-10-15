@@ -968,4 +968,89 @@ describe('mcp-server-stdio: NEW-STDIO-SESSION-01 transport session recovery and 
       resetMcpClientForTesting();
     }
   });
+  it('F-01: scales timeout dynamically for act_toward_goal with margin up to 315s, keeping default 120s', async () => {
+    const mockClient = {
+      ping: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      callTool: (jest.fn() as any).mockResolvedValue({ content: [], isError: false }),
+      close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    };
+
+    const stdioModule = await import('./mcp-server-stdio');
+    const ensureSpy = jest
+      .spyOn(stdioModule, 'ensureMcpClient')
+      .mockResolvedValue(mockClient as any);
+
+    try {
+      setMcpClientForTesting(mockClient as any, 1);
+
+      // 1. act_toward_goal with 240s timeoutMs -> 240000 + 15000 = 255000
+      await callHandler({
+        params: {
+          name: 'chrome_act_toward_goal',
+          arguments: { goal: 'find socks', timeoutMs: 240000 },
+        },
+      });
+      expect(mockClient.callTool).toHaveBeenLastCalledWith(
+        { name: 'chrome_act_toward_goal', arguments: { goal: 'find socks', timeoutMs: 240000 } },
+        undefined,
+        { timeout: 255000 },
+      );
+
+      // 2. act_toward_goal without prefix with 300s timeoutMs -> 300000 + 15000 = 315000
+      await callHandler({
+        params: {
+          name: 'act_toward_goal',
+          arguments: { goal: 'checkout cart', timeoutMs: 300000 },
+        },
+      });
+      expect(mockClient.callTool).toHaveBeenLastCalledWith(
+        { name: 'chrome_act_toward_goal', arguments: { goal: 'checkout cart', timeoutMs: 300000 } },
+        undefined,
+        { timeout: 315000 },
+      );
+
+      // 3. act_toward_goal with 600s timeoutMs -> clamped to 315000
+      await callHandler({
+        params: {
+          name: 'chrome_act_toward_goal',
+          arguments: { goal: 'deep research', timeoutMs: 600000 },
+        },
+      });
+      expect(mockClient.callTool).toHaveBeenLastCalledWith(
+        { name: 'chrome_act_toward_goal', arguments: { goal: 'deep research', timeoutMs: 600000 } },
+        undefined,
+        { timeout: 315000 },
+      );
+
+      // 4. act_toward_goal without timeoutMs -> default 120000
+      await callHandler({
+        params: {
+          name: 'chrome_act_toward_goal',
+          arguments: { goal: 'search item' },
+        },
+      });
+      expect(mockClient.callTool).toHaveBeenLastCalledWith(
+        { name: 'chrome_act_toward_goal', arguments: { goal: 'search item' } },
+        undefined,
+        { timeout: 120000 },
+      );
+
+      // 5. Non-goal tool with timeoutMs -> must NOT scale, stays default 120000
+      await callHandler({
+        params: {
+          name: 'chrome_read_dom',
+          arguments: { timeoutMs: 240000 },
+        },
+      });
+      expect(mockClient.callTool).toHaveBeenLastCalledWith(
+        { name: 'chrome_read_dom', arguments: { timeoutMs: 240000 } },
+        undefined,
+        { timeout: 120000 },
+      );
+    } finally {
+      ensureSpy.mockRestore();
+      resetMcpClientForTesting();
+    }
+  });
 });

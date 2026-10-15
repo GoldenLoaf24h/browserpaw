@@ -218,6 +218,39 @@ export async function assertSafeUrlAsync(fileUrl: string): Promise<URL> {
  */
 export const MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024;
 
+const SENSITIVE_PATH_PATTERN =
+  /([/\\])(\.ssh|\.aws|\.gnupg|\.config|\.chrome-mcp|\.browserpaw|\.env)(?:[/\\]|$|\.)/i;
+
+export function isSensitivePath(candidatePath: string): boolean {
+  if (!candidatePath) return false;
+  const normalized = path.normalize(candidatePath);
+  if (SENSITIVE_PATH_PATTERN.test(normalized)) {
+    return true;
+  }
+  const base = path.basename(normalized).toLowerCase();
+  if (base === 'bridge-token' || base === 'jev-remote.json') {
+    return true;
+  }
+  return false;
+}
+
+export function assertNotSensitivePath(candidatePath: string): void {
+  const resolved = path.resolve(candidatePath);
+  if (isSensitivePath(resolved)) {
+    throw new Error('Access to sensitive directories is prohibited');
+  }
+
+  let canonical: string | null = null;
+  try {
+    canonical = fs.realpathSync(resolved);
+  } catch {
+    // Best-effort resolution: missing or unreadable paths fall through to the caller's own checks
+  }
+  if (canonical && isSensitivePath(canonical)) {
+    throw new Error('Access to sensitive directories is prohibited');
+  }
+}
+
 /**
  * Custom DNS lookup for HTTP/HTTPS agents that validates resolved IP addresses
  * immediately when the TCP connection is initiated, eliminating TOCTOU DNS rebinding windows.
@@ -642,11 +675,8 @@ export class FileHandler {
    */
   async readMediaFile(filePath: string): Promise<any> {
     try {
+      assertNotSensitivePath(filePath);
       const resolvedPath = path.resolve(filePath);
-      // Reject traversal into sensitive user configuration or key stores
-      if (/([/\\])(\.ssh|\.aws|\.gnupg|\.config|\.chrome-mcp|\.env)([/\\]|$)/i.test(resolvedPath)) {
-        throw new Error('Access to sensitive directories is prohibited');
-      }
       if (!fs.existsSync(resolvedPath)) {
         throw new Error(`Media file does not exist: ${filePath}`);
       }

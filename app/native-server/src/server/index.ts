@@ -698,7 +698,7 @@ export class Server {
         mcpSessionManager.broadcastToolListChanged();
         return reply.status(HTTP_STATUS.OK).send({
           success: true,
-          remoteConfig: jevModelManager.getRemoteConfig(),
+          remoteConfig: jevModelManager.getPublicRemoteConfig(),
         });
       },
     );

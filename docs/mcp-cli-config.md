@@ -116,7 +116,7 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 
 #### Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)
 
-Configure Hermes with native Stdio transport in `config.yaml` to expose all ~50 standard MCP tools:
+Configure Hermes with native Stdio transport in `config.yaml` to expose all 50 standard MCP tools (49 extension-executed + 1 native-server tool):
 
 ```yaml
 mcp_servers:
@@ -160,11 +160,13 @@ BrowserPaw provides an official Codex plugin under `plugins/browserpaw/`:
 
 To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
 
-| Profile              | Tool Count | Token Overhead | Best For                                                           |
-| :------------------- | :--------- | :------------- | :----------------------------------------------------------------- |
-| **`core`** (default) | 14         | ~5.8k tokens   | Daily semantic navigation, 1-based clicks, form fills, screenshots |
-| **`crawl`**          | 12         | ~4.8k tokens   | High-throughput content extraction, markdown, links                |
-| **`full`**           | 50         | ~16.5k tokens  | Full low-level CDP access, diagnostics, tab groups, and storage    |
+| Profile              | Tool Count | Estimated Prompt Footprint (chars/4) | Best For                                                           |
+| :------------------- | :--------- | :----------------------------------- | :----------------------------------------------------------------- |
+| **`core`** (default) | 14         | ~9.2k                                | Daily semantic navigation, 1-based clicks, form fills, screenshots |
+| **`crawl`**          | 12         | ~6.1k                                | High-throughput content extraction, markdown, links                |
+| **`full`**           | 50         | ~20.3k                               | Full low-level CDP access, diagnostics, tab groups, and storage    |
+
+Profile counts are Core 14 / Crawl 12 / Full 50, where the 50 canonical tools are 49 extension-executed tools plus the single native-server tool `chrome_act_toward_goal`. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 
 ### Dynamic Tool Activation Without Restart
 

@@ -968,7 +968,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         formData: {
           type: 'object',
           description:
-            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:.',
+            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:. Note: filePath and the file: spec are read through the native host, which only accepts files strictly inside its temp directory (<os.tmpdir()>/chrome-mcp-uploads) and at most 700KB (Native Messaging 1MB pipe, base64 inflates binary by 33%). For arbitrary local paths use chrome_upload_file or chrome_insert_media.',
         },
         tabId: {
           type: 'number',
