@@ -3444,6 +3444,56 @@ export function inPageDOMPruner(options?: {
   type TreeOutputItem = { type: 'element'; el: IndexedElement } | { type: 'marker'; line: string };
   const treeOutputItems: TreeOutputItem[] = [];
 
+  // Shape inference scans a candidate's whole subtree, so a nested candidate re-walks nodes an
+  // ancestor candidate already visited. Both helpers below are pure per node, so caching them for
+  // this snapshot keeps the original document order and depth while visiting each node once.
+  const SHAPE_DESCENDANT_TAGS = new Set(['span', 'div', 'i', 'svg', 'polygon', 'circle', 'rect']);
+  const ownShapeCache = new WeakMap<Element, string | null>();
+  const descendantShapeCache = new WeakMap<Element, string | null>();
+
+  // Shape contributed by the element's own style/tag, in the original rule precedence.
+  const ownVisualShape = (el: Element): string | null => {
+    const cached = ownShapeCache.get(el);
+    if (cached !== undefined) return cached;
+
+    let shape: string | null = null;
+    const style = el.getAttribute('style') || '';
+    if (/rotate\(\s*(45|135|225|315)deg\s*\)/i.test(style)) {
+      shape = 'diamond';
+    } else if (/border-radius:\s*(50%|9999px)/i.test(style)) {
+      shape = 'circle';
+    } else if (/clip-path:\s*polygon/i.test(style)) {
+      const pts = (style.match(/%/g) || []).length;
+      shape = pts >= 12 ? 'hex' : 'triangle';
+    } else {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'circle') shape = 'circle';
+      else if (tag === 'polygon') shape = 'polygon';
+    }
+
+    ownShapeCache.set(el, shape);
+    return shape;
+  };
+
+  // First shape among the descendants the original selector matched, in document order.
+  const descendantShape = (root: Element): string | null => {
+    const cached = descendantShapeCache.get(root);
+    if (cached !== undefined) return cached;
+
+    let shape: string | null = null;
+    for (const child of Array.from(root.children)) {
+      if (SHAPE_DESCENDANT_TAGS.has(child.tagName.toLowerCase())) {
+        shape = ownVisualShape(child);
+        if (shape !== null) break;
+      }
+      shape = descendantShape(child);
+      if (shape !== null) break;
+    }
+
+    descendantShapeCache.set(root, shape);
+    return shape;
+  };
+
   // Phase 2: Decoupled batch hit-testing & indexing pass (eliminates layout thrashing)
   let flattenedCardCount = 0;
   if (options?.flattenCards !== false) {
@@ -3481,34 +3531,7 @@ export function inPageDOMPruner(options?: {
     // Detect visual geometric shape if styled or transformed (diamond, circle, hex, triangle, square)
     let detectedShape: string | undefined = undefined;
     try {
-      const targets = [
-        cand.node,
-        ...Array.from(cand.node.querySelectorAll('span, div, i, svg, polygon, circle, rect')),
-      ];
-      for (const t of targets) {
-        const style = t.getAttribute('style') || '';
-        if (/rotate\(\s*(45|135|225|315)deg\s*\)/i.test(style)) {
-          detectedShape = 'diamond';
-          break;
-        }
-        if (/border-radius:\s*(50%|9999px)/i.test(style)) {
-          detectedShape = 'circle';
-          break;
-        }
-        if (/clip-path:\s*polygon/i.test(style)) {
-          const pts = (style.match(/%/g) || []).length;
-          detectedShape = pts >= 12 ? 'hex' : 'triangle';
-          break;
-        }
-        if (t.tagName.toLowerCase() === 'circle') {
-          detectedShape = 'circle';
-          break;
-        }
-        if (t.tagName.toLowerCase() === 'polygon') {
-          detectedShape = 'polygon';
-          break;
-        }
-      }
+      detectedShape = ownVisualShape(cand.node) ?? descendantShape(cand.node) ?? undefined;
     } catch {}
 
     const attributes: Record<string, string> = {};
