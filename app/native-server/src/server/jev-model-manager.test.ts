@@ -292,7 +292,8 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
   });
 
   test('17. writes jev-remote.json as 0600 inside a 0700 home directory', async () => {
-    const { existsSync, mkdtempSync, readFileSync, rmSync, statSync } = await import('node:fs');
+    const { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } =
+      await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
 
@@ -335,6 +336,23 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
       });
       expect(reloadedMod.jevModelManager.getRemoteConfig().modelId).toBe('jev-latest');
       expect(reloadedMod.jevModelManager.getRemoteConfig().baseUrl).toBe('https://example.invalid');
+
+      // A config file left over from the retired consent switch must not round-trip that key
+      // back to disk: an unknown field would persist forever and still read as a live setting.
+      writeFileSync(
+        configFile,
+        JSON.stringify({ modelId: 'jev-preview', visionEnabled: true, legacyJunk: 'x' }),
+        'utf8',
+      );
+      let legacyMod: any;
+      jest.isolateModules(() => {
+        legacyMod = require('./jev-model-manager');
+      });
+      legacyMod.jevModelManager.setRemoteConfig({ modelId: 'jev-preview' });
+      const rewritten = JSON.parse(readFileSync(configFile, 'utf8'));
+      expect(rewritten.modelId).toBe('jev-preview');
+      expect(rewritten).not.toHaveProperty('visionEnabled');
+      expect(rewritten).not.toHaveProperty('legacyJunk');
 
       if (process.platform !== 'win32') {
         // POSIX mode bits only. Node's mode argument does not model NTFS ACLs, so this

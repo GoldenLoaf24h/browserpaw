@@ -228,9 +228,12 @@ export class JevModelManager {
         const raw = readFileSync(CONFIG_FILE, 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          // Load only the fields this config declares. Spreading the parsed object verbatim
+          // would resurrect retired keys (such as the removed `visionEnabled` consent flag)
+          // on every save, leaving a dead setting that still looks live.
           this.remoteConfig = {
-            ...this.remoteConfig,
-            ...parsed,
+            baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : undefined,
+            apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : undefined,
             modelId: parsed.modelId?.trim() || 'jev-latest',
           };
           if (
