@@ -109,6 +109,53 @@ describe('Jev Client & Helper Unit Tests', () => {
       // total JSON string <= 24,000 characters
       expect(JSON.stringify(state).length).toBeLessThanOrEqual(24000);
     });
+
+    test('P1: carries visible page text so a rendered result is observable', () => {
+      const lines = ['[1] textbox "Search query" value="BrowserPaw"'];
+
+      // The outcome of a control action is usually page text, not another control; without it
+      // the model cannot tell that the goal was reached.
+      const withText = buildState(
+        'Filter the list',
+        'https://example.com/search',
+        'Products',
+        lines,
+        [],
+        undefined,
+        'Preview: BrowserPaw\nBrowserPaw Automation Engine',
+      );
+      expect(withText.page_text).toContain('Preview: BrowserPaw');
+
+      // Absent text must not add an empty field to the payload.
+      const withoutText = buildState(
+        'Filter the list',
+        'https://example.com/search',
+        'Products',
+        lines,
+        [],
+        undefined,
+        undefined,
+      );
+      expect(withoutText).not.toHaveProperty('page_text');
+    });
+
+    test('P1: page text is dropped before element indices when the budget is exceeded', () => {
+      const lines = Array.from({ length: 250 }, (_, i) => `[${i + 1}] button "Item ${i + 1}"`);
+      const state = buildState(
+        'Click through the list',
+        'https://example.com/list',
+        'List',
+        lines,
+        [],
+        undefined,
+        'x'.repeat(6000),
+      );
+
+      expect(JSON.stringify(state).length).toBeLessThanOrEqual(24000);
+      // Element indices are what every action question refers to, so they survive longest.
+      expect(state.elements.length).toBeGreaterThan(0);
+      expect(state.elements[0]).toContain('[1]');
+    });
   });
 
   describe('3. Questions assembly (§5.2)', () => {

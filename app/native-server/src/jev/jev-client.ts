@@ -123,6 +123,7 @@ export function buildState(
   treeLines: string[],
   history: JevHistoryItem[],
   pendingModal?: string,
+  pageText?: string,
 ): JevState {
   const cleanLines: string[] = [];
   for (const rawLine of treeLines) {
@@ -133,6 +134,16 @@ export function buildState(
     cleanLines.push(trimmed.slice(0, 120));
   }
 
+  // The result of a control action is usually rendered as page text, not as another control.
+  // Without it the model cannot tell that the goal was reached. Kept short because the
+  // elements and history share the same 24,000 character budget.
+  const cleanText = (pageText || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 2000);
+
   const state: JevState = {
     task: goal,
     page: {
@@ -141,10 +152,16 @@ export function buildState(
     },
     elements: cleanLines,
     history: history.slice(-5),
+    ...(cleanText ? { page_text: cleanText } : {}),
     ...(pendingModal ? { pending_modal: pendingModal.slice(0, 120) } : {}),
   };
 
-  // Enforce overall state character budget <= 24,000 chars
+  // Enforce overall state character budget <= 24,000 chars. Page text is dropped before
+  // elements, since element indices are what every action question refers to.
+  while (JSON.stringify(state).length > 24000 && state.page_text) {
+    state.page_text = state.page_text.slice(0, Math.max(0, state.page_text.length - 500));
+    if (!state.page_text) delete state.page_text;
+  }
   while (JSON.stringify(state).length > 24000 && state.elements.length > 0) {
     state.elements.pop();
   }

@@ -462,6 +462,8 @@ export class FastDecisionEngine {
           currentElements,
           history,
           domData.modalIsolated ? 'modal dialog active' : undefined,
+          // The fast snapshot already carries the viewport's visible text, so no extra read.
+          typeof domData.text === 'string' ? domData.text : undefined,
         );
         const questions = buildQuestions(state.elements, params.goal);
 

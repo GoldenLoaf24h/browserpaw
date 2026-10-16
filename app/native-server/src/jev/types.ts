@@ -19,6 +19,12 @@ export interface JevState {
   page: JevPageState;
   elements: string[];
   history: JevHistoryItem[];
+  /**
+   * Visible page text from the same fast snapshot that produced `elements`. Without it the
+   * model sees the controls but not their result, so a task whose outcome is rendered as page
+   * text reads as unachieved and the run keeps hunting for another action to take.
+   */
+  page_text?: string;
   pending_modal?: string;
 }
 
