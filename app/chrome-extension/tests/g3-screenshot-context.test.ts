@@ -469,9 +469,14 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
   });
 
   describe('3. Accepted ROI lossless contracts', () => {
-    it.each([false, true])(
-      'bounds black-bar retry frame waits when active=%s never paints',
-      async (active) => {
+    it.each([
+      { active: false, stalledRetry: false },
+      { active: true, stalledRetry: false },
+      { active: false, stalledRetry: true },
+      { active: true, stalledRetry: true },
+    ])(
+      'bounds black-bar retry when active=$active and stalledRetry=$stalledRetry',
+      async ({ active, stalledRetry }) => {
         vi.useFakeTimers();
         try {
           vi.spyOn(screenshotTool as any, 'resolveAffinityTab').mockResolvedValue({
@@ -484,6 +489,7 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
           vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_id, _owner, fn) =>
             fn(),
           );
+          let captureCount = 0;
           const capture = vi
             .spyOn(cdpSessionManager, 'sendCommand')
             .mockImplementation(async (_id, method) => {
@@ -495,6 +501,9 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
                   cssVisualViewport: { clientWidth: 1000, clientHeight: 1000, pageX: 0, pageY: 0 },
                 };
               }
+              if (method === 'Page.captureScreenshot' && ++captureCount === 2 && stalledRetry) {
+                return new Promise(() => {});
+              }
               return { data: VALID_PNG_1.split(',')[1], mimeType: 'image/png' };
             });
           let settled = false;
@@ -502,9 +511,13 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
             settled = true;
             return value;
           });
-          await vi.advanceTimersByTimeAsync(1500);
+          await vi.advanceTimersByTimeAsync(2500);
           expect(settled).toBe(true);
-          expect((await result).isError).toBeFalsy();
+          const response = await result;
+          expect(response.isError).toBeFalsy();
+          expect(JSON.parse((response.content[0] as any).text).cdpCaptureWarning).toBe(
+            stalledRetry ? 'Black-bar recapture exceeded 1000ms; using initial frame' : undefined,
+          );
           expect(
             capture.mock.calls.filter((call) => call[1] === 'Page.captureScreenshot'),
           ).toHaveLength(2);

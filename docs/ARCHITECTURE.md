@@ -520,7 +520,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
      - Viewport screenshots are captured in PNG or JPEG format via `chrome_screenshot` (`_jevVision: true`, `saveToDisk: false`).
      - Image dimensions are strictly clamped to `280..1568px` along both width and height, preserving aspect ratio with proportional downscaling and letterbox padding to bound network payload and inference memory.
      - Normalized `Box` coordinates are mapped through image content dimensions and padding to viewport CSS pixels; DPR is not applied a second time.
-     - Black-bar recapture skips animation-frame waits for background tabs. Active-tab frame waits are bounded at 300 ms per attempt because minimized windows can suspend `requestAnimationFrame`; recapture remains limited to one retry.
+     - Black-bar recapture skips animation-frame waits for background tabs. Active-tab frame waits are bounded at 300 ms per attempt because minimized windows can suspend `requestAnimationFrame`; the single optional recapture has a 1000 ms deadline. If it stalls, the initial image is retained with `cdpCaptureWarning`; semantic and frame checks still apply.
   4. **Click-Only Scope & Escalation on Complex Goals**:
      - Visual fallback in the initial release is strictly restricted to single, unambiguous click/tap targets.
      - The engine proactively rejects `type`, `fill`, `select`, and multi-step compound goals; complex goals escalate safely.

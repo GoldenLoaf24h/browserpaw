@@ -1740,5 +1740,163 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(query).not.toHaveBeenCalled();
       expect(caller.mock.calls.some(([tool]) => tool === 'chrome_screenshot')).toBe(false);
     });
+
+    test('12. Low-confidence wait on explicit single-click goal triggers vision fallback and executes click exactly once', async () => {
+      const { engine, caller, query } = visionHarness();
+      const toolbarDom = {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              url: 'https://example.com/toolbar',
+              title: 'Toolbar',
+              treeString: '[1] toolbar ""\n[2] div ""',
+            }),
+          },
+        ],
+      };
+
+      const lowConfWaitAnswers = createMockVisionJevAnswers({
+        action: {
+          type: 'choice',
+          choice: 'wait',
+          confidence: 0.28,
+          probabilities: {
+            click: 0.1,
+            type: 0.05,
+            select: 0.05,
+            scroll_down: 0.05,
+            scroll_up: 0.05,
+            back: 0.05,
+            wait: 0.28,
+            done: 0.2,
+            escalate: 0.17,
+          },
+        },
+      });
+
+      jest.spyOn((engine as any).jevClient, 'query').mockResolvedValue({
+        result: { answers: lowConfWaitAnswers },
+        errorReason: null,
+      });
+
+      const result = await engine.run(
+        {
+          goal: 'Click on the blue notification bell button in the toolbar',
+          maxSteps: 2,
+        },
+        (tool, args) =>
+          tool === 'chrome_read_dom' ? Promise.resolve(toolbarDom) : caller(tool, args),
+      );
+
+      // Verify vision fallback triggered and clicked exactly once
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(caller.mock.calls.filter(([tool]) => tool === 'chrome_screenshot')).toHaveLength(1);
+      expect(caller.mock.calls.filter(([tool]) => tool === 'chrome_interact_index')).toHaveLength(
+        1,
+      );
+      expect(result.jevUsage?.visionCalls).toBe(1);
+      // Second step halted because visualClickExecuted prevents re-executing
+      expect(result.status).toBe('escalate');
+      expect(result.reason).toContain('Visual click already executed');
+    });
+
+    test('13. Negative controls: low-confidence type, select, done and ambiguous/compound goals never trigger vision', async () => {
+      const { engine, caller, query } = visionHarness();
+      const toolbarDom = {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              url: 'https://example.com/toolbar',
+              title: 'Toolbar',
+              treeString: '[1] toolbar ""\n[2] div ""',
+            }),
+          },
+        ],
+      };
+
+      // Low confidence negative actions: type, select, done
+      for (const action of ['type', 'select', 'done'] as const) {
+        query.mockClear();
+        caller.mockClear();
+        jest.spyOn((engine as any).jevClient, 'query').mockResolvedValue({
+          result: {
+            answers: createMockVisionJevAnswers({
+              action: {
+                type: 'choice',
+                choice: action,
+                confidence: 0.28,
+                probabilities: {
+                  click: 0.1,
+                  type: 0.1,
+                  select: 0.1,
+                  scroll_down: 0.05,
+                  scroll_up: 0.05,
+                  back: 0.05,
+                  wait: 0.17,
+                  done: 0.1,
+                  escalate: 0.28,
+                  [action]: 0.28,
+                },
+              },
+            }),
+          },
+          errorReason: null,
+        });
+
+        const res = await engine.run(
+          {
+            goal: 'Click on the blue notification bell button in the toolbar',
+            maxSteps: 1,
+          },
+          (tool, args) =>
+            tool === 'chrome_read_dom' ? Promise.resolve(toolbarDom) : caller(tool, args),
+        );
+
+        expect(query).not.toHaveBeenCalled();
+        expect(caller.mock.calls.some(([tool]) => tool === 'chrome_screenshot')).toBe(false);
+        expect(caller.mock.calls.some(([tool]) => tool === 'chrome_interact_index')).toBe(false);
+        expect(res.jevUsage?.visionCalls ?? 0).toBe(0);
+      }
+
+      // Ambiguous and compound goals with low-confidence wait must not trigger vision
+      const disallowedGoals = [
+        'Explore the toolbar options',
+        'Click on the blue notification bell button and then click settings',
+        'Click on the blue notification bell button; click settings',
+      ];
+
+      for (const goal of disallowedGoals) {
+        query.mockClear();
+        caller.mockClear();
+        jest.spyOn((engine as any).jevClient, 'query').mockResolvedValue({
+          result: {
+            answers: createMockVisionJevAnswers({
+              action: {
+                type: 'choice',
+                choice: 'wait',
+                confidence: 0.28,
+                probabilities: {
+                  click: 0.1,
+                  wait: 0.28,
+                  escalate: 0.2,
+                },
+              },
+            }),
+          },
+          errorReason: null,
+        });
+
+        const res = await engine.run({ goal, maxSteps: 1 }, (tool, args) =>
+          tool === 'chrome_read_dom' ? Promise.resolve(toolbarDom) : caller(tool, args),
+        );
+
+        expect(query).not.toHaveBeenCalled();
+        expect(caller.mock.calls.some(([tool]) => tool === 'chrome_screenshot')).toBe(false);
+        expect(caller.mock.calls.some(([tool]) => tool === 'chrome_interact_index')).toBe(false);
+        expect(res.jevUsage?.visionCalls ?? 0).toBe(0);
+      }
+    });
   });
 });

@@ -821,23 +821,35 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                   await Promise.race([frames, new Promise((r) => setTimeout(r, 300))]);
                 }
               } catch {}
-              const retry: any = await cdpSessionManager.sendCommand(
-                tabId,
-                'Page.captureScreenshot',
-                {
-                  format: cdpFormat,
-                  quality: cdpQuality,
-                  captureBeyondViewport: false,
-                  fromSurface: true,
-                  clip: {
-                    x: viewport.pageX || 0,
-                    y: viewport.pageY || 0,
-                    width: clientWidth,
-                    height: clientHeight,
-                    scale: 1,
-                  },
+              const retryCapture = cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', {
+                format: cdpFormat,
+                quality: cdpQuality,
+                captureBeyondViewport: false,
+                fromSurface: true,
+                clip: {
+                  x: viewport.pageX || 0,
+                  y: viewport.pageY || 0,
+                  width: clientWidth,
+                  height: clientHeight,
+                  scale: 1,
                 },
-              );
+              });
+              // Keep the first capture if an optional compositor retry stops acknowledging.
+              let retryTimer: ReturnType<typeof setTimeout> | undefined;
+              let retry: any;
+              try {
+                retry = await Promise.race([
+                  retryCapture,
+                  new Promise<null>((resolve) => {
+                    retryTimer = setTimeout(() => resolve(null), 1000);
+                  }),
+                ]);
+              } finally {
+                clearTimeout(retryTimer);
+              }
+              if (!retry)
+                results.cdpCaptureWarning =
+                  'Black-bar recapture exceeded 1000ms; using initial frame';
               const retryData = typeof retry?.data === 'string' ? retry.data : '';
               if (retryData) {
                 finalImageDataUrl = await normalizeImageToCssDimensions(
@@ -851,6 +863,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             }
           });
         } catch (e) {
+          results.cdpCaptureWarning = e instanceof Error ? e.message : String(e);
           console.warn('CDP viewport capture failed, falling back to helper path:', e);
         }
       }

@@ -587,7 +587,7 @@ export class FastDecisionEngine {
             const visFallback = await executeVisionFallback(
               step,
               'low text action confidence',
-              actionToTake === 'escalate' ? 'click' : actionToTake,
+              actionToTake === 'escalate' || actionToTake === 'wait' ? 'click' : actionToTake,
             );
             if (visFallback.handled) {
               if (visFallback.result) return visFallback.result;
