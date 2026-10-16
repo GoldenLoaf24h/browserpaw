@@ -45,30 +45,52 @@ export async function apply(ctx) {
 
   let session = null;
 
+  // Open and close transitions are serialized. `ctx.plugin` cannot be cancelled once it has
+  // started, so a concurrent open would fork a second transport that nothing tracks, and a
+  // close (or plugin unload) landing while an open is still awaiting would see no session,
+  // return as a no-op, and let the connection reappear afterwards. Serializing makes each
+  // transition observe the settled result of the previous one, so a close always ends with
+  // no live connection and no undisposed fork.
+  let transitions = Promise.resolve();
+
+  function serialize(transition) {
+    const run = transitions.then(transition);
+    transitions = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+
   async function open() {
-    if (session) return;
-    const token = resolveBridgeToken();
-    if (!token) {
-      throw new Error(
-        'BrowserPaw bridge token not found. Start the native host or set CHROME_MCP_TOKEN.',
-      );
-    }
-    const fork = await ctx.plugin('@deepseek-ai/dsh-mcp-client', {
-      serverName: SERVER_NAME,
-      transport: 'streamable-http',
-      url: `http://127.0.0.1:${resolveServerPort()}/mcp`,
-      headers: { 'x-mcp-token': token },
+    return serialize(async () => {
+      if (session) return;
+      const token = resolveBridgeToken();
+      if (!token) {
+        throw new Error(
+          'BrowserPaw bridge token not found. Start the native host or set CHROME_MCP_TOKEN.',
+        );
+      }
+      const fork = await ctx.plugin('@deepseek-ai/dsh-mcp-client', {
+        serverName: SERVER_NAME,
+        transport: 'streamable-http',
+        url: `http://127.0.0.1:${resolveServerPort()}/mcp`,
+        headers: { 'x-mcp-token': token },
+      });
+      session = {
+        fork,
+        startedAt: Date.now(),
+      };
     });
-    session = {
-      fork,
-      startedAt: Date.now(),
-    };
   }
 
   async function close() {
-    if (!session) return;
-    await session.fork.dispose();
-    session = null;
+    return serialize(async () => {
+      if (!session) return;
+      const current = session;
+      session = null;
+      await current.fork.dispose();
+    });
   }
 
   ctx.tools.register({
@@ -104,10 +126,10 @@ export async function apply(ctx) {
   });
 
   ctx.effect(
-    () => () => {
-      session?.fork.dispose().catch(() => {});
-      session = null;
-    },
+    () => () =>
+      // Route unload through close() so it queues behind any in-flight open instead of
+      // observing an empty session and leaving that fork connected after the plugin is gone.
+      close().catch(() => {}),
     'browserpaw-session.dispose',
   );
 }
