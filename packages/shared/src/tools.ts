@@ -1518,7 +1518,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).',
+      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait), buffer mode (persistent per-tab buffer you can read/clear instantly without waiting), and stop mode (release the persistent buffer for a tab).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1550,9 +1550,9 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         },
         mode: {
           type: 'string',
-          enum: ['snapshot', 'buffer'],
+          enum: ['snapshot', 'buffer', 'stop'],
           description:
-            'Console capture mode: snapshot (default; waits ~2s for messages) or buffer (persistent per-tab buffer; reads from memory instantly).',
+            'Console capture mode: snapshot (default; one-time capture with a ~50ms settle wait), buffer (persistent per-tab buffer; reads from memory instantly), or stop (stop the persistent buffer for this tab and release its resources; idempotent).',
         },
         buffer: {
           type: 'boolean',
@@ -1561,7 +1561,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         clear: {
           type: 'boolean',
           description:
-            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style).',
+            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style). Ignored by stop mode, which discards the buffer entirely.',
         },
         clearAfterRead: {
           type: 'boolean',

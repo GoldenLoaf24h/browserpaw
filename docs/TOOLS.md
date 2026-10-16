@@ -460,7 +460,7 @@ Performs automated client-side RAF auto-scrolling and live DOM / Shadow-DOM dete
 
 ### `chrome_console`
 
-Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).
+Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait), buffer mode (persistent per-tab buffer you can read/clear instantly without waiting), and stop mode (release the persistent buffer for a tab).
 
 - `url` — URL to navigate to and capture console from. If not provided, uses the current active tab
 - `tabId` — Target an existing tab by ID (default: active tab).
@@ -468,9 +468,9 @@ Capture console output from a browser tab. Supports snapshot mode (default; one-
 - `background` — Do not activate tab/focus window when capturing via CDP. Default: true
 - `includeExceptions` — Include uncaught exceptions in the output (default: true)
 - `maxMessages` — Maximum number of console messages to capture in snapshot mode (default: 100). If limit is provided, it takes precedence.
-- `mode:snapshot|buffer` — Console capture mode: snapshot (default; waits ~2s for messages) or buffer (persistent per-tab buffer; reads from memory instantly).
+- `mode:snapshot|buffer|stop` — Console capture mode: snapshot (default; one-time capture with a ~50ms settle wait), buffer (persistent per-tab buffer; reads from memory instantly), or stop (stop the persistent buffer for this tab and release its resources; idempotent).
 - `buffer` — Deprecated alias for mode="buffer". Prefer mode.
-- `clear` — Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style).
+- `clear` — Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style). Ignored by stop mode, which discards the buffer entirely.
 - `clearAfterRead` — Buffer mode only: clear the buffered logs for this tab AFTER reading, to avoid duplicate messages on subsequent calls (default: false). This matches mcp-tools.js behavior.
 - `pattern` — Optional regex filter applied to message/exception text. Supports /pattern/flags syntax.
 - `onlyErrors` — Only return error-level console messages (and exceptions when includeExceptions=true). Default: false.
