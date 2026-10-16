@@ -164,7 +164,7 @@ To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
 | :------------------- | :--------- | :----------------------------------- | :----------------------------------------------------------------- |
 | **`core`** (default) | 14         | ~9.2k                                | Daily semantic navigation, 1-based clicks, form fills, screenshots |
 | **`crawl`**          | 12         | ~6.1k                                | High-throughput content extraction, markdown, links                |
-| **`full`**           | 50         | ~20.3k                               | Full low-level CDP access, diagnostics, tab groups, and storage    |
+| **`full`**           | 50         | ~20.4k                               | Full low-level CDP access, diagnostics, tab groups, and storage    |
 
 Profile counts are Core 14 / Crawl 12 / Full 50, where the 50 canonical tools are 49 extension-executed tools plus the single native-server tool `chrome_act_toward_goal`. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 

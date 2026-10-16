@@ -14,6 +14,21 @@ This document tracks in-progress architectural updates, fixes, and documentation
 
 ## 📋 Queued Changes
 
+### Jev Vision Routing & Autonomous Loop Corrections
+
+- **Local Extension Origin Accepted**: The native bridge derives the calling extension ID from the Native Messaging launch arguments and admits it alongside the published store ID, so a locally unpacked build can save remote configuration and switch Jev modes. Malformed caller-supplied IDs are rejected by format validation.
+- **Vision Capability Routed by Upstream, Not by a Switch**: Removed the `visionEnabled` setting and the pinned `jev-1.14.0` vision model. Before any screenshot is captured the engine asks upstream which concrete release answers the configured endpoint and proceeds only when that release supports `box` questions (Jev 1.14+). Resolution is cached per credentials/endpoint/model and refreshed whenever a text query reports a new release, so promoting an alias moves the gate automatically. Endpoints below the threshold are declined with `vision_model_unsupported` and no image is captured or sent.
+- **Retired Configuration Keys Stop Round-Tripping**: The remote config loader reads known fields only, so keys removed from the product no longer survive on disk after a save.
+- **Model Sees Its Own Results**: The DOM tree handed to the model now includes the current value of filled controls, and the model state carries a bounded slice of visible page text. A fill that previously looked like a no-op no longer loops until the run reports `stuck`.
+- **Submit Judgment Replaces Keyword Matching**: Whether a filled field is also submitted is now an explicit model question with a `fill_only` / `submit` / `unclear` answer; an unclear answer pauses for the caller instead of pressing Enter. An explicit `pressEnter` argument still wins.
+- **Session Lifecycle Serialization**: The DeepSeek Harness plugin serializes open/close transitions, so concurrent opens create a single connection and a close issued while opening still tears the connection down.
+
+### Browser Tool Corrections
+
+- **Console Buffer Stop Mode**: `chrome_console` accepts `mode: "stop"` to release a tab's persistent buffer. The stop path waits for an in-flight start, releases only the domain claims it acquired, and is idempotent.
+- **Tab-Scoped Network Listeners**: `chrome_network_capture` registers one `webRequest` listener set per captured tab behind a `tabId` filter and removes exactly that set when the tab stops, closes, or restarts, so unrelated tabs' traffic is no longer delivered to the extension and multiple captures can be stopped independently.
+- **Single-Pass Shape Inference**: Visual shape inference caches nodes within one snapshot instead of rescanning each candidate's subtree, preserving traversal depth, precedence, and index output.
+
 ### Native Bridge Credential Security & Stdio Transport Architecture
 
 - **Default Stdio Transport**: Standardized all client configuration templates (Desktop, Editor, Cline, CLI, Hermes) on stdio (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) as the zero-config default without token or environment credential requirements.

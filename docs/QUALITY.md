@@ -36,6 +36,7 @@ Executes the complete verification and production build suite across the root `b
 - **Unit & Integration Suites**:
   - The full `app/chrome-extension/tests/**/*.test.ts` Vitest suite, including shared schema contracts. The reported file set must match the discovered file set exactly.
   - Native Jest tests for `app/native-server` messaging protocol framing.
+  - Root script regression tests for every `scripts/*.test.{mjs,cjs}` file via `node --test`.
   - Simulated E2E tests for CDP event dispatch and fallback ladders.
   - Platform plugin connector tests via pytest.
   - **Skip Policy**: The sole permissible skip is the optional Hermes host environment when unconfigured locally. Any other suite skip or warning is a fail-closed error.

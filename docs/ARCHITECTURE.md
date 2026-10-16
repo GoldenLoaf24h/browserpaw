@@ -318,14 +318,14 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 ### ADR-014: Dynamic Profile Layering & Session-Level Tool Activation across Transports
 
 - **Status**: Implemented & Verified
-- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 50 tools consumes ~19.5k tokens on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
+- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 50 tools consumes ~20.4k chars/4 on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
 - **Decision**:
   1. Define 8 comprehensive tool categories in `TOOL_CATEGORIES` across `packages/shared`: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, and `crawl`.
   2. Retain `chrome_tool_docs` as an omni-present introspection tool across all profiles.
   3. Implement `activateForSession: true` support on both transports:
      - **Fastify HTTP/SSE**: dynamically registers extra tools to the client's dedicated `McpSessionManager` instance.
      - **Stdio Transport**: maintains `dynamicExtraTools` set in `mcp-server-stdio.ts`, dynamically expanding both `tools/list` and `tools/call` filters for subsequent RPC requests.
-- **Consequences**: Minimal initial token footprint (< 5.8k-11.5k tokens) with zero-restart, on-demand privilege and capability escalation during autonomous runs.
+- **Consequences**: Minimal initial footprint (core ~9.2k, crawl ~6.1k chars/4) with zero-restart, on-demand privilege and capability escalation during autonomous runs.
 
 ### ADR-015: Single-Expression JavaScript Auto-Return & Event-Driven Page Load Settle
 
@@ -550,4 +550,4 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
   9. **Vision Billing Accounting & Benchmark Smoke Nature**:
      - TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. Telemetry `estCostUsd` accumulates those tokens at the documented Jev rate ($0.042/1M input tokens) and therefore covers vision requests; it remains an input-only estimate (output tokens are excluded).
      - The 4 mixed benchmark fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise.
-- **Consequences**: Adds an opt-in path for icon and canvas targets, with conservative rejection and explicit freshness limits. Functional smoke results do not establish universal accuracy or a speedup.
+- **Consequences**: Adds an additional path for icon and canvas targets, with conservative rejection and explicit freshness limits. Functional smoke results do not establish universal accuracy or a speedup.

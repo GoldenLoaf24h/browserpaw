@@ -53,6 +53,7 @@ From upstream `deepseek-ai/deepseek-harness`:
   - In vendored Cordis ([`vendor/cordis/src/registry.ts:331-334`](https://github.com/deepseek-ai/deepseek-harness/blob/571902028a75c64c1d767f4ae5fd099485f0ddf0/vendor/cordis/src/registry.ts#L331-L334)), `ctx.plugin()` returns a thenable wrapped Fork awaiting `fiber.await()`.
   - While `@deepseek-ai/dsh-mcp-client` awaits `connection.ready` ([`packages/mcp/mcp-client/src/index.ts:199`](https://github.com/deepseek-ai/deepseek-harness/blob/571902028a75c64c1d767f4ae5fd099485f0ddf0/packages/mcp/mcp-client/src/index.ts#L199)), full host readiness was not exercised in this verification; requires host-level validation.
 - **Lifecycle Cleanup**: Session unmounting calls `await session.fork.dispose()`. Plugin unmount is registered via `ctx.effect()`.
+- **Serialized Session Transitions**: Because `ctx.plugin()` cannot be cancelled once it starts, the plugin funnels `open` and `close` through a single promise chain. Concurrent opens therefore create one connection, a close issued while an open is still awaiting tears that connection down instead of being ignored, and unmounting during a pending open disposes the resulting fork rather than leaking it. Regression coverage: [`scripts/browserpaw-dsh-plugin.test.mjs`](../../scripts/browserpaw-dsh-plugin.test.mjs).
 
 ### 2.2. Resolved Contract Boundaries (S-02, S-03, S-04)
 
