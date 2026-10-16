@@ -76,7 +76,6 @@ export interface ModelStatusInfo {
     baseUrl?: string;
     modelId?: string;
     hasApiKey?: boolean;
-    visionEnabled?: boolean;
   };
   idleTimeoutMs?: number;
   lastActivityTime?: number;
@@ -106,10 +105,8 @@ export class JevModelManager {
     baseUrl?: string;
     apiKey?: string;
     modelId?: string;
-    visionEnabled?: boolean;
   } = {
     modelId: 'jev-latest',
-    visionEnabled: false,
   };
   private progress: ModelDownloadProgress = {
     status: 'idle',
@@ -235,7 +232,6 @@ export class JevModelManager {
             ...this.remoteConfig,
             ...parsed,
             modelId: parsed.modelId?.trim() || 'jev-latest',
-            visionEnabled: parsed.visionEnabled === true,
           };
           if (
             parsed.activeMode === 'off' ||
@@ -404,15 +400,7 @@ export class JevModelManager {
     }
   }
 
-  public setRemoteConfig(config: {
-    baseUrl?: string;
-    apiKey?: string;
-    modelId?: string;
-    visionEnabled?: boolean;
-  }): void {
-    if (config.visionEnabled !== undefined && typeof config.visionEnabled !== 'boolean') {
-      throw new Error('visionEnabled must be a boolean');
-    }
+  public setRemoteConfig(config: { baseUrl?: string; apiKey?: string; modelId?: string }): void {
     const rawModel = (config.modelId ?? this.remoteConfig.modelId)?.trim();
     const sanitizedModelId = !rawModel || rawModel === 'decider-2b' ? 'jev-latest' : rawModel;
     this.remoteConfig = {
@@ -427,7 +415,6 @@ export class JevModelManager {
     baseUrl?: string;
     apiKey?: string;
     modelId?: string;
-    visionEnabled?: boolean;
   } {
     const rawModel = this.remoteConfig.modelId?.trim();
     const sanitizedModelId = !rawModel || rawModel === 'decider-2b' ? 'jev-latest' : rawModel;
@@ -441,14 +428,12 @@ export class JevModelManager {
     baseUrl?: string;
     modelId?: string;
     hasApiKey: boolean;
-    visionEnabled: boolean;
   } {
     const config = this.getRemoteConfig();
     return {
       baseUrl: config.baseUrl,
       modelId: config.modelId,
       hasApiKey: Boolean(config.apiKey),
-      visionEnabled: config.visionEnabled === true,
     };
   }
 

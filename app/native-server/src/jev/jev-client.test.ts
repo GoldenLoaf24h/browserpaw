@@ -17,7 +17,7 @@ import {
   extractVisualTargetDescription,
   parseScreenshotContent,
   validateBoxCoordinates,
-  JEV_VISION_MODEL,
+  supportsBoxQuestions,
   DANGER_ZONE_IMAGES_HEADER,
 } from './jev-client';
 import { jevModelManager } from '../server/jev-model-manager';
@@ -573,9 +573,21 @@ describe('Jev Client & Helper Unit Tests', () => {
     describe('15. JevClientWrapper queryVision Guard & Pipeline', () => {
       const fakeBuf = Buffer.from('fake_image_bytes');
 
+      test('reads box support from the version upstream reports, not from the configured id', () => {
+        // Jev 1.14 is the first release that can answer `box`.
+        expect(supportsBoxQuestions('jev-1.14.0')).toBe(true);
+        expect(supportsBoxQuestions('jev-1.14')).toBe(true);
+        expect(supportsBoxQuestions('jev-preview')).toBe(false); // alias: no version to judge
+        expect(supportsBoxQuestions('jev-1.13.0')).toBe(false);
+        expect(supportsBoxQuestions('jev-2.0.0')).toBe(true); // a future major follows along
+        expect(supportsBoxQuestions('my-vision-gateway')).toBe(false);
+        expect(supportsBoxQuestions('')).toBe(false);
+        expect(supportsBoxQuestions(undefined)).toBe(false);
+      });
+
       test('the real SDK stops retry backoff when the total request signal aborts', async () => {
         jevModelManager.setActiveMode('remote');
-        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+        jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
         let requestStarted!: () => void;
         const started = new Promise<void>((resolve) => {
           requestStarted = resolve;
@@ -594,6 +606,7 @@ describe('Jev Client & Helper Unit Tests', () => {
         });
         const client = new JevClientWrapper('dummy_key');
         jest.spyOn(client, 'getRemoteClient').mockReturnValue(sdk);
+        (client as any).resolvedModelId = 'jev-1.14.0';
         const controller = new AbortController();
         const pending = client.queryVision(fakeBuf, 'bell icon', 'remote', {
           signal: controller.signal,
@@ -611,8 +624,9 @@ describe('Jev Client & Helper Unit Tests', () => {
       test.each([NaN, Infinity, -1, 1.1, null, '0.99'])(
         'malformed probability %s cannot authorize a visual click',
         async (noulValue) => {
-          jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+          jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
           const client = new JevClientWrapper('dummy_key');
+          (client as any).resolvedModelId = 'jev-1.14.0';
           jest.spyOn(client, 'getRemoteClient').mockReturnValue({
             systemOne: async () => ({
               answers: {
@@ -648,27 +662,42 @@ describe('Jev Client & Helper Unit Tests', () => {
         expect(localRes.result).toBeNull();
       });
 
-      test('strictly rejects when remoteConfig.visionEnabled is false', async () => {
-        jevModelManager.setRemoteConfig({ visionEnabled: false });
+      test('fails closed without sending an image when upstream serves a pre-1.14 release', async () => {
+        jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
         const client = new JevClientWrapper('dummy_key');
+        const systemOne = jest.fn(async () => ({
+          model: 'jev-1.13.0',
+          answers: { ready: { type: 'noul', noul: 1 } },
+        }));
+        jest.spyOn(client, 'getRemoteClient').mockReturnValue({ systemOne } as any);
+
         const res = await client.queryVision(fakeBuf, 'cart icon', 'remote');
-        expect(res.errorReason).toBe('jev_disabled');
+
+        expect(res.errorReason).toBe('vision_model_unsupported');
         expect(res.result).toBeNull();
+        // Only the text-only capability probe ran; the image never left the process.
+        expect(systemOne).toHaveBeenCalledTimes(1);
+        expect((systemOne.mock.calls[0] as any)[0].state).not.toHaveProperty('screenshot');
       });
 
-      test('invokes remote client with fixed vision model, danger-zone header, and evaluates defensive questions', async () => {
-        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+      test('invokes remote client with the upstream-reported model, danger-zone header, and evaluates defensive questions', async () => {
+        jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
         const client = new JevClientWrapper('dummy_key');
 
         let capturedRequest: any = null;
         let capturedOptions: any = null;
+        let call = 0;
 
         (client as any).client = {
           systemOne: async (req: any, opts: any) => {
+            // First call is the text-only capability probe, second is the real vision query.
+            if (call++ === 0) {
+              return { model: 'jev-1.14.0', answers: { ready: { type: 'noul', noul: 1 } } };
+            }
             capturedRequest = req;
             capturedOptions = opts;
             return {
-              model: JEV_VISION_MODEL,
+              model: 'jev-1.14.0',
               answers: {
                 target_exists: { type: 'noul', noul: 0.92 },
                 target_ambiguous: { type: 'noul', noul: 0.15 },
@@ -702,12 +731,13 @@ describe('Jev Client & Helper Unit Tests', () => {
       });
 
       test('flags exists as false if target_exists noul < 0.85 (conservative threshold)', async () => {
-        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+        jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
         const client = new JevClientWrapper('dummy_key');
+        (client as any).resolvedModelId = 'jev-1.14.0';
 
         (client as any).client = {
           systemOne: async () => ({
-            model: JEV_VISION_MODEL,
+            model: 'jev-1.14.0',
             answers: {
               target_exists: { type: 'noul', noul: 0.82 }, // below 0.85
               target_ambiguous: { type: 'noul', noul: 0.1 },

@@ -935,6 +935,16 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
   });
 
   describe('14. Jev Vision Fallback & Safety Regression Tests', () => {
+    /**
+     * The visual fallback first asks upstream which release answers here and declines unless it
+     * can do `box`. These tests exercise the safety logic after that gate, so they declare the
+     * endpoint capable; the gate itself is covered by the jev-client and test-3 suites.
+     */
+    const boxCapable = (engine: FastDecisionEngine) =>
+      jest
+        .spyOn((engine as any).jevClient, 'resolveBoxCapableModel')
+        .mockResolvedValue('jev-1.14.0');
+
     const fakeScreenshotResponse = {
       content: [
         {
@@ -996,8 +1006,13 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     const visionHarness = () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       const engine = new FastDecisionEngine();
+      // Upstream reports a release that can answer `box`; the gate itself is covered by the
+      // jev-client suite, so here it stands in as an available capability.
+      jest
+        .spyOn((engine as any).jevClient, 'resolveBoxCapableModel')
+        .mockResolvedValue('jev-1.14.0');
       jest.spyOn((engine as any).jevClient, 'query').mockResolvedValue({
         result: { answers: createMockVisionJevAnswers() },
         errorReason: null,
@@ -1088,7 +1103,9 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
     test('revoked consent prevents click even after a valid cloud answer', async () => {
       const { engine, caller, vision, query } = visionHarness();
       query.mockImplementation(async () => {
-        jevModelManager.setRemoteConfig({ visionEnabled: false });
+        // Mode is revoked while the vision request is in flight; the post-capture re-check
+        // must still refuse to dispatch the click.
+        jevModelManager.setActiveMode('off');
         return { result: vision, errorReason: null };
       });
       const result = await engine.run({ goal: 'click bell icon', maxSteps: 1 }, caller);
@@ -1209,9 +1226,9 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       },
     );
 
-    test('caller arguments cannot bypass disabled persistent screenshot consent', async () => {
+    test('caller arguments cannot force vision when upstream serves a pre-1.14 release', async () => {
       const { engine, caller, query } = visionHarness();
-      jevModelManager.setRemoteConfig({ visionEnabled: false });
+      jest.spyOn((engine as any).jevClient, 'resolveBoxCapableModel').mockResolvedValue(null);
       await engine.run(
         { goal: 'click bell icon', visionEnabled: true, maxSteps: 1 } as any,
         caller,
@@ -1222,7 +1239,7 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('1. Never captures screenshot or calls vision in off mode', async () => {
       jevModelManager.setActiveMode('off');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
 
@@ -1242,7 +1259,7 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('2. Never captures screenshot or calls vision in local mode', async () => {
       jevModelManager.setActiveMode('local');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       const engine = new FastDecisionEngine();
 
       let screenshotCalled = false;
@@ -1265,9 +1282,9 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(screenshotCalled).toBe(false);
     });
 
-    test('3. Never captures screenshot or calls vision when visionEnabled is false in remote mode', async () => {
+    test('3. Never captures screenshot or calls vision when upstream serves a pre-1.14 release', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: false, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
 
@@ -1300,6 +1317,9 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
         },
         errorReason: null,
       });
+      // The endpoint answers with a release that cannot do `box`, so the fallback must decline
+      // without ever capturing a frame.
+      jest.spyOn((engine as any).jevClient, 'resolveBoxCapableModel').mockResolvedValue(null);
 
       const result = await engine.run({ goal: 'click cart icon', maxSteps: 2 }, caller);
       expect(screenshotCalled).toBe(false);
@@ -1309,9 +1329,10 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('4. Vision fallback safely escalates without clicking when target_exists is below 0.85', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
+      boxCapable(engine);
 
       let clickIntercepted = false;
       const caller = async (tool: string, args: any) => {
@@ -1346,9 +1367,10 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('5. Vision fallback safely escalates without clicking when target_ambiguous >= 0.50', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
+      boxCapable(engine);
 
       let clickIntercepted = false;
       const caller = async (tool: string, args: any) => {
@@ -1383,9 +1405,10 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('6. Vision fallback safely escalates without clicking when box coordinates are invalid', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
+      boxCapable(engine);
 
       let clickIntercepted = false;
       const caller = async (tool: string, args: any) => {
@@ -1420,9 +1443,10 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('7. Dispatches coordinate click with exact expectedScreenshotId and observes subsequent page state (never blind done)', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
+      boxCapable(engine);
 
       let capturedInteractArgs: any = null;
       let domCallCount = 0;
@@ -1508,9 +1532,10 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
     test('8. Handles stale frame error without replaying and triggers pauseBeforeKeywords on visual target', async () => {
       jevModelManager.setActiveMode('remote');
-      jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'test_key' });
+      jevModelManager.setRemoteConfig({ apiKey: 'test_key' });
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();
+      boxCapable(engine);
 
       // Test 8A: Safety pause on visual target matching pauseBeforeKeywords
       const pauseResult = await engine.run(

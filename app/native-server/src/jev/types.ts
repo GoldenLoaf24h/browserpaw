@@ -77,6 +77,7 @@ export type FallbackReason =
   | 'network_error'
   | 'jev_disabled'
   | 'local_service_offline'
+  | 'vision_model_unsupported'
   | null;
 
 export interface ActTowardGoalParams {

@@ -38,6 +38,10 @@ test('BENCHMARK_GROUPS defines exact three comparison groups with pinned models'
   assert.ok(candidateVision, 'candidate-1.14-vision group must exist');
   assert.equal(candidateVision.modelId, 'jev-1.14.0');
   assert.equal(candidateVision.visionEnabled, true);
+
+  // The two 1.14 groups must share a model so that vision availability is the only variable
+  // between them; the flag is a benchmark-local stub, not a product setting.
+  assert.equal(candidateText.modelId, candidateVision.modelId);
 });
 
 test('FIXTURE_NAMES contains all four required deterministic evaluation scenarios', () => {

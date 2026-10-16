@@ -23,9 +23,23 @@ import {
 } from './types';
 import { jevModelManager, JevMode } from '../server/jev-model-manager';
 
-// Fixed vision model and danger zone header
-export const JEV_VISION_MODEL = 'jev-1.14.0';
 export const DANGER_ZONE_IMAGES_HEADER = 'TypeSafe-Danger-Zone-Images';
+
+// Box questions require Jev 1.14 or newer. This is read from the model upstream reports
+// answering the request rather than from a pinned id: an alias such as `jev-latest` may be
+// promoted to a newer release at any time, and the gate follows that automatically.
+const BOX_MIN_MAJOR = 1;
+const BOX_MIN_MINOR = 14;
+const JEV_VERSION_PATTERN = /(?:^|\/)jev-(\d+)\.(\d+)(?:\.\d+)?/i;
+
+/** Whether the model id upstream reported can answer `box` questions. */
+export function supportsBoxQuestions(modelId: string | undefined): boolean {
+  const match = JEV_VERSION_PATTERN.exec((modelId || '').trim());
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > BOX_MIN_MAJOR || (major === BOX_MIN_MAJOR && minor >= BOX_MIN_MINOR);
+}
 
 export interface JevVisionResult {
   exists: boolean;
@@ -466,6 +480,11 @@ export class JevClientWrapper {
   private localClient: TypeSafeClient | null = null;
   private explicitApiKey?: string;
   private currentKey?: string;
+  /**
+   * The concrete model id upstream reported answering this endpoint, cached for the life of
+   * the current credentials/endpoint/model combination. `undefined` means "not resolved yet".
+   */
+  private resolvedModelId?: string;
 
   constructor(apiKey?: string) {
     this.explicitApiKey = apiKey;
@@ -533,6 +552,7 @@ export class JevClientWrapper {
       if (!this.client || this.currentKey !== clientKey) {
         try {
           this.currentKey = clientKey;
+          this.resolvedModelId = undefined;
           this.client = new TypeSafeClient({
             apiKey: key,
             ...(baseUrl ? { baseURL: baseUrl } : {}),
@@ -545,8 +565,55 @@ export class JevClientWrapper {
     } else {
       this.client = null;
       this.currentKey = undefined;
+      this.resolvedModelId = undefined;
     }
     return this.client;
+  }
+
+  /**
+   * Resolve the concrete model upstream serves for this endpoint and report whether it can
+   * answer `box` questions, which is what the visual fallback depends on.
+   *
+   * The configured id may be an alias (`jev-latest` currently resolves to Jev 1.13) or a
+   * custom gateway model we cannot place; upstream's `response.model` is the only authority,
+   * so this asks it once per credentials/endpoint/model combination and caches the answer.
+   *
+   * A process that reaches the visual fallback before any text query has run needs one
+   * text-only request to learn the release. That probe carries no image and no danger-zone
+   * header, so the decision to send a screenshot is still made before any capture leaves
+   * the machine.
+   */
+  public async resolveBoxCapableModel(
+    signal?: AbortSignal,
+    timeout?: number,
+  ): Promise<string | null> {
+    const client = this.getRemoteClient();
+    if (!client || isSessionKeyInvalid()) return null;
+
+    if (this.resolvedModelId === undefined) {
+      const configured = jevModelManager.getRemoteConfig().modelId?.trim() || undefined;
+      try {
+        const probe = await client.systemOne(
+          {
+            state: 'ready' as any,
+            questions: { ready: noul('Is the state a non-empty value?') },
+            ...(configured ? { model: configured } : {}),
+          },
+          { signal, timeout },
+        );
+        if (probe?.model) this.resolvedModelId = probe.model;
+      } catch {
+        return null;
+      }
+    }
+    return this.resolvedModelId && supportsBoxQuestions(this.resolvedModelId)
+      ? this.resolvedModelId
+      : null;
+  }
+
+  /** The concrete model upstream last reported answering this endpoint, if known. */
+  public getResolvedModelId(): string | undefined {
+    return this.resolvedModelId;
   }
 
   public isAvailable(mode?: JevMode): boolean {
@@ -603,6 +670,11 @@ export class JevClientWrapper {
         },
         options,
       );
+      // Upstream reports the concrete release that answered, which is what decides whether
+      // `box` is available; record it so vision routing needs no pinned model id.
+      if (targetMode === 'remote' && response?.model) {
+        this.resolvedModelId = response.model;
+      }
       return { result: response, errorReason: null };
     } catch (err: any) {
       if (targetMode === 'local') {
@@ -649,7 +721,8 @@ export class JevClientWrapper {
 
   /**
    * Execute visual System One query with image asset and 4-question defensive fan-out.
-   * Hard gated: Remote mode only, visionEnabled required. Local/off strictly prohibited.
+   * Hard gated: Remote mode only, and the model upstream serves for this endpoint must be
+   * able to answer `box`. Local/off strictly prohibited.
    */
   public async queryVision(
     imageBuffer: Buffer,
@@ -670,19 +743,21 @@ export class JevClientWrapper {
       };
     }
 
-    const remoteCfg = jevModelManager.getRemoteConfig();
-    if (remoteCfg.visionEnabled !== true) {
-      return {
-        result: null,
-        errorReason: 'jev_disabled',
-      };
-    }
-
     const client = this.getRemoteClient();
     if (!client || isSessionKeyInvalid()) {
       return {
         result: null,
         errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
+      };
+    }
+
+    // Ask upstream which release answers here; `box` needs Jev 1.14+, so anything else must
+    // fail closed rather than send a screenshot the request cannot use.
+    const visionModel = await this.resolveBoxCapableModel(options?.signal, options?.timeout);
+    if (!visionModel) {
+      return {
+        result: null,
+        errorReason: 'vision_model_unsupported',
       };
     }
 
@@ -692,7 +767,6 @@ export class JevClientWrapper {
         task: targetDescription,
         screenshot: imgAsset,
       };
-
       const questions = {
         target_exists: noul(
           `Does the visual element described by "${targetDescription}" exist and is it clearly distinguishable in \`screenshot\`?`,
@@ -710,7 +784,7 @@ export class JevClientWrapper {
         {
           state: state as any,
           questions,
-          model: JEV_VISION_MODEL,
+          model: visionModel,
         },
         {
           signal: options?.signal,
@@ -720,6 +794,7 @@ export class JevClientWrapper {
           },
         },
       );
+      if (response?.model) this.resolvedModelId = response.model;
 
       const answers = (response.answers || {}) as Record<string, any>;
       const probability = (answer: any, fallback: number): number =>

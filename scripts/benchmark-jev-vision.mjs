@@ -2,9 +2,9 @@
  * Benchmark runner & fixture suite for BrowserPaw Jev Decision Engine (Vision vs. Text).
  *
  * Compares:
- *   1. baseline-1.13-text: Pinned jev-1.13.0, visionEnabled: false
- *   2. candidate-1.14-text: Pinned jev-1.14.0, visionEnabled: false
- *   3. candidate-1.14-vision: Pinned jev-1.14.0, visionEnabled: true (multimodal Box + Noul)
+ *   1. baseline-1.13-text: Pinned jev-1.13.0, visual fallback unavailable
+ *   2. candidate-1.14-text: Pinned jev-1.14.0, visual fallback forced off (benchmark-only)
+ *   3. candidate-1.14-vision: Pinned jev-1.14.0, visual fallback available (multimodal Box + Noul)
  *
  * Default execution runs deterministic environment and fixture self-checks without
  * fabricating synthetic benchmark scores or writing mock result files.
@@ -19,6 +19,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * `visionEnabled` here is a benchmark-local flag, not a product setting. The product no longer
+ * has a vision switch: it asks upstream which release answers the endpoint and enables the
+ * visual fallback only for a `box`-capable one. Both 1.14 groups therefore resolve the same
+ * way, so the text-only group forces the fallback off through a benchmark-only stub on the
+ * engine's client. That keeps "same model, vision on vs off" as a real controlled comparison.
+ */
 export const BENCHMARK_GROUPS = Object.freeze([
   {
     id: 'baseline-1.13-text',
@@ -30,13 +37,13 @@ export const BENCHMARK_GROUPS = Object.freeze([
     id: 'candidate-1.14-text',
     modelId: 'jev-1.14.0',
     visionEnabled: false,
-    description: 'Candidate: Jev 1.14.0 text-only model',
+    description: 'Candidate: Jev 1.14.0 with the visual fallback forced off',
   },
   {
     id: 'candidate-1.14-vision',
     modelId: 'jev-1.14.0',
     visionEnabled: true,
-    description: 'Candidate: Jev 1.14.0 hybrid vision model (Box + Noul)',
+    description: 'Candidate: Jev 1.14.0 with the visual fallback available (Box + Noul)',
   },
 ]);
 
@@ -670,7 +677,7 @@ export function formatBenchmarkSummary(results) {
 
   lines.push('');
   lines.push(
-    '> **Smoke Verification Notice**: The 4 mixed fixtures constitute a functional smoke verification suite across perception pathways; N=4 sample size indicates p95 latency is smoke data, not a statistically reliable performance claim. estCostUsd reflects nominal text token estimates only ($0.042/1M tokens) and is not actual vision billing.',
+    '> **Smoke Verification Notice**: The 4 mixed fixtures constitute a functional smoke verification suite across perception pathways; N=4 sample size indicates p95 latency is smoke data, not a statistically reliable performance claim. estCostUsd accumulates input tokens (including image tokens) at $0.042/1M; it excludes output tokens and is not a full bill.',
   );
 
   return lines.join('\n');
@@ -773,7 +780,7 @@ export async function runLiveBenchmark(options = {}) {
     for (const group of BENCHMARK_GROUPS) {
       console.log(`\n------------------------------------------------------------`);
       console.log(
-        `Starting Group: ${group.id} (${group.modelId}, visionEnabled: ${group.visionEnabled})`,
+        `Starting Group: ${group.id} (${group.modelId}, vision: ${group.visionEnabled ? 'on' : 'off'})`,
       );
       console.log(`------------------------------------------------------------`);
 
@@ -785,11 +792,18 @@ export async function runLiveBenchmark(options = {}) {
       jevModelManager.getRemoteConfig = () => ({
         ...origGetRemoteConfig(),
         modelId: group.modelId,
-        visionEnabled: group.visionEnabled,
       });
 
+      let engine = null;
+      let origResolveBox = null;
       try {
-        const engine = new FastDecisionEngine();
+        engine = new FastDecisionEngine();
+        // Benchmark-only: force the capability gate off for the text-only group so the two
+        // 1.14 groups stay a controlled vision-on/vision-off comparison.
+        origResolveBox = engine.jevClient.resolveBoxCapableModel.bind(engine.jevClient);
+        if (!group.visionEnabled) {
+          engine.jevClient.resolveBoxCapableModel = async () => null;
+        }
 
         for (const fixtureName of FIXTURE_NAMES) {
           const fixtureUrl = `${fixtureServer.baseUrl}/${fixtureName}`;
@@ -906,9 +920,12 @@ export async function runLiveBenchmark(options = {}) {
           }
         }
       } finally {
-        // Restore in-memory getters
+        // Restore in-memory getters and the benchmark-only capability stub
         jevModelManager.getActiveMode = origGetActiveMode;
         jevModelManager.getRemoteConfig = origGetRemoteConfig;
+        if (engine && origResolveBox) {
+          engine.jevClient.resolveBoxCapableModel = origResolveBox;
+        }
       }
     }
 

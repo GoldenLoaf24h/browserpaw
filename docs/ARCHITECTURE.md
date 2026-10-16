@@ -512,10 +512,10 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
      - Text perception (Tier 1) remains the default and primary decision path.
      - Built on `@typesafe-ai/sdk` 0.7.0 requiring Node.js `>=22.6.0`.
      - When an action requires interacting with non-textual or visual elements (or when text perception yields low confidence), Jev initiates a visual micro-loop query using multimodal `Box` and `Noul` primitives.
-  2. **Opt-in Cloud Vision Contract (`visionEnabled`)**:
-     - `visionEnabled` is derived from the configured model name, not from a separate switch: a Jev 1.14 model (for example `jev-preview` or `jev-1.14.0`) applies it as `true`, any other model name applies it as `false`. `jev-latest` still resolves to Jev 1.13, which accepts images but cannot answer `box`. It also requires a valid `TYPESAFE_API_KEY`.
+  2. **Upstream-Routed Cloud Vision Contract**:
+     - There is no vision switch and no pinned vision model. The configured model id (including a custom or self-hosted one) is forwarded verbatim, and before any capture the client asks upstream which concrete release answers that endpoint (`response.model`) and enables the visual fallback only when that release can answer `box` — Jev 1.14 or newer. The decision therefore reads a version rather than matching an alias string, so an alias that upstream promotes is followed automatically and a model this build cannot place is never sent a screenshot. `jev-latest` currently resolves to Jev 1.13 and is declined. Requires a valid `TYPESAFE_API_KEY`.
      - Jev Vision operates exclusively in Remote mode; offline local decider (`decider-2b`) and Off modes strictly reject vision calls.
-     - Visual grounding calls are pinned strictly to `jev-1.14.0`; the configured model id governs only the text decision loop.
+     - Resolution is cached per credentials/endpoint/model combination and refreshed whenever a text query reports a new release. A run that reaches the fallback before any text query issues one text-only request to learn the release; that request carries no image and no danger-zone header, so no screenshot leaves the machine before the capability is known.
   3. **Viewport Frame Binding & Dimension Clamping**:
      - Viewport screenshots are captured in PNG or JPEG format via `chrome_screenshot` (`_jevVision: true`, `saveToDisk: false`).
      - Image dimensions are strictly clamped to `280..1568px` along both width and height, preserving aspect ratio with proportional downscaling and letterbox padding to bound network payload and inference memory.

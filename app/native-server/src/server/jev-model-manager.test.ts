@@ -319,25 +319,22 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
 
       expect(existsSync(configFile)).toBe(true);
       expect(JSON.parse(readFileSync(configFile, 'utf8')).apiKey).toBe('secret-key');
-      expect(isolatedMod.jevModelManager.getRemoteConfig().visionEnabled).toBe(false);
       isolatedMod.jevModelManager.setRemoteConfig({ modelId: 'custom-remote-model' });
-      isolatedMod.jevModelManager.setRemoteConfig({ visionEnabled: true });
-      expect(JSON.parse(readFileSync(configFile, 'utf8')).visionEnabled).toBe(true);
       expect(isolatedMod.jevModelManager.getRemoteConfig().modelId).toBe('custom-remote-model');
       expect(isolatedMod.jevModelManager.getRemoteConfig().baseUrl).toBe('https://example.invalid');
       isolatedMod.jevModelManager.setRemoteConfig({ modelId: 'jev-latest' });
-      expect(isolatedMod.jevModelManager.getPublicRemoteConfig().visionEnabled).toBe(true);
-      expect(() => isolatedMod.jevModelManager.setRemoteConfig({ visionEnabled: 'true' })).toThrow(
-        'visionEnabled must be a boolean',
+      expect(isolatedMod.jevModelManager.getPublicRemoteConfig().modelId).toBe('jev-latest');
+      // Screenshot consent is no longer a stored setting; the model id is the only input.
+      expect(isolatedMod.jevModelManager.getPublicRemoteConfig()).not.toHaveProperty(
+        'visionEnabled',
       );
 
       let reloadedMod: any;
       jest.isolateModules(() => {
         reloadedMod = require('./jev-model-manager');
       });
-      expect(reloadedMod.jevModelManager.getRemoteConfig().visionEnabled).toBe(true);
-      reloadedMod.jevModelManager.setRemoteConfig({ visionEnabled: false });
-      expect(JSON.parse(readFileSync(configFile, 'utf8')).visionEnabled).toBe(false);
+      expect(reloadedMod.jevModelManager.getRemoteConfig().modelId).toBe('jev-latest');
+      expect(reloadedMod.jevModelManager.getRemoteConfig().baseUrl).toBe('https://example.invalid');
 
       if (process.platform !== 'win32') {
         // POSIX mode bits only. Node's mode argument does not model NTFS ACLs, so this

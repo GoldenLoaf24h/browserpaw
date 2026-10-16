@@ -29,7 +29,6 @@ import {
   isSessionKeyInvalid,
   latchInvalidKey,
   validateChoice,
-  JEV_VISION_MODEL,
 } from './jev-client';
 import { HeuristicEngine } from './heuristic-engine';
 import { jevModelManager } from '../server/jev-model-manager';
@@ -130,6 +129,8 @@ export class FastDecisionEngine {
     let totalTextLatencyMs = 0;
     let totalVisionLatencyMs = 0;
     let visualClickExecuted = false;
+    /** The release upstream reported for the visual call, recorded for telemetry. */
+    let visionModelUsed: string | undefined;
 
     let finalPage: JevPageState = { url: '', title: '' };
     let currentElements: string[] = [];
@@ -159,6 +160,7 @@ export class FastDecisionEngine {
         visionCalls,
         textLatencyMs: totalTextLatencyMs,
         visionLatencyMs: totalVisionLatencyMs,
+        ...(visionModelUsed ? { visionModel: visionModelUsed } : {}),
       };
       return this.formatResult(...args);
     };
@@ -166,7 +168,6 @@ export class FastDecisionEngine {
     const visionAllowed = () =>
       currentMode === 'remote' &&
       jevModelManager.getActiveMode() === 'remote' &&
-      jevModelManager.getRemoteConfig().visionEnabled === true &&
       Boolean(this.jevClient.getRemoteClient()) &&
       !isSessionKeyInvalid();
 
@@ -213,6 +214,17 @@ export class FastDecisionEngine {
       }
       if (isDestructiveTarget(targetDesc)) {
         return halt('escalate', 'Visual target matched destructive keyword; requires confirmation');
+      }
+
+      // Resolve box support before capturing: an endpoint whose release cannot answer `box`
+      // must not have a screenshot taken for it, let alone sent.
+      const visionModel = await this.jevClient.resolveBoxCapableModel();
+      if (!visionModel) {
+        return { handled: false };
+      }
+      visionModelUsed = visionModel;
+      if (!visionAllowed()) {
+        return halt('escalate', 'Vision consent or remote mode was revoked');
       }
 
       sendProgress(currentStep, `Capturing screenshot for vision fallback (${reasonTrigger})`);
@@ -1204,6 +1216,7 @@ export class FastDecisionEngine {
       visionCalls?: number;
       textLatencyMs?: number;
       visionLatencyMs?: number;
+      visionModel?: string;
     },
   ): ActTowardGoalResult {
     const estCostUsd = (inputTokens / 1_000_000) * 0.042;
@@ -1228,7 +1241,12 @@ export class FastDecisionEngine {
               calls: totalCalls,
               inputTokens,
               estCostUsd: Math.round(estCostUsd * 100000) / 100000,
-              ...(vCalls > 0 ? { visionCalls: vCalls, visionModel: JEV_VISION_MODEL } : {}),
+              ...(vCalls > 0
+                ? {
+                    visionCalls: vCalls,
+                    ...(telemetry?.visionModel ? { visionModel: telemetry.visionModel } : {}),
+                  }
+                : {}),
               ...(telemetry?.textLatencyMs !== undefined
                 ? { textLatencyMs: telemetry.textLatencyMs }
                 : {}),

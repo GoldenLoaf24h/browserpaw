@@ -73,17 +73,11 @@ const hasServerApiKey = ref(false);
 // model (for example `jev-1.14.0`) into the model field, so no separate consent control
 // can drift out of sync with what the server will actually run.
 //
-// The visual click fallback is served by TypeSafe's `box` primitive, which requires Jev 1.14.
-// `jev-preview` is merely the alias that currently resolves to 1.14; `jev-latest` still
-// resolves to 1.13, so naming it must not read as consent. Matching documented 1.14 ids
-// keeps this a real gate: an unrelated endpoint such as `my-vision-gateway` must never
-// start receiving screenshots.
-const VISION_MODEL_PATTERN = /(?:^|\/)jev-(?:preview|1\.14)(?:$|[.\-_])/i;
-
-function modelEnablesVision(modelId: string): boolean {
-  return VISION_MODEL_PATTERN.test(modelId.trim());
-}
-
+// Vision is not a user-facing switch and no model id is pinned here. Upstream reports which
+// concrete release answers a request (`response.model`), and the native server enables the
+// visual fallback only for a release that can answer `box` (Jev 1.14+). An alias such as
+// `jev-latest` is therefore followed automatically when upstream promotes it, and a custom
+// gateway model this build cannot place simply never receives screenshots.
 const remoteApiKeyPlaceholder = computed(() => {
   if (remoteApiKey.value) return 'API Key (configured in extension)';
   if (hasServerApiKey.value) return 'API Key (saved on server - leave blank to keep)';
@@ -91,10 +85,9 @@ const remoteApiKeyPlaceholder = computed(() => {
   return 'API Key (or env: TYPESAFE_API_KEY)';
 });
 
-const visionModelHint = computed(() =>
-  modelEnablesVision(remoteModelId.value)
-    ? 'Vision enabled: viewport screenshots will be sent to this endpoint for visual targeting.'
-    : 'Vision off. Type a Jev 1.14 model (e.g. jev-preview, jev-1.14.0) to send viewport screenshots for visual targeting.',
+const visionModelHint = computed(
+  () =>
+    'Visual targeting uses the release this endpoint reports. Screenshots are sent only when it can answer Jev 1.14 box questions.',
 );
 
 const jevModeLabel = computed(() => {
@@ -577,7 +570,6 @@ const applyRemoteConfig = async () => {
   const cfg: Record<string, any> = {
     baseUrl: remoteBaseUrl.value.trim(),
     modelId: effectiveModel,
-    visionEnabled: modelEnablesVision(effectiveModel),
   };
   // Only send apiKey if user entered a new key; omitting preserves existing key on server
   if (enteredKey) {
@@ -1146,12 +1138,7 @@ onUnmounted(() => {
               class="remote-input"
               :title="visionModelHint"
             />
-            <span
-              class="model-hint"
-              :class="{ active: modelEnablesVision(remoteModelId) }"
-              :title="visionModelHint"
-              >👁</span
-            >
+            <span class="model-hint" :title="visionModelHint">👁</span>
             <button
               type="button"
               class="remote-apply-btn"
@@ -1164,9 +1151,7 @@ onUnmounted(() => {
               </Transition>
             </button>
           </div>
-          <p class="remote-vision-notice" :class="{ active: modelEnablesVision(remoteModelId) }">
-            {{ visionModelHint }}
-          </p>
+          <p class="remote-vision-notice">{{ visionModelHint }}</p>
           <p v-if="remoteConfigError" class="remote-config-error" role="alert">
             {{ remoteConfigError }}
           </p>
@@ -1276,16 +1261,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.remote-vision-notice,
 .remote-config-error {
   margin: 0;
   font-size: 10px;
   line-height: 1.4;
-  color: #6b7280;
-}
-
-.remote-vision-notice.active {
-  color: #b45309;
+  color: #b91c1c;
 }
 
 .model-hint {
@@ -1294,14 +1274,6 @@ onUnmounted(() => {
   line-height: 1;
   opacity: 0.35;
   cursor: help;
-}
-
-.model-hint.active {
-  opacity: 1;
-}
-
-.remote-config-error {
-  color: #b91c1c;
 }
 
 .popup-box {

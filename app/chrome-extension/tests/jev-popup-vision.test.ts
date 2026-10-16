@@ -26,7 +26,7 @@ function loadPopup(
     'CURRENT_VERSION',
     'checkExtensionVersionUpdate',
     'jevFetch',
-    `${js}; return { remoteModelId, visionModelHint, modelEnablesVision, remoteConfigError, isRemoteApplied, fetchRemoteConfig, applyRemoteConfig };`,
+    `${js}; return { remoteModelId, visionModelHint, remoteConfigError, isRemoteApplied, fetchRemoteConfig, applyRemoteConfig };`,
   )(
     ref,
     computed,
@@ -45,44 +45,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('popup vision consent', () => {
-  it('derives vision consent from the model name alone', () => {
+describe('popup remote config', () => {
+  it('pins no model id and derives no vision consent in the extension', () => {
     const { popup } = loadPopup();
 
-    // TypeSafe `box` — which the visual click fallback needs — requires Jev 1.14.
-    expect(popup.modelEnablesVision('jev-preview')).toBe(true);
-    expect(popup.modelEnablesVision('jev-1.14.0')).toBe(true);
-    expect(popup.modelEnablesVision('jev-1.14')).toBe(true);
-    expect(popup.modelEnablesVision('jev-1.14.0-preview')).toBe(true);
+    // The release that decides whether `box` is available is reported by upstream at request
+    // time, so the popup must not carry a model-name predicate of its own.
+    expect(source).not.toMatch(/VISION_MODEL_PATTERN|modelEnablesVision/);
+    expect(source).not.toMatch(/visionEnabled/);
 
-    // `jev-latest` still resolves to Jev 1.13, which accepts images but cannot answer `box`.
-    expect(popup.modelEnablesVision('jev-latest')).toBe(false);
-    expect(popup.modelEnablesVision('jev-1.13.0')).toBe(false);
-    expect(popup.modelEnablesVision('gpt-4o')).toBe(false);
-
-    // A model merely containing the word must not silently enable screenshot upload.
-    expect(popup.modelEnablesVision('previewish-model')).toBe(false);
-    expect(popup.modelEnablesVision('my-vision-gateway')).toBe(false);
-    expect(popup.modelEnablesVision('my-1.140-model')).toBe(false);
-
-    expect(popup.remoteModelId.value).toBe('');
-    expect(popup.visionModelHint.value).toContain('Vision off');
-
-    popup.remoteModelId.value = 'jev-preview';
-    expect(popup.visionModelHint.value).toContain('Vision enabled');
+    expect(popup.visionModelHint.value).toContain('Jev 1.14');
+    expect(popup.visionModelHint.value).toContain('this endpoint reports');
   });
 
-  it('hydrates the model field from storage and keeps vision off for a text model', async () => {
+  it('hydrates the model field from storage without computing consent', async () => {
     const { popup, api } = loadPopup({ jevRemoteConfig: { modelId: 'jev-1.13.0' } });
-    api.mockResolvedValue({ ok: true, json: async () => ({ visionEnabled: true }) });
+    api.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     await popup.fetchRemoteConfig();
 
     expect(popup.remoteModelId.value).toBe('jev-1.13.0');
-    expect(popup.modelEnablesVision(popup.remoteModelId.value)).toBe(false);
   });
 
-  it('sends the derived consent and only confirms a successful server save', async () => {
+  it('applies a model id verbatim and only confirms a successful server save', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { popup, api, set } = loadPopup({});
@@ -90,7 +75,7 @@ describe('popup vision consent', () => {
     popup.remoteModelId.value = 'jev-preview';
     api.mockResolvedValue({ ok: false });
     await popup.applyRemoteConfig();
-    expect(JSON.parse(api.mock.calls[0][1].body).visionEnabled).toBe(true);
+    expect(JSON.parse(api.mock.calls[0][1].body)).toMatchObject({ modelId: 'jev-preview' });
     expect(set).not.toHaveBeenCalled();
     expect(popup.isRemoteApplied.value).toBe(false);
     expect(popup.remoteConfigError.value).not.toBe('');
@@ -98,15 +83,16 @@ describe('popup vision consent', () => {
     api.mockResolvedValue({ ok: true });
     await popup.applyRemoteConfig();
     expect(set).toHaveBeenCalledWith({
-      jevRemoteConfig: expect.objectContaining({ modelId: 'jev-preview', visionEnabled: true }),
+      jevRemoteConfig: expect.objectContaining({ modelId: 'jev-preview' }),
     });
     expect(popup.isRemoteApplied.value).toBe(true);
     expect(popup.remoteConfigError.value).toBe('');
 
-    // Switching back to a text-only model must withdraw consent in the same request.
-    popup.remoteModelId.value = 'jev-latest';
+    // A custom gateway id is forwarded unchanged; the popup never judges it.
+    popup.remoteModelId.value = 'my-vision-gateway';
     await popup.applyRemoteConfig();
     const lastBody = JSON.parse(api.mock.calls[api.mock.calls.length - 1][1].body);
-    expect(lastBody).toMatchObject({ modelId: 'jev-latest', visionEnabled: false });
+    expect(lastBody).toMatchObject({ modelId: 'my-vision-gateway' });
+    expect(lastBody).not.toHaveProperty('visionEnabled');
   });
 });
