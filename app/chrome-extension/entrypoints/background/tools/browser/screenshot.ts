@@ -775,7 +775,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             const clientHeight = Math.round(viewport.clientHeight || 600);
             originalScroll = { x: viewport.pageX || 0, y: viewport.pageY || 0 };
 
-            const shot: any = await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', {
+            const captureParams = {
               format: cdpFormat,
               quality: cdpQuality,
               captureBeyondViewport: false,
@@ -787,7 +787,16 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                 height: clientHeight,
                 scale: 1,
               },
-            });
+            };
+            // A clipped compositor capture can stall; Jev must reach the existing fallback promptly.
+            const shot: any = isJevVision
+              ? await cdpSessionManager.sendDebuggerCommand(
+                  tabId,
+                  'Page.captureScreenshot',
+                  captureParams,
+                  1500,
+                )
+              : await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', captureParams);
             const base64Data = typeof shot?.data === 'string' ? shot.data : '';
             if (!base64Data) {
               throw new Error('CDP Page.captureScreenshot returned empty data');

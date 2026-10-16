@@ -469,6 +469,76 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
   });
 
   describe('3. Accepted ROI lossless contracts', () => {
+    it.each([false, true])(
+      'bounds the Jev first capture and rejects document drift=%s',
+      async (drift) => {
+        vi.useFakeTimers();
+        try {
+          const url = 'https://example.com/vision';
+          const scroll = { scrollX: 0, scrollY: 0, viewportWidth: 1000, viewportHeight: 1000 };
+          let scrollProbes = 0;
+          vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target, name) => {
+            if (name === 'inPageGetScrollState') scrollProbes++;
+            return [
+              {
+                documentId: drift && scrollProbes > 1 ? 'replaced-document' : 'vision-document',
+                result:
+                  name === 'inPageGetScrollState'
+                    ? scroll
+                    : { url, title: 'Vision', activeInputs: [], alerts: [] },
+              },
+            ] as any;
+          });
+          vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_id, _owner, fn) =>
+            fn(),
+          );
+          vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(async (_id, method) => {
+            if (method === 'Page.getLayoutMetrics') {
+              return { cssVisualViewport: { clientWidth: 1000, clientHeight: 1000 } };
+            }
+            return new Promise(() => {});
+          });
+          (chrome as any).debugger = { sendCommand: vi.fn(() => new Promise(() => {})) };
+          vi.spyOn(screenshotTool as any, 'injectScreenshotHelper').mockResolvedValue(undefined);
+          vi.spyOn(screenshotTool as any, 'sendToHelperWithRetry').mockImplementation(
+            async (_id: number, msg: any) =>
+              msg.action === TOOL_MESSAGE_TYPES.SCREENSHOT_GET_PAGE_DETAILS
+                ? {
+                    ...scroll,
+                    totalWidth: 1000,
+                    totalHeight: 1000,
+                    devicePixelRatio: 1,
+                    currentScrollX: 0,
+                    currentScrollY: 0,
+                  }
+                : { success: true },
+          );
+          let settled = false;
+          const pending = screenshotTool
+            .execute({ tabId, format: 'png', _jevVision: true } as any)
+            .then((value) => {
+              settled = true;
+              return value;
+            });
+          await vi.advanceTimersByTimeAsync(2500);
+          expect(settled).toBe(true);
+          const result = await pending;
+          expect(screenshotTool.captureTabPngWithRetry).toHaveBeenCalledTimes(1);
+          if (drift) {
+            expect(result.isError).toBe(true);
+            expect(JSON.stringify(result)).toContain('Document changed during screenshot capture');
+            return;
+          }
+          expect(result.isError, JSON.stringify(result)).toBeFalsy();
+          const metadata = JSON.parse((result.content[0] as any).text);
+          expect(metadata.cdpCaptureWarning).toContain('1500ms');
+          expect(screenshotContextManager.getVisionFrame(metadata.visionFrame.id)).toBeDefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it.each([
       { active: false, stalledRetry: false },
       { active: true, stalledRetry: false },
