@@ -320,18 +320,18 @@ Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select y
 3. **Multimodal Jev Vision (Optional, Experimental)**:
    - **Prerequisites & SDK**: Requires Node.js `>=22.6.0` and `@typesafe-ai/sdk` `0.7.0` (pinned).
    - **Remote Mode Exclusive**: Jev Vision operates strictly in Remote mode. Local decider and Off modes strictly prohibit vision requests.
-   - **Explicit Opt-in (`visionEnabled`)**: Defaults to `false`. Requires explicit user activation via the extension popup Manage dialog or setting `"visionEnabled": true` in `~/.browserpaw/jev-remote.json`.
-   - **Model Pinned**: Fixed strictly to model `jev-1.14.0`.
+   - **Opt-in by Model Name (`visionEnabled`)**: There is no separate vision switch. Type a Jev 1.14 model into the popup **Model** field (for example `jev-preview`, `jev-1.14.0`, or `jev-1.14`) and click **Apply**; BrowserPaw then sends `visionEnabled: true` alongside it. Any other model name — including `jev-latest`, which still resolves to Jev 1.13 — sends `visionEnabled: false` and withdraws the consent. The model field also accepts any custom or self-hosted model id verbatim.
+   - **Model Pinned for Vision Calls**: Visual grounding calls are always issued against `jev-1.14.0` regardless of the configured model id.
    - **Image Constraints**: Captures active viewport screenshots in PNG or JPEG format, with width and height each bounded to `280..1568px` (using proportional scaling and letterbox padding).
    - **Click-Only Fallback & Escalation**: Initial visual fallback strictly allows a single, unambiguous click/tap target. Rejects `type`/`fill`/`select` and multi-step goals; complex goals escalate. When the text model selects `type` or `select`, vision fallback is never triggered.
    - **Execution Guard & Verification**: At most one visual click per autonomous run. On successful dispatch, the next step re-reads the DOM: if the text model confirms the goal is completed (`done`), execution completes; empty DOM or any additional attempted action escalates immediately without blindly reporting done.
    - **Box & Noul Guardrails**: Because TypeSafe `Box` returns bounding-box coordinates even when an object is absent, BrowserPaw enforces strict `Noul` presence (`target_exists >= 0.85`), ambiguity (`target_ambiguous < 0.5`), and destructive gates before dispatching any interaction.
    - **Fail-Closed Screenshot Lifecycle**: Each screenshot is assigned a unique frame ID and TTL. Any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired frame ID triggers immediate fail-closed rejection without dispatching clicks.
    - **Perception Boundaries on Canvas**: Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs. They do not compare pixels or the complete layout; canvas/video redraws and changes outside those fields can escape detection.
-   - **Nominal Pricing Disclaimer**: TypeSafe multimodal vision image pricing is unconfirmed. Existing telemetry `estCostUsd` is strictly a nominal text-token estimate ($0.042/1M tokens) and must not be treated as actual vision billing.
+   - **Vision Billing Accounting**: TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. Telemetry `estCostUsd` accumulates those tokens at the documented Jev rate ($0.042/1M input tokens) and therefore covers vision requests; it remains an input-only estimate (output tokens are excluded).
    - **Smoke Benchmark Verification**: The 4 mixed fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise. Benchmark success is evaluated on actual in-page state changes rather than trusting `result.status done`.
 4. **Using Custom / Self-Hosted Gateways**:
-   - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000/v1` or private gateway) and custom `modelId`.
+   - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000` or private gateway) and custom `modelId`. The SDK appends `/v1/systemone` to this value, so do **not** include a trailing `/v1` — the default `https://api.typesafe.ai` already resolves to `https://api.typesafe.ai/v1/systemone`.
    - Settings are cleanly persisted to `~/.browserpaw/jev-remote.json`.
 
 ---

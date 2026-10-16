@@ -27,9 +27,26 @@ export function getChromeMcpHost(): string {
 
 export const DEFAULT_EXTENSION_ID = 'hbdgbgagpkpjffpklnamcljpakneikee';
 
+/**
+ * Extension IDs observed at runtime, currently the caller Chrome passes to the
+ * native host as `chrome-extension://<id>/`. An unpacked build has a different ID
+ * than the published one, so an allow-list built only from the default ID and the
+ * environment rejects the very extension that spawned the host: its popup then gets
+ * 403 on every configuration write (remote config, mode switch, model select).
+ */
+const runtimeExtensionIds = new Set<string>();
+
+/** Register one caller-supplied extension ID. Malformed values are ignored. */
+export function registerRuntimeExtensionId(id: string | undefined | null): void {
+  const trimmed = typeof id === 'string' ? id.trim().toLowerCase() : '';
+  if (/^[a-p]{32}$/.test(trimmed)) {
+    runtimeExtensionIds.add(trimmed);
+  }
+}
+
 export function getAllowedExtensionIds(): string[] {
   const envId = process.env.CHROME_EXTENSION_ID || process.env.EXTENSION_ID;
-  const set = new Set<string>([DEFAULT_EXTENSION_ID]);
+  const set = new Set<string>([DEFAULT_EXTENSION_ID, ...runtimeExtensionIds]);
   if (envId) {
     envId.split(',').forEach((id) => {
       const trimmed = id.trim();
@@ -47,7 +64,12 @@ export const SERVER_CONFIG = {
    * CORS origin whitelist - only allow Chrome/Firefox extensions and local debugging.
    * Use RegExp patterns for extension origins, string for exact match.
    */
-  CORS_ORIGIN: [/^chrome-extension:\/\//, /^moz-extension:\/\//, 'http://127.0.0.1', 'http://localhost'] as const,
+  CORS_ORIGIN: [
+    /^chrome-extension:\/\//,
+    /^moz-extension:\/\//,
+    'http://127.0.0.1',
+    'http://localhost',
+  ] as const,
   LOGGER_ENABLED: false,
 } as const;
 

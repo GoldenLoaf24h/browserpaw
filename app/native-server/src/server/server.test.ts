@@ -14,7 +14,11 @@ import fileHandler, {
 } from '../file-handler';
 import { getBridgeToken } from './token';
 import { checkIsAdmin } from '../scripts/utils';
-import { getAllowedExtensionIds, DEFAULT_EXTENSION_ID } from '../constant';
+import {
+  getAllowedExtensionIds,
+  registerRuntimeExtensionId,
+  DEFAULT_EXTENSION_ID,
+} from '../constant';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -341,6 +345,38 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         .set('Access-Control-Request-Method', 'POST');
 
       expect(res127.headers['access-control-allow-origin']).toBeUndefined();
+    });
+
+    test('accepts the extension ID that Chrome passed to the native host at launch', async () => {
+      // Unpacked builds get a path-derived ID, so the popup previously got 403 on every
+      // configuration write until the caller-supplied ID was registered.
+      const callerId = 'fkoedonclbdjnkkpdphgfbakiclbjpgl';
+      const origin = `chrome-extension://${callerId}`;
+      const token = `Bearer ${getBridgeToken()}`;
+
+      const rejected = await supertest(Server.getInstance().server)
+        .post('/jev/remote-config')
+        .set('Origin', origin)
+        .set('Authorization', token)
+        .send({ modelId: 'jev-latest' });
+      expect(rejected.status).toBe(403);
+
+      registerRuntimeExtensionId(callerId);
+      expect(getAllowedExtensionIds()).toContain(callerId);
+
+      const accepted = await supertest(Server.getInstance().server)
+        .post('/jev/remote-config')
+        .set('Origin', origin)
+        .set('Authorization', token)
+        .send({ modelId: 'jev-latest' });
+      expect(accepted.status).toBe(200);
+    });
+
+    test('ignores a malformed caller-supplied extension ID', () => {
+      registerRuntimeExtensionId('not-an-extension-id');
+      registerRuntimeExtensionId(undefined);
+
+      expect(getAllowedExtensionIds()).not.toContain('not-an-extension-id');
     });
   });
 

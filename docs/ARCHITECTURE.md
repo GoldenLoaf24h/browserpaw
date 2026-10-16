@@ -513,9 +513,9 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
      - Built on `@typesafe-ai/sdk` 0.7.0 requiring Node.js `>=22.6.0`.
      - When an action requires interacting with non-textual or visual elements (or when text perception yields low confidence), Jev initiates a visual micro-loop query using multimodal `Box` and `Noul` primitives.
   2. **Opt-in Cloud Vision Contract (`visionEnabled`)**:
-     - `visionEnabled` defaults to `false`. It requires explicit user activation (via popup Manage or `~/.browserpaw/jev-remote.json`) and a valid `TYPESAFE_API_KEY`.
+     - `visionEnabled` is derived from the configured model name, not from a separate switch: a Jev 1.14 model (for example `jev-preview` or `jev-1.14.0`) applies it as `true`, any other model name applies it as `false`. `jev-latest` still resolves to Jev 1.13, which accepts images but cannot answer `box`. It also requires a valid `TYPESAFE_API_KEY`.
      - Jev Vision operates exclusively in Remote mode; offline local decider (`decider-2b`) and Off modes strictly reject vision calls.
-     - Model pinned strictly to `jev-1.14.0`.
+     - Visual grounding calls are pinned strictly to `jev-1.14.0`; the configured model id governs only the text decision loop.
   3. **Viewport Frame Binding & Dimension Clamping**:
      - Viewport screenshots are captured in PNG or JPEG format via `chrome_screenshot` (`_jevVision: true`, `saveToDisk: false`).
      - Image dimensions are strictly clamped to `280..1568px` along both width and height, preserving aspect ratio with proportional downscaling and letterbox padding to bound network payload and inference memory.
@@ -547,7 +547,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
   8. **Canvas Perception Boundary Disclosure**:
      - Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs.
      - Architectural boundary: This is not a pixel or full-layout comparison. Canvas/WebGL redraws, video frames, and layout changes outside those fields can escape detection. The canvas benchmark verifies fixture-owned state hooks; production canvas tasks require independent outcome verification.
-  9. **Nominal Pricing Disclaimer & Benchmark Smoke Nature**:
-     - TypeSafe multimodal vision image pricing is unconfirmed. Telemetry `estCostUsd` is strictly a nominal text-token estimate ($0.042/1M tokens) and must not be treated as actual vision billing.
+  9. **Vision Billing Accounting & Benchmark Smoke Nature**:
+     - TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. Telemetry `estCostUsd` accumulates those tokens at the documented Jev rate ($0.042/1M input tokens) and therefore covers vision requests; it remains an input-only estimate (output tokens are excluded).
      - The 4 mixed benchmark fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise.
 - **Consequences**: Adds an opt-in path for icon and canvas targets, with conservative rejection and explicit freshness limits. Functional smoke results do not establish universal accuracy or a speedup.

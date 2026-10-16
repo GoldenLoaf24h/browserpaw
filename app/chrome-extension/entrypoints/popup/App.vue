@@ -63,12 +63,26 @@ const customDownloadError = ref('');
 const remoteBaseUrl = ref('');
 const remoteApiKey = ref('');
 const remoteModelId = ref('');
-const remoteVisionEnabled = ref(false);
 const remoteConfigError = ref('');
 const isRemoteApplied = ref(false);
 const envApiKeyDetected = ref(false);
 const envKeySourceName = ref('TYPESAFE_API_KEY');
 const hasServerApiKey = ref(false);
+
+// Multimodal vision is selected by model name alone: the user types the vision-capable
+// model (for example `jev-1.14.0`) into the model field, so no separate consent control
+// can drift out of sync with what the server will actually run.
+//
+// The visual click fallback is served by TypeSafe's `box` primitive, which requires Jev 1.14.
+// `jev-preview` is merely the alias that currently resolves to 1.14; `jev-latest` still
+// resolves to 1.13, so naming it must not read as consent. Matching documented 1.14 ids
+// keeps this a real gate: an unrelated endpoint such as `my-vision-gateway` must never
+// start receiving screenshots.
+const VISION_MODEL_PATTERN = /(?:^|\/)jev-(?:preview|1\.14)(?:$|[.\-_])/i;
+
+function modelEnablesVision(modelId: string): boolean {
+  return VISION_MODEL_PATTERN.test(modelId.trim());
+}
 
 const remoteApiKeyPlaceholder = computed(() => {
   if (remoteApiKey.value) return 'API Key (configured in extension)';
@@ -76,6 +90,12 @@ const remoteApiKeyPlaceholder = computed(() => {
   if (envApiKeyDetected.value) return `Auto-detected: ${envKeySourceName.value}`;
   return 'API Key (or env: TYPESAFE_API_KEY)';
 });
+
+const visionModelHint = computed(() =>
+  modelEnablesVision(remoteModelId.value)
+    ? 'Vision enabled: viewport screenshots will be sent to this endpoint for visual targeting.'
+    : 'Vision off. Type a Jev 1.14 model (e.g. jev-preview, jev-1.14.0) to send viewport screenshots for visual targeting.',
+);
 
 const jevModeLabel = computed(() => {
   if (jevMode.value === 'off') return 'Off';
@@ -523,7 +543,6 @@ const fetchRemoteConfig = async () => {
     const res = await jevFetch('/jev/remote-config');
     if (res.ok) {
       const cfg = await res.json();
-      remoteVisionEnabled.value = cfg.visionEnabled === true;
       envApiKeyDetected.value = Boolean(cfg.hasEnvApiKey);
       hasServerApiKey.value = Boolean(cfg.hasApiKey || cfg.hasConfiguredApiKey);
       if (cfg.envKeySource) {
@@ -558,7 +577,7 @@ const applyRemoteConfig = async () => {
   const cfg: Record<string, any> = {
     baseUrl: remoteBaseUrl.value.trim(),
     modelId: effectiveModel,
-    visionEnabled: remoteVisionEnabled.value,
+    visionEnabled: modelEnablesVision(effectiveModel),
   };
   // Only send apiKey if user entered a new key; omitting preserves existing key on server
   if (enteredKey) {
@@ -1093,7 +1112,7 @@ onUnmounted(() => {
             <input
               type="text"
               v-model="remoteBaseUrl"
-              placeholder="Default: https://api.typesafe.ai/v1"
+              placeholder="Default: https://api.typesafe.ai"
               class="remote-input"
             />
           </div>
@@ -1125,7 +1144,14 @@ onUnmounted(() => {
               v-model="remoteModelId"
               placeholder="Default: jev-latest"
               class="remote-input"
+              :title="visionModelHint"
             />
+            <span
+              class="model-hint"
+              :class="{ active: modelEnablesVision(remoteModelId) }"
+              :title="visionModelHint"
+              >👁</span
+            >
             <button
               type="button"
               class="remote-apply-btn"
@@ -1138,13 +1164,8 @@ onUnmounted(() => {
               </Transition>
             </button>
           </div>
-          <label class="remote-vision-option">
-            <input v-model="remoteVisionEnabled" type="checkbox" />
-            <span>Experimental vision (Jev 1.14)</span>
-          </label>
-          <p class="remote-vision-notice">
-            When enabled, viewport screenshots are sent to your configured cloud endpoint for visual
-            targeting. Off by default; remote mode only. Click Apply to save this setting.
+          <p class="remote-vision-notice" :class="{ active: modelEnablesVision(remoteModelId) }">
+            {{ visionModelHint }}
           </p>
           <p v-if="remoteConfigError" class="remote-config-error" role="alert">
             {{ remoteConfigError }}
@@ -1255,19 +1276,28 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.remote-vision-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-
 .remote-vision-notice,
 .remote-config-error {
   margin: 0;
   font-size: 10px;
   line-height: 1.4;
   color: #6b7280;
+}
+
+.remote-vision-notice.active {
+  color: #b45309;
+}
+
+.model-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.35;
+  cursor: help;
+}
+
+.model-hint.active {
+  opacity: 1;
 }
 
 .remote-config-error {
@@ -2348,6 +2378,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   padding-right: 2px;
+}
+
+.remote-apply-row .remote-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .remote-apply-btn {

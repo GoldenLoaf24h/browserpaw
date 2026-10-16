@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from '@jest/globals';
+import { describe, expect, test, beforeEach, jest } from '@jest/globals';
 import { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
   isSensitiveElement,
@@ -22,9 +22,31 @@ import {
 } from './jev-client';
 import { jevModelManager } from '../server/jev-model-manager';
 
+/**
+ * These suites describe a fixed machine: the credential comes from the environment and
+ * the local decider is not installed.
+ *
+ * On a machine with a real model in `~/.browserpaw/models`, `JevModelManager` starts with
+ * no API key and no environment credential, so it self-switches `activeMode` to `local`
+ * and every remote-path assertion below is silently routed to the offline local service.
+ * The developer's saved configuration must not decide what these tests measure.
+ *
+ * Bound before any spy is installed so the wrapper always calls the real implementation.
+ */
+const realGetRemoteConfig = jevModelManager.getRemoteConfig.bind(jevModelManager);
+
+function pinTestEnvironment(): void {
+  jest
+    .spyOn(jevModelManager, 'getRemoteConfig')
+    .mockImplementation(() => ({ ...realGetRemoteConfig(), apiKey: undefined }));
+  jest.spyOn(jevModelManager, 'getActiveMode').mockReturnValue('remote');
+  jest.spyOn(jevModelManager, 'isModelDownloaded').mockReturnValue(false);
+}
+
 describe('Jev Client & Helper Unit Tests', () => {
   beforeEach(() => {
     resetInvalidKeyLatch();
+    pinTestEnvironment();
   });
 
   describe('1. Sensitive element filtering', () => {
