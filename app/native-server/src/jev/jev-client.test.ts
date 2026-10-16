@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeEach } from '@jest/globals';
+import { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
   isSensitiveElement,
   buildState,
@@ -13,6 +14,11 @@ import {
   resetInvalidKeyLatch,
   DESTRUCTIVE_KEYWORDS,
   JevClientWrapper,
+  extractVisualTargetDescription,
+  parseScreenshotContent,
+  validateBoxCoordinates,
+  JEV_VISION_MODEL,
+  DANGER_ZONE_IMAGES_HEADER,
 } from './jev-client';
 import { jevModelManager } from '../server/jev-model-manager';
 
@@ -448,6 +454,254 @@ describe('Jev Client & Helper Unit Tests', () => {
 
       const isDownloaded = jevModelManager.isModelDownloaded();
       expect(wrapper.isAvailable('local')).toBe(isDownloaded);
+    });
+    describe('12. Visual Target Extraction', () => {
+      test('extracts a click target without treating input payloads as click goals', () => {
+        expect(extractVisualTargetDescription('Click on "Submit Order" button')).toBe(
+          'Submit Order',
+        );
+        expect(extractVisualTargetDescription('请点击“确认支付”图标')).toBe('确认支付');
+        expect(extractVisualTargetDescription('Type shopping_cart into search')).toBe('');
+        expect(extractVisualTargetDescription('click on the red cancel button')).toBe(
+          'the red cancel button',
+        );
+        expect(extractVisualTargetDescription('点击登录头像')).toBe('登录头像');
+      });
+    });
+
+    describe('13. Screenshot Parsing & Frame Validation', () => {
+      test('parses valid MCP screenshot response with image buffer and visionFrame', () => {
+        const mockRes = {
+          content: [
+            {
+              type: 'image',
+              mimeType: 'image/png',
+              data: Buffer.from('fake_image_bytes').toString('base64'),
+            },
+            {
+              type: 'text',
+              text: JSON.stringify({
+                visionFrame: { id: 'frame_101', width: 1280, height: 720 },
+              }),
+            },
+          ],
+        };
+        const parsed = parseScreenshotContent(mockRes);
+        expect(parsed).not.toBeNull();
+        expect(parsed!.imageBuffer.toString()).toBe('fake_image_bytes');
+        expect(parsed!.frame).toEqual({ id: 'frame_101', width: 1280, height: 720 });
+      });
+
+      test('returns null if image or visionFrame is missing or invalid', () => {
+        expect(parseScreenshotContent(null)).toBeNull();
+        expect(parseScreenshotContent({ content: [] })).toBeNull();
+        expect(
+          parseScreenshotContent({
+            content: [{ type: 'image', data: 'abc' }],
+          }),
+        ).toBeNull();
+        expect(
+          parseScreenshotContent({
+            content: [
+              { type: 'image', data: 'abc' },
+              { type: 'text', text: 'invalid_json' },
+            ],
+          }),
+        ).toBeNull();
+        expect(
+          parseScreenshotContent({
+            content: [
+              { type: 'image', data: 'abc' },
+              {
+                type: 'text',
+                text: JSON.stringify({ visionFrame: { id: '', width: 0, height: 100 } }),
+              },
+            ],
+          }),
+        ).toBeNull();
+      });
+    });
+
+    describe('14. Box Coordinate Validation', () => {
+      test('validates correct normalized bounding box', () => {
+        expect(validateBoxCoordinates({ top: 0.1, bottom: 0.5, left: 0.2, right: 0.8 })).toBe(true);
+        expect(validateBoxCoordinates({ top: 0.0, bottom: 1.0, left: 0.0, right: 1.0 })).toBe(true);
+      });
+
+      test('rejects inverted or out of bounds coordinates', () => {
+        expect(validateBoxCoordinates(null)).toBe(false);
+        expect(validateBoxCoordinates({ top: 0.5, bottom: 0.2, left: 0.1, right: 0.9 })).toBe(
+          false,
+        ); // top >= bottom
+        expect(validateBoxCoordinates({ top: 0.1, bottom: 0.5, left: 0.8, right: 0.2 })).toBe(
+          false,
+        ); // left >= right
+        expect(validateBoxCoordinates({ top: -0.1, bottom: 0.5, left: 0.2, right: 0.8 })).toBe(
+          false,
+        ); // top < 0
+        expect(validateBoxCoordinates({ top: 0.1, bottom: 1.2, left: 0.2, right: 0.8 })).toBe(
+          false,
+        ); // bottom > 1
+        expect(validateBoxCoordinates({ top: 0.1, bottom: 0.5, left: NaN, right: 0.8 })).toBe(
+          false,
+        ); // NaN
+      });
+    });
+
+    describe('15. JevClientWrapper queryVision Guard & Pipeline', () => {
+      const fakeBuf = Buffer.from('fake_image_bytes');
+
+      test('the real SDK stops retry backoff when the total request signal aborts', async () => {
+        jevModelManager.setActiveMode('remote');
+        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+        let requestStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+          requestStarted = resolve;
+        });
+        const fetchMock = jest.fn(async () => {
+          requestStarted();
+          return new Response('{"error":"rate limited"}', {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': '10' },
+          });
+        });
+        const sdk = new TypeSafeClient({
+          apiKey: 'dummy_key',
+          fetch: fetchMock,
+          compression: false,
+        });
+        const client = new JevClientWrapper('dummy_key');
+        jest.spyOn(client, 'getRemoteClient').mockReturnValue(sdk);
+        const controller = new AbortController();
+        const pending = client.queryVision(fakeBuf, 'bell icon', 'remote', {
+          signal: controller.signal,
+          timeout: 1000,
+        });
+        await started;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        controller.abort();
+        const result = await pending;
+        expect(result.result).toBeNull();
+        expect(result.rawError?.name).toBe('APIUserAbortError');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      test.each([NaN, Infinity, -1, 1.1, null, '0.99'])(
+        'malformed probability %s cannot authorize a visual click',
+        async (noulValue) => {
+          jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+          const client = new JevClientWrapper('dummy_key');
+          jest.spyOn(client, 'getRemoteClient').mockReturnValue({
+            systemOne: async () => ({
+              answers: {
+                target_exists: { type: 'noul', noul: noulValue },
+                target_ambiguous: { type: 'noul', noul: noulValue },
+                destructive: { type: 'noul', noul: noulValue },
+                target_box: {
+                  type: 'box',
+                  confidence: noulValue,
+                  box: { left: 0.1, right: 0.2, top: 0.1, bottom: 0.2 },
+                },
+              },
+            }),
+          } as any);
+          const res = await client.queryVision(fakeBuf, 'bell icon', 'remote');
+          expect(res.result).toMatchObject({
+            exists: false,
+            ambiguous: true,
+            destructive: true,
+            confidence: null,
+          });
+        },
+      );
+
+      test('strictly rejects in off or local mode without calling SDK', async () => {
+        const client = new JevClientWrapper('dummy_key');
+        const offRes = await client.queryVision(fakeBuf, 'cart icon', 'off');
+        expect(offRes.errorReason).toBe('jev_disabled');
+        expect(offRes.result).toBeNull();
+
+        const localRes = await client.queryVision(fakeBuf, 'cart icon', 'local');
+        expect(localRes.errorReason).toBe('jev_disabled');
+        expect(localRes.result).toBeNull();
+      });
+
+      test('strictly rejects when remoteConfig.visionEnabled is false', async () => {
+        jevModelManager.setRemoteConfig({ visionEnabled: false });
+        const client = new JevClientWrapper('dummy_key');
+        const res = await client.queryVision(fakeBuf, 'cart icon', 'remote');
+        expect(res.errorReason).toBe('jev_disabled');
+        expect(res.result).toBeNull();
+      });
+
+      test('invokes remote client with fixed vision model, danger-zone header, and evaluates defensive questions', async () => {
+        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+        const client = new JevClientWrapper('dummy_key');
+
+        let capturedRequest: any = null;
+        let capturedOptions: any = null;
+
+        (client as any).client = {
+          systemOne: async (req: any, opts: any) => {
+            capturedRequest = req;
+            capturedOptions = opts;
+            return {
+              model: JEV_VISION_MODEL,
+              answers: {
+                target_exists: { type: 'noul', noul: 0.92 },
+                target_ambiguous: { type: 'noul', noul: 0.15 },
+                target_box: {
+                  type: 'box',
+                  box: { top: 0.1, bottom: 0.2, left: 0.3, right: 0.4 },
+                  confidence: 0.88,
+                },
+                destructive: { type: 'noul', noul: 0.05 },
+              },
+              usage: { input_tokens: 300, output_tokens: 20 },
+            };
+          },
+        };
+
+        const res = await client.queryVision(fakeBuf, 'blue search button', 'remote');
+        expect(res.errorReason).toBeNull();
+        expect(res.result).not.toBeNull();
+        expect(res.result!.exists).toBe(true);
+        expect(res.result!.ambiguous).toBe(false);
+        expect(res.result!.destructive).toBe(false);
+        expect(res.result!.box).toEqual({ top: 0.1, bottom: 0.2, left: 0.3, right: 0.4 });
+        expect(res.result!.confidence).toBe(0.88);
+
+        expect(capturedRequest.model).toBe('jev-1.14.0');
+        expect(capturedOptions.headers[DANGER_ZONE_IMAGES_HEADER]).toBe('true');
+        expect(capturedRequest.questions).toHaveProperty('target_exists');
+        expect(capturedRequest.questions).toHaveProperty('target_ambiguous');
+        expect(capturedRequest.questions).toHaveProperty('target_box');
+        expect(capturedRequest.questions).toHaveProperty('destructive');
+      });
+
+      test('flags exists as false if target_exists noul < 0.85 (conservative threshold)', async () => {
+        jevModelManager.setRemoteConfig({ visionEnabled: true, apiKey: 'dummy_key' });
+        const client = new JevClientWrapper('dummy_key');
+
+        (client as any).client = {
+          systemOne: async () => ({
+            model: JEV_VISION_MODEL,
+            answers: {
+              target_exists: { type: 'noul', noul: 0.82 }, // below 0.85
+              target_ambiguous: { type: 'noul', noul: 0.1 },
+              target_box: {
+                type: 'box',
+                box: { top: 0.1, bottom: 0.2, left: 0.3, right: 0.4 },
+                confidence: 0.5,
+              },
+              destructive: { type: 'noul', noul: 0.0 },
+            },
+          }),
+        };
+
+        const res = await client.queryVision(fakeBuf, 'missing icon', 'remote');
+        expect(res.result!.exists).toBe(false);
+      });
     });
   });
 });

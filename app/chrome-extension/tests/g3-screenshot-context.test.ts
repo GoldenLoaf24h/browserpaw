@@ -469,6 +469,54 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
   });
 
   describe('3. Accepted ROI lossless contracts', () => {
+    it.each([false, true])(
+      'bounds black-bar retry frame waits when active=%s never paints',
+      async (active) => {
+        vi.useFakeTimers();
+        try {
+          vi.spyOn(screenshotTool as any, 'resolveAffinityTab').mockResolvedValue({
+            id: tabId,
+            windowId: 1,
+            active,
+            width: 1000,
+            height: 1000,
+          });
+          vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_id, _owner, fn) =>
+            fn(),
+          );
+          const capture = vi
+            .spyOn(cdpSessionManager, 'sendCommand')
+            .mockImplementation(async (_id, method) => {
+              if (method === 'Runtime.evaluate') {
+                return new Promise(() => {});
+              }
+              if (method === 'Page.getLayoutMetrics') {
+                return {
+                  cssVisualViewport: { clientWidth: 1000, clientHeight: 1000, pageX: 0, pageY: 0 },
+                };
+              }
+              return { data: VALID_PNG_1.split(',')[1], mimeType: 'image/png' };
+            });
+          let settled = false;
+          const result = screenshotTool.execute({ tabId, format: 'png' }).then((value) => {
+            settled = true;
+            return value;
+          });
+          await vi.advanceTimersByTimeAsync(1500);
+          expect(settled).toBe(true);
+          expect((await result).isError).toBeFalsy();
+          expect(
+            capture.mock.calls.filter((call) => call[1] === 'Page.captureScreenshot'),
+          ).toHaveLength(2);
+          expect(capture.mock.calls.filter((call) => call[1] === 'Runtime.evaluate')).toHaveLength(
+            active ? 2 : 0,
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it.each([
       {
         label: 'region default',

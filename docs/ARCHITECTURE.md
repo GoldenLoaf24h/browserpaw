@@ -502,3 +502,51 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
   2. **Multi-Click Lockstep**: `double_click` and `triple_click` bind individual CDP `mousePressed` events to distinct visual click ripples and physiological cursor depressions.
   3. **Response Commitment**: MCP tool responses resolve strictly after visual animation completion, CDP event dispatch, and DOM/network settlement verified by `ActionWatchdog`.
 - **Consequences**: 100% deterministic coordination between agent intent, screen rendering, and MCP client perception.
+
+### ADR-030: Multimodal Jev Vision: Box + Noul Anchoring and Frame-Bound Clicks (v4.0.0)
+
+- **Status**: Implemented & Verified
+- **Context**: Text perception covers typical HTML controls, but unlabelled SVG icons and canvas controls can lack useful DOM metadata. Vision provides a fallback for these targets; latency and accuracy require measurement against the configured cloud endpoint.
+- **Decision**:
+  1. **Dual-Path Visual Perception Ladder & Runtime Environment**:
+     - Text perception (Tier 1) remains the default and primary decision path.
+     - Built on `@typesafe-ai/sdk` 0.7.0 requiring Node.js `>=22.6.0`.
+     - When an action requires interacting with non-textual or visual elements (or when text perception yields low confidence), Jev initiates a visual micro-loop query using multimodal `Box` and `Noul` primitives.
+  2. **Opt-in Cloud Vision Contract (`visionEnabled`)**:
+     - `visionEnabled` defaults to `false`. It requires explicit user activation (via popup Manage or `~/.browserpaw/jev-remote.json`) and a valid `TYPESAFE_API_KEY`.
+     - Jev Vision operates exclusively in Remote mode; offline local decider (`decider-2b`) and Off modes strictly reject vision calls.
+     - Model pinned strictly to `jev-1.14.0`.
+  3. **Viewport Frame Binding & Dimension Clamping**:
+     - Viewport screenshots are captured in PNG or JPEG format via `chrome_screenshot` (`_jevVision: true`, `saveToDisk: false`).
+     - Image dimensions are strictly clamped to `280..1568px` along both width and height, preserving aspect ratio with proportional downscaling and letterbox padding to bound network payload and inference memory.
+     - Normalized `Box` coordinates are mapped through image content dimensions and padding to viewport CSS pixels; DPR is not applied a second time.
+     - Black-bar recapture skips animation-frame waits for background tabs. Active-tab frame waits are bounded at 300 ms per attempt because minimized windows can suspend `requestAnimationFrame`; recapture remains limited to one retry.
+  4. **Click-Only Scope & Escalation on Complex Goals**:
+     - Visual fallback in the initial release is strictly restricted to single, unambiguous click/tap targets.
+     - The engine proactively rejects `type`, `fill`, `select`, and multi-step compound goals; complex goals escalate safely.
+     - If the Tier 1 text model selects an action of type `type` or `select`, vision fallback is never triggered.
+  5. **Single Visual Click Execution Limit & Verification Guard**:
+     - Each autonomous run permits at most one visual click (`visualClickExecuted`).
+     - Successful coordinate dispatch does **not** blindly report `done`.
+     - After dispatch, the engine re-reads the DOM in the next step:
+       - If the text model confirms `goal_done` (action is `done`), execution completes successfully.
+       - If the DOM is empty or any subsequent action (click, type, etc.) is attempted, the engine immediately escalates before acting again.
+     - Benchmark success is measured against actual page state changes rather than trusting `result.status === 'done'`.
+  6. **Box Localization & Noul Multi-Gate Guardrails**:
+     - TypeSafe `Box` primitive returns candidate bounding-box coordinates regardless of target presence on screen.
+     - To prevent phantom click dispatch on missing targets, BrowserPaw enforces strict multi-gate criteria:
+       - Target presence: `target_exists` Noul score must be `>= 0.85`.
+       - Target ambiguity: `target_ambiguous` Noul score must be `< 0.5`.
+       - Destructive safeguard: `destructive` Noul score must be `< 0.5`.
+     - When presence or ambiguity criteria fail, candidate `Box` coordinates are discarded and execution safely escalates or halts.
+  7. **Screenshot ID Binding & Fail-Closed Freshness Validation**:
+     - Viewport captures generate an ephemeral `VisionFrameContext` with a unique screenshot ID and TTL.
+     - Vision fallback clicks supply `expectedScreenshotId` and `expectedDeadlineAt`; existing public screenshot-coordinate calls keep their contract.
+     - `validateVisionFrame` enforces a fail-closed policy: any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired TTL rejects execution with zero dispatched clicks.
+  8. **Canvas Perception Boundary Disclosure**:
+     - Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs.
+     - Architectural boundary: This is not a pixel or full-layout comparison. Canvas/WebGL redraws, video frames, and layout changes outside those fields can escape detection. The canvas benchmark verifies fixture-owned state hooks; production canvas tasks require independent outcome verification.
+  9. **Nominal Pricing Disclaimer & Benchmark Smoke Nature**:
+     - TypeSafe multimodal vision image pricing is unconfirmed. Telemetry `estCostUsd` is strictly a nominal text-token estimate ($0.042/1M tokens) and must not be treated as actual vision billing.
+     - The 4 mixed benchmark fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise.
+- **Consequences**: Adds an opt-in path for icon and canvas targets, with conservative rejection and explicit freshness limits. Functional smoke results do not establish universal accuracy or a speedup.

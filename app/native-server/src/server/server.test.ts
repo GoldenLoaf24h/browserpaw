@@ -671,6 +671,28 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         expect(postRes.status).toBe(200);
         expect(postRes.body.success).toBe(true);
         expect(postRes.body.remoteConfig.modelId).toBe('jev-latest');
+        expect(postRes.body.remoteConfig.visionEnabled).toBe(false);
+
+        for (const invalid of ['true', 1, null]) {
+          const rejected = await supertest(Server.getInstance().server)
+            .post('/jev/remote-config')
+            .set('Authorization', `Bearer ${getBridgeToken()}`)
+            .send({ visionEnabled: invalid });
+          expect(rejected.status).toBe(400);
+        }
+
+        const enabled = await supertest(Server.getInstance().server)
+          .post('/jev/remote-config')
+          .set('Authorization', `Bearer ${getBridgeToken()}`)
+          .send({ visionEnabled: true });
+        expect(enabled.body.remoteConfig.visionEnabled).toBe(true);
+        expect(enabled.body.remoteConfig.baseUrl).toBe('https://api.typesafe.ai/v1');
+        expect(enabled.body.remoteConfig.hasApiKey).toBe(true);
+
+        await supertest(Server.getInstance().server)
+          .post('/jev/remote-config')
+          .set('Authorization', `Bearer ${getBridgeToken()}`)
+          .send({ modelId: 'jev-latest', baseUrl: 'https://api.typesafe.ai/v1' });
 
         const getRes = await supertest(Server.getInstance().server)
           .get('/jev/remote-config')
@@ -680,6 +702,12 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         expect(getRes.body.hasApiKey).toBe(true);
         expect(getRes.body.modelId).toBe('jev-latest');
         expect(getRes.body.apiKey).toBeUndefined(); // Plaintext apiKey must never be exposed (BUG-13)
+        expect(getRes.body.visionEnabled).toBe(true);
+        const disabled = await supertest(Server.getInstance().server)
+          .post('/jev/remote-config')
+          .set('Authorization', `Bearer ${getBridgeToken()}`)
+          .send({ visionEnabled: false });
+        expect(disabled.body.remoteConfig.visionEnabled).toBe(false);
       } finally {
         writeSpy.mockRestore();
       }

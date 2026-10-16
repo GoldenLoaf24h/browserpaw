@@ -63,6 +63,8 @@ const customDownloadError = ref('');
 const remoteBaseUrl = ref('');
 const remoteApiKey = ref('');
 const remoteModelId = ref('');
+const remoteVisionEnabled = ref(false);
+const remoteConfigError = ref('');
 const isRemoteApplied = ref(false);
 const envApiKeyDetected = ref(false);
 const envKeySourceName = ref('TYPESAFE_API_KEY');
@@ -521,6 +523,7 @@ const fetchRemoteConfig = async () => {
     const res = await jevFetch('/jev/remote-config');
     if (res.ok) {
       const cfg = await res.json();
+      remoteVisionEnabled.value = cfg.visionEnabled === true;
       envApiKeyDetected.value = Boolean(cfg.hasEnvApiKey);
       hasServerApiKey.value = Boolean(cfg.hasApiKey || cfg.hasConfiguredApiKey);
       if (cfg.envKeySource) {
@@ -555,6 +558,7 @@ const applyRemoteConfig = async () => {
   const cfg: Record<string, any> = {
     baseUrl: remoteBaseUrl.value.trim(),
     modelId: effectiveModel,
+    visionEnabled: remoteVisionEnabled.value,
   };
   // Only send apiKey if user entered a new key; omitting preserves existing key on server
   if (enteredKey) {
@@ -562,22 +566,23 @@ const applyRemoteConfig = async () => {
   }
 
   try {
-    await chrome.storage.local.set({ jevRemoteConfig: cfg });
+    remoteConfigError.value = '';
     const res = await jevFetch('/jev/remote-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
     });
-    if (res.ok) {
-      if (enteredKey) {
-        hasServerApiKey.value = true;
-      }
+    if (!res.ok) throw new Error('Server rejected remote configuration');
+    await chrome.storage.local.set({ jevRemoteConfig: cfg });
+    if (enteredKey) {
+      hasServerApiKey.value = true;
     }
     isRemoteApplied.value = true;
     setTimeout(() => {
       isRemoteApplied.value = false;
     }, 1500);
   } catch (e) {
+    remoteConfigError.value = 'Could not save. Check the server connection and retry.';
     console.error('Failed to apply remote config:', e);
   }
 };
@@ -1133,6 +1138,17 @@ onUnmounted(() => {
               </Transition>
             </button>
           </div>
+          <label class="remote-vision-option">
+            <input v-model="remoteVisionEnabled" type="checkbox" />
+            <span>Experimental vision (Jev 1.14)</span>
+          </label>
+          <p class="remote-vision-notice">
+            When enabled, viewport screenshots are sent to your configured cloud endpoint for visual
+            targeting. Off by default; remote mode only. Click Apply to save this setting.
+          </p>
+          <p v-if="remoteConfigError" class="remote-config-error" role="alert">
+            {{ remoteConfigError }}
+          </p>
         </div>
       </div>
 
@@ -1239,6 +1255,25 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.remote-vision-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.remote-vision-notice,
+.remote-config-error {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #6b7280;
+}
+
+.remote-config-error {
+  color: #b91c1c;
+}
+
 .popup-box {
   width: 220px;
   padding: 14px 16px;

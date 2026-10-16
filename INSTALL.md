@@ -19,7 +19,7 @@ An authoritative, step-by-step onboarding guide for **AI Agents** (Codex Desktop
 ## Prerequisites
 
 - **Source installation:** Node.js `>=22.6.0` and pnpm `12.6.0` (the version declared by this repository's `package.json`).
-- **Release extension installation:** Google Chrome and a supported Node.js runtime for the native server. The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
+- **Release extension installation:** Google Chrome and Node.js `>=22.6.0` for the native server (matching Native engine and repository requirements). The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
 - **Local Jev mode:** Python plus the decider runtime dependencies (uvicorn, torch, and transformers) must be installed in the BrowserPaw virtual environment at ~/.browserpaw/venv, or available to the system Python. If they are unavailable, use Remote mode or Off.
 
 Commands below are written for a shell opened at the repository root unless noted otherwise.
@@ -317,7 +317,20 @@ Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select y
      echo 'export TYPESAFE_API_KEY="your-key-here"' >> ~/.zshrc
      ```
 
-3. **Using Custom / Self-Hosted Gateways**:
+3. **Multimodal Jev Vision (Optional, Experimental)**:
+   - **Prerequisites & SDK**: Requires Node.js `>=22.6.0` and `@typesafe-ai/sdk` `0.7.0` (pinned).
+   - **Remote Mode Exclusive**: Jev Vision operates strictly in Remote mode. Local decider and Off modes strictly prohibit vision requests.
+   - **Explicit Opt-in (`visionEnabled`)**: Defaults to `false`. Requires explicit user activation via the extension popup Manage dialog or setting `"visionEnabled": true` in `~/.browserpaw/jev-remote.json`.
+   - **Model Pinned**: Fixed strictly to model `jev-1.14.0`.
+   - **Image Constraints**: Captures active viewport screenshots in PNG or JPEG format, with width and height each bounded to `280..1568px` (using proportional scaling and letterbox padding).
+   - **Click-Only Fallback & Escalation**: Initial visual fallback strictly allows a single, unambiguous click/tap target. Rejects `type`/`fill`/`select` and multi-step goals; complex goals escalate. When the text model selects `type` or `select`, vision fallback is never triggered.
+   - **Execution Guard & Verification**: At most one visual click per autonomous run. On successful dispatch, the next step re-reads the DOM: if the text model confirms the goal is completed (`done`), execution completes; empty DOM or any additional attempted action escalates immediately without blindly reporting done.
+   - **Box & Noul Guardrails**: Because TypeSafe `Box` returns bounding-box coordinates even when an object is absent, BrowserPaw enforces strict `Noul` presence (`target_exists >= 0.85`), ambiguity (`target_ambiguous < 0.5`), and destructive gates before dispatching any interaction.
+   - **Fail-Closed Screenshot Lifecycle**: Each screenshot is assigned a unique frame ID and TTL. Any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired frame ID triggers immediate fail-closed rejection without dispatching clicks.
+   - **Perception Boundaries on Canvas**: Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs. They do not compare pixels or the complete layout; canvas/video redraws and changes outside those fields can escape detection.
+   - **Nominal Pricing Disclaimer**: TypeSafe multimodal vision image pricing is unconfirmed. Existing telemetry `estCostUsd` is strictly a nominal text-token estimate ($0.042/1M tokens) and must not be treated as actual vision billing.
+   - **Smoke Benchmark Verification**: The 4 mixed fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise. Benchmark success is evaluated on actual in-page state changes rather than trusting `result.status done`.
+4. **Using Custom / Self-Hosted Gateways**:
    - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000/v1` or private gateway) and custom `modelId`.
    - Settings are cleanly persisted to `~/.browserpaw/jev-remote.json`.
 

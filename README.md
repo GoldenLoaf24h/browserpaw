@@ -94,6 +94,7 @@ The micro-loop is bounded: at most 60 steps in Jev mode (default 10), truncated 
 - **Off**: Disabled by the user in the extension popup. `chrome_act_toward_goal` is automatically hidden from `tools/list`; if invoked directly, it is rejected and prompts for user authorization.
 - **Local**: Runs an offline, privacy-first decider model (`decider-2b`) locally on port 8009 with NVIDIA GPU acceleration (CUDA RTX) or CPU fallback. Once weights are downloaded via popup or setup script, the bridge manages process lifecycle and hot-loads automatically.
 - **Remote**: Uses TypeSafe Jev System One cloud inference. Set `TYPESAFE_API_KEY` (or configure via popup) with optional custom `Base URL` and custom fine-tuned `modelId`. Failing configurations return actionable diagnostic logs instead of silent heuristic fallback.
+- **Experimental remote vision**: Enable it explicitly in the popup's remote settings and click Apply. It sends viewport screenshots to the configured cloud endpoint for visual targeting with `jev-1.14.0`; text and DOM targeting remain the normal path. Vision is disabled by default and unavailable in local/off modes. Images and Box are experimental TypeSafe APIs, so uncertain or stale targets escalate to the calling agent.
 
 ---
 

@@ -10,8 +10,10 @@ import {
   compressImage,
   overlayCoordinateGrid,
   smartCompressForTransport,
+  prepareImageForJevVision,
 } from '../../../../utils/image-utils';
 import { screenshotContextManager } from '@/utils/screenshot-context';
+import { diffPerceptiveSignatures } from '@/utils/screenshot-guard';
 import { executeInPage } from './in-page-engine';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
 import { isRestrictedChromeUrl } from '@/utils/restricted-url';
@@ -98,6 +100,8 @@ interface ScreenshotToolParams {
   som?: boolean; // Overlay Set-of-Mark numbered badges on interactive elements before capture
   highlight?: boolean; // Alias for som
   setOfMark?: boolean; // Alias for som
+  /** Internal flag for TypeSafe Jev Vision preparation and frame-binding */
+  _jevVision?: boolean;
   /** View a single visual asset listed by chrome_read_dom (1-based asset index). Bytes first, viewport-crop fallback */
   assetIndex?: number;
   /** Sub-region ROI crop (lossless zoom into specified bounding box [ymin, xmin, ymax, xmax] or { x0, y0, x1, y1 }) */
@@ -346,12 +350,21 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       rawArgs.som === true ||
       (rawArgs as any).highlight === true ||
       (rawArgs as any).setOfMark === true;
+    const isJevVision = rawArgs._jevVision === true;
 
     const args: ScreenshotToolParams = {
       ...rawArgs,
       targetIndex,
       grid,
       som,
+      ...(isJevVision
+        ? {
+            fullPage: false,
+            saveToDisk: false,
+            savePng: false,
+            format: rawArgs.format === 'png' ? 'png' : 'jpeg',
+          }
+        : {}),
     };
 
     const {
@@ -383,6 +396,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalImageDataUrl: string | undefined;
     let finalImageWidthCss: number | undefined;
     let finalImageHeightCss: number | undefined;
+    let jevVisionFrame: { id: string; width: number; height: number } | undefined = undefined;
     const results: any = { base64: null, fileSaved: false };
     let originalScroll: { x: number; y: number } | null = null;
     let didPreparePage = false;
@@ -398,6 +412,33 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.8;
 
     try {
+      let preScroll: any = null;
+      let preDocId: string | undefined = undefined;
+      let preUrl: string = '';
+      let preSig: any = null;
+
+      if (isJevVision) {
+        const preScrollRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageGetScrollState',
+          [],
+        ).catch(() => null);
+        preScroll = preScrollRes?.[0]?.result;
+        preDocId = preScrollRes?.[0]?.documentId || preScroll?.documentId;
+
+        const preSigRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageDetectPerceptiveSignature',
+          [],
+        ).catch(() => null);
+        preSig = preSigRes?.[0]?.result;
+        preUrl = preSig?.url || preScroll?.documentURL || tab.url || '';
+
+        if (!preScroll || !preSig || !preDocId || !preUrl) {
+          throw new Error('Failed to capture initial page probes for TypeSafe Jev vision frame');
+        }
+      }
+
       const enableSoM = args.som === true || args.highlight === true || args.setOfMark === true;
       if (enableSoM) {
         try {
@@ -694,12 +735,14 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             // races the window-transition frame and returns black bars.
             try {
               if (tab.active) {
-                const rafPromise = cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-                  expression:
-                    'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
-                  awaitPromise: true,
-                });
-                await Promise.race([rafPromise, new Promise((r) => setTimeout(r, 300))]);
+                const frames = cdpSessionManager
+                  .sendCommand(tabId, 'Runtime.evaluate', {
+                    expression:
+                      'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
+                    awaitPromise: true,
+                  })
+                  .catch(() => {});
+                await Promise.race([frames, new Promise((r) => setTimeout(r, 300))]);
               } else {
                 await new Promise((r) => setTimeout(r, 50));
               }
@@ -766,11 +809,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
               // retry exactly once before accepting the capture.
               await new Promise((r) => setTimeout(r, 250));
               try {
-                await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-                  expression:
-                    'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
-                  awaitPromise: true,
-                });
+                // Background/minimized tabs can suspend animation frames indefinitely.
+                if (tab.active) {
+                  const frames = cdpSessionManager
+                    .sendCommand(tabId, 'Runtime.evaluate', {
+                      expression:
+                        'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
+                      awaitPromise: true,
+                    })
+                    .catch(() => {});
+                  await Promise.race([frames, new Promise((r) => setTimeout(r, 300))]);
+                }
               } catch {}
               const retry: any = await cdpSessionManager.sendCommand(
                 tabId,
@@ -948,63 +997,188 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
 
       // 2. Process output
-      // Update screenshot context for coordinate scaling by tools like chrome_computer
-      try {
-        if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
-          let hostname = '';
-          try {
-            hostname = tab.url ? new URL(tab.url).hostname : '';
-          } catch {
-            // ignore
-          }
-          // For element captures or ROI crops, keep crop bounds and origin offset
-          const isRoiOrElement = Boolean(elementCropOrigin);
-          const cropW =
-            elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
-          const cropH =
-            elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
-          const viewportWidth =
-            pageDetails?.viewportWidth ?? captureViewport?.viewportWidth ?? finalImageWidthCss;
-          const viewportHeight =
-            pageDetails?.viewportHeight ?? captureViewport?.viewportHeight ?? finalImageHeightCss;
-          const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
-            ? 'element'
-            : fullPage
-              ? 'fullpage'
-              : 'viewport';
-          const scrollX = originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
-          const scrollY = originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
-          const docWidth =
-            captureMode === 'fullpage'
-              ? (capturedDocWidth ?? pageDetails?.totalWidth ?? finalImageWidthCss)
-              : undefined;
-          const docHeight =
-            captureMode === 'fullpage'
-              ? (capturedDocHeight ?? pageDetails?.totalHeight ?? finalImageHeightCss)
-              : undefined;
-          screenshotContextManager.setContext(tab.id!, {
-            screenshotWidth: finalImageWidthCss,
-            screenshotHeight: finalImageHeightCss,
-            viewportWidth,
-            viewportHeight,
-            cropWidth: cropW,
-            cropHeight: cropH,
-            originX: elementCropOrigin?.x,
-            originY: elementCropOrigin?.y,
-            devicePixelRatio: pageDetails?.devicePixelRatio,
-            hostname,
-            scrollX,
-            scrollY,
-            captureMode,
-            docWidth,
-            docHeight,
-          });
+      if (isJevVision && finalImageDataUrl) {
+        const postScrollRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageGetScrollState',
+          [],
+        ).catch(() => null);
+        const postScroll = postScrollRes?.[0]?.result;
+        const postDocId = postScrollRes?.[0]?.documentId || postScroll?.documentId;
+
+        const postSigRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageDetectPerceptiveSignature',
+          [],
+        ).catch(() => null);
+        const postSig = postSigRes?.[0]?.result;
+        const postUrl = postSig?.url || postScroll?.documentURL || tab.url || '';
+
+        if (!postScroll || !postSig || !postDocId || !postUrl) {
+          throw new Error(
+            'Failed to capture post-screenshot verification probes for TypeSafe Jev vision frame',
+          );
         }
-      } catch (e) {
-        console.warn('Failed to set screenshot context:', e);
+
+        if (preDocId !== postDocId) {
+          throw new Error(
+            `Document changed during screenshot capture: pre="${preDocId}" vs post="${postDocId}"`,
+          );
+        }
+
+        if (preUrl !== postUrl) {
+          throw new Error(
+            `Page URL changed during screenshot capture: pre="${preUrl}" vs post="${postUrl}"`,
+          );
+        }
+
+        if (
+          Math.abs(preScroll.scrollX - postScroll.scrollX) > 4 ||
+          Math.abs(preScroll.scrollY - postScroll.scrollY) > 4
+        ) {
+          throw new Error('Page scrolled during screenshot capture');
+        }
+
+        if (
+          Math.abs(preScroll.viewportWidth - postScroll.viewportWidth) > 4 ||
+          Math.abs(preScroll.viewportHeight - postScroll.viewportHeight) > 4
+        ) {
+          throw new Error('Viewport dimensions changed during screenshot capture');
+        }
+
+        if (preSig && postSig) {
+          const sigDrift = diffPerceptiveSignatures(preSig, postSig);
+          if (sigDrift) {
+            throw new Error(`Perceptive signature changed during screenshot capture: ${sigDrift}`);
+          }
+        }
+
+        const preferredMime = args.format === 'png' ? 'image/png' : 'image/jpeg';
+        const jevImg = await prepareImageForJevVision(finalImageDataUrl, {
+          preferredFormat: preferredMime,
+          quality: qualityFraction,
+        });
+        finalImageDataUrl = jevImg.dataUrl;
+        finalImageWidthCss = jevImg.width;
+        finalImageHeightCss = jevImg.height;
+
+        const isRoiOrElement = Boolean(elementCropOrigin);
+        const cropW =
+          elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
+        const cropH =
+          elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
+        const viewportWidth =
+          postScroll.viewportWidth ??
+          pageDetails?.viewportWidth ??
+          captureViewport?.viewportWidth ??
+          finalImageWidthCss;
+        const viewportHeight =
+          postScroll.viewportHeight ??
+          pageDetails?.viewportHeight ??
+          captureViewport?.viewportHeight ??
+          finalImageHeightCss;
+        const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
+          ? 'element'
+          : 'viewport';
+        const scrollX = postScroll.scrollX ?? originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
+        const scrollY = postScroll.scrollY ?? originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
+
+        const documentId = postDocId || preDocId;
+        const frameUrl = postSig?.url || postUrl || tab.url || '';
+
+        const visionFrameId =
+          'vf_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        const frame = screenshotContextManager.createVisionFrame({
+          id: visionFrameId,
+          tabId: tab.id!,
+          url: frameUrl,
+          documentId,
+          title: tab.title,
+          width: jevImg.width,
+          height: jevImg.height,
+          contentWidth: jevImg.contentWidth,
+          contentHeight: jevImg.contentHeight,
+          padX: jevImg.padX,
+          padY: jevImg.padY,
+          scaleRatio: jevImg.scaleRatio,
+          viewportWidth,
+          viewportHeight,
+          scrollX,
+          scrollY,
+          devicePixelRatio: pageDetails?.devicePixelRatio,
+          captureMode,
+          originX: elementCropOrigin?.x,
+          originY: elementCropOrigin?.y,
+          cropWidth: cropW,
+          cropHeight: cropH,
+          perceptiveSignature: postSig,
+        });
+
+        jevVisionFrame = {
+          id: frame.id,
+          width: frame.width,
+          height: frame.height,
+        };
+      } else {
+        // Update screenshot context for coordinate scaling by tools like chrome_computer
+        try {
+          if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
+            let hostname = '';
+            try {
+              hostname = tab.url ? new URL(tab.url).hostname : '';
+            } catch {
+              // ignore
+            }
+            // For element captures or ROI crops, keep crop bounds and origin offset
+            const isRoiOrElement = Boolean(elementCropOrigin);
+            const cropW =
+              elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
+            const cropH =
+              elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
+            const viewportWidth =
+              pageDetails?.viewportWidth ?? captureViewport?.viewportWidth ?? finalImageWidthCss;
+            const viewportHeight =
+              pageDetails?.viewportHeight ?? captureViewport?.viewportHeight ?? finalImageHeightCss;
+            const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
+              ? 'element'
+              : fullPage
+                ? 'fullpage'
+                : 'viewport';
+            const scrollX = originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
+            const scrollY = originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
+            const docWidth =
+              captureMode === 'fullpage'
+                ? (capturedDocWidth ?? pageDetails?.totalWidth ?? finalImageWidthCss)
+                : undefined;
+            const docHeight =
+              captureMode === 'fullpage'
+                ? (capturedDocHeight ?? pageDetails?.totalHeight ?? finalImageHeightCss)
+                : undefined;
+            screenshotContextManager.setContext(tab.id!, {
+              screenshotWidth: finalImageWidthCss,
+              screenshotHeight: finalImageHeightCss,
+              viewportWidth,
+              viewportHeight,
+              cropWidth: cropW,
+              cropHeight: cropH,
+              originX: elementCropOrigin?.x,
+              originY: elementCropOrigin?.y,
+              devicePixelRatio: pageDetails?.devicePixelRatio,
+              hostname,
+              scrollX,
+              scrollY,
+              captureMode,
+              docWidth,
+              docHeight,
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to set screenshot context:', e);
+        }
       }
 
       const shouldSaveDisk =
+        !isJevVision &&
         (savePng === true || saveToDisk === true || (args as any).saveToDisk === true) &&
         args.savePng !== false &&
         (args as any).saveToDisk !== false;
@@ -1106,11 +1280,18 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalBase64 =
       results.base64 ||
       (finalImageDataUrl ? finalImageDataUrl.replace(/^data:[^;]+;base64,/, '') : undefined);
-    let finalMime: 'image/webp' | 'image/png' | 'image/jpeg' =
-      format === 'webp' ? 'image/webp' : format === 'png' ? 'image/png' : 'image/jpeg';
+    let finalMime: 'image/webp' | 'image/png' | 'image/jpeg' = isJevVision
+      ? args.format === 'png'
+        ? 'image/png'
+        : 'image/jpeg'
+      : format === 'webp'
+        ? 'image/webp'
+        : format === 'png'
+          ? 'image/png'
+          : 'image/jpeg';
     let isThumbnailFinal = false;
 
-    if (finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
+    if (!isJevVision && finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
       try {
         const isHighClarity =
           args.highClarity === true || fullPage === true || Boolean(results.roi);
@@ -1178,6 +1359,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         text: JSON.stringify({
           success: true,
           message: `Screenshot [${name}] captured successfully`,
+          ...(jevVisionFrame ? { visionFrame: jevVisionFrame } : {}),
           tabId: tab.id,
           url: scrubUrl(tab.url || ''),
           name: name,

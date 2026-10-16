@@ -21,11 +21,15 @@ import {
   buildState,
   extractElementIndices,
   extractTextPayload,
+  extractVisualTargetDescription,
+  parseScreenshotContent,
+  validateBoxCoordinates,
   getTop3Probabilities,
   isDestructiveTarget,
   isSessionKeyInvalid,
   latchInvalidKey,
   validateChoice,
+  JEV_VISION_MODEL,
 } from './jev-client';
 import { HeuristicEngine } from './heuristic-engine';
 import { jevModelManager } from '../server/jev-model-manager';
@@ -114,7 +118,7 @@ export class FastDecisionEngine {
       maxSteps = Math.min(maxSteps, 5); // §4.3: heuristic mode maxSteps forced <= 5
     }
 
-    const timeoutMs = Math.min(Math.max(1, params.timeoutMs ?? 90_000), 300_000);
+    const timeoutMs = Math.min(Math.max(1, Math.floor(params.timeoutMs ?? 90_000)), 300_000);
     const confidenceThreshold = params.confidenceThreshold ?? 0.55;
     const startTime = Date.now();
 
@@ -122,6 +126,10 @@ export class FastDecisionEngine {
     const history: JevHistoryItem[] = [];
     let jevCalls = 0;
     let inputTokens = 0;
+    let visionCalls = 0;
+    let totalTextLatencyMs = 0;
+    let totalVisionLatencyMs = 0;
+    let visualClickExecuted = false;
 
     let finalPage: JevPageState = { url: '', title: '' };
     let currentElements: string[] = [];
@@ -146,10 +154,165 @@ export class FastDecisionEngine {
       }
     };
 
+    const finish = (...args: Parameters<typeof this.formatResult>): ActTowardGoalResult => {
+      args[11] = {
+        visionCalls,
+        textLatencyMs: totalTextLatencyMs,
+        visionLatencyMs: totalVisionLatencyMs,
+      };
+      return this.formatResult(...args);
+    };
+    const expired = () => Date.now() - startTime >= timeoutMs;
+    const visionAllowed = () =>
+      currentMode === 'remote' &&
+      jevModelManager.getActiveMode() === 'remote' &&
+      jevModelManager.getRemoteConfig().visionEnabled === true &&
+      Boolean(this.jevClient.getRemoteClient()) &&
+      !isSessionKeyInvalid();
+
+    const executeVisionFallback = async (
+      currentStep: number,
+      reasonTrigger: string,
+      proposedAction?: string,
+    ): Promise<{ handled: boolean; result?: ActTowardGoalResult }> => {
+      if (!visionAllowed() || (proposedAction && proposedAction !== 'click')) {
+        return { handled: false };
+      }
+      const targetDesc = extractVisualTargetDescription(params.goal);
+      if (!targetDesc) return { handled: false };
+      const halt = (status: ActTowardGoalStatus, reason: string, pause?: PausedBeforeAction) => ({
+        handled: true,
+        result: finish(
+          status,
+          engine,
+          engineSwitched,
+          fallbackReason,
+          reason,
+          steps,
+          finalPage,
+          currentElements,
+          jevCalls,
+          inputTokens,
+          pause,
+        ),
+      });
+      if (visualClickExecuted) {
+        return halt(
+          'escalate',
+          'Visual click already executed; verify the result before acting again',
+        );
+      }
+      if (expired()) return halt('timeout', 'Execution deadline exceeded before vision capture');
+      const matchedKeyword = findMatchingPauseKeyword(targetDesc, params.pauseBeforeKeywords);
+      if (matchedKeyword) {
+        return halt('paused', `Visual target matches pause keyword "${matchedKeyword}"`, {
+          action: 'click',
+          target: targetDesc,
+          matchedKeyword,
+        });
+      }
+      if (isDestructiveTarget(targetDesc)) {
+        return halt('escalate', 'Visual target matched destructive keyword; requires confirmation');
+      }
+
+      sendProgress(currentStep, `Capturing screenshot for vision fallback (${reasonTrigger})`);
+      let shotRes: any;
+      try {
+        shotRes = await internalCaller('chrome_screenshot', {
+          _jevVision: true,
+          tabId: params.tabId,
+          sessionId: params.sessionId || params.sessionContext,
+          fullPage: false,
+          saveToDisk: false,
+        });
+      } catch (err: any) {
+        return halt(
+          expired() ? 'timeout' : 'escalate',
+          `Failed to capture vision screenshot: ${err?.message || err}`,
+        );
+      }
+      if (expired()) return halt('timeout', 'Execution deadline exceeded during vision capture');
+      if (!visionAllowed()) return halt('escalate', 'Vision consent or remote mode was revoked');
+      const parsedShot = parseScreenshotContent(shotRes);
+      if (!parsedShot) return halt('escalate', 'Invalid screenshot image or frame metadata');
+
+      const remaining = Math.min(timeoutMs - (Date.now() - startTime), 30_000);
+      if (remaining <= 0) return halt('timeout', 'Execution deadline exceeded before vision query');
+      const signal = AbortSignal.timeout(remaining);
+      const requestStart = Date.now();
+      visionCalls++;
+      const visRes = await this.jevClient.queryVision(
+        parsedShot.imageBuffer,
+        targetDesc,
+        currentMode,
+        { signal, timeout: remaining },
+      );
+      totalVisionLatencyMs += Date.now() - requestStart;
+      inputTokens += visRes.result?.usage?.input_tokens || 0;
+      if (expired() || signal.aborted) return halt('timeout', 'Vision request deadline exceeded');
+      if (!visionAllowed()) return halt('escalate', 'Vision consent or remote mode was revoked');
+      if (visRes.errorReason || !visRes.result) {
+        return halt('escalate', `Vision query failed: ${visRes.errorReason || 'empty response'}`);
+      }
+      const vision = visRes.result;
+      if (vision.destructive)
+        return halt('escalate', 'Destructive action detected by vision model');
+      if (!vision.exists) return halt('escalate', 'Visual target not found or presence below 0.85');
+      if (vision.ambiguous) return halt('escalate', 'Visual target is ambiguous');
+      if (
+        vision.confidence === null ||
+        !Number.isFinite(vision.confidence) ||
+        vision.confidence < 0.6 ||
+        vision.confidence > 1
+      ) {
+        return halt('escalate', 'Visual localization confidence is missing or below 0.6');
+      }
+      if (!vision.box || !validateBoxCoordinates(vision.box)) {
+        return halt('escalate', 'Visual target bounding box invalid or out of bounds');
+      }
+      const b = vision.box;
+      const pixelX = Math.round(((b.left + b.right) / 2) * parsedShot.frame.width);
+      const pixelY = Math.round(((b.top + b.bottom) / 2) * parsedShot.frame.height);
+      if (expired()) return halt('timeout', 'Execution deadline exceeded before visual click');
+      let clickRes: any;
+      try {
+        clickRes = await internalCaller('chrome_interact_index', {
+          action: 'click',
+          coordinate: { x: pixelX, y: pixelY },
+          coordinateSpace: 'screenshot',
+          expectedScreenshotId: parsedShot.frame.id,
+          expectedDeadlineAt: startTime + timeoutMs,
+          tabId: params.tabId,
+          includeDelta: true,
+          settleTimeoutMs: 600,
+          sessionId: params.sessionId || params.sessionContext,
+        });
+      } catch (err: any) {
+        clickRes = { isError: true, message: err?.message || String(err) };
+      }
+      const outcome = this.parseOutcome(clickRes);
+      steps.push({
+        step: currentStep,
+        action: 'click',
+        target: `visual:"${targetDesc}" (${pixelX}, ${pixelY})`,
+        confidence: vision.confidence,
+        outcome,
+      });
+      history.push({ step: currentStep, action: `click visual:"${targetDesc}"`, outcome });
+      if (clickRes?.isError || outcome.startsWith('error:')) {
+        return halt(
+          expired() ? 'timeout' : 'escalate',
+          `Visual click execution failed: ${outcome}`,
+        );
+      }
+      visualClickExecuted = true;
+      return { handled: true };
+    };
+
     for (let step = 1; step <= maxSteps; step++) {
       // Check wall-clock timeout
       if (Date.now() - startTime >= timeoutMs) {
-        return this.formatResult(
+        return finish(
           'timeout',
           engine,
           engineSwitched,
@@ -174,10 +337,16 @@ export class FastDecisionEngine {
           format: 'fast',
           sessionId: params.sessionId || params.sessionContext,
         });
+        if (domResult?.isError) {
+          throw new Error(this.parseOutcome(domResult));
+        }
         const textContent = domResult?.content?.[0]?.text;
         domData = textContent ? JSON.parse(textContent) : {};
+        if (domData.success === false) {
+          throw new Error(domData.error || domData.reason || 'DOM read failed');
+        }
       } catch (err: any) {
-        return this.formatResult(
+        return finish(
           'blocked',
           engine,
           engineSwitched,
@@ -192,8 +361,8 @@ export class FastDecisionEngine {
       }
 
       finalPage = {
-        url: domData.tabUrl || '',
-        title: domData.tabTitle || '',
+        url: domData.tabUrl || domData.url || '',
+        title: domData.tabTitle || domData.title || '',
       };
 
       const treeString: string = domData.treeString || '';
@@ -202,9 +371,26 @@ export class FastDecisionEngine {
         .map((l) => l.trim())
         .filter(Boolean);
 
+      const isWaitOnly =
+        (Array.isArray(domData.actions) &&
+          domData.actions.length > 0 &&
+          domData.actions.every((a: any) => a?.kind === 'wait' || a?.id === 'wait')) ||
+        (currentElements.length > 0 && currentElements.every((l) => /^\[\d+\]\s*wait\b/i.test(l)));
+
+      if (currentElements.length === 0 || isWaitOnly) {
+        const visFallback = await executeVisionFallback(
+          step,
+          currentElements.length === 0 ? 'empty DOM elements' : 'wait-only DOM actions',
+        );
+        if (visFallback.handled) {
+          if (visFallback.result) return visFallback.result;
+          continue; // Step executed via vision, observe next page state
+        }
+      }
+
       // Check stuck condition for heuristic mode (§4.3)
       if (engine === 'heuristic' && this.heuristicEngine.isStuck(history)) {
-        return this.formatResult(
+        return finish(
           'stuck',
           engine,
           engineSwitched,
@@ -231,7 +417,7 @@ export class FastDecisionEngine {
             mutatedInLastStep,
           )
         ) {
-          return this.formatResult(
+          return finish(
             'done',
             engine,
             engineSwitched,
@@ -265,7 +451,43 @@ export class FastDecisionEngine {
         );
         const questions = buildQuestions(state.elements, params.goal);
 
-        const queryRes = await this.jevClient.query(state, questions, currentMode);
+        const stepRemaining = timeoutMs - (Date.now() - startTime);
+        if (stepRemaining <= 0) {
+          return finish(
+            'timeout',
+            engine,
+            engineSwitched,
+            fallbackReason,
+            `Execution exceeded timeoutMs (${timeoutMs}ms)`,
+            steps,
+            finalPage,
+            currentElements,
+            jevCalls,
+            inputTokens,
+          );
+        }
+        const textTimeoutMs = Math.min(stepRemaining, 30_000);
+        const textSignal = AbortSignal.timeout(textTimeoutMs);
+        const textT0 = Date.now();
+        const queryRes = await this.jevClient.query(state, questions, currentMode, {
+          signal: textSignal,
+          timeout: textTimeoutMs,
+        });
+        totalTextLatencyMs += Date.now() - textT0;
+        if (expired() || textSignal.aborted) {
+          return finish(
+            'timeout',
+            engine,
+            engineSwitched,
+            fallbackReason,
+            'Text request deadline exceeded',
+            steps,
+            finalPage,
+            currentElements,
+            jevCalls,
+            inputTokens,
+          );
+        }
         if (queryRes.errorReason || !queryRes.result) {
           // Runtime fallback (§4.2)
           engine = 'heuristic';
@@ -282,7 +504,7 @@ export class FastDecisionEngine {
 
           // Check goal_done noul (§5.3: >= 0.85)
           if (answers.goal_done?.noul >= 0.85) {
-            return this.formatResult(
+            return finish(
               'done',
               engine,
               engineSwitched,
@@ -298,7 +520,7 @@ export class FastDecisionEngine {
 
           // Check stuck noul (§5.3: >= 0.85) or heuristic stuck detection
           if (answers.stuck?.noul >= 0.85 || this.heuristicEngine.isStuck(history)) {
-            return this.formatResult(
+            return finish(
               'stuck',
               engine,
               engineSwitched,
@@ -316,7 +538,7 @@ export class FastDecisionEngine {
 
           // Check destructive noul (§5.3: >= 0.5)
           if (answers.destructive?.noul >= 0.5) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -343,7 +565,7 @@ export class FastDecisionEngine {
             'escalate',
           ]);
           if (!validActionChoice) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -362,7 +584,16 @@ export class FastDecisionEngine {
 
           // Action confidence threshold guard (§5.3: >= 0.55)
           if (confidence < confidenceThreshold) {
-            return this.formatResult(
+            const visFallback = await executeVisionFallback(
+              step,
+              'low text action confidence',
+              actionToTake === 'escalate' ? 'click' : actionToTake,
+            );
+            if (visFallback.handled) {
+              if (visFallback.result) return visFallback.result;
+              continue;
+            }
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -377,7 +608,7 @@ export class FastDecisionEngine {
           }
 
           if (actionToTake === 'done') {
-            return this.formatResult(
+            return finish(
               'done',
               engine,
               engineSwitched,
@@ -392,7 +623,16 @@ export class FastDecisionEngine {
           }
 
           if (actionToTake === 'escalate') {
-            return this.formatResult(
+            const visFallback = await executeVisionFallback(
+              step,
+              'model escalated (perceptual absence)',
+              'click',
+            );
+            if (visFallback.handled) {
+              if (visFallback.result) return visFallback.result;
+              continue;
+            }
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -416,7 +656,7 @@ export class FastDecisionEngine {
             const expectedTargetKeys = [...extractElementIndices(state.elements), 'none'];
             const validTargetChoice = validateChoice(targetAnswer, expectedTargetKeys);
             if (!validTargetChoice) {
-              return this.formatResult(
+              return finish(
                 'escalate',
                 engine,
                 engineSwitched,
@@ -436,7 +676,16 @@ export class FastDecisionEngine {
 
             // Target confidence threshold guard (§5.3: confidence >= 0.45 && topProb >= 0.35)
             if (chosen === 'none') {
-              return this.formatResult(
+              const visFallback = await executeVisionFallback(
+                step,
+                'target resolved to none',
+                actionToTake,
+              );
+              if (visFallback.handled) {
+                if (visFallback.result) return visFallback.result;
+                continue; // Step executed via vision, observe next page state
+              }
+              return finish(
                 'escalate',
                 engine,
                 engineSwitched,
@@ -451,11 +700,20 @@ export class FastDecisionEngine {
             }
 
             if (targetConf < 0.45 || targetProb < 0.35) {
+              const visFallback = await executeVisionFallback(
+                step,
+                'target confidence ambiguous',
+                actionToTake,
+              );
+              if (visFallback.handled) {
+                if (visFallback.result) return visFallback.result;
+                continue; // Step executed via vision, observe next page state
+              }
               const top3 = getTop3Probabilities(targetAnswer.probabilities);
               const top3Str = Object.entries(top3)
                 .map(([k, v]) => `[${k}]: ${v}`)
                 .join(', ');
-              return this.formatResult(
+              return finish(
                 'escalate',
                 engine,
                 engineSwitched,
@@ -485,7 +743,7 @@ export class FastDecisionEngine {
                   : actionToTake;
               const matchedKw = findMatchingPauseKeyword(checkTarget, params.pauseBeforeKeywords);
               if (matchedKw) {
-                return this.formatResult(
+                return finish(
                   'paused',
                   engine,
                   engineSwitched,
@@ -508,7 +766,7 @@ export class FastDecisionEngine {
 
             // Destructive keyword check on target element
             if (isDestructiveTarget(targetLine)) {
-              return this.formatResult(
+              return finish(
                 'escalate',
                 engine,
                 engineSwitched,
@@ -585,7 +843,7 @@ export class FastDecisionEngine {
               : pauseAction;
           const matchedKw = findMatchingPauseKeyword(checkTarget, params.pauseBeforeKeywords);
           if (matchedKw) {
-            return this.formatResult(
+            return finish(
               'paused',
               engine,
               engineSwitched,
@@ -606,7 +864,7 @@ export class FastDecisionEngine {
         }
 
         if (decision.shouldEscalate) {
-          return this.formatResult(
+          return finish(
             'escalate',
             engine,
             engineSwitched,
@@ -622,6 +880,20 @@ export class FastDecisionEngine {
       }
 
       // Step 3: Execute Action
+      if (visualClickExecuted) {
+        return finish(
+          'escalate',
+          engine,
+          engineSwitched,
+          fallbackReason,
+          'Visual click already executed; verify the result before acting again',
+          steps,
+          finalPage,
+          currentElements,
+          jevCalls,
+          inputTokens,
+        );
+      }
       sendProgress(step, `${actionToTake} on ${targetLine || 'page'}`);
 
       let outcome = 'urlChanged:false, mutated:false';
@@ -654,7 +926,7 @@ export class FastDecisionEngine {
           outcome = this.parseOutcome(navRes);
         } else if (actionToTake === 'click') {
           if (targetIndex === undefined) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -678,7 +950,7 @@ export class FastDecisionEngine {
           outcome = this.parseOutcome(clickRes);
         } else if (actionToTake === 'type') {
           if (targetIndex === undefined) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -693,7 +965,7 @@ export class FastDecisionEngine {
           }
           const textPayload = extractTextPayload(params.goal, params.textHint);
           if (!textPayload) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -723,7 +995,7 @@ export class FastDecisionEngine {
         } else if (actionToTake === 'select') {
           // Two-stage select (§2.3, §5.2, §5.3)
           if (targetIndex === undefined) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -747,7 +1019,7 @@ export class FastDecisionEngine {
           const options: Array<{ text: string; value: string }> = optData.options || [];
 
           if (options.length === 0) {
-            return this.formatResult(
+            return finish(
               'escalate',
               engine,
               engineSwitched,
@@ -767,7 +1039,7 @@ export class FastDecisionEngine {
             jevCalls++;
             inputTokens += scoreRes?.usage?.inputTokens || 0;
             if (!scoreRes || scoreRes.confidence < 0.4) {
-              return this.formatResult(
+              return finish(
                 'escalate',
                 engine,
                 engineSwitched,
@@ -823,7 +1095,7 @@ export class FastDecisionEngine {
       });
     }
 
-    return this.formatResult(
+    return finish(
       'max_steps',
       engine,
       engineSwitched,
@@ -928,8 +1200,15 @@ export class FastDecisionEngine {
     jevCalls: number,
     inputTokens: number,
     pausedBeforeAction?: PausedBeforeAction,
+    telemetry?: {
+      visionCalls?: number;
+      textLatencyMs?: number;
+      visionLatencyMs?: number;
+    },
   ): ActTowardGoalResult {
     const estCostUsd = (inputTokens / 1_000_000) * 0.042;
+    const vCalls = telemetry?.visionCalls || 0;
+    const totalCalls = jevCalls + vCalls;
 
     return {
       status,
@@ -943,12 +1222,19 @@ export class FastDecisionEngine {
       ...(status === 'escalate' || status === 'stuck' || status === 'paused'
         ? { currentElements: currentElements.slice(0, 100) }
         : {}),
-      ...(jevCalls > 0
+      ...(totalCalls > 0
         ? {
             jevUsage: {
-              calls: jevCalls,
+              calls: totalCalls,
               inputTokens,
               estCostUsd: Math.round(estCostUsd * 100000) / 100000,
+              ...(vCalls > 0 ? { visionCalls: vCalls, visionModel: JEV_VISION_MODEL } : {}),
+              ...(telemetry?.textLatencyMs !== undefined
+                ? { textLatencyMs: telemetry.textLatencyMs }
+                : {}),
+              ...(telemetry?.visionLatencyMs !== undefined
+                ? { visionLatencyMs: telemetry.visionLatencyMs }
+                : {}),
             },
           }
         : {}),

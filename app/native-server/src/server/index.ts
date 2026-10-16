@@ -671,18 +671,31 @@ export class Server {
       },
     );
 
-    // POST /jev/remote-config: Updates remote Jev configuration (baseUrl, apiKey, modelId)
+    // POST /jev/remote-config: Updates remote Jev configuration and screenshot consent.
     this.fastify.post(
       '/jev/remote-config',
       async (
-        request: FastifyRequest<{ Body: { baseUrl?: string; apiKey?: string; modelId?: string } }>,
+        request: FastifyRequest<{
+          Body: { baseUrl?: string; apiKey?: string; modelId?: string; visionEnabled?: boolean };
+        }>,
         reply: FastifyReply,
       ) => {
         const body = request.body || {};
-        const updatePayload: { baseUrl?: string; apiKey?: string; modelId?: string } = {
-          baseUrl: body.baseUrl,
-          modelId: body.modelId,
-        };
+        if (body.visionEnabled !== undefined && typeof body.visionEnabled !== 'boolean') {
+          return reply.status(HTTP_STATUS.BAD_REQUEST).send({
+            success: false,
+            message: 'visionEnabled must be a boolean',
+          });
+        }
+        const updatePayload: {
+          baseUrl?: string;
+          apiKey?: string;
+          modelId?: string;
+          visionEnabled?: boolean;
+        } = {};
+        if (body.baseUrl !== undefined) updatePayload.baseUrl = body.baseUrl;
+        if (body.modelId !== undefined) updatePayload.modelId = body.modelId;
+        if (body.visionEnabled !== undefined) updatePayload.visionEnabled = body.visionEnabled;
         // Don't overwrite existing API key if client omitted it, passed masked key, or passed empty string (preserve existing)
         // Explicit clear requires explicit clearApiKey: true
         if ((body as any).clearApiKey === true) {
@@ -724,6 +737,7 @@ export class Server {
         return reply.status(HTTP_STATUS.OK).send({
           baseUrl: config.baseUrl || '',
           modelId: config.modelId || 'jev-latest',
+          visionEnabled: config.visionEnabled === true,
           hasApiKey: Boolean(config.apiKey || envKey),
           hasConfiguredApiKey: Boolean(config.apiKey),
           hasEnvApiKey: Boolean(envKey),

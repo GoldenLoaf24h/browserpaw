@@ -29,7 +29,7 @@ import { readBridgeToken, TOKEN_FILE } from '../server/token';
 
 const EXPECTED_PORT = 12306;
 const SCHEMA_VERSION = 1;
-const MIN_NODE_MAJOR_VERSION = 20;
+const MIN_NODE_MAJOR_VERSION = 22;
 
 export async function checkBridgeCredentials(): Promise<DoctorCheckResult[]> {
   let token: string;

@@ -8914,6 +8914,8 @@ export function inPageGetScrollState(): {
   viewportHeight: number;
   docWidth: number;
   docHeight: number;
+  documentURL?: string;
+  documentId?: string;
 } {
   const win = typeof window !== 'undefined' ? window : (globalThis as any).window;
   const doc = win?.document;
@@ -8937,6 +8939,18 @@ export function inPageGetScrollState(): {
     docEl?.offsetHeight || 0,
     viewportHeight,
   );
+  let documentId: string | undefined = undefined;
+  if (doc) {
+    documentId = (doc as any)._browserpaw_doc_id;
+    if (!documentId) {
+      documentId = 'doc_' + Math.random().toString(36).slice(2, 11) + '_' + Date.now();
+      try {
+        (doc as any)._browserpaw_doc_id = documentId;
+      } catch {}
+    }
+  }
+  const documentURL = doc?.URL || win?.location?.href || '';
+
   return {
     scrollX: Math.round(scrollX),
     scrollY: Math.round(scrollY),
@@ -8944,6 +8958,8 @@ export function inPageGetScrollState(): {
     viewportHeight: Math.round(viewportHeight),
     docWidth: Math.round(docWidth),
     docHeight: Math.round(docHeight),
+    documentURL,
+    documentId,
   };
 }
 

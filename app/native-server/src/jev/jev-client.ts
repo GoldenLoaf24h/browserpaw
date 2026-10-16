@@ -3,6 +3,9 @@ import {
   choice,
   noul,
   score,
+  box,
+  image,
+  type BoxCoordinates,
   AuthenticationError,
   RateLimitError,
   APITimeoutError,
@@ -10,8 +13,29 @@ import {
   APIError,
   type SystemOneResult,
 } from '@typesafe-ai/sdk';
-import { JevState, JevPageState, JevHistoryItem, JevUsage, FallbackReason } from './types';
+import {
+  JevState,
+  JevPageState,
+  JevHistoryItem,
+  JevUsage,
+  FallbackReason,
+  VisionFrameInfo,
+} from './types';
 import { jevModelManager, JevMode } from '../server/jev-model-manager';
+
+// Fixed vision model and danger zone header
+export const JEV_VISION_MODEL = 'jev-1.14.0';
+export const DANGER_ZONE_IMAGES_HEADER = 'TypeSafe-Danger-Zone-Images';
+
+export interface JevVisionResult {
+  exists: boolean;
+  ambiguous: boolean;
+  destructive: boolean;
+  box: BoxCoordinates | null;
+  confidence: number | null;
+  rawAnswers?: Record<string, any>;
+  usage?: { input_tokens: number | null; output_tokens: number | null };
+}
 
 // 14 Built-in destructive keywords (Iron Rule §2.3)
 export const DESTRUCTIVE_KEYWORDS: readonly string[] = [
@@ -321,6 +345,122 @@ export function getTop3Probabilities(
   return result;
 }
 
+/**
+ * Visual fallback is limited to a single explicit click goal; textHint is input data.
+ */
+export function extractVisualTargetDescription(goal: string): string {
+  if (
+    !goal ||
+    /[;\n&]|\b(?:then|after|and|type|fill|select|enter|drag|upload|hold)\b|然后|接着|并|随后|再|输入|填写|选择|拖拽|上传/i.test(
+      goal,
+    )
+  ) {
+    return '';
+  }
+  const target = goal
+    .trim()
+    .replace(/^(?:please\s+)?(?:click\s+(?:on\s+)?|tap\s+(?:on\s+)?|press\s+|(?:请)?点击)\s*/i, '');
+  if (target === goal.trim() || !target) return '';
+
+  // 1. Quoted segments
+  const quoteMatch = target.match(/["“'「‘]([^"”'」’]+)["”'」’]/);
+  if (quoteMatch && quoteMatch[1].trim()) {
+    return quoteMatch[1].trim().slice(0, 120);
+  }
+
+  return target.slice(0, 120);
+}
+
+/**
+ * Parse chrome_screenshot MCP response into Buffer and VisionFrameInfo.
+ * Response must contain:
+ * - type === 'image': base64 string
+ * - type === 'text': JSON with visionFrame: { id, width, height }
+ */
+export function parseScreenshotContent(
+  res: any,
+): { imageBuffer: Buffer; frame: VisionFrameInfo } | null {
+  if (!res || res.isError) return null;
+  const contentArray: any[] = Array.isArray(res.content) ? res.content : [];
+  if (contentArray.length === 0) return null;
+
+  let imageBuffer: Buffer | null = null;
+  let frame: VisionFrameInfo | null = null;
+
+  for (const item of contentArray) {
+    if (!item) continue;
+    if (
+      item.type === 'image' &&
+      (item.mimeType === 'image/png' || item.mimeType === 'image/jpeg') &&
+      typeof item.data === 'string' &&
+      item.data.length > 0
+    ) {
+      try {
+        imageBuffer = Buffer.from(item.data, 'base64');
+      } catch {
+        imageBuffer = null;
+      }
+    } else if (item.type === 'text' && typeof item.text === 'string') {
+      try {
+        const parsed = JSON.parse(item.text);
+        const vf = parsed.visionFrame || parsed;
+        if (
+          vf &&
+          typeof vf.id === 'string' &&
+          vf.id.trim().length > 0 &&
+          Number.isInteger(vf.width) &&
+          vf.width >= 280 &&
+          vf.width <= 1568 &&
+          Number.isInteger(vf.height) &&
+          vf.height >= 280 &&
+          vf.height <= 1568
+        ) {
+          frame = {
+            id: vf.id.trim(),
+            width: vf.width,
+            height: vf.height,
+          };
+        }
+      } catch {
+        // Ignore non-json text
+      }
+    }
+  }
+
+  if (imageBuffer?.length && frame) {
+    return { imageBuffer, frame };
+  }
+  return null;
+}
+
+/**
+ * Validate BoxCoordinates bounds and sanity.
+ * Values must be numbers in [0, 1] with left < right and top < bottom.
+ */
+export function validateBoxCoordinates(boxCoords: any): boxCoords is BoxCoordinates {
+  if (!boxCoords || typeof boxCoords !== 'object') return false;
+  const { top, bottom, left, right } = boxCoords;
+  if (
+    typeof top !== 'number' ||
+    typeof bottom !== 'number' ||
+    typeof left !== 'number' ||
+    typeof right !== 'number' ||
+    isNaN(top) ||
+    isNaN(bottom) ||
+    isNaN(left) ||
+    isNaN(right)
+  ) {
+    return false;
+  }
+  if (left < 0 || right > 1 || left >= right) {
+    return false;
+  }
+  if (top < 0 || bottom > 1 || top >= bottom) {
+    return false;
+  }
+  return true;
+}
+
 export class JevClientWrapper {
   private client: TypeSafeClient | null = null;
   private localClient: TypeSafeClient | null = null;
@@ -423,6 +563,7 @@ export class JevClientWrapper {
     state: JevState,
     questions: Record<string, any>,
     mode?: JevMode,
+    options?: { signal?: AbortSignal; timeout?: number },
   ): Promise<{
     result: SystemOneResult<any> | null;
     errorReason: FallbackReason;
@@ -454,11 +595,14 @@ export class JevClientWrapper {
     try {
       const remoteCfg = targetMode === 'remote' ? jevModelManager.getRemoteConfig() : undefined;
       const model = remoteCfg?.modelId?.trim() || undefined;
-      const response = await client.systemOne({
-        state: state as any,
-        questions,
-        ...(model ? { model } : {}),
-      });
+      const response = await client.systemOne(
+        {
+          state: state as any,
+          questions,
+          ...(model ? { model } : {}),
+        },
+        options,
+      );
       return { result: response, errorReason: null };
     } catch (err: any) {
       if (targetMode === 'local') {
@@ -504,8 +648,153 @@ export class JevClientWrapper {
   }
 
   /**
-   * Score candidate dropdown options conforming to §2.3, §5.2, §5.3
+   * Execute visual System One query with image asset and 4-question defensive fan-out.
+   * Hard gated: Remote mode only, visionEnabled required. Local/off strictly prohibited.
    */
+  public async queryVision(
+    imageBuffer: Buffer,
+    targetDescription: string,
+    mode?: JevMode,
+    options?: { signal?: AbortSignal; timeout?: number },
+  ): Promise<{
+    result: JevVisionResult | null;
+    errorReason: FallbackReason;
+    rawError?: any;
+  }> {
+    const targetMode = mode || jevModelManager.getActiveMode();
+    // HARD GATE: Vision is strictly remote-only. Local or off must never capture or send images.
+    if (targetMode !== 'remote' || jevModelManager.getActiveMode() !== 'remote') {
+      return {
+        result: null,
+        errorReason: 'jev_disabled',
+      };
+    }
+
+    const remoteCfg = jevModelManager.getRemoteConfig();
+    if (remoteCfg.visionEnabled !== true) {
+      return {
+        result: null,
+        errorReason: 'jev_disabled',
+      };
+    }
+
+    const client = this.getRemoteClient();
+    if (!client || isSessionKeyInvalid()) {
+      return {
+        result: null,
+        errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
+      };
+    }
+
+    try {
+      const imgAsset = image(imageBuffer);
+      const state = {
+        task: targetDescription,
+        screenshot: imgAsset,
+      };
+
+      const questions = {
+        target_exists: noul(
+          `Does the visual element described by "${targetDescription}" exist and is it clearly distinguishable in \`screenshot\`?`,
+        ),
+        target_ambiguous: noul(
+          `Are there multiple candidate elements matching "${targetDescription}" creating visual ambiguity in \`screenshot\`?`,
+        ),
+        target_box: box(`Locate the bounding box of "${targetDescription}" in \`screenshot\``),
+        destructive: noul(
+          `Is interacting with "${targetDescription}" in \`screenshot\` destructive, irreversible, or requiring financial payment/deletion/order submission?`,
+        ),
+      };
+
+      const response = await client.systemOne(
+        {
+          state: state as any,
+          questions,
+          model: JEV_VISION_MODEL,
+        },
+        {
+          signal: options?.signal,
+          timeout: options?.timeout,
+          headers: {
+            [DANGER_ZONE_IMAGES_HEADER]: 'true',
+          },
+        },
+      );
+
+      const answers = (response.answers || {}) as Record<string, any>;
+      const probability = (answer: any, fallback: number): number =>
+        answer?.type === 'noul' &&
+        Number.isFinite(answer.noul) &&
+        answer.noul >= 0 &&
+        answer.noul <= 1
+          ? answer.noul
+          : fallback;
+      const existsNoul = probability(answers.target_exists, 0);
+      const ambiguousNoul = probability(answers.target_ambiguous, 1);
+      const destructiveNoul = probability(answers.destructive, 1);
+
+      // Conservative experimental defaults (not proven zero-risk; requires cautious evaluation)
+      const exists = existsNoul >= 0.85;
+      const ambiguous = ambiguousNoul >= 0.5;
+      const destructive = destructiveNoul >= 0.5;
+
+      const rawBox = answers.target_box?.box;
+      const validBox =
+        answers.target_box?.type === 'box' && validateBoxCoordinates(rawBox) ? rawBox : null;
+      const confidence =
+        Number.isFinite(answers.target_box?.confidence) &&
+        answers.target_box.confidence >= 0 &&
+        answers.target_box.confidence <= 1
+          ? answers.target_box.confidence
+          : null;
+
+      return {
+        result: {
+          exists,
+          ambiguous,
+          destructive,
+          box: validBox,
+          confidence,
+          rawAnswers: answers,
+          usage: response.usage
+            ? {
+                input_tokens: response.usage.input_tokens,
+                output_tokens: response.usage.output_tokens,
+              }
+            : undefined,
+        },
+        errorReason: null,
+      };
+    } catch (err: any) {
+      if (err instanceof AuthenticationError || err?.status === 401) {
+        latchInvalidKey();
+        return { result: null, errorReason: 'invalid_key', rawError: err };
+      }
+      if (err instanceof RateLimitError || err?.status === 429) {
+        return { result: null, errorReason: 'quota_exhausted', rawError: err };
+      }
+      if (
+        err instanceof APITimeoutError ||
+        err instanceof APIConnectionError ||
+        err?.code === 'ECONNREFUSED' ||
+        err?.code === 'ETIMEDOUT'
+      ) {
+        return { result: null, errorReason: 'network_error', rawError: err };
+      }
+      if (err instanceof APIError) {
+        if (err.status === 401 || err.status === 403) {
+          latchInvalidKey();
+          return { result: null, errorReason: 'invalid_key', rawError: err };
+        }
+        if (err.status === 429) {
+          return { result: null, errorReason: 'rate_limited', rawError: err };
+        }
+      }
+      return { result: null, errorReason: 'network_error', rawError: err };
+    }
+  }
+
+  /** Score candidate dropdown options conforming to §2.3, §5.2, §5.3. */
   public async scoreOptions(
     goal: string,
     options: Array<{ text: string; value: string }>,

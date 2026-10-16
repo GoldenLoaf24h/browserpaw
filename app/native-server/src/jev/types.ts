@@ -29,6 +29,16 @@ export interface JevUsage {
   calls: number;
   inputTokens: number;
   estCostUsd: number;
+  visionCalls?: number;
+  textLatencyMs?: number;
+  visionLatencyMs?: number;
+  visionModel?: string;
+}
+
+export interface VisionFrameInfo {
+  id: string;
+  width: number;
+  height: number;
 }
 
 export interface JevSuggestion {
