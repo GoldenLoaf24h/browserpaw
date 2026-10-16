@@ -3236,7 +3236,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         pressEnter: {
           type: 'boolean',
           description:
-            'Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)',
+            'Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.',
         },
         mode: {
           type: 'string',

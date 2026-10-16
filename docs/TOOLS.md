@@ -5,7 +5,7 @@
 | Profile            | Tool Count | Estimated Prompt Footprint (chars/4) | Description                                                                           |
 | :----------------- | :--------: | :----------------------------------: | :------------------------------------------------------------------------------------ |
 | **core** (default) |     14     |                ~9.2k                 | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
-| **full**           |     50     |                ~20.3k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
+| **full**           |     50     |                ~20.4k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
 | **crawl**          |     12     |                ~6.1k                 | High-throughput web extraction, markdown summarization, and media inspection          |
 
 Canonical surface: 50 tools = 49 extension-executed tools + 1 native-server tool (`chrome_act_toward_goal`, served by the local Jev engine). Profile counts are Core 14 / Crawl 12 / Full 50. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
@@ -171,7 +171,7 @@ Autonomous semantic micro-loop that perceives, decides, and acts toward a natura
 - `pauseBeforeKeywords` — List of keywords (e.g. ["Post", "Submit", "Pay"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status "paused" with target element context for System 2 confirmation.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
-- `pressEnter` — Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)
+- `pressEnter` — Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.
 - `mode:off|local|remote` — Optional override for the Jev semantic execution engine mode ("off", "local", or "remote"). Defaults to the mode configured in the extension popup.
 
 ### `chrome_interact_index`
