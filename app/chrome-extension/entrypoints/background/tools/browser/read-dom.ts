@@ -150,6 +150,13 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
               role: a.role,
               name: actionText,
               id: a.id,
+              // The fast snapshot already carries the live control value; without it a caller
+              // cannot tell a filled field from an empty one, so a completed fill looks
+              // unperformed and gets repeated until the run reports itself stuck.
+              ...(a.kind === 'fill' && typeof a.value === 'string' && a.value !== ''
+                ? { value: a.value }
+                : {}),
+              ...(a.current_value ? { current_value: a.current_value } : {}),
             },
             text: actionText,
             rect,
@@ -164,7 +171,10 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         });
 
         const treeString = snapshotElements
-          .map((e: any) => `[${e.index}] ${e.tagName}${e.text ? ' "' + e.text + '"' : ''}`)
+          .map((e: any) => {
+            const valuePart = e.attributes?.value ? ` value="${e.attributes.value}"` : '';
+            return `[${e.index}] ${e.tagName}${e.text ? ' "' + e.text + '"' : ''}${valuePart}`;
+          })
           .join('\n');
 
         return {
