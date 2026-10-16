@@ -451,6 +451,8 @@ export class FastDecisionEngine {
       let confidence: number = 0;
       let jevSuggestion: any = undefined;
       let escalateReason: string | undefined;
+      /** Set when Jev judges that a fill should also submit; never inferred from goal keywords. */
+      let submitAfterFill = false;
 
       if (engine === 'jev') {
         const state = buildState(
@@ -663,6 +665,52 @@ export class FastDecisionEngine {
           if (actionToTake === 'click') targetAnswer = answers.click_target;
           else if (actionToTake === 'type') targetAnswer = answers.type_target;
           else if (actionToTake === 'select') targetAnswer = answers.select_target;
+
+          // Whether a fill should also submit is a separate judgment from which field to fill.
+          // Deriving it from keywords in the goal made any goal mentioning "search" press
+          // Enter, so a goal that only asked to fill a search box ran the search instead.
+          if (actionToTake === 'type') {
+            const submitIntent = answers.submit_intent;
+            const validSubmitIntent =
+              submitIntent?.type === 'choice' &&
+              ['fill_only', 'submit', 'unclear'].includes(submitIntent.choice);
+            if (!validSubmitIntent) {
+              return finish(
+                'escalate',
+                engine,
+                engineSwitched,
+                fallbackReason,
+                'Jev response invalid: submit intent choice validation failed',
+                steps,
+                finalPage,
+                currentElements,
+                jevCalls,
+                inputTokens,
+              );
+            }
+            if (submitIntent.choice === 'unclear') {
+              // The task does not say whether to submit, so leave the decision to the caller
+              // rather than guessing: submitting is not reversible by re-filling the field.
+              return finish(
+                'paused',
+                engine,
+                engineSwitched,
+                fallbackReason,
+                'Submit intent unclear; fill the field and confirm whether to submit',
+                steps,
+                finalPage,
+                currentElements,
+                jevCalls,
+                inputTokens,
+                {
+                  action: 'type',
+                  target: targetAnswer?.choice ? `[${targetAnswer.choice}]` : undefined,
+                  matchedKeyword: 'unclear_submit_intent',
+                },
+              );
+            }
+            submitAfterFill = submitIntent.choice === 'submit';
+          }
 
           if (targetAnswer) {
             const expectedTargetKeys = [...extractElementIndices(state.elements), 'none'];
@@ -991,9 +1039,7 @@ export class FastDecisionEngine {
             );
           }
           const shouldPressEnter =
-            params.pressEnter === true ||
-            (params.pressEnter === undefined &&
-              /(search|搜索|submit|提交|回车|press enter)/i.test(params.goal));
+            params.pressEnter === true || (params.pressEnter === undefined && submitAfterFill);
           const fillRes = await internalCaller('chrome_fill_index', {
             index: targetIndex,
             text: textPayload,

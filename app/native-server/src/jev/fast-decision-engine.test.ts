@@ -386,6 +386,170 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(result.fallbackReason).toBe('network_error');
     });
 
+    const typeActionAnswers = (submitChoice: string) =>
+      createMockJevAnswers({
+        action: {
+          type: 'choice',
+          choice: 'type',
+          confidence: 0.92,
+          probabilities: {
+            click: 0.02,
+            type: 0.92,
+            select: 0.01,
+            scroll_down: 0.01,
+            scroll_up: 0.0,
+            back: 0.0,
+            wait: 0.01,
+            done: 0.03,
+            escalate: 0.0,
+          },
+        },
+        submit_intent: {
+          type: 'choice',
+          choice: submitChoice,
+          confidence: 0.9,
+          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.05, [submitChoice]: 0.85 },
+        },
+      });
+
+    test.each([
+      ['fill_only', false],
+      ['submit', true],
+    ])(
+      'P1: submit_intent "%s" decides pressEnter regardless of goal keywords',
+      async (submitChoice, expectedPressEnter) => {
+        process.env.TYPESAFE_API_KEY = 'test_key';
+        const engine = new FastDecisionEngine();
+        const fillArgs: any[] = [];
+
+        (engine as any).jevClient.query = async () => ({
+          result: {
+            answers: typeActionAnswers(submitChoice as string),
+            usage: { input_tokens: 100, output_tokens: 10 },
+          },
+          errorReason: null,
+        });
+
+        // The goal deliberately contains "search": the old keyword rule would have submitted
+        // even though the task only asked to fill the box.
+        const caller = async (toolName: string, args: any) => {
+          if (toolName === 'chrome_fill_index') {
+            fillArgs.push(args);
+            return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+          }
+          return createMockInternalCaller()(toolName, args);
+        };
+
+        await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+        expect(fillArgs).toHaveLength(1);
+        expect(fillArgs[0].pressEnter).toBe(expectedPressEnter);
+      },
+    );
+
+    test('P1: an unclear submit intent pauses instead of guessing', async () => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      let fillCalled = false;
+
+      (engine as any).jevClient.query = async () => ({
+        result: {
+          answers: typeActionAnswers('unclear'),
+          usage: { input_tokens: 100, output_tokens: 10 },
+        },
+        errorReason: null,
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') fillCalled = true;
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+      expect(result.status).toBe('paused');
+      expect(result.reason).toContain('Submit intent unclear');
+      expect(fillCalled).toBe(false);
+      expect(result.pausedBeforeAction?.matchedKeyword).toBe('unclear_submit_intent');
+    });
+
+    test('P1: a malformed submit intent escalates rather than submitting', async () => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      let fillCalled = false;
+
+      (engine as any).jevClient.query = async () => ({
+        result: {
+          answers: createMockJevAnswers({
+            action: {
+              type: 'choice',
+              choice: 'type',
+              confidence: 0.92,
+              probabilities: {
+                click: 0.02,
+                type: 0.92,
+                select: 0.01,
+                scroll_down: 0.01,
+                scroll_up: 0.0,
+                back: 0.0,
+                wait: 0.01,
+                done: 0.03,
+                escalate: 0.0,
+              },
+            },
+            submit_intent: {
+              type: 'choice',
+              choice: 'submit_now',
+              confidence: 0.9,
+              probabilities: {},
+            },
+          }),
+          errorReason: null,
+        },
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') fillCalled = true;
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+      expect(result.status).toBe('escalate');
+      expect(result.reason).toContain('submit intent choice validation failed');
+      expect(fillCalled).toBe(false);
+    });
+
+    test('P1: an explicit pressEnter parameter still overrides the judged intent', async () => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      const fillArgs: any[] = [];
+
+      (engine as any).jevClient.query = async () => ({
+        result: {
+          answers: typeActionAnswers('fill_only'),
+          usage: { input_tokens: 100, output_tokens: 10 },
+        },
+        errorReason: null,
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') {
+          fillArgs.push(args);
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+        }
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      await engine.run(
+        { goal: '在搜索框中输入 BrowserPaw', maxSteps: 1, pressEnter: true },
+        caller,
+      );
+
+      expect(fillArgs).toHaveLength(1);
+      expect(fillArgs[0].pressEnter).toBe(true);
+    });
+
     test('12. Guard: escalates when action confidence < 0.55 threshold (§5.3)', async () => {
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();

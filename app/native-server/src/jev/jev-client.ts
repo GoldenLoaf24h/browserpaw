@@ -167,7 +167,7 @@ export function extractElementIndices(elements: string[]): string[] {
 }
 
 /**
- * Build the 7 parallel System One questions conforming to §5.2
+ * Build the parallel System One questions conforming to §5.2
  */
 export function buildQuestions(elements: string[], goal: string): Record<string, any> {
   const indices = extractElementIndices(elements);
@@ -212,6 +212,16 @@ export function buildQuestions(elements: string[], goal: string): Record<string,
     select_target: choice(
       'Which dropdown or select element index [N] should be selected?',
       targetCriteria,
+    ),
+    submit_intent: choice(
+      'When text is entered into that field, does the task also require submitting it (pressing Enter or triggering the search), or only filling the field?',
+      {
+        fill_only:
+          'Only enter the text. The task does not ask to run the search, submit the form, or press Enter.',
+        submit:
+          'Enter the text and submit it, for example by pressing Enter or triggering the search action.',
+        unclear: 'The task does not make clear whether submitting after filling is wanted or not.',
+      },
     ),
     goal_done: noul(
       'Has the overall task goal been completely and successfully achieved based on the current page state and history?',

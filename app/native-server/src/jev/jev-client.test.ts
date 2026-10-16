@@ -112,7 +112,7 @@ describe('Jev Client & Helper Unit Tests', () => {
   });
 
   describe('3. Questions assembly (§5.2)', () => {
-    test('builds 7 parallel questions with proper criteria', () => {
+    test('builds 8 parallel questions with proper criteria', () => {
       const elements = ['[1] button "Submit"', '[12] textbox "Search"', '[25] link "Help"'];
       const questions = buildQuestions(elements, 'Search BrowserPaw');
 
@@ -120,15 +120,25 @@ describe('Jev Client & Helper Unit Tests', () => {
       expect(questions).toHaveProperty('click_target');
       expect(questions).toHaveProperty('type_target');
       expect(questions).toHaveProperty('select_target');
+      expect(questions).toHaveProperty('submit_intent');
       expect(questions).toHaveProperty('goal_done');
       expect(questions).toHaveProperty('stuck');
       expect(questions).toHaveProperty('destructive');
 
       expect(questions.action.type).toBe('choice');
       expect(questions.click_target.type).toBe('choice');
+      expect(questions.submit_intent.type).toBe('choice');
       expect(questions.goal_done.type).toBe('noul');
       expect(questions.stuck.type).toBe('noul');
       expect(questions.destructive.type).toBe('noul');
+
+      // Submitting after a fill is a separate judgment, so the option set is fixed rather
+      // than derived from the element list.
+      expect(Object.keys(questions.submit_intent.criteria)).toEqual([
+        'fill_only',
+        'submit',
+        'unclear',
+      ]);
 
       const clickCriteriaKeys = Object.keys(questions.click_target.criteria);
       expect(clickCriteriaKeys).toContain('1');
