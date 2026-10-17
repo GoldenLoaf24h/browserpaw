@@ -249,12 +249,22 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   // other; the last holder restores the captured originals.
   let hasTextPolyfillHeld = false;
 
+  // Ownership token. The marker lives on the page's globalThis, where a page
+  // may define a similarly shaped value of its own; only an object carrying
+  // this registry symbol is BrowserPaw state that may be adopted or deleted.
+  const POLYFILL_TOKEN = Symbol.for('browserpaw:has-text-polyfill:v1');
+  const isOwnedPolyfill = (value) =>
+    !!value &&
+    typeof value === 'object' &&
+    value[POLYFILL_TOKEN] === true &&
+    typeof value.count === 'number' &&
+    typeof value.docQS === 'function';
+
   const restoreHasTextPolyfill = () => {
     if (!hasTextPolyfillHeld) return;
     hasTextPolyfillHeld = false;
     const installed = globalThis.__mcpHasTextPolyfill;
-    if (!installed || typeof installed.count !== 'number' || typeof installed.docQS !== 'function')
-      return;
+    if (!isOwnedPolyfill(installed)) return;
     installed.count -= 1;
     if (installed.count > 0) return;
     Document.prototype.querySelector = installed.docQS;
@@ -268,14 +278,11 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     if (typeof Document === 'undefined' || hasTextPolyfillHeld) return;
     // Any marker that already exists belongs either to another evaluation
     // (ours, shared through its reference count) or to the page. A foreign
-    // value is never overwritten, and no prototype patch is installed over it.
+    // value is never overwritten or mutated, and no prototype patch is
+    // installed over it.
     if ('__mcpHasTextPolyfill' in globalThis) {
       const installed = globalThis.__mcpHasTextPolyfill;
-      if (
-        installed &&
-        typeof installed.count === 'number' &&
-        typeof installed.docQS === 'function'
-      ) {
+      if (isOwnedPolyfill(installed)) {
         installed.count += 1;
         hasTextPolyfillHeld = true;
       }
@@ -298,6 +305,7 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
       // Publish the state before patching so a partial failure still restores
       // whatever was already replaced.
       globalThis.__mcpHasTextPolyfill = {
+        [POLYFILL_TOKEN]: true,
         docQS: origDocQS,
         docQSA: origDocQSA,
         elQS: origElQS,

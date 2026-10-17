@@ -546,6 +546,12 @@ describe('Jev Client & Helper Unit Tests', () => {
         );
         expect(extractVisualTargetDescription('点击登录头像')).toBe('登录头像');
       });
+
+      test('rejects keyboard-key goals instead of turning them into visual click targets', () => {
+        expect(extractVisualTargetDescription('Press Escape')).toBe('');
+        expect(extractVisualTargetDescription('press the Escape key')).toBe('');
+        expect(extractVisualTargetDescription('Tap on "Continue"')).toBe('Continue');
+      });
     });
 
     describe('13. Screenshot Parsing & Frame Validation', () => {
@@ -988,7 +994,33 @@ describe('Jev Client & Helper Unit Tests', () => {
 
         await expect(client.resolveBoxCapableModel()).resolves.toBe('jev-1.14.0');
         await expect(client.resolveBoxCapableModel()).resolves.toBe('jev-1.14.0');
-        expect(systemOne).toHaveBeenCalledTimes(1);
+      });
+
+      test('reports probe usage for the billed cold probe', async () => {
+        const client = new JevClientWrapper('test_key');
+        (client as any).client = {
+          systemOne: jest.fn(async () => ({ model: 'jev-1.14.0', usage: { input_tokens: 42 } })),
+        };
+        const onProbeUsage = jest.fn((_usage: { inputTokens: number; latencyMs: number }) => {});
+
+        await expect(
+          client.resolveBoxCapableModel(undefined, undefined, onProbeUsage),
+        ).resolves.toBe('jev-1.14.0');
+
+        expect(onProbeUsage).toHaveBeenCalledTimes(1);
+        expect(onProbeUsage.mock.calls[0][0].inputTokens).toBe(42);
+        expect(onProbeUsage.mock.calls[0][0].latencyMs).toBeGreaterThanOrEqual(0);
+      });
+
+      test('does not report probe usage when the release is already cached', async () => {
+        const client = new JevClientWrapper('test_key');
+        (client as any).resolvedModelId = 'jev-1.14.0';
+        const onProbeUsage = jest.fn();
+
+        await expect(
+          client.resolveBoxCapableModel(undefined, undefined, onProbeUsage),
+        ).resolves.toBe('jev-1.14.0');
+        expect(onProbeUsage).not.toHaveBeenCalled();
       });
 
       test('an unknown release still fails closed and is not retried forever within one call', async () => {

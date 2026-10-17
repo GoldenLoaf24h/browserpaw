@@ -893,6 +893,67 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
     });
   });
 
+  describe('D-20: subframe asset crop fallback uses top-level coordinates', () => {
+    it('offsets a subframe asset rect by its frame origin before cropping the top-level capture', async () => {
+      lastCanvasWidth = 1000;
+      lastCanvasHeight = 900;
+      vi.spyOn(screenshotTool as any, 'resolveAffinityTab').mockResolvedValue({
+        id: tabId,
+        windowId: 1,
+        active: true,
+      });
+      snapshotCacheManager.setSnapshot(tabId, {
+        url: 'https://example.com/embed',
+        elementCount: 1,
+        assetRoutes: new Map([[1, { frameId: 42, localIndex: 0 }]]),
+      });
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (target: any, fnName: string) =>
+          [
+            {
+              frameId: target.frameIds?.[0] ?? 0,
+              result:
+                fnName === 'inPageGetScrollState'
+                  ? {
+                      viewportWidth: 1000,
+                      viewportHeight: 900,
+                      scrollX: 0,
+                      scrollY: 0,
+                      docWidth: 1000,
+                      docHeight: 900,
+                    }
+                  : {
+                      success: false,
+                      reason: 'tainted canvas',
+                      rect: { x: 100, y: 80, width: 200, height: 100 },
+                      frameOffsetX: 300,
+                      frameOffsetY: 200,
+                      devicePixelRatio: 1,
+                      kind: 'canvas',
+                    },
+            },
+          ] as any,
+      );
+
+      const res = await screenshotTool.execute({
+        tabId,
+        assetIndex: 1,
+        padding: 10,
+        format: 'png',
+      });
+
+      expect(res.isError).toBeFalsy();
+      // (100+300-10, 80+200-10) = (390, 270), size (200+20, 100+20) = (220, 120)
+      expect(drawImage.mock.calls[0].slice(1)).toEqual([390, 270, 220, 120, 0, 0, 220, 120]);
+      const metadata = JSON.parse((res.content[0] as any).text);
+      expect(metadata).toMatchObject({
+        assetSource: 'viewport-crop',
+        originX: 390,
+        originY: 270,
+      });
+    });
+  });
+
   describe('D-19: multi-frame asset routing via snapshot cache', () => {
     it('routes subframe asset to target frameId with local index instead of broadcasting global index to all frames', async () => {
       (screenshotTool as any).resolveAffinityTab = async () => ({

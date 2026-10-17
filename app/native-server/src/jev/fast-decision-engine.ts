@@ -224,7 +224,16 @@ export class FastDecisionEngine {
       if (probeRemaining <= 0)
         return halt('timeout', 'Execution deadline exceeded before vision probe');
       const probeSignal = AbortSignal.timeout(probeRemaining);
-      const visionModel = await this.jevClient.resolveBoxCapableModel(probeSignal, probeRemaining);
+      const visionModel = await this.jevClient.resolveBoxCapableModel(
+        probeSignal,
+        probeRemaining,
+        (probeUsage) => {
+          // The capability probe is a billed text request; count it like a text query.
+          jevCalls++;
+          inputTokens += probeUsage.inputTokens;
+          totalTextLatencyMs += probeUsage.latencyMs;
+        },
+      );
       // A probe that ran into its deadline (or outlived the run's) answered nothing about the
       // endpoint; the run must stop with timeout instead of capturing or acting on stale state.
       if (probeSignal.aborted || expired()) {

@@ -8102,6 +8102,8 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
   reason?: string;
   dataUrl?: string;
   rect?: { x: number; y: number; width: number; height: number };
+  frameOffsetX?: number;
+  frameOffsetY?: number;
   devicePixelRatio?: number;
   kind?: string;
   src?: string;
@@ -8115,6 +8117,36 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
       reason: `asset ${assetIndex} not found (run ${resolveToolName('read_dom')} first)`,
     };
   const rect = entry.el.getBoundingClientRect().toJSON();
+  // rect is relative to this frame's viewport; the background crops the
+  // top-level capture, so also report the frame's cumulative viewport offset
+  // (with border and zoom compensation) for the fallback path.
+  let frameOffsetX = 0;
+  let frameOffsetY = 0;
+  try {
+    let curWin: Window = window;
+    while (curWin !== curWin.top) {
+      if (curWin.frameElement) {
+        const fEl = curWin.frameElement;
+        const fRect = fEl.getBoundingClientRect();
+        const parentWin = curWin.parent || fEl.ownerDocument?.defaultView || window;
+        const fStyle =
+          typeof parentWin.getComputedStyle === 'function'
+            ? parentWin.getComputedStyle(fEl)
+            : undefined;
+        const borderLeft = parseFloat(fStyle?.borderLeftWidth || '0') || 0;
+        const borderTop = parseFloat(fStyle?.borderTopWidth || '0') || 0;
+        const zoom = parseFloat((fStyle as any)?.zoom || '1') || 1;
+
+        frameOffsetX += (fRect.left + borderLeft) / zoom;
+        frameOffsetY += (fRect.top + borderTop) / zoom;
+        curWin = curWin.parent;
+      } else {
+        break;
+      }
+    }
+  } catch {
+    // Cross-origin boundary fallback
+  }
   const out: any = {
     success: false,
     reason: 'unsupported',
@@ -8125,6 +8157,8 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
       width: Math.round(rect.width),
       height: Math.round(rect.height),
     },
+    frameOffsetX: Math.round(frameOffsetX),
+    frameOffsetY: Math.round(frameOffsetY),
     kind: entry.kind,
     src: entry.src,
     devicePixelRatio: (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1,

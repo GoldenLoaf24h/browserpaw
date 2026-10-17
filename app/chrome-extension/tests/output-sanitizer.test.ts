@@ -10,6 +10,27 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(res.redacted).toBe(true);
     });
 
+    it('blocks cookie strings longer than 256 characters under generic names', () => {
+      const cookieStr = [
+        `a=${'v'.repeat(120)}`,
+        `user=${'u'.repeat(120)}`,
+        `flag=${'f'.repeat(120)}`,
+        'path=/',
+        'Secure',
+      ].join('; ');
+      expect(cookieStr.length).toBeGreaterThan(256);
+      const res = sanitizeText(cookieStr);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('blocks long Cookie header values', () => {
+      const header = `Cookie: a=${'v'.repeat(300)}; user=${'u'.repeat(300)}`;
+      const res = sanitizeText(header);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
     it('redacts standalone Bearer tokens', () => {
       const input = 'Bearer secret-bearer-token-123456';
       const res = sanitizeText(input);
@@ -201,6 +222,33 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       const res = sanitizeText(bareAbsolute);
       expect(res.text).toContain('<redacted_base64>');
       expect(res.redacted).toBe(true);
+    });
+
+    it('does NOT block long multi-line code that contains = and ;', () => {
+      const code = [
+        'const el = document.querySelector("#app");',
+        'const state = { count: 0 };',
+        'const style = getComputedStyle(el);',
+        'const html = el.outerHTML;',
+        'const box = el.getBoundingClientRect();',
+        'const text = el.textContent;',
+        'const flag = state.count > 0;',
+        'const label = `count=${state.count}`;',
+        'const width = box.width;',
+        'const height = box.height;',
+      ].join('\n');
+      const res = sanitizeText(code);
+      expect(res.text).toBe(code);
+      expect(res.redacted).toBe(false);
+    });
+
+    it('does NOT block long HTML snippets containing = and ;', () => {
+      const html =
+        '<div class="a=b;c=d" style="color:red;display:block" data-x="1;2">' +
+        'content with key=value; another=value;</div>';
+      const res = sanitizeText(html);
+      expect(res.text).toBe(html);
+      expect(res.redacted).toBe(false);
     });
 
     it('does NOT redact benign keys containing short marker substrings (D-09)', () => {

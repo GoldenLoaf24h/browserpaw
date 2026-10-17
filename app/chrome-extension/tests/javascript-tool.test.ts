@@ -234,6 +234,34 @@ describe('evaluation-local helper teardown (PR6 comment 4301519598)', () => {
     expect(Document.prototype.querySelector).toBe(origDocQS);
   });
 
+  it('does not adopt a duck-typed page-owned __mcpHasTextPolyfill (numeric count + callable docQS)', async () => {
+    // Same shape as BrowserPaw's marker but without the ownership token: a page
+    // value with count 0 and missing docQSA/elQS/elQSA must not be mutated,
+    // restored from, or deleted.
+    const pageOwned = { count: 0, docQS: () => null };
+    Object.defineProperty(globalThis, '__mcpHasTextPolyfill', {
+      value: pageOwned,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    const origDocQS = Document.prototype.querySelector;
+    document.body.innerHTML = '<button id="confirm">Confirm Order</button>';
+
+    const result = await evaluate(`
+      return {
+        duringEval: globalThis.__mcpHasTextPolyfill === undefined ? 'missing' : 'untouched',
+        helperQuery: mcp.query('button:has-text("Confirm Order")')?.id ?? null,
+      };
+    `);
+
+    expect(result).toEqual({ duringEval: 'untouched', helperQuery: 'confirm' });
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__mcpHasTextPolyfill');
+    expect(descriptor?.value).toBe(pageOwned);
+    expect(pageOwned.count).toBe(0);
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+  });
+
   it('leaves a non-writable page-owned __mcpHasTextPolyfill intact and unpatched', async () => {
     const pageOwned = { fromPage: true };
     Object.defineProperty(globalThis, '__mcpHasTextPolyfill', {

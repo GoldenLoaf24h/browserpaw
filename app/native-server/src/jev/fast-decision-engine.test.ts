@@ -1533,6 +1533,21 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(timeout).toBeLessThanOrEqual(2000);
     });
 
+    test('counts the cold capability probe as a billed text call in jevUsage', async () => {
+      const { engine, caller } = visionHarness();
+      const probe = (engine as any).jevClient.resolveBoxCapableModel as jest.Mock;
+      probe.mockImplementation(async (_signal: any, _timeout: any, onProbeUsage: any) => {
+        onProbeUsage({ inputTokens: 42, latencyMs: 7 });
+        return 'jev-1.14.0';
+      });
+      const result = await engine.run({ goal: 'click bell icon', maxSteps: 1 }, caller);
+
+      expect(result.jevUsage?.calls).toBe(2); // probe + vision query
+      expect(result.jevUsage?.inputTokens).toBe(42);
+      expect(result.jevUsage?.textLatencyMs).toBe(7);
+      expect(result.jevUsage?.visionCalls).toBe(1);
+    });
+
     test.each([null, 'jev-1.14.0'])(
       'a capability probe that runs past the deadline returns timeout with no capture or action (model: %s)',
       async (model) => {

@@ -63,6 +63,6 @@ The latest `pnpm verify` report at `.artifacts/verification/latest.json` records
 
 - **Keyboard Chords**: `chrome_keyboard` supports compound chords and normalized key names including `plus` (`+`), `comma` (`,`), and sequential aliases.
 - **DOM Perception & Mutation Boundary**: `chrome_read_dom` is strictly read-only by default (`dismissOverlays: false`). Passing `dismissOverlays: true` initiates active modal clicks and is a mutating side effect.
-- **Port Resolution Precedence**: Thin CLI (`bin/browserpaw.cjs`) evaluates `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). Native daemon defaults to 12306.
+- **Port Resolution Precedence**: The native daemon, thin CLI (`bin/browserpaw.cjs`), DSH plugin, and HTTP-only clients all evaluate `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). An explicit extension `START` message port still wins for the daemon.
 - **Extension Auto-Sync**: Setting `BROWSERPAW_EXTENSION_SYNC_DIR` copies unpacked extension builds to the target browser profile during build.
 - **Browser Compatibility**: Production target is Google Chrome and compatible Chromium browsers. Edge and Brave are not independently tested.

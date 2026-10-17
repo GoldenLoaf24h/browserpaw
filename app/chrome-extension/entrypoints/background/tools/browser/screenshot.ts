@@ -538,17 +538,20 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           captureViewport = viewport;
           originalScroll = { x: viewport.scrollX, y: viewport.scrollY };
           const pad = Math.max(0, args.padding ?? 0);
+          // A subframe asset's rect is relative to the iframe viewport; shift it
+          // by the frame's cumulative offset to address the top-level capture.
+          const assetX = Math.round(asset.rect.x + (asset.frameOffsetX || 0));
+          const assetY = Math.round(asset.rect.y + (asset.frameOffsetY || 0));
           const crop = {
-            x: Math.max(0, Math.round(asset.rect.x - pad)),
-            y: Math.max(0, Math.round(asset.rect.y - pad)),
+            x: Math.max(0, assetX - pad),
+            y: Math.max(0, assetY - pad),
             w: 0,
             h: 0,
           };
           crop.w =
-            Math.min(viewport.viewportWidth, Math.round(asset.rect.x + asset.rect.width + pad)) -
-            crop.x;
+            Math.min(viewport.viewportWidth, assetX + Math.round(asset.rect.width) + pad) - crop.x;
           crop.h =
-            Math.min(viewport.viewportHeight, Math.round(asset.rect.y + asset.rect.height + pad)) -
+            Math.min(viewport.viewportHeight, assetY + Math.round(asset.rect.height) + pad) -
             crop.y;
           if (crop.w <= 0 || crop.h <= 0) throw new Error('Asset crop is outside viewport');
           const visibleDataUrl = await this.captureTabPng(tab);

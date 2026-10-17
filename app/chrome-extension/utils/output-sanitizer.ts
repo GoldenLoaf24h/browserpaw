@@ -111,17 +111,16 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
   };
 
   // 1. Standalone whole-string inspection
-  // Cookie/query string shape detection (contains = and ; or &)
-  // Whole-string blocking only makes sense for short standalone values (a
-  // cookie header, a query string). Long payloads (HTML snippets, JSON with
-  // class="a=b&c=d") would be falsely blocked wholesale, so they fall
-  // through to token-level replacement below.
-  if (out.length <= 256 && out.includes('=') && (out.includes(';') || out.includes('&'))) {
-    // Detect cookie strings
-    if (looksLikeCookieString(out)) {
-      return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
-    }
-    // Detect query strings (key=value&key2=value2 format)
+  // Cookie strings are detected at any length: `document.cookie` values are
+  // commonly longer than any fixed cap. The pair grammar itself separates them
+  // from embedded HTML/JSON/code, so no length cap is needed here.
+  if (out.includes('=') && out.includes(';') && looksLikeCookieString(out)) {
+    return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
+  }
+  // Query-string blocking stays length-capped: long payloads (HTML snippets,
+  // JSON with class="a=b&c=d", URLs) would be falsely blocked wholesale, so
+  // they fall through to token-level replacement below.
+  if (out.length <= 256 && out.includes('=') && out.includes('&')) {
     if (looksLikeQueryString(out)) {
       return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
     }
@@ -374,12 +373,19 @@ function normalizeKey(key: string): string {
 }
 
 /**
- * Check if string looks like a cookie string (key=value; key2=value2)
+ * Check if string looks like a cookie string (key=value; key2=value2).
+ *
+ * Structural checks keep this safe at any length: `document.cookie` output is
+ * a single line that starts with a cookie-pair (RFC 6265) or a `Cookie:`
+ * header, which is what separates it from embedded HTML, JSON, or code that
+ * also contains '=' and ';'.
  */
 function looksLikeCookieString(text: string): boolean {
   const s = (text || '').trim();
   if (!s) return false;
   if (!s.includes('=') || !s.includes(';')) return false;
+  if (/[\r\n]/.test(s)) return false;
+  if (!/^(?:cookie:\s*)?[!#$%&'*+\-.^_`|~0-9A-Za-z]+=/i.test(s)) return false;
 
   const parts = s.split(';');
   if (parts.length < 2) return false;

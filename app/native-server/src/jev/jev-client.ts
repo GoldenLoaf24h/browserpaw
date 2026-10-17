@@ -398,9 +398,12 @@ export function extractVisualTargetDescription(goal: string): string {
   ) {
     return '';
   }
+  // Only explicit click/tap phrasing qualifies: `press`/`key` goals ask for a
+  // keyboard action, and turning "Press Escape" into the visual target
+  // "Escape" would make the fallback click whatever carries that label.
   const target = goal
     .trim()
-    .replace(/^(?:please\s+)?(?:click\s+(?:on\s+)?|tap\s+(?:on\s+)?|press\s+|(?:请)?点击)\s*/i, '');
+    .replace(/^(?:please\s+)?(?:click\s+(?:on\s+)?|tap\s+(?:on\s+)?|(?:请)?点击)\s*/i, '');
   if (target === goal.trim() || !target) return '';
 
   // 1. Quoted segments
@@ -619,6 +622,7 @@ export class JevClientWrapper {
   public async resolveBoxCapableModel(
     signal?: AbortSignal,
     timeout?: number,
+    onProbeUsage?: (usage: { inputTokens: number; latencyMs: number }) => void,
   ): Promise<string | null> {
     // Never probe the local service client that `getRemoteClient()` returns in local mode.
     if (jevModelManager.getActiveMode() !== 'remote') return null;
@@ -631,6 +635,7 @@ export class JevClientWrapper {
 
     if (this.resolvedModelId === undefined) {
       const configured = jevModelManager.getRemoteConfig().modelId?.trim() || undefined;
+      const probeStart = Date.now();
       try {
         const probe = await client.systemOne(
           {
@@ -640,6 +645,12 @@ export class JevClientWrapper {
           },
           { signal, timeout },
         );
+        // The probe is a real billed request; report it so run telemetry counts the
+        // cold-probe cases instead of undercounting them.
+        onProbeUsage?.({
+          inputTokens: probe?.usage?.input_tokens || 0,
+          latencyMs: Date.now() - probeStart,
+        });
         // A probe that straddled a switch reports on the old endpoint: drop it. Mode is
         // checked first so a revocation short-circuits before `getRemoteClient()` can rebuild.
         if (
