@@ -217,8 +217,16 @@ export class FastDecisionEngine {
       }
 
       // Resolve box support before capturing: an endpoint whose release cannot answer `box`
-      // must not have a screenshot taken for it, let alone sent.
-      const visionModel = await this.jevClient.resolveBoxCapableModel();
+      // must not have a screenshot taken for it, let alone sent. Bound the probe by the
+      // same deadline as the rest of the run so a stalled endpoint cannot stretch
+      // act_toward_goal past its requested timeoutMs.
+      const probeRemaining = Math.min(timeoutMs - (Date.now() - startTime), 30_000);
+      if (probeRemaining <= 0)
+        return halt('timeout', 'Execution deadline exceeded before vision probe');
+      const visionModel = await this.jevClient.resolveBoxCapableModel(
+        AbortSignal.timeout(probeRemaining),
+        probeRemaining,
+      );
       if (!visionModel) {
         return { handled: false };
       }
@@ -671,7 +679,9 @@ export class FastDecisionEngine {
           // Whether a fill should also submit is a separate judgment from which field to fill.
           // Deriving it from keywords in the goal made any goal mentioning "search" press
           // Enter, so a goal that only asked to fill a search box ran the search instead.
-          if (actionToTake === 'type') {
+          // An explicit pressEnter parameter is the caller's decision: skip the model
+          // judgment entirely so an unclear or malformed answer cannot veto it.
+          if (actionToTake === 'type' && params.pressEnter === undefined) {
             const submitIntent = answers.submit_intent;
             const validSubmitIntent =
               submitIntent?.type === 'choice' &&

@@ -83,6 +83,16 @@ The registration script writes the Native Messaging manifest and browser registr
 - **Linux**: Places the manifest JSON under `~/.config/google-chrome/NativeMessagingHosts/`.
 - **Security Bridge Token**: Created on first server startup and used to authenticate local HTTP and WebSocket connections.
 
+> **Custom or unpacked extension ID:** Chrome checks the manifest's `allowed_origins` **before** launching the native host, so the runtime ID the host learns from its launch argument cannot bootstrap an ID the manifest does not already list. If you loaded an unpacked build whose ID differs from the published store ID, set it before running registration so it is baked into the manifest:
+>
+> ```bash
+> # Windows (pwsh): $env:CHROME_EXTENSION_ID = '<your-32-char-id>'
+> # macOS/Linux:    export CHROME_EXTENSION_ID='<your-32-char-id>'
+> CHROME_EXTENSION_ID='<your-32-char-id>' node app/native-server/dist/scripts/register-dev.js
+> ```
+>
+> The ID is shown on the extension's card in `chrome://extensions/`. Re-run registration after changing it.
+
 ---
 
 ## Step 3: Connect to Your AI Agent Client

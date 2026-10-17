@@ -89,7 +89,16 @@ export async function apply(ctx) {
       if (!session) return;
       const current = session;
       session = null;
-      await current.fork.dispose();
+      try {
+        await current.fork.dispose();
+      } catch (err) {
+        // Disposal failed before the transport closed: restore the session so a later
+        // close or unload can retry it. Leaving the reference cleared would orphan the
+        // fork and let a subsequent open fork a second connection while the first one
+        // is still live.
+        session = current;
+        throw err;
+      }
     });
   }
 

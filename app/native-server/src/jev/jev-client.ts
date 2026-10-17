@@ -628,7 +628,7 @@ export class JevClientWrapper {
           },
           { signal, timeout },
         );
-        if (probe?.model) this.resolvedModelId = probe.model;
+        if (probe?.model && client === this.client) this.resolvedModelId = probe.model;
       } catch {
         return null;
       }
@@ -698,8 +698,12 @@ export class JevClientWrapper {
         options,
       );
       // Upstream reports the concrete release that answered, which is what decides whether
-      // `box` is available; record it so vision routing needs no pinned model id.
-      if (targetMode === 'remote' && response?.model) {
+      // `box` is available; record it so vision routing needs no pinned model id. If the
+      // endpoint was reconfigured while this request was in flight, `getClient()` has already
+      // swapped `this.client` and reset the cache — a response from the superseded client
+      // must not repopulate it, or a concurrent vision request would skip probing the new
+      // endpoint and send it a screenshot its concrete model was never verified to answer.
+      if (targetMode === 'remote' && response?.model && client === this.client) {
         this.resolvedModelId = response.model;
       }
       return { result: response, errorReason: null };
@@ -821,7 +825,7 @@ export class JevClientWrapper {
           },
         },
       );
-      if (response?.model) this.resolvedModelId = response.model;
+      if (response?.model && client === this.client) this.resolvedModelId = response.model;
 
       const answers = (response.answers || {}) as Record<string, any>;
       const probability = (answer: any, fallback: number): number =>
