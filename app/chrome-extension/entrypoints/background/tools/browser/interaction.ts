@@ -9,6 +9,7 @@ import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { executeInPage } from './in-page-engine';
 import type { PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
+import { createMousePressGuard, isCdpOutcomeUncertainError } from '@/utils/race-cdp';
 
 /**
  * D3 (TESTING-NOTES #19): resolveAffinityTab falls back to the user's ACTIVE
@@ -271,25 +272,34 @@ class ClickTool extends BaseBrowserToolExecutor {
             // alone on several renderers. Mirrors computer.ts double/triple path.
             for (let i = 1; i <= clickCount; i++) {
               await animateAgentCursorClick(tabId, loc.x, loc.y, clickNote);
-              await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-                type: 'mousePressed',
-                x: loc.x,
-                y: loc.y,
-                button: buttonName,
-                buttons: buttonsMask,
-                clickCount: i,
-                modifiers: modifierMask,
-              });
-              await new Promise((r) => setTimeout(r, 35));
-              await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-                type: 'mouseReleased',
-                x: loc.x,
-                y: loc.y,
-                button: buttonName,
-                buttons: 0,
-                clickCount: i,
-                modifiers: modifierMask,
-              });
+              const clickGuard = createMousePressGuard(
+                (eventParams) =>
+                  cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', eventParams),
+                {
+                  type: 'mouseReleased',
+                  x: loc.x,
+                  y: loc.y,
+                  button: buttonName,
+                  buttons: 0,
+                  clickCount: i,
+                  modifiers: modifierMask,
+                },
+              );
+              try {
+                await clickGuard.press({
+                  type: 'mousePressed',
+                  x: loc.x,
+                  y: loc.y,
+                  button: buttonName,
+                  buttons: buttonsMask,
+                  clickCount: i,
+                  modifiers: modifierMask,
+                });
+                await new Promise((r) => setTimeout(r, 35));
+                await clickGuard.release();
+              } finally {
+                await clickGuard.compensate();
+              }
               if (i < clickCount) {
                 await new Promise((r) => setTimeout(r, 50));
               }
@@ -300,6 +310,13 @@ class ClickTool extends BaseBrowserToolExecutor {
             deliveryVerified = await readDeliveryProbe(tabId);
           }
         } catch (cdpErr) {
+          // The CDP click may still have landed: falling back to a content-script
+          // click here would activate the target twice. Fail closed instead.
+          if (isCdpOutcomeUncertainError(cdpErr)) {
+            return createErrorResponse(
+              `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)} The click may still have been delivered; inspect the page state before retrying.`,
+            );
+          }
           console.warn('[ClickTool] CDP click failed, falling back to content script:', cdpErr);
         }
 
@@ -535,21 +552,30 @@ class FillTool extends BaseBrowserToolExecutor {
               y: loc.y,
             });
             await animateAgentCursorClick(tabId, loc.x, loc.y, fillNote);
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-              type: 'mousePressed',
-              x: loc.x,
-              y: loc.y,
-              button: 'left',
-              clickCount: 1,
-            });
-            await new Promise((r) => setTimeout(r, 35));
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-              type: 'mouseReleased',
-              x: loc.x,
-              y: loc.y,
-              button: 'left',
-              clickCount: 1,
-            });
+            const focusGuard = createMousePressGuard(
+              (eventParams) =>
+                cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', eventParams),
+              {
+                type: 'mouseReleased',
+                x: loc.x,
+                y: loc.y,
+                button: 'left',
+                clickCount: 1,
+              },
+            );
+            try {
+              await focusGuard.press({
+                type: 'mousePressed',
+                x: loc.x,
+                y: loc.y,
+                button: 'left',
+                clickCount: 1,
+              });
+              await new Promise((r) => setTimeout(r, 35));
+              await focusGuard.release();
+            } finally {
+              await focusGuard.compensate();
+            }
 
             // Clear input
             let isMac = false;
@@ -599,6 +625,13 @@ class FillTool extends BaseBrowserToolExecutor {
             deliveryVerified = await readDeliveryProbe(tabId);
           }
         } catch (cdpErr) {
+          // Same rule as the click path: an unacknowledged CDP fill may still have
+          // typed, so re-typing via the content script would duplicate the input.
+          if (isCdpOutcomeUncertainError(cdpErr)) {
+            return createErrorResponse(
+              `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)} The input may still have been delivered; inspect the page state before retrying.`,
+            );
+          }
           console.warn('[FillTool] CDP fill failed, falling back to content script:', cdpErr);
         }
 

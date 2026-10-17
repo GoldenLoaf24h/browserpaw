@@ -968,7 +968,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         formData: {
           type: 'object',
           description:
-            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:.',
+            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:. Note: filePath and the file: spec are read through the native host, which only accepts files strictly inside its temp directory (<os.tmpdir()>/chrome-mcp-uploads) and at most 700KB (Native Messaging 1MB pipe, base64 inflates binary by 33%). For arbitrary local paths use chrome_upload_file or chrome_insert_media.',
         },
         tabId: {
           type: 'number',
@@ -1518,7 +1518,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait) and buffer mode (persistent per-tab buffer you can read/clear instantly without waiting).',
+      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait), buffer mode (persistent per-tab buffer you can read/clear instantly without waiting), and stop mode (release the persistent buffer for a tab).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1550,9 +1550,9 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         },
         mode: {
           type: 'string',
-          enum: ['snapshot', 'buffer'],
+          enum: ['snapshot', 'buffer', 'stop'],
           description:
-            'Console capture mode: snapshot (default; waits ~2s for messages) or buffer (persistent per-tab buffer; reads from memory instantly).',
+            'Console capture mode: snapshot (default; one-time capture with a ~50ms settle wait), buffer (persistent per-tab buffer; reads from memory instantly), or stop (stop the persistent buffer for this tab and release its resources; idempotent).',
         },
         buffer: {
           type: 'boolean',
@@ -1561,7 +1561,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         clear: {
           type: 'boolean',
           description:
-            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style).',
+            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style). Ignored by stop mode, which discards the buffer entirely.',
         },
         clearAfterRead: {
           type: 'boolean',
@@ -3236,7 +3236,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         pressEnter: {
           type: 'boolean',
           description:
-            'Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)',
+            'Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.',
         },
         mode: {
           type: 'string',

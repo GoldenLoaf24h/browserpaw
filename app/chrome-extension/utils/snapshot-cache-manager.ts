@@ -21,6 +21,11 @@ export function computeScopeHash(text: string): string {
 
 export type SnapshotRepresentation = 'standard' | 'fast';
 
+export interface AssetRoute {
+  frameId: number;
+  localIndex: number;
+}
+
 export interface CachedSnapshot {
   snapshotId: string;
   tabId: number;
@@ -32,6 +37,7 @@ export interface CachedSnapshot {
   invalidationReason?: string;
   fingerprints?: Map<number, ElementFingerprint>;
   representation?: SnapshotRepresentation;
+  assetRoutes?: Map<number, AssetRoute>;
 }
 
 export interface DomDiffResult {
@@ -179,7 +185,13 @@ export class SnapshotCacheManager {
 
   public setSnapshot(
     tabId: number,
-    data: { url: string; elementCount: number; elements?: any[]; representation?: SnapshotRepresentation },
+    data: {
+      url: string;
+      elementCount: number;
+      elements?: any[];
+      representation?: SnapshotRepresentation;
+      assetRoutes?: Map<number, AssetRoute>;
+    },
   ): CachedSnapshot {
     const currentRev = (this.tabRevisions.get(tabId) ?? 0) + 1;
     this.tabRevisions.set(tabId, currentRev);
@@ -213,6 +225,7 @@ export class SnapshotCacheManager {
       valid: true,
       fingerprints,
       representation: data.representation || 'standard',
+      assetRoutes: data.assetRoutes,
     };
     this.cache.set(tabId, snapshot);
     return snapshot;
@@ -230,7 +243,13 @@ export class SnapshotCacheManager {
     const prevRep = prev?.representation || 'standard';
     const currentRep = options?.representation || 'standard';
 
-    if (!prev || !prev.valid || !prev.fingerprints || prev.fingerprints.size === 0 || prevRep !== currentRep) {
+    if (
+      !prev ||
+      !prev.valid ||
+      !prev.fingerprints ||
+      prev.fingerprints.size === 0 ||
+      prevRep !== currentRep
+    ) {
       // First snapshot on this page or invalidated, no prior baseline to diff
       const isTruncated = currentElements.length > maxDelta;
       const rawAdded = isTruncated ? currentElements.slice(0, maxDelta) : currentElements;

@@ -671,18 +671,23 @@ export class Server {
       },
     );
 
-    // POST /jev/remote-config: Updates remote Jev configuration (baseUrl, apiKey, modelId)
+    // POST /jev/remote-config: Updates remote Jev configuration.
     this.fastify.post(
       '/jev/remote-config',
       async (
-        request: FastifyRequest<{ Body: { baseUrl?: string; apiKey?: string; modelId?: string } }>,
+        request: FastifyRequest<{
+          Body: { baseUrl?: string; apiKey?: string; modelId?: string };
+        }>,
         reply: FastifyReply,
       ) => {
         const body = request.body || {};
-        const updatePayload: { baseUrl?: string; apiKey?: string; modelId?: string } = {
-          baseUrl: body.baseUrl,
-          modelId: body.modelId,
-        };
+        const updatePayload: {
+          baseUrl?: string;
+          apiKey?: string;
+          modelId?: string;
+        } = {};
+        if (body.baseUrl !== undefined) updatePayload.baseUrl = body.baseUrl;
+        if (body.modelId !== undefined) updatePayload.modelId = body.modelId;
         // Don't overwrite existing API key if client omitted it, passed masked key, or passed empty string (preserve existing)
         // Explicit clear requires explicit clearApiKey: true
         if ((body as any).clearApiKey === true) {
@@ -698,7 +703,7 @@ export class Server {
         mcpSessionManager.broadcastToolListChanged();
         return reply.status(HTTP_STATUS.OK).send({
           success: true,
-          remoteConfig: jevModelManager.getRemoteConfig(),
+          remoteConfig: jevModelManager.getPublicRemoteConfig(),
         });
       },
     );

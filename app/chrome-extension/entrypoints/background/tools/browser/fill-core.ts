@@ -1,7 +1,13 @@
 import { actionHistoryManager } from '@/utils/action-history-manager';
 import { executeInPage } from './in-page-engine';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
-import { raceCdp, DialogOpenedError, StalePageError } from '@/utils/race-cdp';
+import {
+  raceCdp,
+  DialogOpenedError,
+  StalePageError,
+  createMousePressGuard,
+  isCdpOutcomeUncertainError,
+} from '@/utils/race-cdp';
 import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
 import { getSubframeViewportOffset } from './interact-index';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
@@ -81,17 +87,38 @@ export interface PhysicalFillResult {
 export async function performPhysicalFill(
   options: PhysicalFillOptions,
 ): Promise<PhysicalFillResult> {
+  const pressEnter = options.pressEnter === true;
+  const submit = options.submit === true;
+
+  // Arm handover tracker at the very start of physical fill so any navigation/tab derivation
+  // triggered by pressEnter, typing, or auto-submit is reliably captured without races.
+  const handoverTracker =
+    pressEnter || submit
+      ? sessionTabAffinity.startHandoverTracking(
+          options.tabId,
+          options.sessionId || options.sessionContext,
+        )
+      : null;
+
+  try {
+    return await runPhysicalFill(options, handoverTracker);
+  } finally {
+    // Every exit path - normal return, early return, or throw - must release the
+    // tracker, otherwise its listeners leak for the life of the extension.
+    handoverTracker?.cancel();
+  }
+}
+
+async function runPhysicalFill(
+  options: PhysicalFillOptions,
+  handoverTracker: ReturnType<typeof sessionTabAffinity.startHandoverTracking> | null,
+): Promise<PhysicalFillResult> {
   const { tabId, target, preferComposer } = options;
   const textToFill = String(options.text ?? '');
   const clear = options.clear;
   const pressEnter = options.pressEnter === true;
   const submit = options.submit === true;
   const sessionId = options.sessionId || options.sessionContext;
-
-  // Arm handover tracker at the very start of physical fill so any navigation/tab derivation
-  // triggered by pressEnter, typing, or auto-submit is reliably captured without races.
-  const handoverTracker =
-    pressEnter || submit ? sessionTabAffinity.startHandoverTracking(tabId, sessionId) : null;
 
   const isNumericIndex =
     typeof target === 'number' || (typeof target === 'string' && /^\d+$/.test(target));
@@ -554,23 +581,31 @@ export async function performPhysicalFill(
 
         // Mouse click to focus
         await animateAgentCursorClick(tabId, targetX, targetY, fillNote);
-        await raceCdp(tabId, 'Input.dispatchMouseEvent', {
-          type: 'mousePressed',
-          x: targetX,
-          y: targetY,
-          button: 'left',
-          buttons: 1,
-          clickCount: 1,
-        });
-        await new Promise((r) => setTimeout(r, 35));
-        await raceCdp(tabId, 'Input.dispatchMouseEvent', {
-          type: 'mouseReleased',
-          x: targetX,
-          y: targetY,
-          button: 'left',
-          buttons: 0,
-          clickCount: 1,
-        });
+        const focusGuard = createMousePressGuard(
+          (eventParams) => raceCdp(tabId, 'Input.dispatchMouseEvent', eventParams),
+          {
+            type: 'mouseReleased',
+            x: targetX,
+            y: targetY,
+            button: 'left',
+            buttons: 0,
+            clickCount: 1,
+          },
+        );
+        try {
+          await focusGuard.press({
+            type: 'mousePressed',
+            x: targetX,
+            y: targetY,
+            button: 'left',
+            buttons: 1,
+            clickCount: 1,
+          });
+          await new Promise((r) => setTimeout(r, 35));
+          await focusGuard.release();
+        } finally {
+          await focusGuard.compensate();
+        }
 
         // Click settling pause for composers
         await new Promise((r) => setTimeout(r, 50));
@@ -812,6 +847,11 @@ export async function performPhysicalFill(
       if (cdpErr instanceof StalePageError) {
         throw cdpErr;
       }
+      if (isCdpOutcomeUncertainError(cdpErr)) {
+        // The native fill may already have committed; a synthetic retry could
+        // concatenate the same text, so fail closed instead.
+        throw cdpErr;
+      }
       console.warn(
         `[performPhysicalFill] CDP native fill failed on target [${target}], falling back to inPageFillIndex:`,
         cdpErr,
@@ -986,7 +1026,6 @@ export async function performPhysicalFill(
   }
 
   if (!outcome || !outcome.success || outcome.committed === false) {
-    handoverTracker?.cancel();
     return {
       success: false,
       committed: false,
@@ -1148,9 +1187,10 @@ async function handleAutoSubmit(
         submitSummary = JSON.parse(submitSummary);
       } catch {}
       const hasTopError = Boolean(clickRes?.isError);
-      const innerSuccess = submitSummary && typeof submitSummary === 'object'
-        ? submitSummary.success !== false
-        : !hasTopError;
+      const innerSuccess =
+        submitSummary && typeof submitSummary === 'object'
+          ? submitSummary.success !== false
+          : !hasTopError;
       const submitOk = !hasTopError && innerSuccess;
 
       result.submitted = submitOk;
@@ -1162,6 +1202,18 @@ async function handleAutoSubmit(
       }
       return;
     } catch (clickErr) {
+      if (isCdpOutcomeUncertainError(clickErr)) {
+        result.submitted = false;
+        result.submitMethod = 'click';
+        result.submitResult = {
+          success: false,
+          status: 'unknown',
+          message: `Submit click outcome is unknown; not retrying with Enter. ${
+            clickErr instanceof Error ? clickErr.message : String(clickErr)
+          }`,
+        };
+        return;
+      }
       console.warn(
         '[performPhysicalFill] Auto-submit click failed, falling back to Enter:',
         clickErr,
@@ -1191,7 +1243,19 @@ async function handleAutoSubmit(
     });
     result.submitted = true;
     result.submitMethod = 'pressEnter';
-  } catch {
+  } catch (enterErr) {
+    if (isCdpOutcomeUncertainError(enterErr)) {
+      result.submitted = false;
+      result.submitMethod = 'pressEnter';
+      result.submitResult = {
+        success: false,
+        status: 'unknown',
+        message: `Enter submission outcome is unknown; not retrying in-page. ${
+          enterErr instanceof Error ? enterErr.message : String(enterErr)
+        }`,
+      };
+      return;
+    }
     // If CDP fails, fallback to in-page synthetic Enter
     try {
       if (typeof result.index === 'number' && result.index > 0) {

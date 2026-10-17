@@ -63,17 +63,32 @@ const customDownloadError = ref('');
 const remoteBaseUrl = ref('');
 const remoteApiKey = ref('');
 const remoteModelId = ref('');
+const remoteConfigError = ref('');
 const isRemoteApplied = ref(false);
 const envApiKeyDetected = ref(false);
 const envKeySourceName = ref('TYPESAFE_API_KEY');
 const hasServerApiKey = ref(false);
 
+// Multimodal vision is selected by model name alone: the user types the vision-capable
+// model (for example `jev-1.14.0`) into the model field, so no separate consent control
+// can drift out of sync with what the server will actually run.
+//
+// Vision is not a user-facing switch and no model id is pinned here. Upstream reports which
+// concrete release answers a request (`response.model`), and the native server enables the
+// visual fallback only for a release that can answer `box` (Jev 1.14+). An alias such as
+// `jev-latest` is therefore followed automatically when upstream promotes it, and a custom
+// gateway model this build cannot place simply never receives screenshots.
 const remoteApiKeyPlaceholder = computed(() => {
   if (remoteApiKey.value) return 'API Key (configured in extension)';
   if (hasServerApiKey.value) return 'API Key (saved on server - leave blank to keep)';
   if (envApiKeyDetected.value) return `Auto-detected: ${envKeySourceName.value}`;
   return 'API Key (or env: TYPESAFE_API_KEY)';
 });
+
+const visionModelHint = computed(
+  () =>
+    'Visual targeting uses the release this endpoint reports. Screenshots are sent only when it can answer Jev 1.14 box questions.',
+);
 
 const jevModeLabel = computed(() => {
   if (jevMode.value === 'off') return 'Off';
@@ -562,22 +577,23 @@ const applyRemoteConfig = async () => {
   }
 
   try {
-    await chrome.storage.local.set({ jevRemoteConfig: cfg });
+    remoteConfigError.value = '';
     const res = await jevFetch('/jev/remote-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),
     });
-    if (res.ok) {
-      if (enteredKey) {
-        hasServerApiKey.value = true;
-      }
+    if (!res.ok) throw new Error('Server rejected remote configuration');
+    await chrome.storage.local.set({ jevRemoteConfig: cfg });
+    if (enteredKey) {
+      hasServerApiKey.value = true;
     }
     isRemoteApplied.value = true;
     setTimeout(() => {
       isRemoteApplied.value = false;
     }, 1500);
   } catch (e) {
+    remoteConfigError.value = 'Could not save. Check the server connection and retry.';
     console.error('Failed to apply remote config:', e);
   }
 };
@@ -1088,7 +1104,7 @@ onUnmounted(() => {
             <input
               type="text"
               v-model="remoteBaseUrl"
-              placeholder="Default: https://api.typesafe.ai/v1"
+              placeholder="Default: https://api.typesafe.ai"
               class="remote-input"
             />
           </div>
@@ -1120,7 +1136,9 @@ onUnmounted(() => {
               v-model="remoteModelId"
               placeholder="Default: jev-latest"
               class="remote-input"
+              :title="visionModelHint"
             />
+            <span class="model-hint" :title="visionModelHint">👁</span>
             <button
               type="button"
               class="remote-apply-btn"
@@ -1133,6 +1151,10 @@ onUnmounted(() => {
               </Transition>
             </button>
           </div>
+          <p class="remote-vision-notice">{{ visionModelHint }}</p>
+          <p v-if="remoteConfigError" class="remote-config-error" role="alert">
+            {{ remoteConfigError }}
+          </p>
         </div>
       </div>
 
@@ -1239,6 +1261,28 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.remote-vision-notice {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #6b7280;
+}
+
+.remote-config-error {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #b91c1c;
+}
+
+.model-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.35;
+  cursor: help;
+}
+
 .popup-box {
   width: 220px;
   padding: 14px 16px;
@@ -2313,6 +2357,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   padding-right: 2px;
+}
+
+.remote-apply-row .remote-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .remote-apply-btn {

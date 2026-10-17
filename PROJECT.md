@@ -51,17 +51,18 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 > All engineering verification, quality gates, and delivery standards are canonically governed by [**`docs/QUALITY.md`**](docs/QUALITY.md).
 > The official static verification suite is `pnpm verify`. Deployment is performed via `pnpm build:deploy` and validated via `pnpm verify:delivery`.
 
-- **Chrome Extension Vitest**: 547 unit tests passing 100% across 57 suites (including F1-M3 pipeline, tab closing, javascript execution, grep, delta diffs, batch assertions, media extraction, deep shadow DOM piercing, visual drift compensation, card flattening, token boundary matching, and undo).
-- **Native Server Jest**: 127 unit and integration tests passing 100% across 7 suites (including Jev fast-decision engine, heuristic scoring, client resilience, update notifier, and session managers).
-- **End-to-End Suite**: 153 four-tier E2E tests passing 100% (`node --experimental-strip-types test/e2e/runner.ts`).
-- **Plugin Integration**: 8 Pytest cases passing 100% (`plugins/browserpaw/tests/test_bridge_token.py`).
-- **TypeScript Checking**: 0 errors across all monorepo packages (`pnpm typecheck`).
-- **Total Automated Test Volume**: 835 / 835 tests passing (100% green).
+- **Chrome Extension Vitest**: All tests in `app/chrome-extension/tests/`, including DOM snapshots, input, screenshots, console capture, and undo.
+- **Native Server Jest**: All unit and integration suites in `app/native-server`, including Jev decisions, client resilience, protocol handling, and session managers.
+- **Simulated End-to-End Suite**: Four tiers executed after building (`pnpm test:e2e`). These tests do not establish live Chrome acceptance.
+- **Plugin Integration**: Pytest cases in `plugins/browserpaw/tests/`; only the optional Hermes host integration may skip when the host is unavailable.
+- **TypeScript Checking**: All monorepo packages (`pnpm typecheck`).
+
+The latest `pnpm verify` report at `.artifacts/verification/latest.json` records the measured test counts, skips, and pass/fail status for that source fingerprint.
 
 ### Key Technical Invariants & Operational Semantics
 
 - **Keyboard Chords**: `chrome_keyboard` supports compound chords and normalized key names including `plus` (`+`), `comma` (`,`), and sequential aliases.
 - **DOM Perception & Mutation Boundary**: `chrome_read_dom` is strictly read-only by default (`dismissOverlays: false`). Passing `dismissOverlays: true` initiates active modal clicks and is a mutating side effect.
-- **Port Resolution Precedence**: Thin CLI (`bin/browserpaw.cjs`) evaluates `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). Native daemon defaults to 12306.
+- **Port Resolution Precedence**: The native daemon, thin CLI (`bin/browserpaw.cjs`), DSH plugin, and HTTP-only clients all evaluate `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). An explicit extension `START` message port still wins for the daemon.
 - **Extension Auto-Sync**: Setting `BROWSERPAW_EXTENSION_SYNC_DIR` copies unpacked extension builds to the target browser profile during build.
 - **Browser Compatibility**: Production target is Google Chrome and compatible Chromium browsers. Edge and Brave are not independently tested.

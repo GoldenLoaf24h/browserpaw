@@ -3,7 +3,8 @@ import path from 'path';
 import os from 'os';
 import { execSync } from 'child_process';
 import { promisify } from 'util';
-import { COMMAND_NAME, DESCRIPTION, EXTENSION_ID, HOST_NAME } from './constant';
+import { COMMAND_NAME, DESCRIPTION, HOST_NAME } from './constant';
+import { getAllowedExtensionIds } from '../constant';
 import { BrowserType, getBrowserConfig, detectInstalledBrowsers } from './browser-config';
 
 export const access = promisify(fs.access);
@@ -244,7 +245,8 @@ export async function createManifestContent(): Promise<any> {
     description: DESCRIPTION,
     path: mainPath, // Node.js executable path
     type: 'stdio',
-    allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
+    // Mirror the CORS allow-list so custom extension IDs can talk to the host.
+    allowed_origins: getAllowedExtensionIds().map((id) => `chrome-extension://${id}/`),
   };
 }
 

@@ -10,6 +10,27 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(res.redacted).toBe(true);
     });
 
+    it('blocks cookie strings longer than 256 characters under generic names', () => {
+      const cookieStr = [
+        `a=${'v'.repeat(120)}`,
+        `user=${'u'.repeat(120)}`,
+        `flag=${'f'.repeat(120)}`,
+        'path=/',
+        'Secure',
+      ].join('; ');
+      expect(cookieStr.length).toBeGreaterThan(256);
+      const res = sanitizeText(cookieStr);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('blocks long Cookie header values', () => {
+      const header = `Cookie: a=${'v'.repeat(300)}; user=${'u'.repeat(300)}`;
+      const res = sanitizeText(header);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
     it('redacts standalone Bearer tokens', () => {
       const input = 'Bearer secret-bearer-token-123456';
       const res = sanitizeText(input);
@@ -71,6 +92,53 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(res.text).toContain('<redacted_base64>');
       expect(res.redacted).toBe(true);
     });
+
+    it('still redacts embedded Base64 payloads with padding or + markers (D-08)', () => {
+      const paddedSlash = 'blob MxvLoHCIYlWF/a32UYvZPTkFzbmeWJYaChkhlvIAMgvInA== end';
+      const plusOnly = `blob ${'+//v'.repeat(11)} end`;
+      for (const input of [paddedSlash, plusOnly]) {
+        const res = sanitizeText(input);
+        expect(res.text).toContain('<redacted_base64>');
+        expect(res.redacted).toBe(true);
+      }
+    });
+
+    it('redacts unpadded slash-only Base64 payloads of any length modulo 4', () => {
+      // Real Base64 of 'username=admin; password=hunter!?' (44 chars, len % 4 === 0),
+      // '...hunter ? ' (46 chars, len % 4 === 2), '...hunter ?  ' (47 chars, len % 4 === 3).
+      // Each contains '/' but no '+', so '/' alone must stay a structural marker.
+      const samples = [
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciE/', 'username=admin; password=hunter!?'],
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciA/IA', 'username=admin; password=hunter ? '],
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciA/ICA', 'username=admin; password=hunter ?  '],
+      ];
+      for (const [slashOnly, decoded] of samples) {
+        expect(slashOnly).not.toContain('+');
+        expect(slashOnly).not.toMatch(/=$/);
+        expect(Buffer.from(slashOnly, 'base64').toString()).toBe(decoded);
+        for (const input of [slashOnly, `payload ${slashOnly} end`]) {
+          const res = sanitizeText(input);
+          expect(res.text).not.toContain(slashOnly);
+          expect(res.redacted).toBe(true);
+        }
+      }
+    });
+
+    it('does not let an unrelated URL hide a later slash-only Base64 payload', () => {
+      const slashOnly = 'dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciE/';
+      const res = sanitizeText(`see https://a.example/x and token ${slashOnly}`);
+      expect(res.text).not.toContain(slashOnly);
+      expect(res.redacted).toBe(true);
+    });
+
+    it('redacts an embedded slash-leading Base64 payload (leading / is not a path)', () => {
+      // Real Base64 (33 bytes -> 44 chars) starting with '/', no '+' and no padding.
+      const slashLeading = '/CAgNTxDSlFYX2ZtdHsjKjE4P0ZNVFtiaXB3fiYtNDtC';
+      expect(Buffer.from(slashLeading, 'base64').toString('base64')).toBe(slashLeading);
+      const res = sanitizeText(`payload ${slashLeading} end`);
+      expect(res.text).not.toContain(slashLeading);
+      expect(res.redacted).toBe(true);
+    });
   });
 
   describe('2. False-Positive Prevention Tests (Must NOT redact non-sensitive identifiers/hashes)', () => {
@@ -115,6 +183,98 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       const res = sanitizeText(md5);
       expect(res.text).toBe(md5);
       expect(res.redacted).toBe(false);
+    });
+
+    it('does NOT redact long absolute paths or deep URLs (D-08)', () => {
+      const preserved = [
+        'some/very/long/filesystem/path/to/the/target/directory',
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpaw-audit-20261014',
+        'https://cdn.example.com/assets/product/hero/image/renditions/large',
+      ];
+      for (const input of preserved) {
+        const res = sanitizeText(input);
+        expect(res.text).toBe(input);
+        expect(res.redacted).toBe(false);
+      }
+    });
+
+    it('keeps path/URL context even when the slash chunk has Base64-compatible length', () => {
+      // The slash-delimited chunks below have length % 4 of 0, 2, or 3; they
+      // must still be treated as paths rather than unpadded Base64 payloads.
+      const preserved = [
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpawaudit20261017',
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpawaudit2026101',
+        'https://cdn.example.com/assets/product/hero/image/renditions/largeAB',
+        './some/very/long/filesystem/path/to/the/target/directory',
+      ];
+      for (const input of preserved) {
+        const res = sanitizeText(input);
+        expect(res.text).toBe(input);
+        expect(res.redacted).toBe(false);
+      }
+    });
+
+    it('fail-closed tradeoff: bare absolute paths of Base64-alphabet chars are redacted', () => {
+      // A bare leading '/' is also a valid Base64 first character and a
+      // relative path made only of Base64 characters cannot be distinguished
+      // from a payload, so such chunks are redacted on purpose.
+      const bareAbsolute = '/srv/app/releases/current/public/assets/images/hero';
+      const res = sanitizeText(bareAbsolute);
+      expect(res.text).toContain('<redacted_base64>');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('does NOT block long multi-line code that contains = and ;', () => {
+      const code = [
+        'const el = document.querySelector("#app");',
+        'const state = { count: 0 };',
+        'const style = getComputedStyle(el);',
+        'const html = el.outerHTML;',
+        'const box = el.getBoundingClientRect();',
+        'const text = el.textContent;',
+        'const flag = state.count > 0;',
+        'const label = `count=${state.count}`;',
+        'const width = box.width;',
+        'const height = box.height;',
+      ].join('\n');
+      const res = sanitizeText(code);
+      expect(res.text).toBe(code);
+      expect(res.redacted).toBe(false);
+    });
+
+    it('does NOT block long HTML snippets containing = and ;', () => {
+      const html =
+        '<div class="a=b;c=d" style="color:red;display:block" data-x="1;2">' +
+        'content with key=value; another=value;</div>';
+      const res = sanitizeText(html);
+      expect(res.text).toBe(html);
+      expect(res.redacted).toBe(false);
+    });
+
+    it('does NOT redact benign keys containing short marker substrings (D-09)', () => {
+      const payload = {
+        author: 'Ada Lovelace',
+        aside: 'sidebar note',
+        president: 'Grace Hopper',
+        considered: true,
+        autocomplete: 'on',
+      };
+      const result = sanitizeValue(payload);
+      expect(result.redacted).toBe(false);
+      expect(result.value).toEqual(payload);
+    });
+
+    it('does NOT redact benign camelCase keys starting with acronym-like runs', () => {
+      const payload = {
+        presidentName: 'Grace Hopper',
+        authorBio: 'Compiler pioneer',
+        XMLHttpRequest: 'ready',
+        userID: 'user_4096',
+        publicURL: 'https://example.com/profile',
+      };
+      const result = sanitizeValue(payload);
+      expect(result.redacted).toBe(false);
+      expect(result.value).toEqual(payload);
     });
   });
 
@@ -167,6 +327,63 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(parsed.auth).toBe('<redacted>');
       expect(parsed.commit).toBe('c3ab8ff13720e8ad9047dd39466b3c8974e592c2');
       expect(parsed.serviceName).toBe('AbstractAnnotationConfigDispatcherServletInitializer');
+    });
+
+    it('still redacts genuine short-marker keys (D-09)', () => {
+      const payload = {
+        auth: 'Bearer abc',
+        sid: 'abc123',
+        user_sid: 'abc123',
+        oauthState: 'xyz',
+        csrfToken: 'tok',
+        sessionId: 'sess',
+      };
+      const result = sanitizeValue(payload);
+      const out = result.value as Record<string, unknown>;
+      for (const key of Object.keys(payload)) {
+        expect(out[key]).toBe('<redacted>');
+      }
+      expect(result.redacted).toBe(true);
+    });
+
+    it('redacts acronym-prefixed camelCase sensitive keys (XSRFHeader, CSRFToken, APIKey)', () => {
+      const payload = {
+        XSRFHeader: 'xsrf-header-value',
+        CSRFToken: 'csrf-token-value',
+        APIKey: 'api-key-value',
+        OAuthToken: 'oauth-token-value',
+      };
+      const result = sanitizeValue(payload);
+      const out = result.value as Record<string, unknown>;
+      for (const key of Object.keys(payload)) {
+        expect(out[key]).toBe('<redacted>');
+      }
+      expect(result.redacted).toBe(true);
+    });
+    it('serializes diamond-shaped DAG references without [Circular] (D-09)', () => {
+      const shared = { label: 'shared node' };
+      const result = sanitizeValue({ a: shared, b: shared, list: [shared] });
+      const out = result.value as any;
+      expect(out.a).toEqual({ label: 'shared node' });
+      expect(out.b).toEqual({ label: 'shared node' });
+      expect(out.list[0]).toEqual({ label: 'shared node' });
+      expect(JSON.stringify(result.value)).not.toContain('[Circular]');
+    });
+
+    it('still marks genuine cycles, including inside shared nodes (D-09)', () => {
+      const cyclic: any = { name: 'root' };
+      cyclic.self = cyclic;
+      const cycleOut = sanitizeValue(cyclic).value as any;
+      expect(cycleOut.name).toBe('root');
+      expect(cycleOut.self).toBe('[Circular]');
+
+      const shared: any = { label: 'shared' };
+      shared.self = shared;
+      const dagOut = sanitizeValue({ a: shared, b: shared }).value as any;
+      expect(dagOut.a.label).toBe('shared');
+      expect(dagOut.a.self).toBe('[Circular]');
+      expect(dagOut.b.label).toBe('shared');
+      expect(dagOut.b.self).toBe('[Circular]');
     });
   });
 });

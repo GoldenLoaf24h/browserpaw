@@ -141,6 +141,10 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   const queryHasTextSingleSelector = (root, selector, single) => {
     const parsed = extractFirstHasText(selector);
     if (!parsed) {
+      // extractFirstHasText found no closing paren, so this selector still
+      // carries :has-text(. The native engine rejects it and the patched
+      // prototypes would just recurse back here, so bail out instead.
+      if (selector.includes(':has-text(')) return [];
       try {
         return single
           ? (root.querySelector(selector) ? [root.querySelector(selector)] : [])
@@ -240,41 +244,86 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     return single ? combined[0] || null : combined;
   };
 
-  // Polyfill :has-text support on Document & Element prototypes so document.querySelector('...:has-text(...)') works natively
-  if (typeof Document !== 'undefined' && !Document.prototype.__mcpHasTextPatched) {
+  // Every evaluation owns exactly one hold on the shared prototype patch so
+  // overlapping evaluations never restore the prototypes out from under each
+  // other; the last holder restores the captured originals.
+  let hasTextPolyfillHeld = false;
+
+  // Ownership token. The marker lives on the page's globalThis, where a page
+  // may define a similarly shaped value of its own; only an object carrying
+  // this registry symbol is BrowserPaw state that may be adopted or deleted.
+  const POLYFILL_TOKEN = Symbol.for('browserpaw:has-text-polyfill:v1');
+  const isOwnedPolyfill = (value) =>
+    !!value &&
+    typeof value === 'object' &&
+    value[POLYFILL_TOKEN] === true &&
+    typeof value.count === 'number' &&
+    typeof value.docQS === 'function';
+
+  const restoreHasTextPolyfill = () => {
+    if (!hasTextPolyfillHeld) return;
+    hasTextPolyfillHeld = false;
+    const installed = globalThis.__mcpHasTextPolyfill;
+    if (!isOwnedPolyfill(installed)) return;
+    installed.count -= 1;
+    if (installed.count > 0) return;
+    Document.prototype.querySelector = installed.docQS;
+    Document.prototype.querySelectorAll = installed.docQSA;
+    Element.prototype.querySelector = installed.elQS;
+    Element.prototype.querySelectorAll = installed.elQSA;
+    delete globalThis.__mcpHasTextPolyfill;
+  };
+
+  const installHasTextPolyfill = () => {
+    if (typeof Document === 'undefined' || hasTextPolyfillHeld) return;
+    // Any marker that already exists belongs either to another evaluation
+    // (ours, shared through its reference count) or to the page. A foreign
+    // value is never overwritten or mutated, and no prototype patch is
+    // installed over it.
+    if ('__mcpHasTextPolyfill' in globalThis) {
+      const installed = globalThis.__mcpHasTextPolyfill;
+      if (isOwnedPolyfill(installed)) {
+        installed.count += 1;
+        hasTextPolyfillHeld = true;
+      }
+      return;
+    }
     try {
       const origDocQS = Document.prototype.querySelector;
       const origDocQSA = Document.prototype.querySelectorAll;
       const origElQS = Element.prototype.querySelector;
       const origElQSA = Element.prototype.querySelectorAll;
 
-      Document.prototype.querySelector = function (sel) {
-        if (typeof sel === 'string' && sel.includes(':has-text(')) {
-          return queryWithHasText(this, sel, true);
-        }
-        return origDocQS.call(this, sel);
+      const wrap = (orig, single) =>
+        function (sel) {
+          if (typeof sel === 'string' && sel.includes(':has-text(')) {
+            return queryWithHasText(this, sel, single);
+          }
+          return orig.call(this, sel);
+        };
+
+      // Publish the state before patching so a partial failure still restores
+      // whatever was already replaced.
+      globalThis.__mcpHasTextPolyfill = {
+        [POLYFILL_TOKEN]: true,
+        docQS: origDocQS,
+        docQSA: origDocQSA,
+        elQS: origElQS,
+        elQSA: origElQSA,
+        count: 1,
       };
-      Document.prototype.querySelectorAll = function (sel) {
-        if (typeof sel === 'string' && sel.includes(':has-text(')) {
-          return queryWithHasText(this, sel, false);
-        }
-        return origDocQSA.call(this, sel);
-      };
-      Element.prototype.querySelector = function (sel) {
-        if (typeof sel === 'string' && sel.includes(':has-text(')) {
-          return queryWithHasText(this, sel, true);
-        }
-        return origElQS.call(this, sel);
-      };
-      Element.prototype.querySelectorAll = function (sel) {
-        if (typeof sel === 'string' && sel.includes(':has-text(')) {
-          return queryWithHasText(this, sel, false);
-        }
-        return origElQSA.call(this, sel);
-      };
-      Document.prototype.__mcpHasTextPatched = true;
-    } catch {}
-  }
+      hasTextPolyfillHeld = true;
+
+      Document.prototype.querySelector = wrap(origDocQS, true);
+      Document.prototype.querySelectorAll = wrap(origDocQSA, false);
+      Element.prototype.querySelector = wrap(origElQS, true);
+      Element.prototype.querySelectorAll = wrap(origElQSA, false);
+    } catch {
+      restoreHasTextPolyfill();
+    }
+  };
+
+  installHasTextPolyfill();
 
   const resolve = (t) => {
     if (typeof t === 'number') {
@@ -639,6 +688,8 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     fetch: (url, opts) => window.fetch(url, opts),
+    installHasTextPolyfill,
+    restoreHasTextPolyfill,
   };
 })();
 `;
@@ -823,11 +874,12 @@ export function detectSingleExpression(code: string): string | null {
  */
 export function wrapUserCode(code: string): string {
   if (!code.trim()) {
+    // No helpers are injected for empty code, so there is nothing to scope.
     return `(async () => {\n${code}\n})()`;
   }
   const expr = detectSingleExpression(code);
   if (expr !== null) {
-    return `(async () => {\n${MCP_INPAGE_HELPERS}return (\n${expr}\n);\n})()`;
+    return wrapInScopedEvaluation(`return (\n${expr}\n);\n`);
   }
   const trimmed = code.trim();
   const declMatch = /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=([\s\S]+)$/.exec(
@@ -838,10 +890,21 @@ export function wrapUserCode(code: string): string {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     try {
       new AsyncFunction(`${trimmed}\nreturn ${varName};`);
-      return `(async () => {\n${MCP_INPAGE_HELPERS}${trimmed}\nreturn ${varName};\n})()`;
+      return wrapInScopedEvaluation(`${trimmed}\nreturn ${varName};\n`);
     } catch {}
   }
-  return `(async () => {\n${MCP_INPAGE_HELPERS}${code}\n})()`;
+  return wrapInScopedEvaluation(`${code}\n`);
+}
+
+/**
+ * Wrap the injected helpers + user code in try/finally so the MAIN-world
+ * prototype patches installed by the helpers are always removed again when
+ * the evaluation ends, including when user code throws. The helpers run in
+ * the same function scope as the user code, so `mcp` stays a local binding:
+ * page-owned globals such as `__mcp` are neither read nor written.
+ */
+function wrapInScopedEvaluation(body: string): string {
+  return `(async () => {\n${MCP_INPAGE_HELPERS}try {\n${body}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}\n})()`;
 }
 
 // ============================================================================
@@ -917,6 +980,11 @@ async function executeViaCdp(
   contextId?: number,
 ): Promise<ExecutionResult> {
   try {
+    // Restricted pages (chrome://, web store, cloud metadata) are just as
+    // reachable through Runtime.evaluate as through the scripting fallback,
+    // so the guard has to run on the primary path too.
+    await assertTabInjectable(tabId);
+
     const expression = wrapUserCode(code);
 
     const response = await withTimeout(
@@ -1058,7 +1126,11 @@ async function executeViaScripting(
               }
             }
           }
-          const fn = new AsyncFunction((inpageHelpers || '') + codeToRun);
+          // Helpers share the generated function scope with the user code, so
+          // `mcp` is a local binding and the teardown never touches page globals.
+          const fn = new AsyncFunction(
+            `${inpageHelpers || ''}\ntry {\n${codeToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`,
+          );
           const value = await fn();
           return { ok: true, value };
         } catch (err: unknown) {

@@ -14,6 +14,26 @@ This document tracks in-progress architectural updates, fixes, and documentation
 
 ## 📋 Queued Changes
 
+### Jev Vision Routing & Autonomous Loop Corrections
+
+- **Local Extension Origin Accepted**: Set `CHROME_EXTENSION_ID` before host registration to include an unpacked build in the manifest's `allowed_origins`. Once Chrome admits that caller, the native bridge derives its ID from the Native Messaging launch arguments for HTTP Origin checks, allowing remote configuration saves and Jev mode switches. Malformed caller-supplied IDs are rejected by format validation.
+- **Vision Capability Routed by Upstream, Not by a Switch**: Removed the `visionEnabled` setting and the pinned `jev-1.14.0` vision model. Before any screenshot is captured the engine asks upstream which concrete release answers the configured endpoint and proceeds only when that release supports `box` questions (Jev 1.14+). Resolution is cached per credentials/endpoint/model and refreshed whenever a text query reports a new release, so promoting an alias moves the gate automatically. Responses from superseded configurations cannot populate the current capability cache. Endpoints below the threshold are declined with `vision_model_unsupported` and no image is captured or sent.
+- **Bounded Vision Fallback**: Capability probes and image requests receive the remaining execution budget. Screenshot capture returns on budget expiry and ignores late results without issuing a vision request or click.
+- **Retired Configuration Keys Stop Round-Tripping**: The remote config loader reads known fields only, so keys removed from the product no longer survive on disk after a save.
+- **Model Sees Its Own Results**: The DOM tree handed to the model now includes the current value of filled controls, and the model state carries a bounded slice of visible page text. A fill that previously looked like a no-op no longer loops until the run reports `stuck`.
+- **Submit Judgment Replaces Keyword Matching**: Whether a filled field is also submitted is now an explicit model question with a `fill_only` / `submit` / `unclear` answer. Automatic submission requires a valid answer distribution and the execution confidence thresholds; an unclear answer pauses for the caller. An explicit `pressEnter` argument bypasses the model's submit judgment.
+- **Session Lifecycle Serialization**: The DeepSeek Harness plugin serializes open/close transitions, so concurrent opens create a single connection and a close issued while opening still tears the connection down. Failed disposal retains the session for retry and prevents a second transport from opening.
+
+### Browser Tool Corrections
+
+- **Output Redaction**: Preserve unpadded Base64 redaction when `/` is its only structural marker, and keep acronym tokens such as `XSRF` intact when identifying sensitive structured keys.
+- **Evaluation-Local JavaScript Helpers**: CDP and scripting evaluations keep their `mcp` reference local instead of overwriting page-owned `__mcp` globals. Overlapping evaluations retain the temporary `:has-text` patch until its last holder finishes.
+- **Navigation Undo**: Navigation records remain undoable after their own main-frame commit; document-epoch rejection continues to protect element-bound fill records.
+- **Overlay Error Propagation**: A confirmed physical dismissal failure sets the standard MCP `isError` flag as well as the result's `success: false` field.
+- **Console Buffer Stop Mode**: `chrome_console` accepts `mode: "stop"` to release a tab's persistent buffer. The stop path waits for an in-flight start, releases only the domain claims it acquired, and is idempotent.
+- **Tab-Scoped Network Listeners**: `chrome_network_capture` registers one `webRequest` listener set per captured tab behind a `tabId` filter and removes exactly that set when the tab stops, closes, or restarts, so unrelated tabs' traffic is no longer delivered to the extension and multiple captures can be stopped independently.
+- **Single-Pass Shape Inference**: Visual shape inference caches nodes within one snapshot instead of rescanning each candidate's subtree, preserving traversal depth, precedence, and index output.
+
 ### Native Bridge Credential Security & Stdio Transport Architecture
 
 - **Default Stdio Transport**: Standardized all client configuration templates (Desktop, Editor, Cline, CLI, Hermes) on stdio (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) as the zero-config default without token or environment credential requirements.
@@ -44,8 +64,8 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - **Single Acceptance Contract**: Authored [`docs/QUALITY.md`](../QUALITY.md) codifying verification interfaces (`pnpm verify`, `pnpm build:deploy`, `pnpm verify:delivery`), deployment checks, and the invariant that staged disk files do not constitute live Chrome execution evidence.
 - **Documentation Policy**: Authored [`docs/DOCUMENTATION.md`](../DOCUMENTATION.md) setting rules for doc ownership, active vs. archived partitioning, canonical English and preserved translations, and release notes templates.
 - **Release Ledger & Migration**:
-  - Centralized version records for all 31 historical git tags into [`docs/releases/`](./README.md) with `Tagged (history reconstructed from git)` status.
-  - Migrated legacy root release notes to [`docs/releases/v3.2.0.md`](./v3.2.0.md), [`docs/releases/v3.2.7.md`](./v3.2.7.md), [`docs/releases/v3.3.0.md`](./v3.3.0.md) (explicitly marked as local draft), and [`docs/releases/v4.0.0.md`](./v4.0.0.md) (working draft).
+  - Centralized version records for every historical git tag into [`docs/releases/`](./README.md) with `Tagged (history reconstructed from git)` status.
+  - Migrated legacy root release notes to [`docs/releases/v3.2.0.md`](./v3.2.0.md), [`docs/releases/v3.2.7.md`](./v3.2.7.md), [`docs/releases/v3.3.0.md`](./v3.3.0.md) (explicitly marked as local draft), and [`docs/releases/v4.0.0.md`](./v4.0.0.md).
   - Eliminated duplicate root release files and added a concise [`CHANGELOG.md`](../../CHANGELOG.md) pointer.
 - **Installation & Setup Clarity**: Updated [`INSTALL.md`](../../INSTALL.md) to replace hardcoded local deployment paths with explicit configuration instructions via `browserpaw.local.json` (`extensionSyncDir`) or `BROWSERPAW_EXTENSION_SYNC_DIR`.
 - **Automated Docs Governance**: Implemented [`scripts/validate-docs.mjs`](../../scripts/validate-docs.mjs) and its test suite [`scripts/validate-docs.test.mjs`](../../scripts/validate-docs.test.mjs) verifying markdown link validity, illegal control characters, literal newline escapes, active index coverage, package version parity, and tag record completeness.

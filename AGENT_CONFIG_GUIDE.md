@@ -67,7 +67,7 @@ BrowserPaw enforces local token authentication to prevent unauthorized loopback 
 - **Token File Location**: `~/.chrome-mcp/bridge-token` (on Windows: `C:\Users\<username>\.chrome-mcp\bridge-token`). The Native Server is the sole producer (preserving valid 48/64-hex tokens with exclusive `wx` lock; clients and doctor scripts never write tokens; environment variable overrides like `CHROME_MCP_TOKEN` or `BROWSERPAW_MCP_TOKEN` are ignored).
 - **Environment Variables**:
   - `CHROME_MCP_PORT` / `MCP_HTTP_PORT`: Port override for Native Bridge (Priority: `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > `12306`, validated to integer range 1–65535).
-  - `CHROME_MCP_TOOL_PROFILE`: Tool exposure profile. Values: `core` (14 tools, default ~11.5k tokens), `crawl` (12 tools, ~5.8k tokens), or `full` (all 50 tools, ~19.5k tokens).
+  - `CHROME_MCP_TOOL_PROFILE`: Tool exposure profile. Values: `core` (14 tools, default, estimated ~9.2k prompt characters/4), `crawl` (12 tools, ~6.1k), or `full` (all 50 tools, ~20.3k). Counts are Core 14 / Crawl 12 / Full 50 (49 extension-executed tools + 1 native-server tool); footprints are character-based estimates, not measured BPE tokens.
   - `BROWSERPAW_TOOL_PREFIX`: Namespace prefix for tool names (`browserpaw_` or `chrome_`).
   - `BROWSERPAW_EXTENSION_SYNC_DIR`: Opt-in destination directory for `sync-extension-dist.mjs` (strictly guarded against repo root, ancestors, drive roots, and user home directory).
 

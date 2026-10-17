@@ -6,11 +6,10 @@ Welcome to the **BrowserPaw** release archive. This directory contains individua
 
 ## 🚧 Active & In-Flight Versions
 
-| Version        | Status         | Release Notes                    | Description                                                              |
-| :------------- | :------------- | :------------------------------- | :----------------------------------------------------------------------- |
-| **Unreleased** | In Development | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates             |
-| **v4.0.0**     | Working Draft  | [v4.0.0.md](./v4.0.0.md)         | Comprehensive audit hardening, session recovery, and coordinate fidelity |
-| **v3.3.0**     | Local Draft    | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance      |
+| Version        | Status         | Release Notes                    | Description                                                         |
+| :------------- | :------------- | :------------------------------- | :------------------------------------------------------------------ |
+| **Unreleased** | In Development | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates        |
+| **v3.3.0**     | Local Draft    | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance |
 
 ---
 
@@ -20,6 +19,7 @@ The following versions correspond to git tags recorded in repository history:
 
 | Tag          | Date       | Release Record           | Summary                                                                                                                   |
 | :----------- | :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------------------ |
+| **`v4.0.0`** | 2026-10-10 | [v4.0.0.md](./v4.0.0.md) | Comprehensive audit hardening, session recovery, and coordinate fidelity                                                  |
 | **`v3.2.7`** | 2026-09-29 | [v3.2.7.md](./v3.2.7.md) | fix(tools): restore canonical tools to pass parity tests and update v3.2.7 release checksums                              |
 | **`v3.2.0`** | 2026-09-28 | [v3.2.0.md](./v3.2.0.md) | docs(release): purify release notes to 100% english                                                                       |
 | **`v3.1.0`** | 2026-09-24 | [v3.1.0.md](./v3.1.0.md) | docs(skill): polish SKILL.md for conciseness, rigor, and structural clarity                                               |

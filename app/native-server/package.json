@@ -34,7 +34,7 @@
     "!dist/node_path.txt"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.6.0"
   },
   "preferGlobal": true,
   "keywords": [
@@ -48,7 +48,7 @@
     "@fastify/cors": "^11.0.1",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "@types/node-fetch": "2",
-    "@typesafe-ai/sdk": "0.6.0",
+    "@typesafe-ai/sdk": "0.7.0",
     "chrome-devtools-frontend": "^1.0.1299282",
     "chrome-mcp-shared": "workspace:*",
     "commander": "^13.1.0",

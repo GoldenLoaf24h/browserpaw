@@ -20,8 +20,6 @@ const targets = [
 
 const SCOPE_BANNER_EN =
   '> **Tool Availability Notice**: Standard BrowserPaw MCP exposes the full 50 toolset (under full profile; stdio defaults to core). The optional Hermes plugin exposes 16 curated wrapper tools (`browserpaw_*`). Other tools are not available in the Hermes plugin; use standard MCP.\n\n';
-const SCOPE_BANNER_ZH =
-  '> **工具可用性说明**：标准 BrowserPaw MCP 提供完整的 50 个工具（需 full profile 设置；stdio 默认使用 core）。Hermes 可选插件提供 16 个精选包装工具 (`browserpaw_*`)。未在此 16 个工具中的其他工具在 Hermes 插件中不可用 (not available in the Hermes plugin; use standard MCP).\n\n';
 
 function assertSafePath(targetPath) {
   let curr = path.resolve(targetPath);
@@ -78,8 +76,7 @@ function copyDir(src, dest, isPlugin = false, isHermes = false) {
       const isTroubleshooting =
         entry.name.startsWith('TROUBLESHOOTING') && entry.name.endsWith('.md');
       if (isHermes && entry.name.endsWith('.md') && (isReference || isTroubleshooting)) {
-        const banner = entry.name.includes('.zh-CN.') ? SCOPE_BANNER_ZH : SCOPE_BANNER_EN;
-        text = banner + text;
+        text = SCOPE_BANNER_EN + text;
       }
       fs.writeFileSync(destPath, Buffer.from(text.replace(/\r\n/g, '\n'), 'utf-8'));
     } else {

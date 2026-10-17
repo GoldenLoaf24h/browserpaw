@@ -101,7 +101,7 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
 
   const replace = (
     re: RegExp,
-    replacement: string | ((substring: string, ...args: string[]) => string),
+    replacement: string | ((substring: string, ...args: any[]) => string),
   ) => {
     const next = out.replace(re, replacement as Parameters<typeof String.prototype.replace>[1]);
     if (next !== out) {
@@ -111,17 +111,16 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
   };
 
   // 1. Standalone whole-string inspection
-  // Cookie/query string shape detection (contains = and ; or &)
-  // Whole-string blocking only makes sense for short standalone values (a
-  // cookie header, a query string). Long payloads (HTML snippets, JSON with
-  // class="a=b&c=d") would be falsely blocked wholesale, so they fall
-  // through to token-level replacement below.
-  if (out.length <= 256 && out.includes('=') && (out.includes(';') || out.includes('&'))) {
-    // Detect cookie strings
-    if (looksLikeCookieString(out)) {
-      return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
-    }
-    // Detect query strings (key=value&key2=value2 format)
+  // Cookie strings are detected at any length: `document.cookie` values are
+  // commonly longer than any fixed cap. The pair grammar itself separates them
+  // from embedded HTML/JSON/code, so no length cap is needed here.
+  if (out.includes('=') && out.includes(';') && looksLikeCookieString(out)) {
+    return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
+  }
+  // Query-string blocking stays length-capped: long payloads (HTML snippets,
+  // JSON with class="a=b&c=d", URLs) would be falsely blocked wholesale, so
+  // they fall through to token-level replacement below.
+  if (out.length <= 256 && out.includes('=') && out.includes('&')) {
     if (looksLikeQueryString(out)) {
       return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
     }
@@ -150,12 +149,17 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
     (_m, key) => `${key}=<redacted>`,
   );
 
-  // 6. Embedded Base64 data with structural markers (+, /, or ending =)
-  replace(/(?<!\w)[A-Za-z0-9+/]{40,}={0,2}(?!\w)/g, (match) => {
-    if (match.includes('+') || match.includes('/') || match.endsWith('=')) {
-      return '<redacted_base64>';
+  // 6. Embedded Base64 data with structural markers (+, /, or ending =).
+  // A bare slash is also a path separator, so slash-only chunks that are not
+  // canonical Base64 or that sit in path/URL context are left intact.
+  replace(/(?<!\w)[A-Za-z0-9+/]{40,}={0,2}(?!\w)/g, (match: string, offset: number) => {
+    if (!hasBase64StructuralMarker(match)) return match;
+    if (!isValidBase64Chunk(match)) return match;
+    if (!match.includes('+') && !match.endsWith('=')) {
+      if (!hasCanonicalBase64Tail(match)) return match;
+      if (isPathLikeContext(out, offset, match)) return match;
     }
-    return match;
+    return '<redacted_base64>';
   });
 
   return { text: out, redacted };
@@ -176,6 +180,64 @@ function looksLikeBase64Payload(text: string): boolean {
   if (!text || text.length < 20 || text.length % 4 !== 0) return false;
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return false;
   return text.includes('+') || text.includes('/') || text.endsWith('=');
+}
+
+function hasBase64StructuralMarker(text: string): boolean {
+  return text.includes('+') || text.includes('/') || text.endsWith('=');
+}
+
+function isValidBase64Chunk(text: string): boolean {
+  const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
+  if (padding > 0 && text.length % 4 !== 0) return false;
+  return (text.length - padding) % 4 !== 1;
+}
+
+/**
+ * Unpadded slash-only chunks can have any length, so verify the final
+ * character carries only zero leftover bits: 4 bits for len % 4 === 2 and
+ * 2 bits for len % 4 === 3; len % 4 === 0 has no leftover bits. This rejects
+ * most ordinary path words (e.g. ".../directory") while a real Base64 payload
+ * keeps its bytes when re-encoded.
+ */
+function hasCanonicalBase64Tail(text: string): boolean {
+  const mod = text.length % 4;
+  if (mod === 0) return true;
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const value = ALPHABET.indexOf(text[text.length - 1]);
+  if (value < 0) return false;
+  return mod === 2 ? (value & 15) === 0 : (value & 3) === 0;
+}
+
+/**
+ * Only explicit URL/drive/`./`/`../`/`~/` context in the same
+ * whitespace-delimited token protects a slash-only match; slashes elsewhere
+ * must not hide a credential. A bare leading '/' is not enough: Base64 may
+ * start with '/', and a relative path made only of Base64 characters cannot
+ * be distinguished from a payload, so it is redacted (fail closed). Base64
+ * has no colon or backslash, so those characters also mark the token as a path.
+ */
+function isPathLikeContext(text: string, offset: number, match: string): boolean {
+  const delimiters = /[\s"'`<>()[\]{},;]/;
+  let start = offset;
+  while (start > 0 && !delimiters.test(text[start - 1])) start -= 1;
+  let end = offset + match.length;
+  while (end < text.length && !delimiters.test(text[end])) end += 1;
+  const token = text.slice(start, end);
+  const tokenOffset = offset - start;
+
+  const scheme = token.match(/[A-Za-z][A-Za-z0-9+.-]*:\/\//);
+  if (scheme && (scheme.index ?? 0) < tokenOffset) {
+    const queryStart = token.search(/[?#]/);
+    return queryStart < 0 || tokenOffset < queryStart;
+  }
+  if (token.includes('\\')) return true;
+  const prefix = token.slice(0, tokenOffset);
+  return (
+    prefix.startsWith('./') ||
+    prefix.startsWith('../') ||
+    prefix.startsWith('~/') ||
+    /^[A-Za-z]:[\\/]/.test(token.slice(0, tokenOffset + 1))
+  );
 }
 
 /**
@@ -204,7 +266,10 @@ export function sanitizeValue(
   const maxArrayLength = normalizePositiveInt(limits.maxArrayLength, DEFAULT_MAX_ARRAY_LENGTH);
   const maxObjectKeys = normalizePositiveInt(limits.maxObjectKeys, DEFAULT_MAX_OBJECT_KEYS);
   const maxStringLength = normalizePositiveInt(limits.maxStringLength, DEFAULT_MAX_STRING_LENGTH);
-  const seen = new WeakMap<object, unknown>();
+  // Cycle detection must only cover the ancestors of the node being visited.
+  // A global "ever visited" map mislabels shared sibling references (a DAG)
+  // as [Circular] and silently drops the second occurrence.
+  const ancestors = new Set<object>();
   let redacted = false;
 
   const walk = (v: unknown, depth: number): unknown => {
@@ -237,22 +302,22 @@ export function sanitizeValue(
 
     const obj = v as Record<string, unknown>;
 
-    if (seen.has(obj)) return '[Circular]';
+    if (ancestors.has(obj)) return '[Circular]';
 
     if (Array.isArray(obj)) {
       const out: unknown[] = [];
-      seen.set(obj, out);
+      ancestors.add(obj);
       const len = Math.min(obj.length, maxArrayLength);
       for (let i = 0; i < len; i++) {
         out.push(walk(obj[i], depth - 1));
       }
       if (obj.length > maxArrayLength) out.push('[...truncated]');
+      ancestors.delete(obj);
       return out;
     }
 
     const out: Record<string, unknown> = {};
-    seen.set(obj, out);
-
+    ancestors.add(obj);
     const keys = Object.keys(obj);
     const len = Math.min(keys.length, maxObjectKeys);
     for (let i = 0; i < len; i++) {
@@ -265,6 +330,7 @@ export function sanitizeValue(
       out[key] = walk(obj[key], depth - 1);
     }
     if (keys.length > maxObjectKeys) out.__truncated__ = true;
+    ancestors.delete(obj);
 
     return out;
   };
@@ -274,7 +340,32 @@ export function sanitizeValue(
 
 function isSensitiveKey(key: string): boolean {
   const normalized = normalizeKey(key);
-  return SENSITIVE_KEY_MARKERS.some((marker) => normalized.includes(marker));
+  if (!normalized) return false;
+  const tokens = tokenizeKey(key);
+  return SENSITIVE_KEY_MARKERS.some((marker) =>
+    // Short markers are ambiguous inside longer identifiers ('auth' inside
+    // 'author', 'sid' inside 'president'), so they must match a whole token.
+    marker.length <= SHORT_MARKER_MAX_LENGTH ? tokens.has(marker) : normalized.includes(marker),
+  );
+}
+
+// Markers up to this length are only accepted as a complete key token.
+const SHORT_MARKER_MAX_LENGTH = 4;
+
+/** Split a key into normalized tokens on separators and camelCase boundaries. */
+function tokenizeKey(key: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const part of String(key || '').split(/[^a-zA-Z0-9]+/)) {
+    if (!part) continue;
+    // Split before a capitalized word, and between an uppercase acronym run
+    // and the following capitalized word: 'XSRFHeader' -> 'XSRF', 'Header'.
+    for (const word of part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)) {
+      const normalized = normalizeKey(word);
+      if (normalized) tokens.add(normalized);
+    }
+    tokens.add(normalizeKey(part));
+  }
+  return tokens;
 }
 
 function normalizeKey(key: string): string {
@@ -282,12 +373,19 @@ function normalizeKey(key: string): string {
 }
 
 /**
- * Check if string looks like a cookie string (key=value; key2=value2)
+ * Check if string looks like a cookie string (key=value; key2=value2).
+ *
+ * Structural checks keep this safe at any length: `document.cookie` output is
+ * a single line that starts with a cookie-pair (RFC 6265) or a `Cookie:`
+ * header, which is what separates it from embedded HTML, JSON, or code that
+ * also contains '=' and ';'.
  */
 function looksLikeCookieString(text: string): boolean {
   const s = (text || '').trim();
   if (!s) return false;
   if (!s.includes('=') || !s.includes(';')) return false;
+  if (/[\r\n]/.test(s)) return false;
+  if (!/^(?:cookie:\s*)?[!#$%&'*+\-.^_`|~0-9A-Za-z]+=/i.test(s)) return false;
 
   const parts = s.split(';');
   if (parts.length < 2) return false;

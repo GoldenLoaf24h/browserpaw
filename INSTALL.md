@@ -19,7 +19,7 @@ An authoritative, step-by-step onboarding guide for **AI Agents** (Codex Desktop
 ## Prerequisites
 
 - **Source installation:** Node.js `>=22.6.0` and pnpm `12.6.0` (the version declared by this repository's `package.json`).
-- **Release extension installation:** Google Chrome and a supported Node.js runtime for the native server. The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
+- **Release extension installation:** Google Chrome and Node.js `>=22.6.0` for the native server (matching Native engine and repository requirements). The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
 - **Local Jev mode:** Python plus the decider runtime dependencies (uvicorn, torch, and transformers) must be installed in the BrowserPaw virtual environment at ~/.browserpaw/venv, or available to the system Python. If they are unavailable, use Remote mode or Off.
 
 Commands below are written for a shell opened at the repository root unless noted otherwise.
@@ -68,11 +68,29 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 
 The Native Messaging Host provides high-speed, secure IPC between Chrome and your local AI Agent clients.
 
-This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server. From the repository root, run:
+This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server.
+
+For an unpacked build, copy its 32-character ID from its card in `chrome://extensions/` **before registering**. Chrome checks the native host manifest's `allowed_origins` before launching the host; learning an ID from the launch argument cannot admit an ID missing from that manifest. Set `CHROME_EXTENSION_ID` in the registration shell so the ID is included (comma-separated IDs are also supported).
+
+Windows PowerShell:
+
+```powershell
+$env:CHROME_EXTENSION_ID = '<your-32-character-id>'
+```
+
+macOS/Linux:
+
+```bash
+export CHROME_EXTENSION_ID='<your-32-character-id>'
+```
+
+Then, from the repository root in the same shell, run (store installations can run this directly):
 
 ```bash
 node app/native-server/dist/scripts/register-dev.js
 ```
+
+Re-run registration after changing the unpacked extension ID. Chrome-launched hosts learn their admitted caller's ID from the launch argument for HTTP Origin checks. If you launch the bridge independently, also set `CHROME_EXTENSION_ID` in that process's environment.
 
 The registration script writes the Native Messaging manifest and browser registration. The bridge token is created exclusively by the Native Messaging server when it starts for the first time (preserving valid 48-hex or 64-hex tokens with exclusive `wx` creation; clients never generate tokens, and environment variable overrides are not supported). The token is stored at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).
 
@@ -317,8 +335,20 @@ Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select y
      echo 'export TYPESAFE_API_KEY="your-key-here"' >> ~/.zshrc
      ```
 
-3. **Using Custom / Self-Hosted Gateways**:
-   - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000/v1` or private gateway) and custom `modelId`.
+3. **Multimodal Jev Vision (Optional, Experimental)**:
+   - **Prerequisites & SDK**: Requires Node.js `>=22.6.0` and `@typesafe-ai/sdk` `0.7.0` (pinned).
+   - **Remote Mode Exclusive**: Jev Vision operates strictly in Remote mode. Local decider and Off modes strictly prohibit vision requests.
+   - **Capability Routed by Upstream, Not Pinned**: There is no vision switch and no hardcoded vision model. The popup **Model** field accepts any id (including a custom or self-hosted one) and is forwarded verbatim. Before any screenshot is captured, BrowserPaw asks upstream which concrete release answers that endpoint and enables the visual fallback only when it can answer `box` questions — Jev 1.14 or newer, read from the version upstream reports rather than from the alias you typed. `jev-preview` and `jev-1.14.0` currently qualify; `jev-latest` still resolves to Jev 1.13 and is declined without sending an image. When upstream promotes an alias, the gate follows automatically.
+   - **Image Constraints**: Captures active viewport screenshots in PNG or JPEG format, with width and height each bounded to `280..1568px` (using proportional scaling and letterbox padding).
+   - **Click-Only Fallback & Escalation**: Initial visual fallback strictly allows a single, unambiguous click/tap target. Rejects `type`/`fill`/`select` and multi-step goals; complex goals escalate. When the text model selects `type` or `select`, vision fallback is never triggered.
+   - **Execution Guard & Verification**: At most one visual click per autonomous run. On successful dispatch, the next step re-reads the DOM: if the text model confirms the goal is completed (`done`), execution completes; empty DOM or any additional attempted action escalates immediately without blindly reporting done.
+   - **Box & Noul Guardrails**: Because TypeSafe `Box` returns bounding-box coordinates even when an object is absent, BrowserPaw enforces strict `Noul` presence (`target_exists >= 0.85`), ambiguity (`target_ambiguous < 0.5`), and destructive gates before dispatching any interaction.
+   - **Fail-Closed Screenshot Lifecycle**: Each screenshot is assigned a unique frame ID and TTL. Any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired frame ID triggers immediate fail-closed rejection without dispatching clicks.
+   - **Perception Boundaries on Canvas**: Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs. They do not compare pixels or the complete layout; canvas/video redraws and changes outside those fields can escape detection.
+   - **Vision Billing Accounting**: TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. Telemetry `estCostUsd` accumulates those tokens at the documented Jev rate ($0.042/1M input tokens) and therefore covers vision requests; it remains an input-only estimate (output tokens are excluded).
+   - **Smoke Benchmark Verification**: The 4 mixed fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise. Benchmark success is evaluated on actual in-page state changes rather than trusting `result.status done`.
+4. **Using Custom / Self-Hosted Gateways**:
+   - In the **Manage** dialog, configure your custom `Base URL` (e.g. `http://localhost:8000` or private gateway) and custom `modelId`. The SDK appends `/v1/systemone` to this value, so do **not** include a trailing `/v1` — the default `https://api.typesafe.ai` already resolves to `https://api.typesafe.ai/v1/systemone`.
    - Settings are cleanly persisted to `~/.browserpaw/jev-remote.json`.
 
 ---

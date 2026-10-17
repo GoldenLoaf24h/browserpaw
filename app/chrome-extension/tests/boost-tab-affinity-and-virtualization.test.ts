@@ -1324,3 +1324,107 @@ describe('Auto Tab Affinity Handover, Viewport Virtualization & Universal Framew
     });
   });
 });
+
+describe('A-03: performPhysicalFill always releases its handover tracker', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    getIsolatedIndexMap().clear();
+    vi.restoreAllMocks();
+  });
+
+  const trackerCount = () =>
+    ((sessionTabAffinity as any).activeHandoverTrackers as Set<unknown>).size;
+
+  it('cancels the tracker when the fill throws a StalePageError', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
+      fn({} as any),
+    );
+    vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
+      if (fnName === 'inPageGetElementCoordinates') {
+        return [{ result: { success: true, x: 10, y: 10, tagName: 'input' } }] as any;
+      }
+      if (fnName === 'inPageCheckOcclusion') {
+        // Occluded / detached target: the fill aborts before any press.
+        return [{ result: null }] as any;
+      }
+      return [{ result: { success: true } }] as any;
+    });
+
+    const before = trackerCount();
+    const err = await performPhysicalFill({
+      tabId: 300,
+      target: 1,
+      text: 'hello',
+      pressEnter: true,
+      sessionId: 'a03-stale',
+    }).catch((e) => e);
+
+    expect(err?.name).toBe('StalePageError');
+    expect(trackerCount()).toBe(before);
+  });
+
+  it('cancels the tracker when the fill returns a focus-verification failure', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
+      fn({} as any),
+    );
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({} as any);
+    vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
+      if (fnName === 'inPageGetElementCoordinates') {
+        return [{ result: { success: true, x: 10, y: 10, tagName: 'input' } }] as any;
+      }
+      if (fnName === 'inPageCheckOcclusion') {
+        return [{ result: { x: 10, y: 10 } }] as any;
+      }
+      if (fnName === 'inPageVerifyActiveElement') {
+        return [{ result: { isFocused: false, activeTag: 'body' } }] as any;
+      }
+      return [{ result: { success: true } }] as any;
+    });
+
+    const before = trackerCount();
+    const res = await performPhysicalFill({
+      tabId: 301,
+      target: 1,
+      text: 'hello',
+      pressEnter: true,
+      sessionId: 'a03-focus',
+    });
+
+    expect(res.success).toBe(false);
+    expect(trackerCount()).toBe(before);
+  });
+
+  it('cancels the tracker on a successful fill as well', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
+      fn({} as any),
+    );
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({} as any);
+    vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
+      if (fnName === 'inPageGetElementCoordinates') {
+        return [{ result: { success: true, x: 10, y: 10, tagName: 'input' } }] as any;
+      }
+      if (fnName === 'inPageCheckOcclusion') {
+        return [{ result: { x: 10, y: 10 } }] as any;
+      }
+      if (fnName === 'inPageVerifyActiveElement') {
+        return [{ result: { isFocused: true } }] as any;
+      }
+      if (fnName === 'inPageVerifyInputCommitment') {
+        return [{ result: { success: true, committed: true } }] as any;
+      }
+      return [{ result: { success: true, committed: true } }] as any;
+    });
+
+    const before = trackerCount();
+    const res = await performPhysicalFill({
+      tabId: 302,
+      target: 1,
+      text: 'hello',
+      pressEnter: true,
+      sessionId: 'a03-success',
+    });
+
+    expect(res.success).toBe(true);
+    expect(trackerCount()).toBe(before);
+  });
+});

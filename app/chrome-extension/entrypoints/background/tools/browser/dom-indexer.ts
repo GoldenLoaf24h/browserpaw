@@ -1050,49 +1050,58 @@ function selfHealFindElement(fp: ElementFingerprint): Element | null {
 
 export function findIndexedElement(index: number | string): Element | null {
   const numIdx = typeof index === 'string' && /^\d+$/.test(index) ? parseInt(index, 10) : index;
-  const isolatedMap = getIsolatedIndexMap();
-  if (isolatedMap.has(index as any) || isolatedMap.has(numIdx as any)) {
-    const el = derefElement(isolatedMap.get(index as any) ?? isolatedMap.get(numIdx as any));
-    if (el && (typeof Element === 'undefined' || el instanceof Element)) {
-      const doc = typeof document !== 'undefined' ? document : undefined;
-      const isConnected =
-        typeof (el as any).isConnected === 'boolean'
-          ? (el as any).isConnected
-          : doc && typeof doc.contains === 'function'
-            ? doc.contains(el) ||
-              (typeof el.getRootNode === 'function' &&
-                typeof ShadowRoot !== 'undefined' &&
-                el.getRootNode() instanceof ShadowRoot)
-            : !doc;
-      if (isConnected) {
+  const isExplicitFast = typeof index === 'string' && index.startsWith('e');
+  const g = globalThis as any;
+  const lastSnapshotType = g[Symbol.for('__browser_use_last_snapshot_type__')];
+  const clawFast = g.__pawFast || g.__clawFast;
+
+  const isConnectedElement = (el: any): boolean => {
+    if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) return false;
+    const doc = typeof document !== 'undefined' ? document : undefined;
+    return typeof (el as any).isConnected === 'boolean'
+      ? (el as any).isConnected
+      : doc && typeof doc.contains === 'function'
+        ? doc.contains(el) ||
+          (typeof el.getRootNode === 'function' &&
+            typeof ShadowRoot !== 'undefined' &&
+            el.getRootNode() instanceof ShadowRoot)
+        : !doc;
+  };
+
+  // If explicit fast action id ('e1') or last snapshot was fast, resolve via fast actionElements first
+  if (isExplicitFast || lastSnapshotType === 'fast') {
+    if (clawFast?.actionElements) {
+      const el =
+        clawFast.actionElements.get(index) ||
+        (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
+      if (isConnectedElement(el)) {
         return el;
       }
     }
   }
 
-  // Fast Snapshot lookup (__pawFast / __clawFast)
-  const g = globalThis as any;
-  const clawFast = g.__pawFast || g.__clawFast;
-  if (clawFast) {
+  // Standard isolatedMap lookup
+  const isolatedMap = getIsolatedIndexMap();
+  if (
+    isolatedMap.has(index as any) ||
+    (typeof numIdx === 'number' && isolatedMap.has(numIdx as any))
+  ) {
+    const el = derefElement(
+      isolatedMap.get(index as any) ??
+        (typeof numIdx === 'number' ? isolatedMap.get(numIdx as any) : undefined),
+    );
+    if (isConnectedElement(el)) {
+      return el;
+    }
+  }
+
+  // Fallback to fast actionElements (never traversal nodes) if not explicit fast and standard didn't match
+  if (!isExplicitFast && lastSnapshotType !== 'fast' && clawFast?.actionElements) {
     const el =
-      clawFast.actionElements?.get(index) ||
-      clawFast.actionElements?.get(numIdx) ||
-      clawFast.nodes?.get(index) ||
-      clawFast.nodes?.get(numIdx);
-    if (el && (typeof Element === 'undefined' || el instanceof Element)) {
-      const doc = typeof document !== 'undefined' ? document : undefined;
-      const isConnected =
-        typeof (el as any).isConnected === 'boolean'
-          ? (el as any).isConnected
-          : doc && typeof doc.contains === 'function'
-            ? doc.contains(el) ||
-              (typeof el.getRootNode === 'function' &&
-                typeof ShadowRoot !== 'undefined' &&
-                el.getRootNode() instanceof ShadowRoot)
-            : !doc;
-      if (isConnected) {
-        return el;
-      }
+      clawFast.actionElements.get(index) ||
+      (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
+    if (isConnectedElement(el)) {
+      return el;
     }
   }
 
@@ -1106,14 +1115,6 @@ export function findIndexedElement(index: number | string): Element | null {
         return recovered;
       }
     }
-  }
-
-  // Graceful fallback: deep query across shadow boundaries
-  if (typeof document !== 'undefined') {
-    try {
-      const fallback = querySelectorDeep(`[data-mcp-idx="${index}"]`, document);
-      if (fallback) return fallback;
-    } catch {}
   }
 
   return null;
@@ -1314,6 +1315,13 @@ export function inPageReindexFrame(offset: number, highlight = false): boolean {
   const isolatedMap = getIsolatedIndexMap();
   const entries = Array.from(isolatedMap.entries()).sort((a, b) => a[0] - b[0]);
   isolatedMap.clear();
+
+  const fpMap = getIndexFingerprintMap();
+  const fpEntries = Array.from(fpMap.entries()).sort((a, b) => a[0] - b[0]);
+  fpMap.clear();
+  for (const [oldIdx, fp] of fpEntries) {
+    fpMap.set(oldIdx + offset, fp);
+  }
 
   const reindexedElements: IndexedElement[] = [];
 
@@ -2434,6 +2442,15 @@ export function inPageDOMPruner(options?: {
   if (startingIndex === 1) {
     isolatedMap.clear();
     getIndexFingerprintMap().clear();
+    const g = globalThis as any;
+    g[Symbol.for('__browser_use_last_snapshot_type__')] = 'standard';
+    const fast = g.__pawFast || g.__clawFast;
+    if (fast) {
+      fast.actionElements?.clear();
+      fast.nodes?.clear();
+      fast.ids = typeof WeakMap !== 'undefined' ? new WeakMap() : new Map();
+      fast.next = 1;
+    }
   }
 
   let nextIndex = startingIndex;
@@ -3427,6 +3444,56 @@ export function inPageDOMPruner(options?: {
   type TreeOutputItem = { type: 'element'; el: IndexedElement } | { type: 'marker'; line: string };
   const treeOutputItems: TreeOutputItem[] = [];
 
+  // Shape inference scans a candidate's whole subtree, so a nested candidate re-walks nodes an
+  // ancestor candidate already visited. Both helpers below are pure per node, so caching them for
+  // this snapshot keeps the original document order and depth while visiting each node once.
+  const SHAPE_DESCENDANT_TAGS = new Set(['span', 'div', 'i', 'svg', 'polygon', 'circle', 'rect']);
+  const ownShapeCache = new WeakMap<Element, string | null>();
+  const descendantShapeCache = new WeakMap<Element, string | null>();
+
+  // Shape contributed by the element's own style/tag, in the original rule precedence.
+  const ownVisualShape = (el: Element): string | null => {
+    const cached = ownShapeCache.get(el);
+    if (cached !== undefined) return cached;
+
+    let shape: string | null = null;
+    const style = el.getAttribute('style') || '';
+    if (/rotate\(\s*(45|135|225|315)deg\s*\)/i.test(style)) {
+      shape = 'diamond';
+    } else if (/border-radius:\s*(50%|9999px)/i.test(style)) {
+      shape = 'circle';
+    } else if (/clip-path:\s*polygon/i.test(style)) {
+      const pts = (style.match(/%/g) || []).length;
+      shape = pts >= 12 ? 'hex' : 'triangle';
+    } else {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'circle') shape = 'circle';
+      else if (tag === 'polygon') shape = 'polygon';
+    }
+
+    ownShapeCache.set(el, shape);
+    return shape;
+  };
+
+  // First shape among the descendants the original selector matched, in document order.
+  const descendantShape = (root: Element): string | null => {
+    const cached = descendantShapeCache.get(root);
+    if (cached !== undefined) return cached;
+
+    let shape: string | null = null;
+    for (const child of Array.from(root.children)) {
+      if (SHAPE_DESCENDANT_TAGS.has(child.tagName.toLowerCase())) {
+        shape = ownVisualShape(child);
+        if (shape !== null) break;
+      }
+      shape = descendantShape(child);
+      if (shape !== null) break;
+    }
+
+    descendantShapeCache.set(root, shape);
+    return shape;
+  };
+
   // Phase 2: Decoupled batch hit-testing & indexing pass (eliminates layout thrashing)
   let flattenedCardCount = 0;
   if (options?.flattenCards !== false) {
@@ -3464,34 +3531,7 @@ export function inPageDOMPruner(options?: {
     // Detect visual geometric shape if styled or transformed (diamond, circle, hex, triangle, square)
     let detectedShape: string | undefined = undefined;
     try {
-      const targets = [
-        cand.node,
-        ...Array.from(cand.node.querySelectorAll('span, div, i, svg, polygon, circle, rect')),
-      ];
-      for (const t of targets) {
-        const style = t.getAttribute('style') || '';
-        if (/rotate\(\s*(45|135|225|315)deg\s*\)/i.test(style)) {
-          detectedShape = 'diamond';
-          break;
-        }
-        if (/border-radius:\s*(50%|9999px)/i.test(style)) {
-          detectedShape = 'circle';
-          break;
-        }
-        if (/clip-path:\s*polygon/i.test(style)) {
-          const pts = (style.match(/%/g) || []).length;
-          detectedShape = pts >= 12 ? 'hex' : 'triangle';
-          break;
-        }
-        if (t.tagName.toLowerCase() === 'circle') {
-          detectedShape = 'circle';
-          break;
-        }
-        if (t.tagName.toLowerCase() === 'polygon') {
-          detectedShape = 'polygon';
-          break;
-        }
-      }
+      detectedShape = ownVisualShape(cand.node) ?? descendantShape(cand.node) ?? undefined;
     } catch {}
 
     const attributes: Record<string, string> = {};
@@ -8062,6 +8102,8 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
   reason?: string;
   dataUrl?: string;
   rect?: { x: number; y: number; width: number; height: number };
+  frameOffsetX?: number;
+  frameOffsetY?: number;
   devicePixelRatio?: number;
   kind?: string;
   src?: string;
@@ -8075,6 +8117,36 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
       reason: `asset ${assetIndex} not found (run ${resolveToolName('read_dom')} first)`,
     };
   const rect = entry.el.getBoundingClientRect().toJSON();
+  // rect is relative to this frame's viewport; the background crops the
+  // top-level capture, so also report the frame's cumulative viewport offset
+  // (with border and zoom compensation) for the fallback path.
+  let frameOffsetX = 0;
+  let frameOffsetY = 0;
+  try {
+    let curWin: Window = window;
+    while (curWin !== curWin.top) {
+      if (curWin.frameElement) {
+        const fEl = curWin.frameElement;
+        const fRect = fEl.getBoundingClientRect();
+        const parentWin = curWin.parent || fEl.ownerDocument?.defaultView || window;
+        const fStyle =
+          typeof parentWin.getComputedStyle === 'function'
+            ? parentWin.getComputedStyle(fEl)
+            : undefined;
+        const borderLeft = parseFloat(fStyle?.borderLeftWidth || '0') || 0;
+        const borderTop = parseFloat(fStyle?.borderTopWidth || '0') || 0;
+        const zoom = parseFloat((fStyle as any)?.zoom || '1') || 1;
+
+        frameOffsetX += (fRect.left + borderLeft) / zoom;
+        frameOffsetY += (fRect.top + borderTop) / zoom;
+        curWin = curWin.parent;
+      } else {
+        break;
+      }
+    }
+  } catch {
+    // Cross-origin boundary fallback
+  }
   const out: any = {
     success: false,
     reason: 'unsupported',
@@ -8085,6 +8157,8 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
       width: Math.round(rect.width),
       height: Math.round(rect.height),
     },
+    frameOffsetX: Math.round(frameOffsetX),
+    frameOffsetY: Math.round(frameOffsetY),
     kind: entry.kind,
     src: entry.src,
     devicePixelRatio: (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1,
@@ -8897,6 +8971,8 @@ export function inPageGetScrollState(): {
   viewportHeight: number;
   docWidth: number;
   docHeight: number;
+  documentURL?: string;
+  documentId?: string;
 } {
   const win = typeof window !== 'undefined' ? window : (globalThis as any).window;
   const doc = win?.document;
@@ -8920,6 +8996,18 @@ export function inPageGetScrollState(): {
     docEl?.offsetHeight || 0,
     viewportHeight,
   );
+  let documentId: string | undefined = undefined;
+  if (doc) {
+    documentId = (doc as any)._browserpaw_doc_id;
+    if (!documentId) {
+      documentId = 'doc_' + Math.random().toString(36).slice(2, 11) + '_' + Date.now();
+      try {
+        (doc as any)._browserpaw_doc_id = documentId;
+      } catch {}
+    }
+  }
+  const documentURL = doc?.URL || win?.location?.href || '';
+
   return {
     scrollX: Math.round(scrollX),
     scrollY: Math.round(scrollY),
@@ -8927,6 +9015,8 @@ export function inPageGetScrollState(): {
     viewportHeight: Math.round(viewportHeight),
     docWidth: Math.round(docWidth),
     docHeight: Math.round(docHeight),
+    documentURL,
+    documentId,
   };
 }
 

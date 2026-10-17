@@ -5,7 +5,13 @@ import { executeInPage } from './in-page-engine';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
-import { raceCdp, DialogOpenedError, createDialogInterruptResponse } from '@/utils/race-cdp';
+import {
+  raceCdp,
+  DialogOpenedError,
+  createDialogInterruptResponse,
+  createMousePressGuard,
+  isCdpOutcomeUncertainError,
+} from '@/utils/race-cdp';
 import { computePerceptiveDelta, type PerceptiveSignature } from './dom-indexer';
 import { tabFaviconManager } from './tab-favicon';
 import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
@@ -49,27 +55,39 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
 
         await cdpSessionManager.withSession(tabId, 'form-pipeline-click', async () => {
           await animateAgentCursorClick(tabId, coords.x, coords.y, clickNote);
-          await raceCdp(tabId, 'Input.dispatchMouseEvent', {
-            type: 'mousePressed',
-            x: coords.x,
-            y: coords.y,
-            button: 'left',
-            buttons: 1,
-            clickCount: 1,
-          });
-          await new Promise((r) => setTimeout(r, 35));
-          await raceCdp(tabId, 'Input.dispatchMouseEvent', {
-            type: 'mouseReleased',
-            x: coords.x,
-            y: coords.y,
-            button: 'left',
-            buttons: 0,
-            clickCount: 1,
-          });
+          const clickGuard = createMousePressGuard(
+            (eventParams) => raceCdp(tabId, 'Input.dispatchMouseEvent', eventParams),
+            {
+              type: 'mouseReleased',
+              x: coords.x,
+              y: coords.y,
+              button: 'left',
+              buttons: 0,
+              clickCount: 1,
+            },
+          );
+          try {
+            await clickGuard.press({
+              type: 'mousePressed',
+              x: coords.x,
+              y: coords.y,
+              button: 'left',
+              buttons: 1,
+              clickCount: 1,
+            });
+            await new Promise((r) => setTimeout(r, 35));
+            await clickGuard.release();
+          } finally {
+            await clickGuard.compensate();
+          }
         });
         return true;
       }
-    } catch {}
+    } catch (err) {
+      // An unacknowledged dispatch may still have landed: never follow it with a
+      // synthetic click, which would activate the target twice.
+      if (isCdpOutcomeUncertainError(err)) throw err;
+    }
 
     const fallbackRes = await executeInPage({ tabId }, 'inPageInteractIndex', [index, 'click']);
     return Boolean(fallbackRes?.[0]?.result?.success);

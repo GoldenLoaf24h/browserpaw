@@ -2,7 +2,7 @@ import { stdin, stdout } from 'process';
 import { Server } from './server';
 import { v4 as uuidv4 } from 'uuid';
 import { NativeMessageType } from 'chrome-mcp-shared';
-import { TIMEOUTS } from './constant';
+import { TIMEOUTS, getChromeMcpPort } from './constant';
 import fileHandler from './file-handler';
 import { getBridgeToken } from './server/token';
 import { choice } from '@typesafe-ai/sdk';
@@ -189,7 +189,10 @@ export class NativeMessagingHost {
     try {
       switch (message.type) {
         case NativeMessageType.START:
-          await this.startServer(message.payload?.port || 12306);
+          // An explicit extension port wins; otherwise honor the same
+          // environment configuration (CHROME_MCP_PORT > MCP_HTTP_PORT) that
+          // HTTP-only clients resolve.
+          await this.startServer(message.payload?.port || getChromeMcpPort());
           break;
         case NativeMessageType.STOP:
           await this.stopServer();

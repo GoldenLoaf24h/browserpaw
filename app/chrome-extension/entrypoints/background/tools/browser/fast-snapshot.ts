@@ -145,8 +145,18 @@ export function getNativeCheckedSetter(element: HTMLInputElement): ((v: boolean)
 export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult | null {
   if (typeof document === 'undefined' || !document.body) return null;
 
-  const cache = getClawFastCache();
+  (globalThis as any)[Symbol.for('__browser_use_last_snapshot_type__')] = 'fast';
+
   const isoMap = (globalThis as any)[Symbol.for('__browser_use_isolated_index_map__')];
+  if (isoMap && typeof isoMap.clear === 'function') {
+    isoMap.clear();
+  }
+  const fpMap = (globalThis as any)[Symbol.for('__browser_use_index_fingerprint_map__')];
+  if (fpMap && typeof fpMap.clear === 'function') {
+    fpMap.clear();
+  }
+
+  const cache = getClawFastCache();
 
   const identity = (e: Element): number => {
     if (!cache.ids.has(e)) {
@@ -154,11 +164,6 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     }
     const id = cache.ids.get(e)!;
     cache.nodes.set(id, e);
-    if (isoMap && typeof isoMap.set === 'function') {
-      try {
-        isoMap.set(id, typeof WeakRef !== 'undefined' ? new WeakRef(e) : e);
-      } catch {}
-    }
     return id;
   };
 

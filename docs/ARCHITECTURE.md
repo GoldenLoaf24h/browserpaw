@@ -318,14 +318,14 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 ### ADR-014: Dynamic Profile Layering & Session-Level Tool Activation across Transports
 
 - **Status**: Implemented & Verified
-- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 50 tools consumes ~19.5k tokens on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
+- **Context**: Different AI agent models have vastly different token window budgets. Standard monolithic MCP server exposing all 50 tools consumes ~20.4k chars/4 on `tools/list`, which overwhelms smaller or faster reasoning models. At the same time, hardcoding static profiles (e.g. `core` with 14 tools or `crawl` with 12 tools) prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
 - **Decision**:
   1. Define 8 comprehensive tool categories in `TOOL_CATEGORIES` across `packages/shared`: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, and `crawl`.
   2. Retain `chrome_tool_docs` as an omni-present introspection tool across all profiles.
   3. Implement `activateForSession: true` support on both transports:
      - **Fastify HTTP/SSE**: dynamically registers extra tools to the client's dedicated `McpSessionManager` instance.
      - **Stdio Transport**: maintains `dynamicExtraTools` set in `mcp-server-stdio.ts`, dynamically expanding both `tools/list` and `tools/call` filters for subsequent RPC requests.
-- **Consequences**: Minimal initial token footprint (< 5.8k-11.5k tokens) with zero-restart, on-demand privilege and capability escalation during autonomous runs.
+- **Consequences**: Minimal initial footprint (core ~9.2k, crawl ~6.1k chars/4) with zero-restart, on-demand privilege and capability escalation during autonomous runs.
 
 ### ADR-015: Single-Expression JavaScript Auto-Return & Event-Driven Page Load Settle
 
@@ -365,8 +365,8 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Context**: In environments with Windows display scaling (e.g. 150% scaling, devicePixelRatio = 1.5) or Retina displays, chrome_screenshot previously defaulted to Page.getLayoutMetrics layoutViewport (measured in device physical pixels: e.g. 2561x1347). However, Chromium's CDP Page.captureScreenshot accepts clip bounds in **CSS (device-independent) pixels**. Passing inflated physical dimensions caused Chrome to render beyond the actual web surface, producing massive black/white borders, shrinking the webpage into a small box, and skewing visual coordinate grids by 1.5x.
 - **Decision**:
   1. Refactor viewport metrics priority in screenshot.ts: prioritize metrics.cssVisualViewport and metrics.cssLayoutViewport (exactly matching CSS viewport dimensions like 1707x898), falling back to layoutViewport only in catastrophic anomalies.
-  2. Enforce 1:1 OffscreenCanvas normalization to guarantee that every coordinate label (x, y) on chrome_screenshot({ grid: true }) maps with 100% mathematical fidelity to DOM getBoundingClientRect() and CDP physical pointer coordinates.
-- **Consequences**: Zero visual distortion, complete elimination of black borders on high-DPI monitors, and seamless visual coordinate targeting for multimodal agents.
+  2. Preserve CSS capture viewport separately from returned raster size: grid labels use returned image pixels; explicit screenshot space scales through capture metadata, while viewport space ignores cached crop/scale.
+- **Consequences**: Accurate coordinate targeting across tested viewport and downscaled screenshot cases; an unexplained inactive-tab fullpage capture discrepancy remains outside this guarantee.
 
 ### ADR-018: Anti-Bot Natural Kinematics, Settling Latency & Extended Hold Duration (v2.3.0)
 
@@ -381,12 +381,15 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 ### ADR-019: Full-Spectrum Drag Architecture & Background Tab Delivery Self-Healing (v2.3.0)
 
 - **Status**: Implemented & Verified
-- **Context**: Web automation encounters two fundamentally distinct drag paradigms: (1) HTML5 Native Drag-and-Drop (dragstart/dragover/drop) used in file wells, and (2) Pointer/Mouse Drags (pointerdown/pointermove/pointerup) used in canvas drawing, custom sliders, SVG corridors, and list reordering. Previously, BrowserPaw intercepted drags unconditionally, breaking pointer drags, while background tab throttling caused Chromium to drop CDP input when users were browsing other tabs.
+- **Context**: Web automation encounters two fundamentally distinct drag paradigms: (1) HTML5 Native Drag-and-Drop (dragstart/dragover/drop) used in file wells, and (2) Pointer/Mouse Drags (pointerdown/pointermove/pointerup) used in canvas drawing, custom sliders, SVG corridors, and list reordering. Previously, BrowserPaw intercepted drags unconditionally, breaking pointer drags, while background tab throttling caused Chromium to drop CDP input when users were browsing other tabs. Furthermore, drag endpoints specified across screenshot, viewport, or live DOM index spaces required unified document coordinate alignment and shared viewport bounds checking to prevent partial or misaligned cross-screen drag execution.
 - **Decision**:
   1. Decouple drag execution: route HTML5 drags through CDP Input.setInterceptDrags only when dnd: true; for pointer/gesture drags, execute uninterrupted pressed mouse movements with button: 'left', buttons: 1 along multi-point path sequences.
-  2. Extend Click Probe Fallback to visual coordinates: when Chromium background tab throttling drops CDP events (probe reports delivered: false), automatically resolve the target element via document.elementFromPoint(x, y) and dispatch synthetic in-page clicks, ensuring 100% action delivery even on non-active background tabs.
-  3. Expand chrome_fill_index with pressEnter: true, cutting agent search and auth round-trips by 50%.
-- **Consequences**: High-fidelity execution across HTML5 drops, list reordering, and multi-point path corridors, paired with resilient background tab automation with Click Probe fallback.
+  2. Joint document coordinate alignment and shared viewport fitting: Convert drag start, end (via resolveDragEndPoint / projectCoord), and path coordinates into top-level document space, separating capture-time scroll offsets (for screenshot-space inputs) from live viewport scroll offsets (for live DOM indices and viewport coordinates). Compute the collective bounding box across all document points. If the coordinate span exceeds viewport dimensions (maxX - minX >= vw or maxY - minY >= vh), execution fails closed with an explicit error before dispatching mouse presses. When points can fit simultaneously, compute required scroll offsets and execute inPageInstantScrollTo, then project back to viewport coordinates using actual clamped scrollX/scrollY and verify all points reside within active viewport boundaries.
+  3. Explicit path trajectory preservation: When an explicit path array is provided (hasPath), magnetic snapping (autoSnap) is bypassed to preserve the caller's exact specified trajectory without distortion.
+  4. Parameter validation and action gating: The points parameter is strictly reserved for action: 'click' sequences. Supplying points with non-click actions (such as action: 'drag') is rejected early before tab resolution or input dispatch, preventing drag requests from executing unintended batch clicks.
+  5. Extend Click Probe Fallback to visual coordinates: when Chromium background tab throttling drops CDP events (probe reports delivered: false), resolve the target element via document.elementFromPoint(x, y) and dispatch synthetic in-page clicks to ensure resilient background tab delivery.
+  6. Expand chrome_fill_index with pressEnter: true, reducing agent search and auth round-trips.
+- **Consequences**: High-fidelity execution across HTML5 drops, list reordering, and multi-point path corridors, paired with resilient background tab automation and strict fail-closed boundary enforcement for cross-viewport drag sequences.
 
 ### ADR-020: Windows Process Teardown, Unref Watchdog & Keep-Alive Socket Severance (v2.3.8)
 
@@ -424,7 +427,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Decision**:
   1. **Hierarchical Dual-Brain Architecture**: Establish a Fast/System 1 Native Semantic Micro-Loop (`chrome_act_toward_goal`, 200–400ms/step) executing directly inside the Native Server, while Slow/System 2 Generalist LLMs retain macroscopic strategy, goal formulation, and supervisory steering.
   2. **Three-Tier Engine Degradation Ladder**:
-     - _Tier 1 (Semantic Probabilistic)_: TypeSafe Jev via 7 parallel structured questions (action Choice, click_target Choice, type_target Choice, select_target Choice, goal_done Noul, stuck Noul, destructive Noul) evaluated against a strict compact DOM budget (≤250 lines, ≤120 chars/line, ≤24KB total payload, sensitive password/file fields scrubbed).
+     - _Tier 1 (Semantic Probabilistic)_: TypeSafe Jev via parallel structured questions (action Choice, click_target Choice, type_target Choice, select_target Choice, submit_intent Choice, goal_done Noul, stuck Noul, destructive Noul) evaluated against a strict compact DOM budget (≤250 lines, ≤120 chars/line, ≤24KB total payload, sensitive password/file fields scrubbed). The state carries the same snapshot's visible page text so the model can observe the result its action produced; page text is shed before element indices when the budget is exceeded.
      - _Tier 2 (Heuristic Fast Fallback)_: Zero-dependency tokenization scoring with CJK bigrams, exact/substring matching (+2.0), role bonuses (button, textbox, combobox, link), and confidence separation ratio ((top_1 - top_2) / top_1) when Jev is unavailable, 401 unauthenticated (session latched), quota exhausted, or network severed.
      - _Tier 3 (Macro Escalation)_: Controlled escalation back to System 2 upon encountering low confidence (< 0.30), destructive actions (`pay`, `delete`, `purchase`, `submit`, `confirm`), repeated action loops (≥3 identical actions without DOM mutation, URL change, or visualDiff), or step budget exhaustion (≤10 steps).
   3. **Two-Stage `<select>` Primitive**: Leverage Jev Score primitive to inspect `<select>` options dynamically and select the optimal value without DOM mutation race conditions, returning full token usage and candidate shortlisting for dropdowns with > 10 options.
@@ -499,3 +502,52 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
   2. **Multi-Click Lockstep**: `double_click` and `triple_click` bind individual CDP `mousePressed` events to distinct visual click ripples and physiological cursor depressions.
   3. **Response Commitment**: MCP tool responses resolve strictly after visual animation completion, CDP event dispatch, and DOM/network settlement verified by `ActionWatchdog`.
 - **Consequences**: 100% deterministic coordination between agent intent, screen rendering, and MCP client perception.
+
+### ADR-030: Multimodal Jev Vision: Box + Noul Anchoring and Frame-Bound Clicks (v4.0.0)
+
+- **Status**: Implemented & Verified
+- **Context**: Text perception covers typical HTML controls, but unlabelled SVG icons and canvas controls can lack useful DOM metadata. Vision provides a fallback for these targets; latency and accuracy require measurement against the configured cloud endpoint.
+- **Decision**:
+  1. **Dual-Path Visual Perception Ladder & Runtime Environment**:
+     - Text perception (Tier 1) remains the default and primary decision path.
+     - Built on `@typesafe-ai/sdk` 0.7.0 requiring Node.js `>=22.6.0`.
+     - When an action requires interacting with non-textual or visual elements (or when text perception yields low confidence), Jev initiates a visual micro-loop query using multimodal `Box` and `Noul` primitives.
+  2. **Upstream-Routed Cloud Vision Contract**:
+     - There is no vision switch and no pinned vision model. The configured model id (including a custom or self-hosted one) is forwarded verbatim, and before any capture the client asks upstream which concrete release answers that endpoint (`response.model`) and enables the visual fallback only when that release can answer `box` — Jev 1.14 or newer. The decision therefore reads a version rather than matching an alias string, so an alias that upstream promotes is followed automatically and a model this build cannot place is never sent a screenshot. `jev-latest` currently resolves to Jev 1.13 and is declined. Requires a valid `TYPESAFE_API_KEY`.
+     - Jev Vision operates exclusively in Remote mode; offline local decider (`decider-2b`) and Off modes strictly reject vision calls.
+     - Resolution is cached per credentials/endpoint/model combination and refreshed whenever a text query reports a new release. A run that reaches the fallback before any text query issues one text-only request to learn the release; that request carries no image and no danger-zone header, so no screenshot leaves the machine before the capability is known.
+  3. **Viewport Frame Binding & Dimension Clamping**:
+     - Viewport screenshots are captured in PNG or JPEG format via `chrome_screenshot` (`_jevVision: true`, `saveToDisk: false`).
+     - Image dimensions are strictly clamped to `280..1568px` along both width and height, preserving aspect ratio with proportional downscaling and letterbox padding to bound network payload and inference memory.
+     - Normalized `Box` coordinates are mapped through image content dimensions and padding to viewport CSS pixels; DPR is not applied a second time.
+     - The initial clipped viewport capture for Jev has a 1500 ms deadline, then uses the existing helper-assisted capture path. CDP failures expose `cdpCaptureWarning`; document and semantic probes must still agree before a frame is issued.
+     - Black-bar recapture skips animation-frame waits for background tabs. Active-tab frame waits are bounded at 300 ms per attempt because minimized windows can suspend `requestAnimationFrame`; the single optional recapture has a 1000 ms deadline. If it stalls, the initial image is retained with `cdpCaptureWarning`; semantic and frame checks still apply.
+  4. **Click-Only Scope & Escalation on Complex Goals**:
+     - Visual fallback in the initial release is strictly restricted to single, unambiguous click/tap targets.
+     - The engine proactively rejects `type`, `fill`, `select`, and multi-step compound goals; complex goals escalate safely.
+     - If the Tier 1 text model selects an action of type `type` or `select`, vision fallback is never triggered.
+  5. **Single Visual Click Execution Limit & Verification Guard**:
+     - Each autonomous run permits at most one visual click (`visualClickExecuted`).
+     - Successful coordinate dispatch does **not** blindly report `done`.
+     - After dispatch, the engine re-reads the DOM in the next step:
+       - If the text model confirms `goal_done` (action is `done`), execution completes successfully.
+       - If the DOM is empty or any subsequent action (click, type, etc.) is attempted, the engine immediately escalates before acting again.
+     - Benchmark success is measured against actual page state changes rather than trusting `result.status === 'done'`.
+  6. **Box Localization & Noul Multi-Gate Guardrails**:
+     - TypeSafe `Box` primitive returns candidate bounding-box coordinates regardless of target presence on screen.
+     - To prevent phantom click dispatch on missing targets, BrowserPaw enforces strict multi-gate criteria:
+       - Target presence: `target_exists` Noul score must be `>= 0.85`.
+       - Target ambiguity: `target_ambiguous` Noul score must be `< 0.5`.
+       - Destructive safeguard: `destructive` Noul score must be `< 0.5`.
+     - When presence or ambiguity criteria fail, candidate `Box` coordinates are discarded and execution safely escalates or halts.
+  7. **Screenshot ID Binding & Fail-Closed Freshness Validation**:
+     - Viewport captures generate an ephemeral `VisionFrameContext` with a unique screenshot ID and TTL.
+     - Vision fallback clicks supply `expectedScreenshotId` and `expectedDeadlineAt`; existing public screenshot-coordinate calls keep their contract.
+     - `validateVisionFrame` enforces a fail-closed policy: any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired TTL rejects execution with zero dispatched clicks.
+  8. **Canvas Perception Boundary Disclosure**:
+     - Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs.
+     - Architectural boundary: This is not a pixel or full-layout comparison. Canvas/WebGL redraws, video frames, and layout changes outside those fields can escape detection. The canvas benchmark verifies fixture-owned state hooks; production canvas tasks require independent outcome verification.
+  9. **Vision Billing Accounting & Benchmark Smoke Nature**:
+     - TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. Telemetry `estCostUsd` accumulates those tokens at the documented Jev rate ($0.042/1M input tokens) and therefore covers vision requests; it remains an input-only estimate (output tokens are excluded).
+     - The 4 mixed benchmark fixtures (`search-preview`, `icon-toolbar`, `canvas-interactive`, `missing-target`) serve as a functional smoke verification suite across perception pathways; p95 latency is indicative smoke data, not a statistical benchmark or performance promise.
+- **Consequences**: Adds an additional path for icon and canvas targets, with conservative rejection and explicit freshness limits. Functional smoke results do not establish universal accuracy or a speedup.

@@ -180,6 +180,25 @@ class ConsoleBuffer {
   }
 
   /**
+   * Stop buffer capture for the specified tab.
+   *
+   * Idempotent: a tab with no active capture reports `false`. A start that is still
+   * in flight is awaited first, so a stop issued during startup tears down the session
+   * that start created instead of leaving an orphaned capture behind.
+   */
+  async stop(tabId: number, reason: string = 'manual'): Promise<boolean> {
+    const pendingStart = this.starting.get(tabId);
+    if (pendingStart) {
+      await pendingStart.catch(() => {});
+    }
+
+    if (!this.buffers.has(tabId)) return false;
+
+    await this.stopCapture(tabId, reason);
+    return true;
+  }
+
+  /**
    * Clear buffer for the specified tab
    */
   clear(
@@ -291,11 +310,20 @@ class ConsoleBuffer {
 
     this.buffers.set(tabId, state);
 
+    const acquiredDomains: string[] = [];
+
     try {
       await cdpSessionManager.attach(tabId, 'console-buffer');
-      await cdpSessionManager.sendCommand(tabId, 'Runtime.enable');
-      await cdpSessionManager.sendCommand(tabId, 'Log.enable');
+      for (const domain of ['Runtime', 'Log']) {
+        await cdpSessionManager.enableDomain(tabId, domain);
+        acquiredDomains.push(domain);
+      }
     } catch (error) {
+      // Release only the domains this capture acquired; detach alone would leave
+      // their reference counts held against the tab.
+      for (const domain of acquiredDomains.reverse()) {
+        await cdpSessionManager.disableDomain(tabId, domain).catch(() => {});
+      }
       this.buffers.delete(tabId);
       await cdpSessionManager.detach(tabId, 'console-buffer').catch(() => {});
       throw error;
@@ -432,16 +460,12 @@ class ConsoleBuffer {
     this.buffers.delete(tabId);
     this.starting.delete(tabId);
 
-    try {
-      await cdpSessionManager.sendCommand(tabId, 'Runtime.disable');
-    } catch {
-      // best effort
+    // Release this capture's own domain claims. disableDomain decrements the shared
+    // reference count, so a domain another tool also enabled stays physically enabled.
+    for (const domain of ['Runtime', 'Log']) {
+      await cdpSessionManager.disableDomain(tabId, domain).catch(() => {});
     }
-    try {
-      await cdpSessionManager.sendCommand(tabId, 'Log.disable');
-    } catch {
-      // best effort
-    }
+
     await cdpSessionManager.detach(tabId, 'console-buffer').catch(() => {});
     console.log(`ConsoleBuffer: Stopped buffer for tab ${tabId} (reason=${reason}).`);
   }

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { describe, expect, it, beforeEach } from '@jest/globals';
 import {
   AgentUpdateNotifier,
@@ -273,5 +276,55 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
       if (prevEnv !== undefined) process.env.ENABLE_MCP_VERSION_CHECK = prevEnv;
       else delete process.env.ENABLE_MCP_VERSION_CHECK;
     }
+  });
+});
+
+describe('B-02: prepareMediaArgsIfNeeded sensitive path guard and symlink boundary', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'browserpaw-b02-tools-'));
+  const fakeBrowserpawDir = path.join(tmpRoot, '.browserpaw');
+  const fakeRemoteJson = path.join(fakeBrowserpawDir, 'jev-remote.json');
+  const innocentSymlink = path.join(tmpRoot, 'innocent-media.png');
+  const legitimateImage = path.join(tmpRoot, 'legit-photo.png');
+
+  beforeAll(() => {
+    fs.mkdirSync(fakeBrowserpawDir, { recursive: true });
+    fs.writeFileSync(fakeRemoteJson, JSON.stringify({ apiKey: 'sk-secret-do-not-leak' }));
+    fs.writeFileSync(legitimateImage, Buffer.from('fake-png-content'));
+    try {
+      fs.symlinkSync(fakeRemoteJson, innocentSymlink, 'file');
+    } catch {}
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('throws when filePath points to .browserpaw/jev-remote.json and leaves base64Data unset', async () => {
+    const { prepareMediaArgsIfNeeded } = await import('./register-tools');
+    const args: any = { filePath: fakeRemoteJson };
+    await expect(prepareMediaArgsIfNeeded('chrome_insert_media', args)).rejects.toThrow(
+      'Access to sensitive directories is prohibited',
+    );
+    expect(args.base64Data).toBeUndefined();
+    expect(args.mediaUrl).toBeUndefined();
+  });
+
+  it('throws when filePath is a symlink pointing to a sensitive file', async () => {
+    if (!fs.existsSync(innocentSymlink)) return;
+    const { prepareMediaArgsIfNeeded } = await import('./register-tools');
+    const args: any = { filePath: innocentSymlink };
+    await expect(prepareMediaArgsIfNeeded('chrome_insert_media', args)).rejects.toThrow(
+      'Access to sensitive directories is prohibited',
+    );
+    expect(args.base64Data).toBeUndefined();
+    expect(args.mediaUrl).toBeUndefined();
+  });
+
+  it('allows legitimate media file and populates base64Data', async () => {
+    const { prepareMediaArgsIfNeeded } = await import('./register-tools');
+    const args: any = { filePath: legitimateImage };
+    await prepareMediaArgsIfNeeded('chrome_insert_media', args);
+    expect(args.base64Data).toBeDefined();
+    expect(args.fileName).toBe('legit-photo.png');
   });
 });

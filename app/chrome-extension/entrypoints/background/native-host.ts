@@ -858,8 +858,12 @@ export const initNativeHostListener = () => {
     // Forward file operation messages to native host
     if (message.type === 'forward_to_native' && message.message) {
       if (nativePort) {
-        safePostMessage(nativePort, message.message);
-        sendResponse({ success: true });
+        const posted = safePostMessage(nativePort, message.message);
+        if (posted) {
+          sendResponse({ success: true });
+        } else {
+          sendResponse({ success: false, error: 'Failed to post message to native host' });
+        }
       } else {
         sendResponse({ success: false, error: 'Native host not connected' });
       }

@@ -41,6 +41,14 @@ TOOL_DEFINITIONS = {
                     "type": "string",
                     "description": "URL to navigate to. Special values: \"back\" or \"forward\" to navigate browser history in the target tab."
                 },
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "back",
+                        "forward"
+                    ],
+                    "description": "Alternative to url=\"back\"|\"forward\": navigate browser history backward or forward."
+                },
                 "newWindow": {
                     "type": "boolean",
                     "description": "Create a new window to navigate to the URL or not. Defaults to false"
@@ -91,6 +99,10 @@ TOOL_DEFINITIONS = {
                 "autoGroup": {
                     "type": "boolean",
                     "description": "Automatically place newly opened tab into an Agent-managed tab group with dedicated title and color. Default: true"
+                },
+                "dismissOverlays": {
+                    "type": "boolean",
+                    "description": "Automatically detect and dismiss visible marketing popups, coupon modals, and promotional overlays after navigation completes (default: false)"
                 }
             },
             "required": []
@@ -370,13 +382,34 @@ TOOL_DEFINITIONS = {
                     "type": "string",
                     "enum": [
                         "compact",
-                        "html"
+                        "html",
+                        "fast"
                     ],
-                    "description": "Output format for treeString. \"compact\" (default) produces a concise, accessibility-tree-inspired representation without closing tags, slashing token usage by 60%+. \"html\" returns legacy pseudo-HTML tags."
+                    "description": "Output format for treeString. \"compact\" (default) produces a concise, accessibility-tree-inspired representation without closing tags, slashing token usage by 60%+. \"html\" returns legacy pseudo-HTML tags. \"fast\" activates ultrafast atomic snapshot mode (10-30ms, <=15KB)."
+                },
+                "fast": {
+                    "type": "boolean",
+                    "description": "When true, activates the ultrafast atomic DOM snapshot engine (10-30ms, <=15KB payload) with WeakMap caching and native checkVisibility."
+                },
+                "legacyVisibility": {
+                    "type": "boolean",
+                    "description": "When true, uses legacy visibility fallback (computedStyle display/visibility/opacity) instead of element.checkVisibility."
                 },
                 "deltaOnly": {
                     "type": "boolean",
                     "description": "When true, returns only changed/added/removed diffs compared to the previous snapshot, saving 90%+ tokens on repeated reads."
+                },
+                "dismissOverlays": {
+                    "type": "boolean",
+                    "description": "When true, automatically detects and dismisses visible marketing popups, coupon modals, and promotional overlays before indexing DOM nodes, preventing modal overlays from polluting the DOM tree (default: false)"
+                },
+                "virtualizeViewport": {
+                    "type": "boolean",
+                    "description": "When true (enabled by default on infinite scroll, long feeds, and waterfall pages when selector/scope is omitted), intelligently virtualizes and folds repetitive offscreen subtrees into compact summaries, drastically slashing token usage while strictly preserving visible viewport elements and key navigation."
+                },
+                "flattenCards": {
+                    "type": "boolean",
+                    "description": "When true (default: true), identifies composite card containers (article, [role=\"article\"], [role=\"listitem\"], li) and aggregates fragmented leaf nodes into unified structured card summaries while preserving actionable link/click indices. Slashes token usage by 60%+ on eCommerce, search feeds, and news listings."
                 }
             },
             "required": []
@@ -838,6 +871,10 @@ TOOL_DEFINITIONS = {
                                 "type": "number",
                                 "description": "Scroll pixel amount"
                             },
+                            "note": {
+                                "type": "string",
+                                "description": "Optional intent note displayed on virtual agent cursor during execution"
+                            },
                             "durationMs": {
                                 "type": "number",
                                 "description": "Wait duration in ms"
@@ -1123,6 +1160,10 @@ TOOL_DEFINITIONS = {
                 "settleTimeoutMs": {
                     "type": "number",
                     "description": "Maximum settle wait timeout in ms (default: 1500)"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional intent note displayed on virtual agent cursor during scrolling (e.g. \"Scrolling down timeline\")"
                 }
             },
             "required": []
@@ -1207,6 +1248,18 @@ TOOL_DEFINITIONS = {
                     "type": "number",
                     "description": "Maximum matching results to return (default: 20, max: 50)"
                 },
+                "autoScroll": {
+                    "type": "boolean",
+                    "description": "When true, automatically executes client-side RAF auto-scrolling to probe and detect off-screen virtualized elements (virtual list / infinite scroll streams like X/Twitter). Default: false"
+                },
+                "maxSteps": {
+                    "type": "number",
+                    "description": "Maximum scroll iterations to attempt when autoScroll is enabled (default: 10)"
+                },
+                "stepPx": {
+                    "type": "number",
+                    "description": "Pixel distance to scroll on each probing step (default: 800)"
+                },
                 "tabId": {
                     "type": "number",
                     "description": "Target tab ID (optional)"
@@ -1250,6 +1303,13 @@ TOOL_DEFINITIONS = {
                     "type": "number",
                     "description": "Minimum confidence threshold to commit an action (default: 0.55)"
                 },
+                "pauseBeforeKeywords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "List of keywords (e.g. [\"Post\", \"Submit\", \"Pay\"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status \"paused\" with target element context for System 2 confirmation."
+                },
                 "sessionId": {
                     "type": "string",
                     "description": "Optional session identifier to bind affinity to a specific tab context"
@@ -1257,6 +1317,19 @@ TOOL_DEFINITIONS = {
                 "sessionContext": {
                     "type": "string",
                     "description": "Optional alias for sessionId"
+                },
+                "pressEnter": {
+                    "type": "boolean",
+                    "description": "Whether to press Enter after filling text into an input field (defaults to true if goal implies search or submit, otherwise false)"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "local",
+                        "remote"
+                    ],
+                    "description": "Optional override for the Jev semantic execution engine mode (\"off\", \"local\", or \"remote\"). Defaults to the mode configured in the extension popup."
                 }
             },
             "required": [
@@ -1276,6 +1349,10 @@ TOOL_DEFINITIONS = {
                 "selector": {
                     "type": "string",
                     "description": "CSS selector to search for during scrolling (supports >>> and /deep/ shadow piercing)"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "ARIA role to filter matching elements (e.g. \"button\", \"article\", \"link\")."
                 },
                 "isRegex": {
                     "type": "boolean",
@@ -1302,9 +1379,23 @@ TOOL_DEFINITIONS = {
                     "type": "string",
                     "description": "CSS selector for a custom scrollable container (defaults to window)"
                 },
+                "actionOnFound": {
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "scroll_into_view",
+                        "click",
+                        "focus"
+                    ],
+                    "description": "Action to perform automatically when element is found (default: \"scroll_into_view\")."
+                },
                 "settleMs": {
                     "type": "number",
                     "description": "Delay in milliseconds to wait for virtual lists / DOM recycling after each scroll (default: 150)"
+                },
+                "scrollDelayMs": {
+                    "type": "number",
+                    "description": "Pause duration in ms after each step to allow virtual list rendering (default: 250ms). Alias for settleMs."
                 },
                 "tabId": {
                     "type": "number",
@@ -1339,7 +1430,12 @@ def _make_handler(ctx: Any, tool_name: str) -> Callable:
                 'get_windows_and_tabs' if tool_name == 'browserpaw_get_windows_and_tabs'
                 else 'chrome_' + tool_name.removeprefix('browserpaw_')
             )
-            envelope = ctx.call_mcp('browserpaw', remote_name, arguments, timeout=120)
+            timeout = 120
+            if tool_name == 'browserpaw_act_toward_goal' and isinstance(arguments, dict):
+                raw_timeout = arguments.get('timeoutMs')
+                if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
+                    timeout = min(max(120, int(raw_timeout / 1000) + 15), 315)
+            envelope = ctx.call_mcp('browserpaw', remote_name, arguments, timeout=timeout)
             output = json.dumps(envelope, ensure_ascii=False)
             result = envelope.get('result')
             error = envelope.get('error')

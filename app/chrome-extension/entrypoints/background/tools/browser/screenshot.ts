@@ -10,17 +10,24 @@ import {
   compressImage,
   overlayCoordinateGrid,
   smartCompressForTransport,
+  prepareImageForJevVision,
 } from '../../../../utils/image-utils';
 import { screenshotContextManager } from '@/utils/screenshot-context';
+import { diffPerceptiveSignatures } from '@/utils/screenshot-guard';
 import { executeInPage } from './in-page-engine';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
 import { isRestrictedChromeUrl } from '@/utils/restricted-url';
+import { scrubUrl } from '@/utils/url-sanitizer';
+import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 
 // Screenshot-specific constants
 export const MAX_CANVAS_DIM = 16384;
 export const MAX_CANVAS_AREA = 268435456;
 
-export function clampCanvasDimensions(width: number, height: number): { width: number; height: number } {
+export function clampCanvasDimensions(
+  width: number,
+  height: number,
+): { width: number; height: number } {
   const safeW = typeof width === 'number' && Number.isFinite(width) && width > 0 ? width : 1;
   const safeH = typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : 1;
   let w = Math.max(1, Math.round(safeW));
@@ -93,6 +100,8 @@ interface ScreenshotToolParams {
   som?: boolean; // Overlay Set-of-Mark numbered badges on interactive elements before capture
   highlight?: boolean; // Alias for som
   setOfMark?: boolean; // Alias for som
+  /** Internal flag for TypeSafe Jev Vision preparation and frame-binding */
+  _jevVision?: boolean;
   /** View a single visual asset listed by chrome_read_dom (1-based asset index). Bytes first, viewport-crop fallback */
   assetIndex?: number;
   /** Sub-region ROI crop (lossless zoom into specified bounding box [ymin, xmin, ymax, xmax] or { x0, y0, x1, y1 }) */
@@ -196,7 +205,10 @@ export async function normalizeImageToCssDimensions(
     ) {
       return dataUrl;
     }
-    const { width: boundedW, height: boundedH } = clampCanvasDimensions(targetWidthCss, targetHeightCss);
+    const { width: boundedW, height: boundedH } = clampCanvasDimensions(
+      targetWidthCss,
+      targetHeightCss,
+    );
     const canvas = new OffscreenCanvas(boundedW, boundedH);
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to get 2D context from OffscreenCanvas');
@@ -338,12 +350,21 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       rawArgs.som === true ||
       (rawArgs as any).highlight === true ||
       (rawArgs as any).setOfMark === true;
+    const isJevVision = rawArgs._jevVision === true;
 
     const args: ScreenshotToolParams = {
       ...rawArgs,
       targetIndex,
       grid,
       som,
+      ...(isJevVision
+        ? {
+            fullPage: false,
+            saveToDisk: false,
+            savePng: false,
+            format: rawArgs.format === 'png' ? 'png' : 'jpeg',
+          }
+        : {}),
     };
 
     const {
@@ -375,12 +396,13 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalImageDataUrl: string | undefined;
     let finalImageWidthCss: number | undefined;
     let finalImageHeightCss: number | undefined;
+    let jevVisionFrame: { id: string; width: number; height: number } | undefined = undefined;
     const results: any = { base64: null, fileSaved: false };
     let originalScroll: { x: number; y: number } | null = null;
     let didPreparePage = false;
     let didInjectSoM = false;
     let pageDetails: ScreenshotPageDetails | undefined;
-    let assetViewport: { viewportWidth: number; viewportHeight: number } | undefined;
+    let captureViewport: { viewportWidth: number; viewportHeight: number } | undefined;
     let capturedDocWidth: number | undefined;
     let capturedDocHeight: number | undefined;
 
@@ -390,6 +412,33 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.8;
 
     try {
+      let preScroll: any = null;
+      let preDocId: string | undefined = undefined;
+      let preUrl: string = '';
+      let preSig: any = null;
+
+      if (isJevVision) {
+        const preScrollRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageGetScrollState',
+          [],
+        ).catch(() => null);
+        preScroll = preScrollRes?.[0]?.result;
+        preDocId = preScrollRes?.[0]?.documentId || preScroll?.documentId;
+
+        const preSigRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageDetectPerceptiveSignature',
+          [],
+        ).catch(() => null);
+        preSig = preSigRes?.[0]?.result;
+        preUrl = preSig?.url || preScroll?.documentURL || tab.url || '';
+
+        if (!preScroll || !preSig || !preDocId || !preUrl) {
+          throw new Error('Failed to capture initial page probes for TypeSafe Jev vision frame');
+        }
+      }
+
       const enableSoM = args.som === true || args.highlight === true || args.setOfMark === true;
       if (enableSoM) {
         try {
@@ -440,11 +489,22 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       // Fallback: crop the viewport capture by the asset rect.
       let assetHandled = false;
       if (typeof args.assetIndex === 'number') {
-        const assetResults = await executeInPage(
-          { tabId: tab.id!, allFrames: true },
-          'inPageGetAssetImage',
-          [args.assetIndex],
-        );
+        let assetResults: chrome.scripting.InjectionResult<any>[];
+        const cachedSnap = tab.id ? snapshotCacheManager.getSnapshot(tab.id) : undefined;
+        const route = cachedSnap?.valid ? cachedSnap.assetRoutes?.get(args.assetIndex) : undefined;
+        if (route) {
+          assetResults = await executeInPage(
+            { tabId: tab.id!, frameIds: [route.frameId] },
+            'inPageGetAssetImage',
+            [route.localIndex + 1],
+          );
+        } else {
+          assetResults = await executeInPage(
+            { tabId: tab.id!, allFrames: true },
+            'inPageGetAssetImage',
+            [args.assetIndex],
+          );
+        }
         const asset = assetResults?.find((r) => r.result)?.result;
         if (!asset?.rect) {
           return createErrorResponse(
@@ -459,7 +519,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           finalImageHeightCss = img.height;
           assetHandled = true;
           results.assetKind = asset.kind;
-          results.assetSrc = asset.src;
+          results.assetSrc = scrubUrl(asset.src || '');
           results.assetSource = 'bytes';
         } else {
           // Match the bitmap's actual scale; capture providers can differ at the same DPR.
@@ -468,22 +528,31 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           )?.[0]?.result;
           if (
             !viewport ||
-            !Number.isFinite(viewport.viewportWidth) || viewport.viewportWidth <= 0 ||
-            !Number.isFinite(viewport.viewportHeight) || viewport.viewportHeight <= 0
+            !Number.isFinite(viewport.viewportWidth) ||
+            viewport.viewportWidth <= 0 ||
+            !Number.isFinite(viewport.viewportHeight) ||
+            viewport.viewportHeight <= 0
           ) {
             throw new Error('Invalid viewport dimensions for asset fallback');
           }
-          assetViewport = viewport;
+          captureViewport = viewport;
           originalScroll = { x: viewport.scrollX, y: viewport.scrollY };
           const pad = Math.max(0, args.padding ?? 0);
+          // A subframe asset's rect is relative to the iframe viewport; shift it
+          // by the frame's cumulative offset to address the top-level capture.
+          const assetX = Math.round(asset.rect.x + (asset.frameOffsetX || 0));
+          const assetY = Math.round(asset.rect.y + (asset.frameOffsetY || 0));
           const crop = {
-            x: Math.max(0, Math.round(asset.rect.x - pad)),
-            y: Math.max(0, Math.round(asset.rect.y - pad)),
+            x: Math.max(0, assetX - pad),
+            y: Math.max(0, assetY - pad),
             w: 0,
             h: 0,
           };
-          crop.w = Math.min(viewport.viewportWidth, Math.round(asset.rect.x + asset.rect.width + pad)) - crop.x;
-          crop.h = Math.min(viewport.viewportHeight, Math.round(asset.rect.y + asset.rect.height + pad)) - crop.y;
+          crop.w =
+            Math.min(viewport.viewportWidth, assetX + Math.round(asset.rect.width) + pad) - crop.x;
+          crop.h =
+            Math.min(viewport.viewportHeight, assetY + Math.round(asset.rect.height) + pad) -
+            crop.y;
           if (crop.w <= 0 || crop.h <= 0) throw new Error('Asset crop is outside viewport');
           const visibleDataUrl = await this.captureTabPng(tab);
           if (!visibleDataUrl)
@@ -495,7 +564,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           const cropped = new OffscreenCanvas(cropW, cropH);
           const cctx = cropped.getContext('2d');
           if (!cctx) throw new Error('OffscreenCanvas 2d context failed (asset fallback)');
-          cctx.drawImage(raw, crop.x * scaleX, crop.y * scaleY, crop.w * scaleX, crop.h * scaleY, 0, 0, cropW, cropH);
+          cctx.drawImage(
+            raw,
+            crop.x * scaleX,
+            crop.y * scaleY,
+            crop.w * scaleX,
+            crop.h * scaleY,
+            0,
+            0,
+            cropW,
+            cropH,
+          );
           if (typeof (raw as any).close === 'function') (raw as any).close();
           finalImageDataUrl = await canvasToDataURL(
             cropped,
@@ -514,7 +593,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           };
           assetHandled = true;
           results.assetKind = asset.kind;
-          results.assetSrc = asset.src;
+          results.assetSrc = scrubUrl(asset.src || '');
           results.assetSource = 'viewport-crop';
           results.assetFallbackReason = asset.reason;
         }
@@ -659,12 +738,14 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             // races the window-transition frame and returns black bars.
             try {
               if (tab.active) {
-                const rafPromise = cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-                  expression:
-                    'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
-                  awaitPromise: true,
-                });
-                await Promise.race([rafPromise, new Promise((r) => setTimeout(r, 300))]);
+                const frames = cdpSessionManager
+                  .sendCommand(tabId, 'Runtime.evaluate', {
+                    expression:
+                      'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
+                    awaitPromise: true,
+                  })
+                  .catch(() => {});
+                await Promise.race([frames, new Promise((r) => setTimeout(r, 300))]);
               } else {
                 await new Promise((r) => setTimeout(r, 50));
               }
@@ -697,7 +778,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             const clientHeight = Math.round(viewport.clientHeight || 600);
             originalScroll = { x: viewport.pageX || 0, y: viewport.pageY || 0 };
 
-            const shot: any = await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', {
+            const captureParams = {
               format: cdpFormat,
               quality: cdpQuality,
               captureBeyondViewport: false,
@@ -709,7 +790,16 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                 height: clientHeight,
                 scale: 1,
               },
-            });
+            };
+            // A clipped compositor capture can stall; Jev must reach the existing fallback promptly.
+            const shot: any = isJevVision
+              ? await cdpSessionManager.sendDebuggerCommand(
+                  tabId,
+                  'Page.captureScreenshot',
+                  captureParams,
+                  1500,
+                )
+              : await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', captureParams);
             const base64Data = typeof shot?.data === 'string' ? shot.data : '';
             if (!base64Data) {
               throw new Error('CDP Page.captureScreenshot returned empty data');
@@ -725,34 +815,53 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             );
             finalImageWidthCss = clientWidth;
             finalImageHeightCss = clientHeight;
+            captureViewport = { viewportWidth: clientWidth, viewportHeight: clientHeight };
             if (await hasBlackBars(finalImageDataUrl)) {
               // Window-transition frame: wait two more presented frames and
               // retry exactly once before accepting the capture.
               await new Promise((r) => setTimeout(r, 250));
               try {
-                await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
-                  expression:
-                    'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
-                  awaitPromise: true,
-                });
+                // Background/minimized tabs can suspend animation frames indefinitely.
+                if (tab.active) {
+                  const frames = cdpSessionManager
+                    .sendCommand(tabId, 'Runtime.evaluate', {
+                      expression:
+                        'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))',
+                      awaitPromise: true,
+                    })
+                    .catch(() => {});
+                  await Promise.race([frames, new Promise((r) => setTimeout(r, 300))]);
+                }
               } catch {}
-              const retry: any = await cdpSessionManager.sendCommand(
-                tabId,
-                'Page.captureScreenshot',
-                {
-                  format: cdpFormat,
-                  quality: cdpQuality,
-                  captureBeyondViewport: false,
-                  fromSurface: true,
-                  clip: {
-                    x: viewport.pageX || 0,
-                    y: viewport.pageY || 0,
-                    width: clientWidth,
-                    height: clientHeight,
-                    scale: 1,
-                  },
+              const retryCapture = cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', {
+                format: cdpFormat,
+                quality: cdpQuality,
+                captureBeyondViewport: false,
+                fromSurface: true,
+                clip: {
+                  x: viewport.pageX || 0,
+                  y: viewport.pageY || 0,
+                  width: clientWidth,
+                  height: clientHeight,
+                  scale: 1,
                 },
-              );
+              });
+              // Keep the first capture if an optional compositor retry stops acknowledging.
+              let retryTimer: ReturnType<typeof setTimeout> | undefined;
+              let retry: any;
+              try {
+                retry = await Promise.race([
+                  retryCapture,
+                  new Promise<null>((resolve) => {
+                    retryTimer = setTimeout(() => resolve(null), 1000);
+                  }),
+                ]);
+              } finally {
+                clearTimeout(retryTimer);
+              }
+              if (!retry)
+                results.cdpCaptureWarning =
+                  'Black-bar recapture exceeded 1000ms; using initial frame';
               const retryData = typeof retry?.data === 'string' ? retry.data : '';
               if (retryData) {
                 finalImageDataUrl = await normalizeImageToCssDimensions(
@@ -766,6 +875,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             }
           });
         } catch (e) {
+          results.cdpCaptureWarning = e instanceof Error ? e.message : String(e);
           console.warn('CDP viewport capture failed, falling back to helper path:', e);
         }
       }
@@ -773,13 +883,14 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       // === Path 2: Helper-assisted capture (requires content script) ===
       if (!assetHandled && !finalImageDataUrl) {
         // Always inject helper when we need pageDetails
-        await this.injectContentScript(tab.id!, ['inject-scripts/screenshot-helper.js']);
+        await this.injectScreenshotHelper(tab.id!);
         await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_CONSTANTS.SCRIPT_INIT_DELAY));
 
         // Prepare page (hide scrollbars, handle fixed elements)
         // Helper messages can die with a stale listener after extension
         // reloads or renderer swaps. One re-inject + retry recovers them;
         // a second failure surfaces as the original error.
+        didPreparePage = true;
         const prepareResp = await this.sendToHelperWithRetry(tab.id!, {
           action: TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
           options: { fullPage },
@@ -789,7 +900,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             'Screenshot helper did not acknowledge page preparation. The content script may not be injected or cannot run on this page.',
           );
         }
-        didPreparePage = true;
 
         // Get page details with validation
         const rawPageDetails = await this.sendToHelperWithRetry(tab.id!, {
@@ -818,7 +928,10 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           finalImageWidthCss = elementCapture.widthCss;
           finalImageHeightCss = elementCapture.heightCss;
           elementCropOrigin = { x: elementCapture.originX, y: elementCapture.originY };
-          elementOriginalCrop = { width: (elementCapture as any).originalCropWidth, height: (elementCapture as any).originalCropHeight };
+          elementOriginalCrop = {
+            width: (elementCapture as any).originalCropWidth,
+            height: (elementCapture as any).originalCropHeight,
+          };
         } else {
           // Visible area only
           this.logInfo('Capturing visible area...');
@@ -842,6 +955,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
 
       // TOOL01: Clamp to maxWidth before grid overlay, caching, and disk saving
+      let viewportScale = 1;
       const effectiveMaxWidth =
         typeof args.maxWidth === 'number' && Number.isFinite(args.maxWidth) && args.maxWidth > 0
           ? Math.max(1, Math.round(args.maxWidth))
@@ -862,14 +976,15 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           );
           if (scaledUrl && scaledUrl !== finalImageDataUrl) {
             finalImageDataUrl = scaledUrl;
+            viewportScale = scale;
             try {
               const bmp = await createImageBitmapFromUrl(scaledUrl);
               finalImageWidthCss = bmp.width;
               finalImageHeightCss = bmp.height;
               if (typeof (bmp as any).close === 'function') (bmp as any).close();
             } catch {
-            finalImageWidthCss = targetW;
-            finalImageHeightCss = targetH;
+              finalImageWidthCss = targetW;
+              finalImageHeightCss = targetH;
             }
           }
         } catch (maxWErr) {
@@ -897,6 +1012,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                     : 'ruler',
               originX: elementCropOrigin?.x,
               originY: elementCropOrigin?.y,
+              viewportScale,
               normalized1000: gridStyle === '1000',
             },
           );
@@ -906,57 +1022,188 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
 
       // 2. Process output
-      // Update screenshot context for coordinate scaling by tools like chrome_computer
-      try {
-        if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
-          let hostname = '';
-          try {
-            hostname = tab.url ? new URL(tab.url).hostname : '';
-          } catch {
-            // ignore
-          }
-          // For element captures or ROI crops, keep crop bounds and origin offset
-          const isRoiOrElement = Boolean(elementCropOrigin);
-          const cropW = elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
-          const cropH = elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
-          const viewportWidth = pageDetails?.viewportWidth ?? assetViewport?.viewportWidth ?? finalImageWidthCss;
-          const viewportHeight = pageDetails?.viewportHeight ?? assetViewport?.viewportHeight ?? finalImageHeightCss;
-          const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
-            ? 'element'
-            : fullPage
-              ? 'fullpage'
-              : 'viewport';
-          const scrollX = originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
-          const scrollY = originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
-          const docWidth = captureMode === 'fullpage'
-            ? (capturedDocWidth ?? pageDetails?.totalWidth ?? finalImageWidthCss)
-            : undefined;
-          const docHeight = captureMode === 'fullpage'
-            ? (capturedDocHeight ?? pageDetails?.totalHeight ?? finalImageHeightCss)
-            : undefined;
-          screenshotContextManager.setContext(tab.id!, {
-            screenshotWidth: finalImageWidthCss,
-            screenshotHeight: finalImageHeightCss,
-            viewportWidth,
-            viewportHeight,
-            cropWidth: cropW,
-            cropHeight: cropH,
-            originX: elementCropOrigin?.x,
-            originY: elementCropOrigin?.y,
-            devicePixelRatio: pageDetails?.devicePixelRatio,
-            hostname,
-            scrollX,
-            scrollY,
-            captureMode,
-            docWidth,
-            docHeight,
-          });
+      if (isJevVision && finalImageDataUrl) {
+        const postScrollRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageGetScrollState',
+          [],
+        ).catch(() => null);
+        const postScroll = postScrollRes?.[0]?.result;
+        const postDocId = postScrollRes?.[0]?.documentId || postScroll?.documentId;
+
+        const postSigRes = await executeInPage(
+          { tabId: tab.id! },
+          'inPageDetectPerceptiveSignature',
+          [],
+        ).catch(() => null);
+        const postSig = postSigRes?.[0]?.result;
+        const postUrl = postSig?.url || postScroll?.documentURL || tab.url || '';
+
+        if (!postScroll || !postSig || !postDocId || !postUrl) {
+          throw new Error(
+            'Failed to capture post-screenshot verification probes for TypeSafe Jev vision frame',
+          );
         }
-      } catch (e) {
-        console.warn('Failed to set screenshot context:', e);
+
+        if (preDocId !== postDocId) {
+          throw new Error(
+            `Document changed during screenshot capture: pre="${preDocId}" vs post="${postDocId}"`,
+          );
+        }
+
+        if (preUrl !== postUrl) {
+          throw new Error(
+            `Page URL changed during screenshot capture: pre="${preUrl}" vs post="${postUrl}"`,
+          );
+        }
+
+        if (
+          Math.abs(preScroll.scrollX - postScroll.scrollX) > 4 ||
+          Math.abs(preScroll.scrollY - postScroll.scrollY) > 4
+        ) {
+          throw new Error('Page scrolled during screenshot capture');
+        }
+
+        if (
+          Math.abs(preScroll.viewportWidth - postScroll.viewportWidth) > 4 ||
+          Math.abs(preScroll.viewportHeight - postScroll.viewportHeight) > 4
+        ) {
+          throw new Error('Viewport dimensions changed during screenshot capture');
+        }
+
+        if (preSig && postSig) {
+          const sigDrift = diffPerceptiveSignatures(preSig, postSig);
+          if (sigDrift) {
+            throw new Error(`Perceptive signature changed during screenshot capture: ${sigDrift}`);
+          }
+        }
+
+        const preferredMime = args.format === 'png' ? 'image/png' : 'image/jpeg';
+        const jevImg = await prepareImageForJevVision(finalImageDataUrl, {
+          preferredFormat: preferredMime,
+          quality: qualityFraction,
+        });
+        finalImageDataUrl = jevImg.dataUrl;
+        finalImageWidthCss = jevImg.width;
+        finalImageHeightCss = jevImg.height;
+
+        const isRoiOrElement = Boolean(elementCropOrigin);
+        const cropW =
+          elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
+        const cropH =
+          elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
+        const viewportWidth =
+          postScroll.viewportWidth ??
+          pageDetails?.viewportWidth ??
+          captureViewport?.viewportWidth ??
+          finalImageWidthCss;
+        const viewportHeight =
+          postScroll.viewportHeight ??
+          pageDetails?.viewportHeight ??
+          captureViewport?.viewportHeight ??
+          finalImageHeightCss;
+        const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
+          ? 'element'
+          : 'viewport';
+        const scrollX = postScroll.scrollX ?? originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
+        const scrollY = postScroll.scrollY ?? originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
+
+        const documentId = postDocId || preDocId;
+        const frameUrl = postSig?.url || postUrl || tab.url || '';
+
+        const visionFrameId =
+          'vf_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        const frame = screenshotContextManager.createVisionFrame({
+          id: visionFrameId,
+          tabId: tab.id!,
+          url: frameUrl,
+          documentId,
+          title: tab.title,
+          width: jevImg.width,
+          height: jevImg.height,
+          contentWidth: jevImg.contentWidth,
+          contentHeight: jevImg.contentHeight,
+          padX: jevImg.padX,
+          padY: jevImg.padY,
+          scaleRatio: jevImg.scaleRatio,
+          viewportWidth,
+          viewportHeight,
+          scrollX,
+          scrollY,
+          devicePixelRatio: pageDetails?.devicePixelRatio,
+          captureMode,
+          originX: elementCropOrigin?.x,
+          originY: elementCropOrigin?.y,
+          cropWidth: cropW,
+          cropHeight: cropH,
+          perceptiveSignature: postSig,
+        });
+
+        jevVisionFrame = {
+          id: frame.id,
+          width: frame.width,
+          height: frame.height,
+        };
+      } else {
+        // Update screenshot context for coordinate scaling by tools like chrome_computer
+        try {
+          if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
+            let hostname = '';
+            try {
+              hostname = tab.url ? new URL(tab.url).hostname : '';
+            } catch {
+              // ignore
+            }
+            // For element captures or ROI crops, keep crop bounds and origin offset
+            const isRoiOrElement = Boolean(elementCropOrigin);
+            const cropW =
+              elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
+            const cropH =
+              elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
+            const viewportWidth =
+              pageDetails?.viewportWidth ?? captureViewport?.viewportWidth ?? finalImageWidthCss;
+            const viewportHeight =
+              pageDetails?.viewportHeight ?? captureViewport?.viewportHeight ?? finalImageHeightCss;
+            const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
+              ? 'element'
+              : fullPage
+                ? 'fullpage'
+                : 'viewport';
+            const scrollX = originalScroll?.x ?? pageDetails?.currentScrollX ?? 0;
+            const scrollY = originalScroll?.y ?? pageDetails?.currentScrollY ?? 0;
+            const docWidth =
+              captureMode === 'fullpage'
+                ? (capturedDocWidth ?? pageDetails?.totalWidth ?? finalImageWidthCss)
+                : undefined;
+            const docHeight =
+              captureMode === 'fullpage'
+                ? (capturedDocHeight ?? pageDetails?.totalHeight ?? finalImageHeightCss)
+                : undefined;
+            screenshotContextManager.setContext(tab.id!, {
+              screenshotWidth: finalImageWidthCss,
+              screenshotHeight: finalImageHeightCss,
+              viewportWidth,
+              viewportHeight,
+              cropWidth: cropW,
+              cropHeight: cropH,
+              originX: elementCropOrigin?.x,
+              originY: elementCropOrigin?.y,
+              devicePixelRatio: pageDetails?.devicePixelRatio,
+              hostname,
+              scrollX,
+              scrollY,
+              captureMode,
+              docWidth,
+              docHeight,
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to set screenshot context:', e);
+        }
       }
 
       const shouldSaveDisk =
+        !isJevVision &&
         (savePng === true || saveToDisk === true || (args as any).saveToDisk === true) &&
         args.savePng !== false &&
         (args as any).saveToDisk !== false;
@@ -1033,7 +1280,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             resetMessage.scrollX = originalScroll.x;
             resetMessage.scrollY = originalScroll.y;
           }
-          await this.sendMessageToTab(tab.id!, resetMessage);
+          await this.sendToHelperWithRetry(tab.id!, resetMessage);
         } catch (err) {
           console.warn('Failed to reset page, tab might have closed:', err);
         }
@@ -1058,13 +1305,21 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalBase64 =
       results.base64 ||
       (finalImageDataUrl ? finalImageDataUrl.replace(/^data:[^;]+;base64,/, '') : undefined);
-    let finalMime: 'image/webp' | 'image/png' | 'image/jpeg' =
-      format === 'webp' ? 'image/webp' : format === 'png' ? 'image/png' : 'image/jpeg';
+    let finalMime: 'image/webp' | 'image/png' | 'image/jpeg' = isJevVision
+      ? args.format === 'png'
+        ? 'image/png'
+        : 'image/jpeg'
+      : format === 'webp'
+        ? 'image/webp'
+        : format === 'png'
+          ? 'image/png'
+          : 'image/jpeg';
     let isThumbnailFinal = false;
 
-    if (finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
+    if (!isJevVision && finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
       try {
-        const isHighClarity = args.highClarity === true || fullPage === true || Boolean(results.roi);
+        const isHighClarity =
+          args.highClarity === true || fullPage === true || Boolean(results.roi);
         const maxBudget = fullPage
           ? args.highClarity
             ? 2000 * 1024
@@ -1129,15 +1384,18 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         text: JSON.stringify({
           success: true,
           message: `Screenshot [${name}] captured successfully`,
+          ...(jevVisionFrame ? { visionFrame: jevVisionFrame } : {}),
           tabId: tab.id,
-          url: tab.url,
+          url: scrubUrl(tab.url || ''),
           name: name,
           format,
           quality: args.quality ?? (format === 'png' ? undefined : 80),
           imageWidth: finalImageWidthCss,
           imageHeight: finalImageHeightCss,
-          viewportWidth: pageDetails?.viewportWidth ?? assetViewport?.viewportWidth ?? finalImageWidthCss,
-          viewportHeight: pageDetails?.viewportHeight ?? assetViewport?.viewportHeight ?? finalImageHeightCss,
+          viewportWidth:
+            pageDetails?.viewportWidth ?? captureViewport?.viewportWidth ?? finalImageWidthCss,
+          viewportHeight:
+            pageDetails?.viewportHeight ?? captureViewport?.viewportHeight ?? finalImageHeightCss,
           originX: elementCropOrigin?.x ?? 0,
           originY: elementCropOrigin?.y ?? 0,
           scaleFactor:
@@ -1200,17 +1458,69 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
    * reload is the common case).
    */
   private async sendToHelperWithRetry(tabId: number, message: any): Promise<any> {
+    const allFrames =
+      message.action === TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE ||
+      message.action === TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_SLICE ||
+      message.action === TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE;
+    const frames = allFrames ? await this.getScreenshotFrames(tabId) : [{ frameId: 0 }];
+    const send = async () => {
+      const settled = await Promise.allSettled(
+        frames.map((frame) =>
+          this.sendMessageToTab(
+            tabId,
+            message.action === TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE &&
+              frame.frameId !== 0
+              ? { action: message.action }
+              : message,
+            frame.frameId,
+          ),
+        ),
+      );
+      // Let every frame settle before surfacing a failure: an early reject would
+      // let the caller start the reset while other frames are still preparing,
+      // and those late DOM mutations would survive into the next capture.
+      const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) throw failed.reason;
+      return (
+        settled[frames.findIndex((frame) => frame.frameId === 0)] as
+          PromiseFulfilledResult<any> | undefined
+      )?.value;
+    };
     try {
-      return await this.sendMessageToTab(tabId, message);
+      return await send();
     } catch (firstErr) {
       console.warn(
         `screenshot helper no answer for ${message?.action}; re-injecting once`,
         firstErr instanceof Error ? firstErr.message : firstErr,
       );
-      await this.injectContentScript(tabId, ['inject-scripts/screenshot-helper.js']);
+      await this.injectScreenshotHelper(tabId);
       await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_CONSTANTS.SCRIPT_INIT_DELAY));
-      return this.sendMessageToTab(tabId, message);
+      return send();
     }
+  }
+
+  private async getScreenshotFrames(tabId: number) {
+    const frames = await chrome.webNavigation?.getAllFrames?.({ tabId });
+    return frames?.length
+      ? frames.filter((frame) => !isRestrictedChromeUrl(frame.url))
+      : [{ frameId: 0 }];
+  }
+
+  private async injectScreenshotHelper(tabId: number): Promise<void> {
+    const frames = await this.getScreenshotFrames(tabId);
+    await Promise.all(
+      frames.map((frame) =>
+        // A main-frame pong cannot prove the helper is present in child frames.
+        this.injectContentScript(
+          tabId,
+          ['inject-scripts/screenshot-helper.js'],
+          false,
+          'ISOLATED',
+          true,
+          [frame.frameId],
+        ),
+      ),
+    );
   }
 
   private async captureTabPng(tab: chrome.tabs.Tab): Promise<string> {
@@ -1347,12 +1657,18 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     }
 
     // DPR 1:1 Normalization: enforce output dimensions to exact CSS pixel dimensions
-    const zoom = typeof options.zoom === 'number' && Number.isFinite(options.zoom) && options.zoom > 0 ? options.zoom : 1;
+    const zoom =
+      typeof options.zoom === 'number' && Number.isFinite(options.zoom) && options.zoom > 0
+        ? options.zoom
+        : 1;
     const baseWidth = Math.max(1, Math.round(cropRectPx.width / dpr));
     const baseHeight = Math.max(1, Math.round(cropRectPx.height / dpr));
     const rawWidthCss = options.width ?? Math.round(baseWidth * zoom);
     const rawHeightCss = options.height ?? Math.round(baseHeight * zoom);
-    const { width: finalWidthCss, height: finalHeightCss } = clampCanvasDimensions(rawWidthCss, rawHeightCss);
+    const { width: finalWidthCss, height: finalHeightCss } = clampCanvasDimensions(
+      rawWidthCss,
+      rawHeightCss,
+    );
 
     const croppedCanvas = new OffscreenCanvas(finalWidthCss, finalHeightCss);
     const ctx = croppedCanvas.getContext('2d');

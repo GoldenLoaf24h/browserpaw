@@ -88,6 +88,16 @@ interface CaptureInfo {
   limitReached?: boolean; // Whether request count limit is reached
 }
 
+// One listener set per captured tab. webRequest listeners are not tab-scoped by themselves, so
+// each captured tab registers its own set behind a `tabId` filter and drops it when it stops.
+interface TabRequestListeners {
+  onBeforeRequest: (details: chrome.webRequest.WebRequestBodyDetails) => void;
+  onSendHeaders: (details: chrome.webRequest.WebRequestHeadersDetails) => void;
+  onHeadersReceived: (details: chrome.webRequest.WebResponseHeadersDetails) => void;
+  onCompleted: (details: chrome.webRequest.WebResponseCacheDetails) => void;
+  onErrorOccurred: (details: chrome.webRequest.WebResponseErrorDetails) => void;
+}
+
 /**
  * Network Capture Start Tool V2 - Uses Chrome webRequest API to start capturing network requests
  */
@@ -100,7 +110,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
   private lastActivityTime: Map<number, number> = new Map(); // tabId -> timestamp of last activity
   private requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests
   public static MAX_REQUESTS_PER_CAPTURE = LIMITS.MAX_NETWORK_REQUESTS; // Maximum capture request count
-  private listeners: { [key: string]: (details: any) => void } = {};
+  private listeners: Map<number, TabRequestListeners> = new Map(); // tabId -> request listeners
 
   // Static resource MIME types list (for filtering)
   private static STATIC_MIME_TYPES_TO_FILTER = [
@@ -327,6 +337,9 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
    * Clean up capture resources
    */
   private cleanupCapture(tabId: number): void {
+    // Stop delivering events for this tab before tearing its state down
+    this.removeListeners(tabId);
+
     // Clear timers
     if (this.captureTimers.has(tabId)) {
       clearTimeout(this.captureTimers.get(tabId)!);
@@ -347,16 +360,18 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
   }
 
   /**
-   * Set up request listeners (idempotent - won't add duplicate listeners)
+   * Set up request listeners for one tab (idempotent - won't add duplicate listeners)
    */
-  private setupListeners(): void {
-    // Skip if listeners are already set up
-    if ((this.listeners as any).onBeforeRequest) {
+  private setupListeners(tabId: number): void {
+    // Skip if this tab already has its listeners set up
+    if (this.listeners.has(tabId)) {
       return;
     }
 
+    const listeners = {} as TabRequestListeners;
+
     // Before request is sent
-    this.listeners.onBeforeRequest = (details: chrome.webRequest.WebRequestBodyDetails) => {
+    listeners.onBeforeRequest = (details: chrome.webRequest.WebRequestBodyDetails) => {
       const captureInfo = this.captureData.get(details.tabId);
       if (!captureInfo) return;
 
@@ -399,7 +414,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
     };
 
     // Send request headers
-    this.listeners.onSendHeaders = (details: chrome.webRequest.WebRequestHeadersDetails) => {
+    listeners.onSendHeaders = (details: chrome.webRequest.WebRequestHeadersDetails) => {
       const captureInfo = this.captureData.get(details.tabId);
       if (!captureInfo || !captureInfo.requests[details.requestId]) return;
 
@@ -413,7 +428,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
     };
 
     // Receive response headers
-    this.listeners.onHeadersReceived = (details: chrome.webRequest.WebResponseHeadersDetails) => {
+    listeners.onHeadersReceived = (details: chrome.webRequest.WebResponseHeadersDetails) => {
       const captureInfo = this.captureData.get(details.tabId);
       if (!captureInfo || !captureInfo.requests[details.requestId]) return;
 
@@ -456,7 +471,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
     };
 
     // Request completed
-    this.listeners.onCompleted = (details: chrome.webRequest.WebResponseCacheDetails) => {
+    listeners.onCompleted = (details: chrome.webRequest.WebResponseCacheDetails) => {
       const captureInfo = this.captureData.get(details.tabId);
       if (!captureInfo || !captureInfo.requests[details.requestId]) return;
 
@@ -469,7 +484,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
     };
 
     // Request failed
-    this.listeners.onErrorOccurred = (details: chrome.webRequest.WebResponseErrorDetails) => {
+    listeners.onErrorOccurred = (details: chrome.webRequest.WebResponseErrorDetails) => {
       const captureInfo = this.captureData.get(details.tabId);
       if (!captureInfo || !captureInfo.requests[details.requestId]) return;
 
@@ -479,69 +494,45 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
       this.updateLastActivityTime(details.tabId);
     };
 
-    // Register all listeners
-    chrome.webRequest.onBeforeRequest.addListener(
-      this.listeners.onBeforeRequest,
-      { urls: ['<all_urls>'] },
-      ['requestBody'],
-    );
+    // Register all listeners, scoped to this tab so unrelated tabs' traffic is never delivered
+    const filter: chrome.webRequest.RequestFilter = { tabId, urls: ['<all_urls>'] };
+    this.listeners.set(tabId, listeners);
 
-    chrome.webRequest.onSendHeaders.addListener(
-      this.listeners.onSendHeaders,
-      { urls: ['<all_urls>'] },
-      ['requestHeaders'],
-    );
+    chrome.webRequest.onBeforeRequest.addListener(listeners.onBeforeRequest, filter, [
+      'requestBody',
+    ]);
 
-    chrome.webRequest.onHeadersReceived.addListener(
-      this.listeners.onHeadersReceived,
-      { urls: ['<all_urls>'] },
-      ['responseHeaders'],
-    );
+    chrome.webRequest.onSendHeaders.addListener(listeners.onSendHeaders, filter, [
+      'requestHeaders',
+    ]);
 
-    chrome.webRequest.onCompleted.addListener(this.listeners.onCompleted, { urls: ['<all_urls>'] });
+    chrome.webRequest.onHeadersReceived.addListener(listeners.onHeadersReceived, filter, [
+      'responseHeaders',
+    ]);
 
-    chrome.webRequest.onErrorOccurred.addListener(this.listeners.onErrorOccurred, {
-      urls: ['<all_urls>'],
-    });
+    chrome.webRequest.onCompleted.addListener(listeners.onCompleted, filter);
+
+    chrome.webRequest.onErrorOccurred.addListener(listeners.onErrorOccurred, filter);
   }
 
   /**
-   * Remove all request listeners
-   * Only remove listeners when all tab captures have stopped
+   * Remove the request listeners owned by one tab
    */
-  private removeListeners(): void {
-    // Don't remove listeners if there are still tabs being captured
-    if (this.captureData.size > 0) {
-      console.log(
-        `NetworkCaptureV2: Still capturing on ${this.captureData.size} tabs, not removing listeners.`,
-      );
+  private removeListeners(tabId: number): void {
+    const listeners = this.listeners.get(tabId);
+    if (!listeners) {
       return;
     }
 
-    console.log(`NetworkCaptureV2: No more active captures, removing all listeners.`);
+    chrome.webRequest.onBeforeRequest.removeListener(listeners.onBeforeRequest);
+    chrome.webRequest.onSendHeaders.removeListener(listeners.onSendHeaders);
+    chrome.webRequest.onHeadersReceived.removeListener(listeners.onHeadersReceived);
+    chrome.webRequest.onCompleted.removeListener(listeners.onCompleted);
+    chrome.webRequest.onErrorOccurred.removeListener(listeners.onErrorOccurred);
 
-    if (this.listeners.onBeforeRequest) {
-      chrome.webRequest.onBeforeRequest.removeListener(this.listeners.onBeforeRequest);
-    }
+    this.listeners.delete(tabId);
 
-    if (this.listeners.onSendHeaders) {
-      chrome.webRequest.onSendHeaders.removeListener(this.listeners.onSendHeaders);
-    }
-
-    if (this.listeners.onHeadersReceived) {
-      chrome.webRequest.onHeadersReceived.removeListener(this.listeners.onHeadersReceived);
-    }
-
-    if (this.listeners.onCompleted) {
-      chrome.webRequest.onCompleted.removeListener(this.listeners.onCompleted);
-    }
-
-    if (this.listeners.onErrorOccurred) {
-      chrome.webRequest.onErrorOccurred.removeListener(this.listeners.onErrorOccurred);
-    }
-
-    // Clear listener object
-    this.listeners = {};
+    console.log(`NetworkCaptureV2: Removed request listeners for tab ${tabId}.`);
   }
 
   /**
@@ -600,7 +591,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
       this.requestCounters.set(tabId, 0);
 
       // Set up listeners
-      this.setupListeners();
+      this.setupListeners(tabId);
 
       // Update last activity time
       this.updateLastActivityTime(tabId);
@@ -684,9 +675,6 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
 
       // Sort by time
       processedRequests.sort((a, b) => (a.requestTime || 0) - (b.requestTime || 0));
-
-      // Remove listeners
-      this.removeListeners();
 
       // Prepare result data
       const resultData = {

@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readDOMTool } from '../entrypoints/background/tools/browser/read-dom';
 import { grepTool } from '../entrypoints/background/tools/browser/grep';
 import { snapshotCacheManager } from '../utils/snapshot-cache-manager';
@@ -39,12 +39,14 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
         ],
       };
 
-      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (target: any, fnName: string) => {
-        if (fnName === 'inPageFastSnapshot') {
-          return [{ result: mockFastData, frameId: 0 }] as any;
-        }
-        return [] as any;
-      });
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (target: any, fnName: string) => {
+          if (fnName === 'inPageFastSnapshot') {
+            return [{ result: mockFastData, frameId: 0 }] as any;
+          }
+          return [] as any;
+        },
+      );
 
       const res = await readDOMTool.execute({ format: 'fast', tabId });
       expect(res.isError).toBe(false);
@@ -76,6 +78,72 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
       expect(snapshot?.representation).toBe('fast');
       expect(snapshot?.fingerprints?.get(1)?.text).toBe('Submit Order Now');
     });
+
+    it('P1: fast tree carries the live value of a filled control', async () => {
+      const tabId = 103;
+      vi.spyOn(readDOMTool as any, 'resolveAffinityTab').mockResolvedValue({
+        id: tabId,
+        url: 'https://example.com/search',
+      });
+
+      // The fast snapshot reports the control's live value; the tree must not drop it, or a
+      // completed fill reads as unperformed and gets repeated until the run reports stuck.
+      const mockFastData = {
+        url: 'https://example.com/search',
+        title: 'Search',
+        w: 1280,
+        h: 800,
+        text: 'Page text',
+        actions: [
+          {
+            id: 'e1',
+            kind: 'fill',
+            role: 'searchbox',
+            label: 'Search',
+            value: 'BrowserPaw',
+            rect: { x: 10, y: 20, w: 300, h: 40 },
+          },
+          {
+            id: 'e2',
+            kind: 'fill',
+            role: 'textbox',
+            label: 'Empty field',
+            value: '',
+            rect: { x: 10, y: 80, w: 300, h: 40 },
+          },
+          {
+            id: 'e3',
+            kind: 'select',
+            role: 'combobox',
+            label: 'Country → Japan',
+            value: 'jp',
+            current_value: 'Japan',
+            rect: { x: 10, y: 140, w: 300, h: 40 },
+          },
+        ],
+      };
+
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (target: any, fnName: string) => {
+          if (fnName === 'inPageFastSnapshot') {
+            return [{ result: mockFastData, frameId: 0 }] as any;
+          }
+          return [] as any;
+        },
+      );
+
+      const res = await readDOMTool.execute({ format: 'fast', tabId });
+      expect(res.isError).toBe(false);
+      const payload = JSON.parse(res.content[0].text);
+
+      expect(payload.treeString).toContain('[1] searchbox "Search" value="BrowserPaw"');
+      // An empty control must not gain a value attribute.
+      expect(payload.treeString).toContain('[2] textbox "Empty field"');
+      expect(payload.treeString).not.toContain('[2] textbox "Empty field" value=');
+      // A select's option value is not its current state; only current_value describes that.
+      expect(payload.treeString).toContain('[3] combobox "Country → Japan"');
+      expect(payload.treeString).not.toContain('value="jp"');
+    });
   });
 
   describe('FUNC-05: Grep Subframe Reindex Synchronization', () => {
@@ -86,50 +154,52 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
         url: 'https://example.com/multi-frame',
       });
 
-      const executeSpy = vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (target: any, fnName: string) => {
-        if (fnName === 'inPageDOMPruner') {
-          return [
-            {
-              frameId: 0,
-              result: {
-                elementCount: 1,
-                interactiveCount: 1,
-                indexedElements: [
-                  {
-                    index: 1,
-                    tagName: 'input',
-                    role: 'textbox',
-                    text: 'Search input',
-                    isInteractive: true,
-                  },
-                ],
-                indexMap: { 1: { selector: '#search', tagName: 'input' } },
+      const executeSpy = vi
+        .spyOn(inPageEngine, 'executeInPage')
+        .mockImplementation(async (target: any, fnName: string) => {
+          if (fnName === 'inPageDOMPruner') {
+            return [
+              {
+                frameId: 0,
+                result: {
+                  elementCount: 1,
+                  interactiveCount: 1,
+                  indexedElements: [
+                    {
+                      index: 1,
+                      tagName: 'input',
+                      role: 'textbox',
+                      text: 'Search input',
+                      isInteractive: true,
+                    },
+                  ],
+                  indexMap: { 1: { selector: '#search', tagName: 'input' } },
+                },
               },
-            },
-            {
-              frameId: 42,
-              result: {
-                elementCount: 1,
-                interactiveCount: 1,
-                indexedElements: [
-                  {
-                    index: 1,
-                    tagName: 'button',
-                    role: 'button',
-                    text: 'Pay with Card',
-                    isInteractive: true,
-                  },
-                ],
-                indexMap: { 1: { selector: '#pay', tagName: 'button' } },
+              {
+                frameId: 42,
+                result: {
+                  elementCount: 1,
+                  interactiveCount: 1,
+                  indexedElements: [
+                    {
+                      index: 1,
+                      tagName: 'button',
+                      role: 'button',
+                      text: 'Pay with Card',
+                      isInteractive: true,
+                    },
+                  ],
+                  indexMap: { 1: { selector: '#pay', tagName: 'button' } },
+                },
               },
-            },
-          ] as any;
-        }
-        if (fnName === 'inPageReindexFrame') {
-          return [{ frameId: target.frameIds?.[0], result: true }] as any;
-        }
-        return [] as any;
-      });
+            ] as any;
+          }
+          if (fnName === 'inPageReindexFrame') {
+            return [{ frameId: target.frameIds?.[0], result: true }] as any;
+          }
+          return [] as any;
+        });
 
       const res = await grepTool.execute({ query: 'Pay with Card', tabId });
       expect(res.isError).toBe(false);
@@ -154,40 +224,42 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
         url: 'https://example.com/parent',
       });
 
-      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (target: any, fnName: string) => {
-        if (fnName === 'inPageDOMPruner') {
-          return [
-            {
-              frameId: 0,
-              result: {
-                elementCount: 1,
-                interactiveCount: 1,
-                treeString: '[1] div "Click Me"',
-                indexedElements: [
-                  { index: 1, tagName: 'div', text: 'Click Me', isInteractive: false },
-                ],
-                indexMap: { 1: { selector: 'div#c', tagName: 'div' } },
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (target: any, fnName: string) => {
+          if (fnName === 'inPageDOMPruner') {
+            return [
+              {
+                frameId: 0,
+                result: {
+                  elementCount: 1,
+                  interactiveCount: 1,
+                  treeString: '[1] div "Click Me"',
+                  indexedElements: [
+                    { index: 1, tagName: 'div', text: 'Click Me', isInteractive: false },
+                  ],
+                  indexMap: { 1: { selector: 'div#c', tagName: 'div' } },
+                },
               },
-            },
-            {
-              frameId: 10,
-              result: {
-                elementCount: 1,
-                interactiveCount: 1,
-                treeString: '[1] button "Subframe Button"',
-                indexedElements: [
-                  { index: 1, tagName: 'button', text: 'Subframe Button', isInteractive: true },
-                ],
-                indexMap: { 1: { selector: 'button#s', tagName: 'button' } },
+              {
+                frameId: 10,
+                result: {
+                  elementCount: 1,
+                  interactiveCount: 1,
+                  treeString: '[1] button "Subframe Button"',
+                  indexedElements: [
+                    { index: 1, tagName: 'button', text: 'Subframe Button', isInteractive: true },
+                  ],
+                  indexMap: { 1: { selector: 'button#s', tagName: 'button' } },
+                },
               },
-            },
-          ] as any;
-        }
-        if (fnName === 'inPageReindexFrame') {
-          return [{ frameId: 10, result: true }] as any;
-        }
-        return [] as any;
-      });
+            ] as any;
+          }
+          if (fnName === 'inPageReindexFrame') {
+            return [{ frameId: 10, result: true }] as any;
+          }
+          return [] as any;
+        },
+      );
 
       // Mock CDP sendCommand to return AX tree that turns div into a button
       vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({
@@ -226,9 +298,7 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
         w: 1280,
         h: 800,
         text: 'Checkout',
-        actions: [
-          { id: 'e1', kind: 'click', role: 'button', label: 'Pay Now' },
-        ],
+        actions: [{ id: 'e1', kind: 'click', role: 'button', label: 'Pay Now' }],
       };
 
       const prunerData = [
@@ -247,15 +317,17 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
         },
       ];
 
-      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (target: any, fnName: string) => {
-        if (fnName === 'inPageFastSnapshot') {
-          return [{ result: fastData, frameId: 0 }] as any;
-        }
-        if (fnName === 'inPageDOMPruner') {
-          return prunerData as any;
-        }
-        return [] as any;
-      });
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (target: any, fnName: string) => {
+          if (fnName === 'inPageFastSnapshot') {
+            return [{ result: fastData, frameId: 0 }] as any;
+          }
+          if (fnName === 'inPageDOMPruner') {
+            return prunerData as any;
+          }
+          return [] as any;
+        },
+      );
 
       // Step 1: Execute fast snapshot
       const fastRes = await readDOMTool.execute({ format: 'fast', tabId });
@@ -311,7 +383,7 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
       ] as any);
 
       // captureDeltaIfRequested defaults to standard representation
-      const deltaResult = await captureDeltaIfRequested(tabId, true, 0); 
+      const deltaResult = await captureDeltaIfRequested(tabId, true, 0);
       expect(deltaResult).toBeDefined();
       // Because cached baseline was 'fast' and delta-helper is standard,
       // diffWithPrevious returns isDelta: false, establishing a fresh baseline instead of bogus diffs

@@ -7,7 +7,7 @@ import { isPopupUrl } from '@/utils/popup-guard';
 
 const DEFAULT_MAX_MESSAGES = 100;
 
-type ConsoleMode = 'snapshot' | 'buffer';
+type ConsoleMode = 'snapshot' | 'buffer' | 'stop';
 
 interface ConsoleToolParams {
   url?: string;
@@ -206,7 +206,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
 
       // Determine mode: buffer param is alias for mode="buffer"
       const resolvedMode: ConsoleMode =
-        mode === 'buffer' || buffer === true ? 'buffer' : 'snapshot';
+        mode === 'stop' ? 'stop' : mode === 'buffer' || buffer === true ? 'buffer' : 'snapshot';
 
       // Calculate effective message limit
       const normalizedMaxMessages = normalizeLimit(maxMessages, DEFAULT_MAX_MESSAGES);
@@ -214,6 +214,26 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         typeof limit === 'number'
           ? normalizeLimit(limit, normalizedMaxMessages)
           : normalizedMaxMessages;
+
+      // Stop mode: explicitly release this tab's persistent buffer
+      if (resolvedMode === 'stop') {
+        const stopped = await consoleBuffer.stop(targetTabId, 'manual');
+        const result = {
+          success: true,
+          message: stopped
+            ? `Console buffer stopped for tab ${targetTabId}.`
+            : `No console buffer was active for tab ${targetTabId}.`,
+          tabId: targetTabId,
+          tabUrl: targetTab.url || '',
+          tabTitle: targetTab.title || '',
+          stopped,
+          isCapturing: consoleBuffer.isCapturing(targetTabId),
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          isError: false,
+        };
+      }
 
       // Buffer mode
       if (resolvedMode === 'buffer') {
@@ -354,18 +374,41 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     }
   }
 
+  private static readonly TAB_READY_TIMEOUT_MS = 15000;
+
   private async waitForTabReady(tabId: number): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      let timerId: ReturnType<typeof setTimeout> | undefined;
+      const startTime = Date.now();
+
+      const cleanup = () => {
+        if (timerId !== undefined) {
+          clearTimeout(timerId);
+          timerId = undefined;
+        }
+      };
+
       const checkTab = async () => {
         try {
+          if (Date.now() - startTime >= ConsoleTool.TAB_READY_TIMEOUT_MS) {
+            cleanup();
+            reject(
+              new Error(
+                `TAB_READY_TIMEOUT: tab ${tabId} did not reach complete within ${ConsoleTool.TAB_READY_TIMEOUT_MS}ms`,
+              ),
+            );
+            return;
+          }
           const tab = await chrome.tabs.get(tabId);
           if (tab.status === 'complete') {
+            cleanup();
             resolve();
           } else {
-            setTimeout(checkTab, 100);
+            timerId = setTimeout(checkTab, 100);
           }
         } catch (error) {
           // Tab might be closed, resolve anyway
+          cleanup();
           resolve();
         }
       };

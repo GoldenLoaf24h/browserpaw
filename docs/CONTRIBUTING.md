@@ -19,7 +19,7 @@ We welcome contributions in many forms:
 
 ### Prerequisites
 
-- **Node.js 20+** and **pnpm or npm** (latest version)
+- **Node.js 22.6+** and **pnpm** (use the version pinned in `package.json`)
 - **Chrome/Chromium** browser for testing
 - **Git** for version control
 - **TypeScript** knowledge

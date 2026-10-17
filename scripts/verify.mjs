@@ -540,7 +540,7 @@ export async function executeSteps(root = repoRoot) {
     // Step 8: Extension Vitest (exec vitest run directly, exit 0 check even if report exists)
     recordStep(
       'extension-vitest',
-      'pnpm --dir app/chrome-extension exec vitest run --reporter=json --outputFile=<tmp>',
+      'pnpm --dir app/chrome-extension exec vitest run --reporter=default --reporter=json --outputFile=<tmp>',
       () => {
         const expectedFiles = findExtensionTestFiles(root);
         const jsonReportPath = path.join(tempDir, 'vitest-report.json');
@@ -551,6 +551,7 @@ export async function executeSteps(root = repoRoot) {
             'exec',
             'vitest',
             'run',
+            '--reporter=default',
             '--reporter=json',
             `--outputFile=${jsonReportPath}`,
           ],

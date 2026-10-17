@@ -448,6 +448,7 @@ export interface CoordinateGridOptions {
   normalized1000?: boolean;
   originX?: number;
   originY?: number;
+  viewportScale?: number;
 }
 
 /**
@@ -482,6 +483,7 @@ export async function overlayCoordinateGrid(
     const stepPx = Math.max(10, Math.round(gridStepCss * dpr));
     const ox = Math.round((options?.originX ?? 0) * dpr);
     const oy = Math.round((options?.originY ?? 0) * dpr);
+    const viewportScale = options?.viewportScale ?? 1;
     const isClassic = options?.style === 'classic';
     const isCrosshairOnly = options?.style === 'crosshair';
 
@@ -562,10 +564,10 @@ export async function overlayCoordinateGrid(
       for (let y = intersectionInterval; y < canvas.height; y += intersectionInterval) {
         const xCss = Math.round(x / dpr);
         const yCss = Math.round(y / dpr);
-        const globalX = Math.round((x + ox) / dpr);
-        const globalY = Math.round((y + oy) / dpr);
+        const globalX = Math.round(x / dpr / viewportScale + ox / dpr);
+        const globalY = Math.round(y / dpr / viewportScale + oy / dpr);
 
-        let label = ox !== 0 || oy !== 0 ? `(${globalX},${globalY})` : `(${xCss},${yCss})`;
+        let label = `(${globalX},${globalY})`;
         if (options?.normalized1000) {
           const normY = Math.round((yCss / (canvas.height / dpr)) * 1000);
           const normX = Math.round((xCss / (canvas.width / dpr)) * 1000);
@@ -634,7 +636,7 @@ export async function overlayCoordinateGrid(
           const normX = Math.round((x / canvas.width) * 1000);
           label = `${normX}`;
         } else {
-          const globalX = Math.round(xCss + (options?.originX ?? 0));
+          const globalX = Math.round(xCss / viewportScale + (options?.originX ?? 0));
           label = `${globalX}`;
         }
         ctx.fillStyle = '#facc15'; // bright amber
@@ -667,7 +669,7 @@ export async function overlayCoordinateGrid(
           const normY = Math.round((y / canvas.height) * 1000);
           label = `${normY}`;
         } else {
-          const globalY = Math.round(yCss + (options?.originY ?? 0));
+          const globalY = Math.round(yCss / viewportScale + (options?.originY ?? 0));
           label = `${globalY}`;
         }
         ctx.fillStyle = '#facc15'; // bright amber
@@ -678,6 +680,119 @@ export async function overlayCoordinateGrid(
     ctx.restore();
 
     return await canvasToDataURL(canvas, format, quality);
+  } finally {
+    if (imageBitmap && typeof imageBitmap.close === 'function') {
+      imageBitmap.close();
+    }
+  }
+}
+
+export const JEV_VISION_MIN_DIM = 280;
+export const JEV_VISION_MAX_DIM = 1568;
+
+export function calculateDecodedBase64ByteLength(dataUrlOrB64: string): number {
+  const commaIdx = dataUrlOrB64.indexOf(',');
+  const b64 = commaIdx >= 0 ? dataUrlOrB64.slice(commaIdx + 1) : dataUrlOrB64;
+  let padding = 0;
+  if (b64.endsWith('==')) {
+    padding = 2;
+  } else if (b64.endsWith('=')) {
+    padding = 1;
+  }
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
+}
+
+export interface JevVisionImageResult {
+  dataUrl: string;
+  mimeType: 'image/jpeg' | 'image/png';
+  width: number;
+  height: number;
+  contentWidth: number;
+  contentHeight: number;
+  padX: number;
+  padY: number;
+  scaleRatio: number;
+  byteLength: number;
+}
+
+/**
+ * Prepares an image for TypeSafe Jev Vision inference.
+ * Enforces TypeSafe real-time constraints:
+ * 1. Image dimensions: every side must be within [280..1568] px.
+ * 2. Supported formats: image/jpeg or image/png only (NEVER WebP).
+ * 3. Proportional scaling with letterbox padding when aspect ratio is extreme.
+ */
+export async function prepareImageForJevVision(
+  imageDataUrl: string,
+  options?: {
+    preferredFormat?: 'image/jpeg' | 'image/png';
+    quality?: number;
+  },
+): Promise<JevVisionImageResult> {
+  if (typeof createImageBitmap === 'undefined' || typeof OffscreenCanvas === 'undefined') {
+    throw new Error(
+      'createImageBitmap and OffscreenCanvas are required for Jev vision preparation',
+    );
+  }
+
+  const imageBitmap = await createImageBitmapFromUrl(imageDataUrl);
+  try {
+    const origW = imageBitmap.width;
+    const origH = imageBitmap.height;
+
+    const isPng = options?.preferredFormat
+      ? options.preferredFormat === 'image/png'
+      : imageDataUrl.startsWith('data:image/png');
+    const targetMime: 'image/jpeg' | 'image/png' = isPng ? 'image/png' : 'image/jpeg';
+    const quality = options?.quality ?? (targetMime === 'image/jpeg' ? 0.85 : undefined);
+
+    let s = 1.0;
+    if (Math.max(origW, origH) > JEV_VISION_MAX_DIM) {
+      s = JEV_VISION_MAX_DIM / Math.max(origW, origH);
+    } else if (origW < JEV_VISION_MIN_DIM && origH < JEV_VISION_MIN_DIM) {
+      const scaleUp = Math.max(JEV_VISION_MIN_DIM / origW, JEV_VISION_MIN_DIM / origH);
+      s =
+        Math.max(origW, origH) * scaleUp <= JEV_VISION_MAX_DIM
+          ? scaleUp
+          : JEV_VISION_MAX_DIM / Math.max(origW, origH);
+    }
+
+    let contentW = Math.max(1, Math.round(origW * s));
+    let contentH = Math.max(1, Math.round(origH * s));
+
+    if (contentW > JEV_VISION_MAX_DIM) contentW = JEV_VISION_MAX_DIM;
+    if (contentH > JEV_VISION_MAX_DIM) contentH = JEV_VISION_MAX_DIM;
+
+    const finalW = Math.max(JEV_VISION_MIN_DIM, contentW);
+    const finalH = Math.max(JEV_VISION_MIN_DIM, contentH);
+    const padX = Math.floor((finalW - contentW) / 2);
+    const padY = Math.floor((finalH - contentH) / 2);
+
+    const canvas = new OffscreenCanvas(finalW, finalH);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Unable to get canvas context for Jev vision preparation');
+    }
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, finalW, finalH);
+    ctx.drawImage(imageBitmap, 0, 0, origW, origH, padX, padY, contentW, contentH);
+
+    const finalDataUrl = await canvasToDataURL(canvas, targetMime, quality);
+    const byteLength = calculateDecodedBase64ByteLength(finalDataUrl);
+
+    return {
+      dataUrl: finalDataUrl,
+      mimeType: targetMime,
+      width: finalW,
+      height: finalH,
+      contentWidth: contentW,
+      contentHeight: contentH,
+      padX,
+      padY,
+      scaleRatio: s,
+      byteLength,
+    };
   } finally {
     if (imageBitmap && typeof imageBitmap.close === 'function') {
       imageBitmap.close();

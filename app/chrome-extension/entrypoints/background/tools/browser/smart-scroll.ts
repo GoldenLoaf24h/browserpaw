@@ -2,7 +2,12 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
-import { raceCdp, DialogOpenedError, createDialogInterruptResponse } from '@/utils/race-cdp';
+import {
+  raceCdp,
+  DialogOpenedError,
+  createDialogInterruptResponse,
+  isCdpOutcomeUncertainError,
+} from '@/utils/race-cdp';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { executeInPage } from './in-page-engine';
 import type { SmartScrollTargetInfo } from './dom-indexer';
@@ -220,6 +225,9 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
           } catch (wheelErr) {
             if (wheelErr instanceof DialogOpenedError) {
               return createDialogInterruptResponse(wheelErr);
+            }
+            if (isCdpOutcomeUncertainError(wheelErr)) {
+              throw wheelErr;
             }
             smartScrollWheelSkipUntil.set(tabId, Date.now() + 60_000);
             console.warn(
