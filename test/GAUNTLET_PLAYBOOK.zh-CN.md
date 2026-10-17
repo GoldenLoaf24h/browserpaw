@@ -1,6 +1,0 @@
-# Gauntlet Playbook (zh-CN path)
-
-> **English only.** BrowserPaw active documentation is English. This path is kept as a redirect stub
-> so existing inbound links keep resolving instead of breaking.
-
-See the canonical English document: [GAUNTLET_PLAYBOOK.md](./GAUNTLET_PLAYBOOK.md)
