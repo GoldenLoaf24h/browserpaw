@@ -812,5 +812,217 @@ describe('Jev Client & Helper Unit Tests', () => {
         expect(res.result!.exists).toBe(false);
       });
     });
+
+    describe('16. Configuration identity guards across in-flight requests', () => {
+      const fakeBuf = Buffer.from('fake_image_bytes');
+      const state = { task: 'test', page: { url: '', title: '' }, elements: [], history: [] };
+
+      /** Holds a request open so the endpoint can be reconfigured before the old one answers. */
+      function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+        let resolve!: (v: T) => void;
+        const promise = new Promise<T>((r) => (resolve = r));
+        return { promise, resolve };
+      }
+
+      function configureRemote(modelId: string): void {
+        const getRemoteConfig = jevModelManager.getRemoteConfig as jest.Mock;
+        getRemoteConfig.mockImplementation(() => ({
+          ...realGetRemoteConfig(),
+          apiKey: 'test_key',
+          baseUrl: 'https://api.typesafe.ai',
+          modelId,
+        }));
+      }
+
+      beforeEach(() => {
+        configureRemote('jev-latest');
+      });
+
+      test('a text query answered by a superseded endpoint does not cache its release', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        (client as any).client = { systemOne: () => pending.promise };
+
+        const inFlight = client.query(state, {});
+        configureRemote('gateway-model-b');
+        pending.resolve({ model: 'jev-1.14.0', answers: {} });
+        await inFlight;
+
+        expect(client.getResolvedModelId()).toBeUndefined();
+      });
+
+      test('a capability probe answered by a superseded endpoint fails closed and caches nothing', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        (client as any).client = { systemOne: () => pending.promise };
+
+        const inFlight = client.resolveBoxCapableModel();
+        configureRemote('gateway-model-b');
+        pending.resolve({ model: 'jev-1.14.0', answers: {} });
+
+        await expect(inFlight).resolves.toBeNull();
+        expect(client.getResolvedModelId()).toBeUndefined();
+      });
+
+      test('a superseded probe never hands back a release cached by the new configuration', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        (client as any).client = { systemOne: () => pending.promise };
+
+        const inFlight = client.resolveBoxCapableModel();
+        // The operator switches endpoints, `getClient()` refreshes, and a concurrent request
+        // for the new endpoint caches its release while the old probe is still open.
+        configureRemote('gateway-model-b');
+        client.getRemoteClient();
+        (client as any).resolvedModelId = 'jev-1.14.0';
+        pending.resolve({ model: 'jev-1.13.0', answers: {} });
+
+        await expect(inFlight).resolves.toBeNull();
+      });
+
+      test('a probe answered after the mode is revoked writes nothing to the cache', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        (client as any).client = { systemOne: () => pending.promise };
+
+        const inFlight = client.resolveBoxCapableModel();
+        (jevModelManager.getActiveMode as jest.Mock).mockReturnValue('local');
+        pending.resolve({ model: 'jev-1.14.0', answers: {} });
+
+        await expect(inFlight).resolves.toBeNull();
+        expect(client.getResolvedModelId()).toBeUndefined();
+      });
+
+      test('a screenshot is never sent when the configuration changes while the probe is in flight', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pendingProbe = deferred<any>();
+        const oldSystemOne = jest.fn(() => pendingProbe.promise);
+        (client as any).client = { systemOne: oldSystemOne };
+
+        const inFlight = client.queryVision(fakeBuf, 'bell icon', 'remote');
+        await Promise.resolve();
+        configureRemote('gateway-model-b');
+        pendingProbe.resolve({ model: 'jev-1.14.0', answers: {} });
+
+        const res = await inFlight;
+        expect(res.result).toBeNull();
+        expect(res.errorReason).toBe('vision_model_unsupported');
+        // The old endpoint only saw the text-only probe, never the screenshot.
+        expect(oldSystemOne).toHaveBeenCalledTimes(1);
+        expect((oldSystemOne.mock.calls[0] as any)[0].state).not.toHaveProperty('screenshot');
+      });
+
+      test('a screenshot is never sent to a client refreshed mid-probe', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pendingProbe = deferred<any>();
+        const oldSystemOne = jest.fn(() => pendingProbe.promise);
+        (client as any).client = { systemOne: oldSystemOne };
+
+        const inFlight = client.queryVision(fakeBuf, 'bell icon', 'remote');
+        await Promise.resolve();
+        configureRemote('gateway-model-b');
+        // Force the `getClient()` refresh path while the probe is still open.
+        const refreshed = client.getRemoteClient()!;
+        const refreshedSystemOne = jest.fn(async () => ({ model: 'jev-1.14.0', answers: {} }));
+        (refreshed as any).systemOne = refreshedSystemOne;
+        pendingProbe.resolve({ model: 'jev-1.14.0', answers: {} });
+
+        const res = await inFlight;
+        expect(res.result).toBeNull();
+        expect(refreshedSystemOne).not.toHaveBeenCalled();
+        expect(oldSystemOne).toHaveBeenCalledTimes(1);
+        expect((oldSystemOne.mock.calls[0] as any)[0].state).not.toHaveProperty('screenshot');
+      });
+
+      test('a late vision response after revocation does not refresh the release cache', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        (client as any).client = { systemOne: () => pending.promise };
+        (client as any).resolvedModelId = 'jev-1.14.0';
+
+        const inFlight = client.queryVision(fakeBuf, 'bell icon', 'remote');
+        await Promise.resolve();
+        (jevModelManager.getActiveMode as jest.Mock).mockReturnValue('off');
+        pending.resolve({
+          model: 'jev-1.15.0',
+          answers: {
+            target_exists: { type: 'noul', noul: 0.9 },
+            target_ambiguous: { type: 'noul', noul: 0.1 },
+            target_box: { type: 'box', box: { top: 0.1, bottom: 0.2, left: 0.1, right: 0.2 } },
+            destructive: { type: 'noul', noul: 0.1 },
+          },
+        });
+
+        await inFlight;
+        expect(client.getResolvedModelId()).toBe('jev-1.14.0');
+      });
+
+      test('a late vision response from a replaced client cannot repopulate its release cache', async () => {
+        const client = new JevClientWrapper('test_key');
+        const pending = deferred<any>();
+        const started = deferred<void>();
+        (client as any).client = {
+          systemOne: () => {
+            started.resolve();
+            return pending.promise;
+          },
+        };
+        (client as any).resolvedModelId = 'jev-1.14.0';
+
+        const inFlight = client.queryVision(fakeBuf, 'bell icon', 'remote');
+        await started.promise;
+        configureRemote('gateway-model-b');
+        client.getRemoteClient();
+        configureRemote('jev-latest');
+        client.getRemoteClient();
+        pending.resolve({ model: 'jev-1.15.0', answers: {} });
+        await inFlight;
+
+        expect(client.getResolvedModelId()).toBeUndefined();
+      });
+
+      test('the probe still caches when the configuration is unchanged, and is reused', async () => {
+        const client = new JevClientWrapper('test_key');
+        const systemOne = jest.fn(async () => ({ model: 'jev-1.14.0', answers: {} }));
+        (client as any).client = { systemOne };
+
+        await expect(client.resolveBoxCapableModel()).resolves.toBe('jev-1.14.0');
+        await expect(client.resolveBoxCapableModel()).resolves.toBe('jev-1.14.0');
+        expect(systemOne).toHaveBeenCalledTimes(1);
+      });
+
+      test('an unknown release still fails closed and is not retried forever within one call', async () => {
+        const client = new JevClientWrapper('test_key');
+        const systemOne = jest.fn(async () => ({ model: 'my-vision-gateway', answers: {} }));
+        (client as any).client = { systemOne };
+
+        await expect(client.resolveBoxCapableModel()).resolves.toBeNull();
+        expect(client.getResolvedModelId()).toBe('my-vision-gateway');
+      });
+
+      test('local mode never probes or reports a box-capable remote model', async () => {
+        const client = new JevClientWrapper('test_key');
+        const systemOne = jest.fn(async () => ({ model: 'jev-1.14.0', answers: {} }));
+        (client as any).client = { systemOne };
+        const localSystemOne = jest.fn(async () => ({ model: 'jev-1.14.0', answers: {} }));
+        jest.spyOn(client, 'getLocalClient').mockReturnValue({ systemOne: localSystemOne } as any);
+        (jevModelManager.getActiveMode as jest.Mock).mockReturnValue('local');
+
+        await expect(client.resolveBoxCapableModel()).resolves.toBeNull();
+        expect(systemOne).not.toHaveBeenCalled();
+        expect(localSystemOne).not.toHaveBeenCalled();
+        expect(client.getResolvedModelId()).toBeUndefined();
+      });
+
+      test('off mode never probes or reports a box-capable remote model', async () => {
+        const client = new JevClientWrapper('test_key');
+        const systemOne = jest.fn(async () => ({ model: 'jev-1.14.0', answers: {} }));
+        (client as any).client = { systemOne };
+        (jevModelManager.getActiveMode as jest.Mock).mockReturnValue('off');
+
+        await expect(client.resolveBoxCapableModel()).resolves.toBeNull();
+        expect(systemOne).not.toHaveBeenCalled();
+      });
+    });
   });
 });

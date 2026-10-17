@@ -44,15 +44,6 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
       );
     }
 
-    // Fail closed across documents: the recorded element belongs to the document
-    // that was current when the action ran. Once the tab committed a navigation or
-    // changed history state, replaying the record could write into a different page.
-    if (lastAction.documentEpoch !== actionHistoryManager.getDocumentEpoch(tabId)) {
-      return createErrorResponse(
-        'Undo rejected: the tab navigated (or changed history state) after this action was recorded, so the recorded element may belong to a different document. No change was made.',
-      );
-    }
-
     try {
       if (lastAction.type === 'navigate') {
         if (typeof chrome === 'undefined' || !chrome.tabs?.goBack) {
@@ -83,6 +74,12 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
       }
 
       if (lastAction.type === 'fill') {
+        // Only element-bound records need the original document; navigation changes it.
+        if (lastAction.documentEpoch !== actionHistoryManager.getDocumentEpoch(tabId)) {
+          return createErrorResponse(
+            'Undo rejected: the tab navigated (or changed history state) after this action was recorded, so the recorded element may belong to a different document. No change was made.',
+          );
+        }
         const revertResult = await this.safeExecuteScript(tabId, {
           target: { tabId },
           func: (targetIdx?: number, targetSelector?: string, restoreValue?: string) => {

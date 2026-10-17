@@ -23,7 +23,7 @@ app/chrome-extension/
 │   ├── tab-favicon.ts          # Agent glowing favicon state backed by storage.session
 │   ├── screenshot-ring-buffer.ts # In-memory bounded ring buffer (cap: 1) for zero-disk screenshots
 │   └── action-watchdog.ts      # MutationObserver & network in-flight settle detectors
-└── tests/                      # 87 Vitest test files (919 tests, 100% pass)
+└── tests/                      # Vitest regression tests (counts recorded by pnpm verify)
 ```
 
 ---

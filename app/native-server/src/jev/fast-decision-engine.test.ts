@@ -408,7 +408,8 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
           type: 'choice',
           choice: submitChoice,
           confidence: 0.9,
-          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.05, [submitChoice]: 0.85 },
+          // Full distribution over the three choices so validateChoice accepts it.
+          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.05, [submitChoice]: 0.9 },
         },
       });
 
@@ -548,6 +549,213 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
 
       expect(fillArgs).toHaveLength(1);
       expect(fillArgs[0].pressEnter).toBe(true);
+    });
+
+    test.each([
+      { pressEnter: true, shape: 'missing', submitIntent: undefined },
+      { pressEnter: false, shape: 'missing', submitIntent: undefined },
+      {
+        pressEnter: true,
+        shape: 'malformed',
+        submitIntent: { type: 'choice', choice: 'submit_now', confidence: 0.9, probabilities: {} },
+      },
+      {
+        pressEnter: false,
+        shape: 'malformed',
+        submitIntent: { type: 'choice', choice: 'submit_now', confidence: 0.9, probabilities: {} },
+      },
+      {
+        pressEnter: true,
+        shape: 'unclear',
+        submitIntent: {
+          type: 'choice',
+          choice: 'unclear',
+          confidence: 0.9,
+          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.9 },
+        },
+      },
+      {
+        pressEnter: false,
+        shape: 'unclear',
+        submitIntent: {
+          type: 'choice',
+          choice: 'unclear',
+          confidence: 0.9,
+          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.9 },
+        },
+      },
+    ])(
+      'P1: explicit pressEnter=$pressEnter bypasses a $shape submit intent',
+      async ({ pressEnter, submitIntent }) => {
+        process.env.TYPESAFE_API_KEY = 'test_key';
+        const engine = new FastDecisionEngine();
+        const fillArgs: any[] = [];
+
+        const answers: any = typeActionAnswers('submit');
+        if (submitIntent === undefined) delete answers.submit_intent;
+        else answers.submit_intent = submitIntent;
+
+        (engine as any).jevClient.query = async () => ({
+          result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
+          errorReason: null,
+        });
+
+        const caller = async (toolName: string, args: any) => {
+          if (toolName === 'chrome_fill_index') {
+            fillArgs.push(args);
+            return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+          }
+          return createMockInternalCaller()(toolName, args);
+        };
+
+        const result = await engine.run(
+          { goal: '在搜索框中输入 BrowserPaw', maxSteps: 1, pressEnter },
+          caller,
+        );
+
+        expect(result.status).toBe('max_steps');
+        expect(fillArgs).toHaveLength(1);
+        expect(fillArgs[0].pressEnter).toBe(pressEnter);
+      },
+    );
+
+    test('P1: a valid confident submit intent still presses Enter without an override', async () => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      const fillArgs: any[] = [];
+
+      (engine as any).jevClient.query = async () => ({
+        result: {
+          answers: typeActionAnswers('submit'),
+          usage: { input_tokens: 100, output_tokens: 10 },
+        },
+        errorReason: null,
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') {
+          fillArgs.push(args);
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+        }
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+      expect(fillArgs).toHaveLength(1);
+      expect(fillArgs[0].pressEnter).toBe(true);
+    });
+
+    test.each([
+      {
+        shape: 'a low-confidence submit judgment (0.40 < 0.45)',
+        confidence: 0.4,
+        probabilities: { fill_only: 0.05, submit: 0.85, unclear: 0.1 },
+      },
+      {
+        shape: 'a selected probability below the target guard (0.34 < 0.35)',
+        confidence: 0.9,
+        probabilities: { fill_only: 0.33, submit: 0.34, unclear: 0.33 },
+      },
+    ])(
+      'P1: $shape escalates without pressing Enter when pressEnter is absent',
+      async (caseData) => {
+        process.env.TYPESAFE_API_KEY = 'test_key';
+        const engine = new FastDecisionEngine();
+        let fillCalled = false;
+
+        const answers: any = typeActionAnswers('submit');
+        answers.submit_intent = {
+          type: 'choice',
+          choice: 'submit',
+          confidence: caseData.confidence,
+          probabilities: caseData.probabilities,
+        };
+
+        (engine as any).jevClient.query = async () => ({
+          result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
+          errorReason: null,
+        });
+
+        const caller = async (toolName: string, args: any) => {
+          if (toolName === 'chrome_fill_index') fillCalled = true;
+          return createMockInternalCaller()(toolName, args);
+        };
+
+        const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+        expect(result.status).toBe('escalate');
+        expect(result.reason).toContain('Submit intent');
+        expect(fillCalled).toBe(false);
+      },
+    );
+
+    test.each([
+      ['a distribution that does not sum to 1', { fill_only: 0.4, submit: 0.6, unclear: 0.4 }],
+      ['a missing choice key', { fill_only: 0.5, submit: 0.5 }],
+      [
+        'a chosen probability that is not the maximum',
+        { fill_only: 0.7, submit: 0.2, unclear: 0.1 },
+      ],
+    ])('P1: submit_intent with %s escalates as invalid', async (_shape, probabilities) => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      let fillCalled = false;
+
+      const answers: any = typeActionAnswers('submit');
+      answers.submit_intent = {
+        type: 'choice',
+        choice: 'submit',
+        confidence: 0.9,
+        probabilities,
+      };
+
+      (engine as any).jevClient.query = async () => ({
+        result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
+        errorReason: null,
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') fillCalled = true;
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+      expect(result.status).toBe('escalate');
+      expect(result.reason).toContain('submit intent choice validation failed');
+      expect(fillCalled).toBe(false);
+    });
+
+    test.each([
+      ['missing', undefined],
+      ['NaN', NaN],
+      ['above 1', 1.5],
+      ['below 0', -0.1],
+      ['a string', '0.9'],
+    ])('P1: submit_intent with %s confidence escalates as invalid', async (_shape, confidence) => {
+      process.env.TYPESAFE_API_KEY = 'test_key';
+      const engine = new FastDecisionEngine();
+      let fillCalled = false;
+
+      const answers: any = typeActionAnswers('submit');
+      answers.submit_intent.confidence = confidence;
+
+      (engine as any).jevClient.query = async () => ({
+        result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
+        errorReason: null,
+      });
+
+      const caller = async (toolName: string, args: any) => {
+        if (toolName === 'chrome_fill_index') fillCalled = true;
+        return createMockInternalCaller()(toolName, args);
+      };
+
+      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
+
+      expect(result.status).toBe('escalate');
+      expect(result.reason).toContain('submit intent confidence validation failed');
+      expect(fillCalled).toBe(false);
     });
 
     test('12. Guard: escalates when action confidence < 0.55 threshold (§5.3)', async () => {
@@ -1312,6 +1520,48 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(options.timeout).toBeLessThanOrEqual(1000);
     });
 
+    test('the capability probe receives a deadline-bounded AbortSignal and remaining budget', async () => {
+      const { engine, caller } = visionHarness();
+      const probe = (engine as any).jevClient.resolveBoxCapableModel as jest.Mock;
+      await engine.run({ goal: 'click bell icon', maxSteps: 1, timeoutMs: 2000 }, caller);
+
+      expect(probe).toHaveBeenCalledTimes(1);
+      const [signal, timeout] = probe.mock.calls[0];
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(2000);
+    });
+
+    test.each([null, 'jev-1.14.0'])(
+      'a capability probe that runs past the deadline returns timeout with no capture or action (model: %s)',
+      async (model) => {
+        const { engine, caller } = visionHarness();
+        const probe = (engine as any).jevClient.resolveBoxCapableModel as jest.Mock;
+        let now = 10000;
+        const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
+        probe.mockImplementation(async () => {
+          now += 101; // the probe answers only after the 100ms budget is gone
+          return model;
+        });
+
+        try {
+          const result = await engine.run(
+            { goal: 'click bell icon', maxSteps: 2, timeoutMs: 100 },
+            caller,
+          );
+
+          expect(result.status).toBe('timeout');
+          expect(result.reason).toContain('vision capability probe');
+          expect(result.steps).toHaveLength(0);
+          // Only the DOM read may run: no frame is captured and no other action executes.
+          expect(caller.mock.calls.map(([tool]) => tool)).toEqual(['chrome_read_dom']);
+        } finally {
+          clock.mockRestore();
+        }
+      },
+    );
+
     test('forwards a finite dispatch deadline and retains usage on max_steps', async () => {
       const { engine, caller } = visionHarness();
       const result = await engine.run({ goal: 'click bell icon', maxSteps: 1 }, caller);
@@ -1320,6 +1570,136 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(result.status).toBe('max_steps');
       expect(result.jevUsage?.visionCalls).toBe(1);
       expect(result.jevUsage?.calls).toBe(1);
+    });
+
+    // Deterministic screenshot-race tests: fake timers plus a caller-controlled deferred,
+    // so deadline behavior never depends on real CI timing.
+    const deferredScreenshotHarness = () => {
+      const { engine, caller, query } = visionHarness();
+      let resolveShot!: (value: any) => void;
+      let rejectShot!: (reason: any) => void;
+      const shot = new Promise((resolve, reject) => {
+        resolveShot = resolve;
+        rejectShot = reject;
+      });
+      const racingCaller = jest.fn((tool: string, args?: any) => {
+        if (tool === 'chrome_screenshot') return shot;
+        return caller(tool, args);
+      });
+      return { engine, caller, query, racingCaller, resolveShot, rejectShot };
+    };
+
+    const flushUntilShotTimer = async () => {
+      for (let i = 0; i < 20 && jest.getTimerCount() === 0; i++) {
+        await jest.advanceTimersByTimeAsync(0);
+      }
+      expect(jest.getTimerCount()).toBe(1);
+    };
+
+    test('the screenshot deadline fires on budget and the late capture never acts', async () => {
+      jest.useFakeTimers();
+      try {
+        const { engine, query, racingCaller, resolveShot } = deferredScreenshotHarness();
+        const runPromise = engine.run(
+          { goal: 'click bell icon', maxSteps: 2, timeoutMs: 120 },
+          racingCaller,
+        );
+        await flushUntilShotTimer();
+        await jest.advanceTimersByTimeAsync(120);
+        const result = await runPromise;
+
+        expect(result.status).toBe('timeout');
+        expect(result.reason).toContain('vision screenshot');
+        expect(result.steps).toHaveLength(0);
+        expect(query).not.toHaveBeenCalled();
+        expect(racingCaller.mock.calls.some(([tool]) => tool === 'chrome_interact_index')).toBe(
+          false,
+        );
+
+        // The late capture settles with nothing left to act on: no replay, no vision, no click.
+        resolveShot(fakeScreenshotResponse);
+        await jest.advanceTimersByTimeAsync(0);
+        expect(query).not.toHaveBeenCalled();
+        expect(
+          racingCaller.mock.calls.filter(([tool]) => tool === 'chrome_screenshot'),
+        ).toHaveLength(1);
+        expect(racingCaller.mock.calls.some(([tool]) => tool === 'chrome_interact_index')).toBe(
+          false,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test('a late screenshot rejection after the deadline is handled, not unhandled', async () => {
+      jest.useFakeTimers();
+      const unhandled = jest.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        const { engine, query, racingCaller, rejectShot } = deferredScreenshotHarness();
+        const runPromise = engine.run(
+          { goal: 'click bell icon', maxSteps: 2, timeoutMs: 120 },
+          racingCaller,
+        );
+        await flushUntilShotTimer();
+        await jest.advanceTimersByTimeAsync(120);
+        const result = await runPromise;
+        expect(result.status).toBe('timeout');
+
+        rejectShot(new Error('late screenshot failure'));
+        await jest.advanceTimersByTimeAsync(0);
+        jest.useRealTimers();
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(query).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+        jest.useRealTimers();
+      }
+    });
+
+    test('an in-budget capture clears the deadline timer before acting', async () => {
+      jest.useFakeTimers();
+      try {
+        const { engine, query, racingCaller, resolveShot } = deferredScreenshotHarness();
+        const runPromise = engine.run(
+          { goal: 'click bell icon', maxSteps: 1, timeoutMs: 120 },
+          racingCaller,
+        );
+        await flushUntilShotTimer();
+        resolveShot(fakeScreenshotResponse);
+        const result = await runPromise;
+
+        expect(jest.getTimerCount()).toBe(0); // deadline timer cleared, not left pending
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(
+          racingCaller.mock.calls.filter(([tool]) => tool === 'chrome_interact_index'),
+        ).toHaveLength(1);
+        expect(result.status).toBe('max_steps');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test('a synchronous screenshot throw still clears the deadline timer', async () => {
+      jest.useFakeTimers();
+      try {
+        const { engine, caller } = visionHarness();
+        const racingCaller = jest.fn((tool: string, args?: any) => {
+          if (tool === 'chrome_screenshot') throw new Error('sync screenshot failure');
+          return caller(tool, args);
+        });
+        const result = await engine.run(
+          { goal: 'click bell icon', maxSteps: 1, timeoutMs: 120 },
+          racingCaller,
+        );
+
+        expect(result.status).toBe('escalate');
+        expect(result.reason).toContain('sync screenshot failure');
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     test.each([false, true])(

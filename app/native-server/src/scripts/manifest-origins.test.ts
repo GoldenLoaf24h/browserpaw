@@ -43,6 +43,21 @@ describe('Native messaging manifest allowed_origins (B-09)', () => {
     expect(origins).toEqual(getAllowedExtensionIds().map((id) => `chrome-extension://${id}/`));
   });
 
+  test('unpacked ID is admitted by the manifest before the native host launches', async () => {
+    const unpackedId = 'abcdefghijklmnopabcdefghijklmnop';
+    process.env.CHROME_EXTENSION_ID = unpackedId;
+    delete process.env.EXTENSION_ID;
+
+    // Registration runs before Chrome can supply its calling-origin launch argument.
+    // The environment must therefore authorize this ID without runtime registration.
+    const manifest = await createManifestContent();
+    expect(manifest.allowed_origins).toEqual([
+      `chrome-extension://${DEFAULT_EXTENSION_ID}/`,
+      `chrome-extension://${unpackedId}/`,
+    ]);
+    expect(getAllowedExtensionIds()).toContain(unpackedId);
+  });
+
   test('2. createManifestContent falls back to the default id when no override is set', async () => {
     delete process.env.CHROME_EXTENSION_ID;
     delete process.env.EXTENSION_ID;

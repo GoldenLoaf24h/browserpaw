@@ -157,6 +157,47 @@ describe('A-06: documentEpoch fail-closed undo', () => {
     const res = await tool.execute({ tabId: 1 });
     expect(res.isError).toBe(false);
   });
+
+  it('still undoes a recorded navigation after that navigation commits', async () => {
+    const { manager, tool, committed } = await setupFreshEnv();
+    manager.pushAction(1, {
+      type: 'navigate',
+      prevUrl: 'https://example.com/step1',
+      timestamp: Date.now(),
+    });
+    // The recorded navigation itself bumps the epoch via main-frame onCommitted;
+    // history records are not element-bound, so undo must still reach goBack.
+    committed[0]({ tabId: 1, frameId: 0 });
+
+    const res = await tool.execute({ tabId: 1 });
+    expect(res.isError).toBe(false);
+    expect((globalThis as any).chrome.tabs.goBack).toHaveBeenCalledWith(1);
+    expect(manager.peekAction(1)).toBeUndefined();
+  });
+
+  it('rejects a stale fill after navigation without popping it or falling through to navigate', async () => {
+    const { manager, tool, committed } = await setupFreshEnv();
+    manager.pushAction(1, {
+      type: 'navigate',
+      prevUrl: 'https://example.com/step1',
+      timestamp: Date.now(),
+    });
+    manager.pushAction(1, {
+      type: 'fill',
+      index: 2,
+      prevValue: 'stale',
+      timestamp: Date.now(),
+    });
+    committed[0]({ tabId: 1, frameId: 0 });
+
+    const res = await tool.execute({ tabId: 1 });
+    expect(res.isError).toBe(true);
+    expect((res.content[0] as any).text).toContain('navigated');
+    // The stale element-bound record must stay on the stack and nothing may run.
+    expect(manager.peekAction(1)?.type).toBe('fill');
+    expect((globalThis as any).chrome.scripting.executeScript).not.toHaveBeenCalled();
+    expect((globalThis as any).chrome.tabs.goBack).not.toHaveBeenCalled();
+  });
 });
 
 describe('A-07: undo restores controlled inputs through the native value setter', () => {

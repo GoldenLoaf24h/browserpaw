@@ -68,11 +68,29 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 
 The Native Messaging Host provides high-speed, secure IPC between Chrome and your local AI Agent clients.
 
-This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server. From the repository root, run:
+This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server.
+
+For an unpacked build, copy its 32-character ID from its card in `chrome://extensions/` **before registering**. Chrome checks the native host manifest's `allowed_origins` before launching the host; learning an ID from the launch argument cannot admit an ID missing from that manifest. Set `CHROME_EXTENSION_ID` in the registration shell so the ID is included (comma-separated IDs are also supported).
+
+Windows PowerShell:
+
+```powershell
+$env:CHROME_EXTENSION_ID = '<your-32-character-id>'
+```
+
+macOS/Linux:
+
+```bash
+export CHROME_EXTENSION_ID='<your-32-character-id>'
+```
+
+Then, from the repository root in the same shell, run (store installations can run this directly):
 
 ```bash
 node app/native-server/dist/scripts/register-dev.js
 ```
+
+Re-run registration after changing the unpacked extension ID. Chrome-launched hosts learn their admitted caller's ID from the launch argument for HTTP Origin checks. If you launch the bridge independently, also set `CHROME_EXTENSION_ID` in that process's environment.
 
 The registration script writes the Native Messaging manifest and browser registration. The bridge token is created exclusively by the Native Messaging server when it starts for the first time (preserving valid 48-hex or 64-hex tokens with exclusive `wx` creation; clients never generate tokens, and environment variable overrides are not supported). The token is stored at `~/.chrome-mcp/bridge-token` (Windows: `%USERPROFILE%\.chrome-mcp\bridge-token`).
 
@@ -82,16 +100,6 @@ The registration script writes the Native Messaging manifest and browser registr
 - **macOS**: Places the manifest JSON under `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`.
 - **Linux**: Places the manifest JSON under `~/.config/google-chrome/NativeMessagingHosts/`.
 - **Security Bridge Token**: Created on first server startup and used to authenticate local HTTP and WebSocket connections.
-
-> **Custom or unpacked extension ID:** Chrome checks the manifest's `allowed_origins` **before** launching the native host, so the runtime ID the host learns from its launch argument cannot bootstrap an ID the manifest does not already list. If you loaded an unpacked build whose ID differs from the published store ID, set it before running registration so it is baked into the manifest:
->
-> ```bash
-> # Windows (pwsh): $env:CHROME_EXTENSION_ID = '<your-32-char-id>'
-> # macOS/Linux:    export CHROME_EXTENSION_ID='<your-32-char-id>'
-> CHROME_EXTENSION_ID='<your-32-char-id>' node app/native-server/dist/scripts/register-dev.js
-> ```
->
-> The ID is shown on the extension's card in `chrome://extensions/`. Re-run registration after changing it.
 
 ---
 

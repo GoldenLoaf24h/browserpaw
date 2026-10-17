@@ -4,8 +4,8 @@ import nativeMessagingHostInstance from './native-messaging-host';
 import { registerRuntimeExtensionId } from './constant';
 
 // Chrome launches the native host with the calling extension origin as the first
-// argument (for example `chrome-extension://<id>/`). Trusting that argument keeps the
-// origin allow-list honest for unpacked builds whose ID differs from the published one.
+// argument (for example `chrome-extension://<id>/`) after checking allowed_origins.
+// Registration must already include an unpacked ID; this admits that caller for HTTP.
 for (const arg of process.argv.slice(1)) {
   const match = /^chrome-extension:\/\/([a-p]{32})\/?$/i.exec(arg);
   if (match) {

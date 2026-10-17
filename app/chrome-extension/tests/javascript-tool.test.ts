@@ -121,6 +121,140 @@ describe('scoped :has-text polyfill (D-15)', () => {
   });
 });
 
+describe('evaluation-local helper teardown (PR6 comment 4301519598)', () => {
+  const evaluate = (code: string) => (0, eval)(wrapUserCode(code)) as Promise<unknown>;
+
+  const resetPageGlobals = () => {
+    delete (globalThis as { __mcp?: unknown }).__mcp;
+    delete (globalThis as { __mcpHasTextPolyfill?: unknown }).__mcpHasTextPolyfill;
+  };
+
+  afterEach(() => {
+    resetPageGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('does not touch a page-owned globalThis.__mcp value or its descriptor', async () => {
+    const pageOwned = { fromPage: true };
+    Object.defineProperty(globalThis, '__mcp', {
+      value: pageOwned,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+
+    const result = await evaluate(`
+      return {
+        duringEval: globalThis.__mcp === undefined ? 'overwritten' : 'untouched',
+        helperWorks: typeof mcp.get === 'function',
+      };
+    `);
+
+    expect(result).toEqual({ duringEval: 'untouched', helperWorks: true });
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__mcp');
+    expect(descriptor?.value).toBe(pageOwned);
+    expect(descriptor?.writable).toBe(true);
+    expect(descriptor?.enumerable).toBe(false);
+    expect(descriptor?.configurable).toBe(true);
+  });
+
+  it('keeps page-owned __mcp and restores prototypes when evaluation throws', async () => {
+    const pageOwned = { fromPage: true };
+    (globalThis as Record<string, unknown>).__mcp = pageOwned;
+    const origDocQS = Document.prototype.querySelector;
+
+    await expect(evaluate('throw new Error("boom");')).rejects.toThrow('boom');
+
+    expect((globalThis as { __mcp?: unknown }).__mcp).toBe(pageOwned);
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+    expect((globalThis as { __mcpHasTextPolyfill?: unknown }).__mcpHasTextPolyfill).toBeUndefined();
+  });
+
+  it('lets overlapping evaluations clean up only their own polyfill install', async () => {
+    document.body.innerHTML = '<button id="confirm">Confirm Order</button>';
+    const origDocQS = Document.prototype.querySelector;
+    const origDocQSA = Document.prototype.querySelectorAll;
+    const origElQS = Element.prototype.querySelector;
+    const origElQSA = Element.prototype.querySelectorAll;
+
+    const first = evaluate(`
+      const found = document.querySelector('button:has-text("Confirm Order")')?.id;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { found, stillPatchedAfterSecondEnded: !!globalThis.__mcpHasTextPolyfill };
+    `);
+    const second = evaluate(`
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return document.querySelector('button:has-text("Confirm Order")')?.id ?? null;
+    `);
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toEqual({ found: 'confirm', stillPatchedAfterSecondEnded: true });
+    expect(secondResult).toBe('confirm');
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+    expect(Document.prototype.querySelectorAll).toBe(origDocQSA);
+    expect(Element.prototype.querySelector).toBe(origElQS);
+    expect(Element.prototype.querySelectorAll).toBe(origElQSA);
+    expect((globalThis as { __mcpHasTextPolyfill?: unknown }).__mcpHasTextPolyfill).toBeUndefined();
+  });
+
+  it('restores the page prototypes after the last overlapping evaluation ends', async () => {
+    const origDocQS = Document.prototype.querySelector;
+    const first = evaluate('await new Promise((resolve) => setTimeout(resolve, 30)); return 1;');
+    const second = evaluate('await new Promise((resolve) => setTimeout(resolve, 10)); return 2;');
+
+    await Promise.all([first, second]);
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+    expect((globalThis as { __mcpHasTextPolyfill?: unknown }).__mcpHasTextPolyfill).toBeUndefined();
+  });
+
+  it('leaves a page-owned __mcpHasTextPolyfill value and descriptor untouched', async () => {
+    const pageOwned = { fromPage: true };
+    Object.defineProperty(globalThis, '__mcpHasTextPolyfill', {
+      value: pageOwned,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    const origDocQS = Document.prototype.querySelector;
+    document.body.innerHTML = '<button id="confirm">Confirm Order</button>';
+
+    const result = await evaluate(`
+      return {
+        duringEval: globalThis.__mcpHasTextPolyfill === undefined ? 'missing' : 'untouched',
+        helperQuery: mcp.query('button:has-text("Confirm Order")')?.id ?? null,
+      };
+    `);
+
+    expect(result).toEqual({ duringEval: 'untouched', helperQuery: 'confirm' });
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__mcpHasTextPolyfill');
+    expect(descriptor?.value).toBe(pageOwned);
+    expect(descriptor?.writable).toBe(true);
+    expect(descriptor?.enumerable).toBe(false);
+    expect(descriptor?.configurable).toBe(true);
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+  });
+
+  it('leaves a non-writable page-owned __mcpHasTextPolyfill intact and unpatched', async () => {
+    const pageOwned = { fromPage: true };
+    Object.defineProperty(globalThis, '__mcpHasTextPolyfill', {
+      value: pageOwned,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+    const origDocQS = Document.prototype.querySelector;
+    document.body.innerHTML = '<button id="confirm">Confirm Order</button>';
+
+    const result = await evaluate(`
+      return mcp.query('button:has-text("Confirm Order")')?.id ?? null;
+    `);
+
+    expect(result).toBe('confirm');
+    expect((globalThis as { __mcpHasTextPolyfill?: unknown }).__mcpHasTextPolyfill).toBe(pageOwned);
+    expect(Document.prototype.querySelector).toBe(origDocQS);
+  });
+});
+
 describe('D-15 scripting fallback teardown', () => {
   const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
   const prototypeOriginals = () => ({
@@ -173,7 +307,7 @@ describe('D-15 scripting fallback teardown', () => {
         return {
           found: btn ? btn.id : null,
           polyfillActiveDuringEval: !!globalThis.__mcpHasTextPolyfill,
-          mcpPublishedDuringEval: !!globalThis.__mcp,
+          pageGlobalsUntouched: !('__mcp' in globalThis),
         };
       `,
     });
@@ -185,7 +319,7 @@ describe('D-15 scripting fallback teardown', () => {
     expect(JSON.parse(payload.result)).toEqual({
       found: 'confirm',
       polyfillActiveDuringEval: true,
-      mcpPublishedDuringEval: true,
+      pageGlobalsUntouched: true,
     });
 
     expect(Document.prototype.querySelector).toBe(orig.docQS);

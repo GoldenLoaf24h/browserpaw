@@ -101,7 +101,7 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
 
   const replace = (
     re: RegExp,
-    replacement: string | ((substring: string, ...args: string[]) => string),
+    replacement: string | ((substring: string, ...args: any[]) => string),
   ) => {
     const next = out.replace(re, replacement as Parameters<typeof String.prototype.replace>[1]);
     if (next !== out) {
@@ -150,12 +150,16 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
     (_m, key) => `${key}=<redacted>`,
   );
 
-  // 6. Embedded Base64 data with structural markers.
-  // A bare slash is also a path separator, so require either '+' or valid
-  // padding plus a valid Base64 chunk length before redacting.
-  replace(/(?<!\w)[A-Za-z0-9+/]{40,}={0,2}(?!\w)/g, (match) => {
+  // 6. Embedded Base64 data with structural markers (+, /, or ending =).
+  // A bare slash is also a path separator, so slash-only chunks that are not
+  // canonical Base64 or that sit in path/URL context are left intact.
+  replace(/(?<!\w)[A-Za-z0-9+/]{40,}={0,2}(?!\w)/g, (match: string, offset: number) => {
     if (!hasBase64StructuralMarker(match)) return match;
     if (!isValidBase64Chunk(match)) return match;
+    if (!match.includes('+') && !match.endsWith('=')) {
+      if (!hasCanonicalBase64Tail(match)) return match;
+      if (isPathLikeContext(out, offset, match)) return match;
+    }
     return '<redacted_base64>';
   });
 
@@ -180,13 +184,61 @@ function looksLikeBase64Payload(text: string): boolean {
 }
 
 function hasBase64StructuralMarker(text: string): boolean {
-  return text.includes('+') || text.endsWith('=');
+  return text.includes('+') || text.includes('/') || text.endsWith('=');
 }
 
 function isValidBase64Chunk(text: string): boolean {
   const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0;
   if (padding > 0 && text.length % 4 !== 0) return false;
   return (text.length - padding) % 4 !== 1;
+}
+
+/**
+ * Unpadded slash-only chunks can have any length, so verify the final
+ * character carries only zero leftover bits: 4 bits for len % 4 === 2 and
+ * 2 bits for len % 4 === 3; len % 4 === 0 has no leftover bits. This rejects
+ * most ordinary path words (e.g. ".../directory") while a real Base64 payload
+ * keeps its bytes when re-encoded.
+ */
+function hasCanonicalBase64Tail(text: string): boolean {
+  const mod = text.length % 4;
+  if (mod === 0) return true;
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const value = ALPHABET.indexOf(text[text.length - 1]);
+  if (value < 0) return false;
+  return mod === 2 ? (value & 15) === 0 : (value & 3) === 0;
+}
+
+/**
+ * Only explicit URL/drive/`./`/`../`/`~/` context in the same
+ * whitespace-delimited token protects a slash-only match; slashes elsewhere
+ * must not hide a credential. A bare leading '/' is not enough: Base64 may
+ * start with '/', and a relative path made only of Base64 characters cannot
+ * be distinguished from a payload, so it is redacted (fail closed). Base64
+ * has no colon or backslash, so those characters also mark the token as a path.
+ */
+function isPathLikeContext(text: string, offset: number, match: string): boolean {
+  const delimiters = /[\s"'`<>()[\]{},;]/;
+  let start = offset;
+  while (start > 0 && !delimiters.test(text[start - 1])) start -= 1;
+  let end = offset + match.length;
+  while (end < text.length && !delimiters.test(text[end])) end += 1;
+  const token = text.slice(start, end);
+  const tokenOffset = offset - start;
+
+  const scheme = token.match(/[A-Za-z][A-Za-z0-9+.-]*:\/\//);
+  if (scheme && (scheme.index ?? 0) < tokenOffset) {
+    const queryStart = token.search(/[?#]/);
+    return queryStart < 0 || tokenOffset < queryStart;
+  }
+  if (token.includes('\\')) return true;
+  const prefix = token.slice(0, tokenOffset);
+  return (
+    prefix.startsWith('./') ||
+    prefix.startsWith('../') ||
+    prefix.startsWith('~/') ||
+    /^[A-Za-z]:[\\/]/.test(token.slice(0, tokenOffset + 1))
+  );
 }
 
 /**
@@ -306,7 +358,9 @@ function tokenizeKey(key: string): Set<string> {
   const tokens = new Set<string>();
   for (const part of String(key || '').split(/[^a-zA-Z0-9]+/)) {
     if (!part) continue;
-    for (const word of part.split(/(?=[A-Z])/)) {
+    // Split before a capitalized word, and between an uppercase acronym run
+    // and the following capitalized word: 'XSRFHeader' -> 'XSRF', 'Header'.
+    for (const word of part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)) {
       const normalized = normalizeKey(word);
       if (normalized) tokens.add(normalized);
     }

@@ -62,6 +62,8 @@ describe('A-08: dismissedCount only reflects real CDP click success', () => {
     expect(parsed.success).toBe(false);
     expect(parsed.errors.length).toBeGreaterThan(0);
     expect(parsed.errors[0]).toContain('renderer did not acknowledge');
+    // A confirmed dismissal failure must surface through the MCP error flag.
+    expect(res.isError).toBe(true);
   });
 
   it('counts a click only after the CDP click resolves', async () => {
@@ -91,6 +93,7 @@ describe('A-08: dismissedCount only reflects real CDP click success', () => {
     expect(parsed.dismissedCount).toBe(1);
     expect(parsed.success).toBe(true);
     expect(parsed.overlays[0].dismissed).toBe(true);
+    expect(res.isError).toBe(false);
   });
 
   it('keeps the pre-click dismissedCount and reports the error when the press dispatch fails', async () => {
@@ -122,5 +125,20 @@ describe('A-08: dismissedCount only reflects real CDP click success', () => {
     // ...but the failed physical fallback must be visible instead of silently swallowed.
     expect(parsed.success).toBe(false);
     expect(parsed.errors[0]).toContain('dispatch timeout');
+    expect(res.isError).toBe(true);
+  });
+
+  it('keeps a no-overlay page a non-error result', async () => {
+    vi.spyOn(inPageEngine, 'executeInPage').mockResolvedValue([
+      { result: { dismissedCount: 0, overlays: [] } },
+    ] as any);
+
+    const res = await dismissOverlayTool.execute({ tabId: 801, waitForSettle: false });
+
+    const parsed = JSON.parse((res.content[0] as any).text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.dismissedCount).toBe(0);
+    expect(parsed.message).toContain('No active marketing popups');
+    expect(res.isError).toBe(false);
   });
 });

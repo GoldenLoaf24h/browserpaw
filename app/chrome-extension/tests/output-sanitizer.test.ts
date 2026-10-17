@@ -81,6 +81,43 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
         expect(res.redacted).toBe(true);
       }
     });
+
+    it('redacts unpadded slash-only Base64 payloads of any length modulo 4', () => {
+      // Real Base64 of 'username=admin; password=hunter!?' (44 chars, len % 4 === 0),
+      // '...hunter ? ' (46 chars, len % 4 === 2), '...hunter ?  ' (47 chars, len % 4 === 3).
+      // Each contains '/' but no '+', so '/' alone must stay a structural marker.
+      const samples = [
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciE/', 'username=admin; password=hunter!?'],
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciA/IA', 'username=admin; password=hunter ? '],
+        ['dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciA/ICA', 'username=admin; password=hunter ?  '],
+      ];
+      for (const [slashOnly, decoded] of samples) {
+        expect(slashOnly).not.toContain('+');
+        expect(slashOnly).not.toMatch(/=$/);
+        expect(Buffer.from(slashOnly, 'base64').toString()).toBe(decoded);
+        for (const input of [slashOnly, `payload ${slashOnly} end`]) {
+          const res = sanitizeText(input);
+          expect(res.text).not.toContain(slashOnly);
+          expect(res.redacted).toBe(true);
+        }
+      }
+    });
+
+    it('does not let an unrelated URL hide a later slash-only Base64 payload', () => {
+      const slashOnly = 'dXNlcm5hbWU9YWRtaW47IHBhc3N3b3JkPWh1bnRlciE/';
+      const res = sanitizeText(`see https://a.example/x and token ${slashOnly}`);
+      expect(res.text).not.toContain(slashOnly);
+      expect(res.redacted).toBe(true);
+    });
+
+    it('redacts an embedded slash-leading Base64 payload (leading / is not a path)', () => {
+      // Real Base64 (33 bytes -> 44 chars) starting with '/', no '+' and no padding.
+      const slashLeading = '/CAgNTxDSlFYX2ZtdHsjKjE4P0ZNVFtiaXB3fiYtNDtC';
+      expect(Buffer.from(slashLeading, 'base64').toString('base64')).toBe(slashLeading);
+      const res = sanitizeText(`payload ${slashLeading} end`);
+      expect(res.text).not.toContain(slashLeading);
+      expect(res.redacted).toBe(true);
+    });
   });
 
   describe('2. False-Positive Prevention Tests (Must NOT redact non-sensitive identifiers/hashes)', () => {
@@ -140,6 +177,32 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       }
     });
 
+    it('keeps path/URL context even when the slash chunk has Base64-compatible length', () => {
+      // The slash-delimited chunks below have length % 4 of 0, 2, or 3; they
+      // must still be treated as paths rather than unpadded Base64 payloads.
+      const preserved = [
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpawaudit20261017',
+        'C:/Users/Lenovo/AppData/Local/Temp/browserpawaudit2026101',
+        'https://cdn.example.com/assets/product/hero/image/renditions/largeAB',
+        './some/very/long/filesystem/path/to/the/target/directory',
+      ];
+      for (const input of preserved) {
+        const res = sanitizeText(input);
+        expect(res.text).toBe(input);
+        expect(res.redacted).toBe(false);
+      }
+    });
+
+    it('fail-closed tradeoff: bare absolute paths of Base64-alphabet chars are redacted', () => {
+      // A bare leading '/' is also a valid Base64 first character and a
+      // relative path made only of Base64 characters cannot be distinguished
+      // from a payload, so such chunks are redacted on purpose.
+      const bareAbsolute = '/srv/app/releases/current/public/assets/images/hero';
+      const res = sanitizeText(bareAbsolute);
+      expect(res.text).toContain('<redacted_base64>');
+      expect(res.redacted).toBe(true);
+    });
+
     it('does NOT redact benign keys containing short marker substrings (D-09)', () => {
       const payload = {
         author: 'Ada Lovelace',
@@ -147,6 +210,19 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
         president: 'Grace Hopper',
         considered: true,
         autocomplete: 'on',
+      };
+      const result = sanitizeValue(payload);
+      expect(result.redacted).toBe(false);
+      expect(result.value).toEqual(payload);
+    });
+
+    it('does NOT redact benign camelCase keys starting with acronym-like runs', () => {
+      const payload = {
+        presidentName: 'Grace Hopper',
+        authorBio: 'Compiler pioneer',
+        XMLHttpRequest: 'ready',
+        userID: 'user_4096',
+        publicURL: 'https://example.com/profile',
       };
       const result = sanitizeValue(payload);
       expect(result.redacted).toBe(false);
@@ -222,6 +298,20 @@ describe('Output Sanitizer Regression & False-Positive Tests', () => {
       expect(result.redacted).toBe(true);
     });
 
+    it('redacts acronym-prefixed camelCase sensitive keys (XSRFHeader, CSRFToken, APIKey)', () => {
+      const payload = {
+        XSRFHeader: 'xsrf-header-value',
+        CSRFToken: 'csrf-token-value',
+        APIKey: 'api-key-value',
+        OAuthToken: 'oauth-token-value',
+      };
+      const result = sanitizeValue(payload);
+      const out = result.value as Record<string, unknown>;
+      for (const key of Object.keys(payload)) {
+        expect(out[key]).toBe('<redacted>');
+      }
+      expect(result.redacted).toBe(true);
+    });
     it('serializes diamond-shaped DAG references without [Circular] (D-09)', () => {
       const shared = { label: 'shared node' };
       const result = sanitizeValue({ a: shared, b: shared, list: [shared] });

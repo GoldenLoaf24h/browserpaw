@@ -515,19 +515,10 @@ export class JevClientWrapper {
 
   constructor(apiKey?: string) {
     this.explicitApiKey = apiKey;
-    const remoteCfg = jevModelManager.getRemoteConfig();
-    const baseUrl = remoteCfg.baseUrl?.trim() || undefined;
-    const modelId = remoteCfg.modelId?.trim() || undefined;
-    const key = (
-      apiKey ||
-      remoteCfg.apiKey ||
-      process.env.TYPESAFE_API_KEY ||
-      process.env.JEV_API_KEY ||
-      ''
-    ).trim();
+    const { key, baseUrl, modelId, identity } = this.resolveRemoteConfig();
     if (key) {
       try {
-        this.currentKey = `${key}@${baseUrl || 'default'}@${modelId || 'default'}`;
+        this.currentKey = identity;
         this.client = new TypeSafeClient({
           apiKey: key,
           ...(baseUrl ? { baseURL: baseUrl } : {}),
@@ -537,6 +528,31 @@ export class JevClientWrapper {
         this.client = null;
       }
     }
+  }
+
+  /** The credential/endpoint/model the remote configuration selects, plus a collision-free identity for it. */
+  private resolveRemoteConfig(): {
+    key: string;
+    baseUrl?: string;
+    modelId?: string;
+    identity: string;
+  } {
+    const remoteCfg = jevModelManager.getRemoteConfig();
+    const key = (
+      this.explicitApiKey ||
+      remoteCfg.apiKey ||
+      process.env.TYPESAFE_API_KEY ||
+      process.env.JEV_API_KEY ||
+      ''
+    ).trim();
+    const baseUrl = remoteCfg.baseUrl?.trim() || undefined;
+    const modelId = remoteCfg.modelId?.trim() || undefined;
+    return {
+      key,
+      baseUrl,
+      modelId,
+      identity: JSON.stringify([key, baseUrl ?? null, modelId ?? null]),
+    };
   }
 
   public getLocalClient(): TypeSafeClient {
@@ -563,22 +579,12 @@ export class JevClientWrapper {
       return this.getLocalClient();
     }
 
-    const remoteCfg = jevModelManager.getRemoteConfig();
-    const key = (
-      this.explicitApiKey ||
-      remoteCfg.apiKey ||
-      process.env.TYPESAFE_API_KEY ||
-      process.env.JEV_API_KEY ||
-      ''
-    ).trim();
-    const baseUrl = remoteCfg.baseUrl?.trim() || undefined;
-    const modelId = remoteCfg.modelId?.trim() || undefined;
-    const clientKey = `${key}@${baseUrl || 'default'}@${modelId || 'default'}`;
+    const { key, baseUrl, modelId, identity } = this.resolveRemoteConfig();
 
     if (key) {
-      if (!this.client || this.currentKey !== clientKey) {
+      if (!this.client || this.currentKey !== identity) {
         try {
-          this.currentKey = clientKey;
+          this.currentKey = identity;
           this.resolvedModelId = undefined;
           this.client = new TypeSafeClient({
             apiKey: key,
@@ -614,6 +620,12 @@ export class JevClientWrapper {
     signal?: AbortSignal,
     timeout?: number,
   ): Promise<string | null> {
+    // Never probe the local service client that `getRemoteClient()` returns in local mode.
+    if (jevModelManager.getActiveMode() !== 'remote') return null;
+    // Attribute the awaited answer by configuration identity, not by the `client` field:
+    // `getClient()` may not have refreshed yet, and a concurrent request may already have
+    // cached the new configuration's release.
+    const identity = this.resolveRemoteConfig().identity;
     const client = this.getRemoteClient();
     if (!client || isSessionKeyInvalid()) return null;
 
@@ -628,10 +640,27 @@ export class JevClientWrapper {
           },
           { signal, timeout },
         );
-        if (probe?.model && client === this.client) this.resolvedModelId = probe.model;
+        // A probe that straddled a switch reports on the old endpoint: drop it. Mode is
+        // checked first so a revocation short-circuits before `getRemoteClient()` can rebuild.
+        if (
+          jevModelManager.getActiveMode() === 'remote' &&
+          probe?.model &&
+          this.resolveRemoteConfig().identity === identity &&
+          this.getRemoteClient() === client
+        ) {
+          this.resolvedModelId = probe.model;
+        }
       } catch {
         return null;
       }
+    }
+    // Exit guard: never return a cache that now belongs to another configuration or client.
+    if (
+      jevModelManager.getActiveMode() !== 'remote' ||
+      this.resolveRemoteConfig().identity !== identity ||
+      this.getRemoteClient() !== client
+    ) {
+      return null;
     }
     return this.resolvedModelId && supportsBoxQuestions(this.resolvedModelId)
       ? this.resolvedModelId
@@ -672,6 +701,9 @@ export class JevClientWrapper {
     }
 
     let client: TypeSafeClient | null = null;
+    // Capture the configuration before selecting the client; a switch in between must not be
+    // attributed to the new configuration.
+    const identity = targetMode === 'remote' ? this.resolveRemoteConfig().identity : undefined;
     if (targetMode === 'local') {
       await jevModelManager.ensureLocalServiceRunning();
       jevModelManager.touchActivity();
@@ -697,13 +729,14 @@ export class JevClientWrapper {
         },
         options,
       );
-      // Upstream reports the concrete release that answered, which is what decides whether
-      // `box` is available; record it so vision routing needs no pinned model id. If the
-      // endpoint was reconfigured while this request was in flight, `getClient()` has already
-      // swapped `this.client` and reset the cache — a response from the superseded client
-      // must not repopulate it, or a concurrent vision request would skip probing the new
-      // endpoint and send it a screenshot its concrete model was never verified to answer.
-      if (targetMode === 'remote' && response?.model && client === this.client) {
+      // Cache the reported release only if it still describes the configuration that sent
+      // this request; `client === this.client` also rejects the local service client.
+      if (
+        targetMode === 'remote' &&
+        response?.model &&
+        client === this.client &&
+        this.resolveRemoteConfig().identity === identity
+      ) {
         this.resolvedModelId = response.model;
       }
       return { result: response, errorReason: null };
@@ -781,11 +814,27 @@ export class JevClientWrapper {
         errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
       };
     }
+    const identity = this.resolveRemoteConfig().identity;
 
     // Ask upstream which release answers here; `box` needs Jev 1.14+, so anything else must
     // fail closed rather than send a screenshot the request cannot use.
     const visionModel = await this.resolveBoxCapableModel(options?.signal, options?.timeout);
     if (!visionModel) {
+      return {
+        result: null,
+        errorReason: 'vision_model_unsupported',
+      };
+    }
+
+    // The probe awaited: re-select the client and fail closed if the configuration, mode, or
+    // client changed, so the screenshot only goes to the endpoint whose release was verified.
+    const currentClient = this.getRemoteClient();
+    if (
+      jevModelManager.getActiveMode() !== 'remote' ||
+      !currentClient ||
+      this.resolveRemoteConfig().identity !== identity ||
+      currentClient !== client
+    ) {
       return {
         result: null,
         errorReason: 'vision_model_unsupported',
@@ -811,7 +860,7 @@ export class JevClientWrapper {
         ),
       };
 
-      const response = await client.systemOne(
+      const response = await currentClient.systemOne(
         {
           state: state as any,
           questions,
@@ -825,7 +874,16 @@ export class JevClientWrapper {
           },
         },
       );
-      if (response?.model && client === this.client) this.resolvedModelId = response.model;
+      // Same attribution rule as `query`, plus the mode guard: a revoked vision consent must
+      // not refresh the cache.
+      if (
+        jevModelManager.getActiveMode() === 'remote' &&
+        response?.model &&
+        this.resolveRemoteConfig().identity === identity &&
+        currentClient === this.client
+      ) {
+        this.resolvedModelId = response.model;
+      }
 
       const answers = (response.answers || {}) as Record<string, any>;
       const probability = (answer: any, fallback: number): number =>

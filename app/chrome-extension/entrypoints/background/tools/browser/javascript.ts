@@ -244,9 +244,19 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     return single ? combined[0] || null : combined;
   };
 
+  // Every evaluation owns exactly one hold on the shared prototype patch so
+  // overlapping evaluations never restore the prototypes out from under each
+  // other; the last holder restores the captured originals.
+  let hasTextPolyfillHeld = false;
+
   const restoreHasTextPolyfill = () => {
+    if (!hasTextPolyfillHeld) return;
+    hasTextPolyfillHeld = false;
     const installed = globalThis.__mcpHasTextPolyfill;
-    if (!installed) return;
+    if (!installed || typeof installed.count !== 'number' || typeof installed.docQS !== 'function')
+      return;
+    installed.count -= 1;
+    if (installed.count > 0) return;
     Document.prototype.querySelector = installed.docQS;
     Document.prototype.querySelectorAll = installed.docQSA;
     Element.prototype.querySelector = installed.elQS;
@@ -255,7 +265,22 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   };
 
   const installHasTextPolyfill = () => {
-    if (typeof Document === 'undefined' || globalThis.__mcpHasTextPolyfill) return;
+    if (typeof Document === 'undefined' || hasTextPolyfillHeld) return;
+    // Any marker that already exists belongs either to another evaluation
+    // (ours, shared through its reference count) or to the page. A foreign
+    // value is never overwritten, and no prototype patch is installed over it.
+    if ('__mcpHasTextPolyfill' in globalThis) {
+      const installed = globalThis.__mcpHasTextPolyfill;
+      if (
+        installed &&
+        typeof installed.count === 'number' &&
+        typeof installed.docQS === 'function'
+      ) {
+        installed.count += 1;
+        hasTextPolyfillHeld = true;
+      }
+      return;
+    }
     try {
       const origDocQS = Document.prototype.querySelector;
       const origDocQSA = Document.prototype.querySelectorAll;
@@ -270,17 +295,21 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
           return orig.call(this, sel);
         };
 
-      Document.prototype.querySelector = wrap(origDocQS, true);
-      Document.prototype.querySelectorAll = wrap(origDocQSA, false);
-      Element.prototype.querySelector = wrap(origElQS, true);
-      Element.prototype.querySelectorAll = wrap(origElQSA, false);
-
+      // Publish the state before patching so a partial failure still restores
+      // whatever was already replaced.
       globalThis.__mcpHasTextPolyfill = {
         docQS: origDocQS,
         docQSA: origDocQSA,
         elQS: origElQS,
         elQSA: origElQSA,
+        count: 1,
       };
+      hasTextPolyfillHeld = true;
+
+      Document.prototype.querySelector = wrap(origDocQS, true);
+      Document.prototype.querySelectorAll = wrap(origDocQSA, false);
+      Element.prototype.querySelector = wrap(origElQS, true);
+      Element.prototype.querySelectorAll = wrap(origElQSA, false);
     } catch {
       restoreHasTextPolyfill();
     }
@@ -655,7 +684,6 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     restoreHasTextPolyfill,
   };
 })();
-globalThis.__mcp = mcp;
 `;
 
 // ============================================================================
@@ -843,7 +871,7 @@ export function wrapUserCode(code: string): string {
   }
   const expr = detectSingleExpression(code);
   if (expr !== null) {
-    return wrapInScopedEvaluation(`${MCP_INPAGE_HELPERS}return (\n${expr}\n);\n`);
+    return wrapInScopedEvaluation(`return (\n${expr}\n);\n`);
   }
   const trimmed = code.trim();
   const declMatch = /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=([\s\S]+)$/.exec(
@@ -854,20 +882,21 @@ export function wrapUserCode(code: string): string {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     try {
       new AsyncFunction(`${trimmed}\nreturn ${varName};`);
-      return wrapInScopedEvaluation(`${MCP_INPAGE_HELPERS}${trimmed}\nreturn ${varName};\n`);
+      return wrapInScopedEvaluation(`${trimmed}\nreturn ${varName};\n`);
     } catch {}
   }
-  return wrapInScopedEvaluation(`${MCP_INPAGE_HELPERS}${code}\n`);
+  return wrapInScopedEvaluation(`${code}\n`);
 }
 
 /**
  * Wrap the injected helpers + user code in try/finally so the MAIN-world
  * prototype patches installed by the helpers are always removed again when
- * the evaluation ends, including when user code throws. The polyfill state
- * is published on globalThis because `mcp` is block-scoped to the try block.
+ * the evaluation ends, including when user code throws. The helpers run in
+ * the same function scope as the user code, so `mcp` stays a local binding:
+ * page-owned globals such as `__mcp` are neither read nor written.
  */
 function wrapInScopedEvaluation(body: string): string {
-  return `(async () => {\ntry {\n${body}\n} finally {\nglobalThis.__mcp?.restoreHasTextPolyfill();\ndelete globalThis.__mcp;\n}\n})()`;
+  return `(async () => {\n${MCP_INPAGE_HELPERS}try {\n${body}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}\n})()`;
 }
 
 // ============================================================================
@@ -1089,7 +1118,11 @@ async function executeViaScripting(
               }
             }
           }
-          const fn = new AsyncFunction((inpageHelpers || '') + codeToRun);
+          // Helpers share the generated function scope with the user code, so
+          // `mcp` is a local binding and the teardown never touches page globals.
+          const fn = new AsyncFunction(
+            `${inpageHelpers || ''}\ntry {\n${codeToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`,
+          );
           const value = await fn();
           return { ok: true, value };
         } catch (err: unknown) {
@@ -1102,11 +1135,6 @@ async function executeViaScripting(
               stack: error?.stack ?? undefined,
             },
           };
-        } finally {
-          try {
-            (globalThis as any).__mcp?.restoreHasTextPolyfill?.();
-            delete (globalThis as any).__mcp;
-          } catch {}
         }
       },
       args: [code, MCP_INPAGE_HELPERS],

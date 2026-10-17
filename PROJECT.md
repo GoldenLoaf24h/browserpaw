@@ -51,12 +51,13 @@ BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered 
 > All engineering verification, quality gates, and delivery standards are canonically governed by [**`docs/QUALITY.md`**](docs/QUALITY.md).
 > The official static verification suite is `pnpm verify`. Deployment is performed via `pnpm build:deploy` and validated via `pnpm verify:delivery`.
 
-- **Chrome Extension Vitest**: 919 unit tests passing 100% across 87 suites (including F1-M3 pipeline, tab closing, javascript execution, grep, delta diffs, batch assertions, media extraction, deep shadow DOM piercing, visual drift compensation, card flattening, token boundary matching, and undo).
-- **Native Server Jest**: 279 unit and integration tests passing 100% across 14 suites (including Jev fast-decision engine, heuristic scoring, client resilience, update notifier, and session managers).
-- **End-to-End Suite**: 153 four-tier E2E tests passing 100% (`node --experimental-strip-types test/e2e/runner.ts`).
-- **Plugin Integration**: 33 Pytest cases (`plugins/browserpaw/tests/`).
-- **TypeScript Checking**: 0 errors across all monorepo packages (`pnpm typecheck`).
-- **Total Automated Test Volume**: 1384 / 1384 tests passing (100% green).
+- **Chrome Extension Vitest**: All tests in `app/chrome-extension/tests/`, including DOM snapshots, input, screenshots, console capture, and undo.
+- **Native Server Jest**: All unit and integration suites in `app/native-server`, including Jev decisions, client resilience, protocol handling, and session managers.
+- **Simulated End-to-End Suite**: Four tiers executed after building (`pnpm test:e2e`). These tests do not establish live Chrome acceptance.
+- **Plugin Integration**: Pytest cases in `plugins/browserpaw/tests/`; only the optional Hermes host integration may skip when the host is unavailable.
+- **TypeScript Checking**: All monorepo packages (`pnpm typecheck`).
+
+The latest `pnpm verify` report at `.artifacts/verification/latest.json` records the measured test counts, skips, and pass/fail status for that source fingerprint.
 
 ### Key Technical Invariants & Operational Semantics
 

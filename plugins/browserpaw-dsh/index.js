@@ -49,8 +49,8 @@ export async function apply(ctx) {
   // started, so a concurrent open would fork a second transport that nothing tracks, and a
   // close (or plugin unload) landing while an open is still awaiting would see no session,
   // return as a no-op, and let the connection reappear afterwards. Serializing makes each
-  // transition observe the settled result of the previous one, so a close always ends with
-  // no live connection and no undisposed fork.
+  // transition observe the settled result of the previous one, so close can dispose the
+  // fork created by an in-flight open.
   let transitions = Promise.resolve();
 
   function serialize(transition) {
@@ -87,18 +87,10 @@ export async function apply(ctx) {
   async function close() {
     return serialize(async () => {
       if (!session) return;
-      const current = session;
+      // Retain the session until disposal succeeds so status stays honest and a
+      // failed close can be retried without allowing a second transport to open.
+      await session.fork.dispose();
       session = null;
-      try {
-        await current.fork.dispose();
-      } catch (err) {
-        // Disposal failed before the transport closed: restore the session so a later
-        // close or unload can retry it. Leaving the reference cleared would orphan the
-        // fork and let a subsequent open fork a second connection while the first one
-        // is still live.
-        session = current;
-        throw err;
-      }
     });
   }
 

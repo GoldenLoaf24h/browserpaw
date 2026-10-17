@@ -126,7 +126,7 @@ export class DismissOverlayTool extends BaseBrowserToolExecutor {
             text: JSON.stringify(outcome),
           },
         ],
-        isError: false,
+        isError: !success,
       };
     } catch (error) {
       return createErrorResponse(

@@ -223,10 +223,13 @@ export class FastDecisionEngine {
       const probeRemaining = Math.min(timeoutMs - (Date.now() - startTime), 30_000);
       if (probeRemaining <= 0)
         return halt('timeout', 'Execution deadline exceeded before vision probe');
-      const visionModel = await this.jevClient.resolveBoxCapableModel(
-        AbortSignal.timeout(probeRemaining),
-        probeRemaining,
-      );
+      const probeSignal = AbortSignal.timeout(probeRemaining);
+      const visionModel = await this.jevClient.resolveBoxCapableModel(probeSignal, probeRemaining);
+      // A probe that ran into its deadline (or outlived the run's) answered nothing about the
+      // endpoint; the run must stop with timeout instead of capturing or acting on stale state.
+      if (probeSignal.aborted || expired()) {
+        return halt('timeout', 'Execution deadline exceeded during vision capability probe');
+      }
       if (!visionModel) {
         return { handled: false };
       }
@@ -236,15 +239,34 @@ export class FastDecisionEngine {
       }
 
       sendProgress(currentStep, `Capturing screenshot for vision fallback (${reasonTrigger})`);
+      const shotBudget = timeoutMs - (Date.now() - startTime);
+      if (shotBudget <= 0)
+        return halt('timeout', 'Execution deadline exceeded before vision capture');
       let shotRes: any;
       try {
-        shotRes = await internalCaller('chrome_screenshot', {
-          _jevVision: true,
-          tabId: params.tabId,
-          sessionId: params.sessionId || params.sessionContext,
-          fullPage: false,
-          saveToDisk: false,
+        // Race the capture against the remaining budget. The losing timer is cleared so an
+        // in-budget capture leaves no pending handle, and a late result is ignored below.
+        let shotTimer: NodeJS.Timeout | undefined;
+        const shotDeadline = new Promise<null>((resolve) => {
+          shotTimer = globalThis.setTimeout(() => resolve(null), shotBudget);
         });
+        try {
+          shotRes = await Promise.race([
+            internalCaller('chrome_screenshot', {
+              _jevVision: true,
+              tabId: params.tabId,
+              sessionId: params.sessionId || params.sessionContext,
+              fullPage: false,
+              saveToDisk: false,
+            }),
+            shotDeadline,
+          ]);
+        } finally {
+          globalThis.clearTimeout(shotTimer);
+        }
+        if (shotRes === null) {
+          return halt('timeout', 'Execution deadline exceeded during vision screenshot capture');
+        }
       } catch (err: any) {
         return halt(
           expired() ? 'timeout' : 'escalate',
@@ -683,16 +705,34 @@ export class FastDecisionEngine {
           // judgment entirely so an unclear or malformed answer cannot veto it.
           if (actionToTake === 'type' && params.pressEnter === undefined) {
             const submitIntent = answers.submit_intent;
-            const validSubmitIntent =
-              submitIntent?.type === 'choice' &&
-              ['fill_only', 'submit', 'unclear'].includes(submitIntent.choice);
-            if (!validSubmitIntent) {
+            // Validate the whole answer (choice plus distribution), not just the choice string.
+            if (!validateChoice(submitIntent, ['fill_only', 'submit', 'unclear'])) {
               return finish(
                 'escalate',
                 engine,
                 engineSwitched,
                 fallbackReason,
                 'Jev response invalid: submit intent choice validation failed',
+                steps,
+                finalPage,
+                currentElements,
+                jevCalls,
+                inputTokens,
+              );
+            }
+            const submitConfidence = submitIntent.confidence;
+            if (
+              typeof submitConfidence !== 'number' ||
+              !Number.isFinite(submitConfidence) ||
+              submitConfidence < 0 ||
+              submitConfidence > 1
+            ) {
+              return finish(
+                'escalate',
+                engine,
+                engineSwitched,
+                fallbackReason,
+                'Jev response invalid: submit intent confidence validation failed',
                 steps,
                 finalPage,
                 currentElements,
@@ -721,7 +761,25 @@ export class FastDecisionEngine {
                 },
               );
             }
-            submitAfterFill = submitIntent.choice === 'submit';
+            if (submitIntent.choice === 'submit') {
+              const submitProb = submitIntent.probabilities['submit'];
+              // Enter is not reversible; reuse the target guard so a weak submit escalates.
+              if (submitConfidence < 0.45 || submitProb < 0.35) {
+                return finish(
+                  'escalate',
+                  engine,
+                  engineSwitched,
+                  fallbackReason,
+                  `Submit intent confidence ambiguous (${submitConfidence.toFixed(2)} < 0.45 or prob ${submitProb.toFixed(2)} < 0.35)`,
+                  steps,
+                  finalPage,
+                  currentElements,
+                  jevCalls,
+                  inputTokens,
+                );
+              }
+              submitAfterFill = true;
+            }
           }
 
           if (targetAnswer) {

@@ -290,6 +290,76 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
     });
   });
 
+  it('P2: failed disposal keeps the session active and blocks a second fork until close retries', async () => {
+    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token' }, async () => {
+      let disposals = 0;
+      const { tool, forks } = await bootSession({
+        pluginGate: async (fork) => {
+          fork.dispose = async () => {
+            disposals += 1;
+            if (disposals === 1) throw new Error('transport still open');
+            fork.disposed = true;
+          };
+        },
+      });
+      await tool.execute({ action: 'open' });
+
+      const closing = tool.execute({ action: 'close' });
+      const reopening = tool.execute({ action: 'open' });
+      await assert.rejects(closing, /transport still open/);
+      await reopening;
+      assert.equal((await tool.execute({ action: 'status' })).active, true);
+      assert.equal(forks.length, 1, 'a failed close must not let queued open fork again');
+      assert.equal(forks[0].disposed, false);
+
+      await tool.execute({ action: 'close' });
+      assert.equal(disposals, 2);
+      assert.equal(forks[0].disposed, true);
+      assert.equal((await tool.execute({ action: 'status' })).active, false);
+      await tool.execute({ action: 'open' });
+      assert.equal(forks.length, 2, 'successful disposal permits a fresh connection');
+    });
+  });
+
+  it('P2: status stays active during disposal and unload retries a failed close', async () => {
+    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token' }, async () => {
+      let rejectDisposal;
+      let disposalStarted;
+      const started = new Promise((resolve) => {
+        disposalStarted = resolve;
+      });
+      const held = new Promise((_, reject) => {
+        rejectDisposal = reject;
+      });
+      let disposals = 0;
+      const { tool, forks, cleanups } = await bootSession({
+        pluginGate: async (fork) => {
+          fork.dispose = async () => {
+            disposals += 1;
+            if (disposals === 1) {
+              disposalStarted();
+              await held;
+            }
+            fork.disposed = true;
+          };
+        },
+      });
+      await tool.execute({ action: 'open' });
+      const closing = tool.execute({ action: 'close' });
+      await started;
+      const activeDuringDisposal = (await tool.execute({ action: 'status' })).active;
+      const rejected = assert.rejects(closing, /transport still open/);
+      rejectDisposal(new Error('transport still open'));
+      await rejected;
+      await Promise.all(cleanups.map((cleanup) => cleanup()));
+
+      assert.equal(activeDuringDisposal, true, 'status must not hide an in-flight transport');
+      assert.equal(disposals, 2);
+      assert.equal(forks[0].disposed, true);
+      assert.equal((await tool.execute({ action: 'status' })).active, false);
+    });
+  });
+
   it('S-02: session tool output declares required render projection function', async () => {
     const { tool } = await bootSession();
     assert.equal(typeof tool.output?.render, 'function', 'output.render must be a function');
