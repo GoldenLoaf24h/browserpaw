@@ -89,6 +89,7 @@ test('checkPackageVersions verifies consistency across monorepo packages', () =>
   assert.equal(res.versions.shared, '4.0.0');
   assert.equal(res.versions['chrome-extension'], '4.0.0');
   assert.equal(res.versions['codex-plugin'], '4.0.0');
+  assert.equal(res.versions['claude-plugin'], '4.0.0');
 });
 
 test('checkTagReleaseRecords asserts all local git tags have release notes', () => {

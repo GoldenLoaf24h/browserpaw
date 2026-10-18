@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-config.json",
+  "description": "BrowserPaw (mcp-chrome) MCP client configuration templates. Each entry shows where a client keeps its MCP server config and how to register BrowserPaw over stdio (recommended zero-config) or advanced manual HTTP.",
+  "configurations": {
+    "desktop_client_a": {
+      "filePath": {
+        "windows": "%APPDATA%\\<CLIENT>\\<mcp-config>.json",
+        "macos": "~/Library/Application Support/<CLIENT>/<mcp-config>.json",
+        "linux": "~/.config/<CLIENT>/<mcp-config>.json"
+      },
+      "config_stdio": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+          }
+        }
+      },
+      "config_http_advanced_optional": {
+        "_comment": "Advanced manual HTTP connection example (not recommended as default, requires active bridge-token from ~/.chrome-mcp/bridge-token).",
+        "mcpServers": {
+          "browserpaw": {
+            "url": "http://127.0.0.1:12306/mcp",
+            "headers": {
+              "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+            }
+          }
+        }
+      }
+    },
+    "editor_client_a": {
+      "filePath": "<project>/.<client>/mcp.json or ~/.<client>/mcp.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+          }
+        }
+      }
+    },
+    "editor_client_b": {
+      "filePath": "~/.<client>/mcp_config.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+          }
+        }
+      }
+    },
+    "cline_and_roo_code": {
+      "filePath": "%APPDATA%\\<EDITOR>\\User\\globalStorage\\<vendor.extension>\\settings\\<mcp-settings>.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": [
+              "<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"
+            ],
+            "disabled": false,
+            "autoApprove": [
+              "chrome_act_toward_goal",
+              "chrome_read_dom",
+              "chrome_interact_index",
+              "chrome_fill_index",
+              "chrome_batch_actions",
+              "chrome_screenshot",
+              "chrome_smart_scroll",
+              "chrome_dismiss_overlay"
+            ]
+          }
+        }
+      }
+    },
+    "cli_client": {
+      "filePath": "~/.<cli-agent>/mcp_config.json",
+      "config": {
+        "mcpServers": {
+          "browserpaw": {
+            "command": "node",
+            "args": ["<ABSOLUTE_PATH_TO_BROWSERPAW>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+          }
+        }
+      }
+    },
+    "advanced_manual_http": {
+      "_comment": "Advanced manual HTTP/SSE connection examples (not recommended as default, requires active bridge-token from ~/.chrome-mcp/bridge-token).",
+      "http": {
+        "url": "http://127.0.0.1:12306/mcp",
+        "headers": {
+          "x-mcp-token": "PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+        }
+      },
+      "sse": {
+        "url": "http://127.0.0.1:12306/sse",
+        "headers": {
+          "Authorization": "Bearer PASTE_TOKEN_FROM_~/.chrome-mcp/bridge-token"
+        }
+      }
+    }
+  }
+}

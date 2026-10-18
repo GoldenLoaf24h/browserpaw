@@ -16,6 +16,8 @@ const targets = [
   },
   { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw') },
   { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'), isPlugin: true },
+  // Claude Code speaks the canonical chrome_* names over stdio, so this mirror stays verbatim.
+  { dir: path.join(repoRoot, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw') },
 ];
 
 const SCOPE_BANNER_EN =

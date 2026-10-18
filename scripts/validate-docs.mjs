@@ -98,6 +98,7 @@ export function checkPackageVersions(repoRoot) {
     { name: 'shared', file: 'packages/shared/package.json' },
     { name: 'chrome-extension', file: 'app/chrome-extension/package.json' },
     { name: 'codex-plugin', file: 'plugins/browserpaw/.codex-plugin/plugin.json' },
+    { name: 'claude-plugin', file: 'plugins/browserpaw-claude/.claude-plugin/plugin.json' },
   ];
 
   let canonicalVersion = null;
