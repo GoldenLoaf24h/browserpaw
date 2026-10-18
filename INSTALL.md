@@ -249,7 +249,7 @@ Claude Code installs BrowserPaw from this repository's plugin marketplace. The p
 /plugin install browserpaw@browserpaw
 ```
 
-For a local checkout, add the repository root instead: `/plugin marketplace add <ABSOLUTE_PATH_TO_REPO>`. The plugin's MCP entry runs `mcp-chrome-stdio` from `PATH`, a bin exported by the `mcp-chrome-bridge` package shipped in this repository; where that shim is unavailable, use the direct stdio configuration in section 3.2 instead. After installation, type `/browserpaw` to load the operating guide. Chrome must be running with the extension loaded and the native host registered (Steps 1-2).
+For a local checkout, add the repository root instead: `/plugin marketplace add <ABSOLUTE_PATH_TO_REPO>`. The plugin's MCP entry runs `mcp-chrome-stdio` from `PATH`, a bin exported by this repository's `mcp-chrome-bridge` package. Where that shim is unavailable, either install it from the checkout after building (`pnpm build`, then `npm install -g ./app/native-server`) or register the server manually with `claude mcp add browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`. After installation, type `/browserpaw` to load the operating guide. Chrome must be running with the extension loaded and the native host registered (Steps 1-2).
 
 ---
 

@@ -16,17 +16,22 @@
  *   node doctor.mjs --fix  # Diagnose and auto-repair common defects
  */
 
-import { existsSync, readFileSync, cpSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, cpSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve, delimiter } from 'node:path';
+import { join, resolve, relative, delimiter, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const AUTO_FIX = process.argv.includes('--fix');
 const PORT = 12306;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
-const REPO_ROOT = resolve(process.cwd());
+// The repair wrappers cd into config/ before invoking doctor, so cwd is not the checkout.
+// Resolve from this file (skill/config/doctor.mjs -> repo root) and let an explicit root win.
+const REPO_ROOT = resolve(
+  process.env.BROWSERPAW_REPO_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..'),
+);
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
 // Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths
 const STANDALONE_EXT_DIRS = process.env.BROWSERPAW_STANDALONE_DIRS
@@ -189,7 +194,34 @@ if (
   );
 }
 
-// Check Standalone Load Directories
+// Compare the complete build tree, not a sample: a stale manifest, content script, or
+// extra file left by an older build must count as out of sync even when two files match.
+function snapshotTree(dir) {
+  const files = new Map();
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.set(relative(dir, full), readFileSync(full));
+    }
+  };
+  walk(dir);
+  return files;
+}
+
+function treesMatch(a, b) {
+  const left = snapshotTree(a);
+  const right = snapshotTree(b);
+  if (left.size !== right.size) return false;
+  for (const [rel, content] of left) {
+    const other = right.get(rel);
+    if (!other || !other.equals(content)) return false;
+  }
+  return true;
+}
+
+// Check Standalone Load Directories. Each directory reports exactly once, so a repair
+// that succeeds does not leave the earlier failure counted against the final status.
 for (const dir of STANDALONE_EXT_DIRS) {
   if (!existsSync(dir)) {
     if (AUTO_FIX && buildOk) {
@@ -205,35 +237,19 @@ for (const dir of STANDALONE_EXT_DIRS) {
     }
     continue;
   }
-  const standaloneBg = join(dir, 'background.js');
-  const srcBg = join(EXT_SRC_OUTPUT, 'background.js');
-  const standalonePopup = join(dir, 'popup.html');
-  const srcPopup = join(EXT_SRC_OUTPUT, 'popup.html');
-  let synced = false;
-  if (
-    existsSync(standaloneBg) &&
-    existsSync(srcBg) &&
-    existsSync(standalonePopup) &&
-    existsSync(srcPopup)
-  ) {
-    const s1 = readFileSync(standaloneBg).length;
-    const s2 = readFileSync(srcBg).length;
-    const p1 = readFileSync(standalonePopup, 'utf8').trim();
-    const p2 = readFileSync(srcPopup, 'utf8').trim();
-    synced = s1 === s2 && p1 === p2;
+  if (buildOk && treesMatch(EXT_SRC_OUTPUT, dir)) {
+    report(true, `Standalone Directory Synced: ${dir}`, `All build files matched.`);
+    continue;
   }
-  if (synced) {
-    report(true, `Standalone Directory Synced: ${dir}`, `Files matched perfectly.`);
-  } else {
+  if (!(AUTO_FIX && buildOk)) {
     report(false, `Standalone Directory Out of Sync: ${dir}`);
-    if (AUTO_FIX && buildOk) {
-      try {
-        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
-        report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
-      } catch (err) {
-        report(false, `Failed to copy build to ${dir}`, err.message);
-      }
-    }
+    continue;
+  }
+  try {
+    cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+    report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
+  } catch (err) {
+    report(false, `Failed to copy build to ${dir}`, err.message);
   }
 }
 

@@ -49,10 +49,9 @@ The skill documents the canonical `chrome_*` tool names, which are exactly what 
 ## Prerequisites
 
 1. **Native messaging host**: run the registration script described in [INSTALL.md](../../INSTALL.md) so Chrome can launch the bridge.
-2. **`mcp-chrome-stdio` on `PATH`**: provided by a global install of `mcp-chrome-bridge`, or replaced with an absolute `node` + script path in `.mcp.json`.
+2. **`mcp-chrome-stdio` on `PATH`**: installed by `npm install -g ./app/native-server` after `pnpm build`. Without it, register the server yourself: `claude mcp add browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`.
 3. **Chrome open with the BrowserPaw extension loaded**: the bridge is only reachable while the browser is running.
-
-To reach the full 50-tool surface, set `CHROME_MCP_TOOL_PROFILE: full` in the server's `env` block; the stdio transport defaults to the `core` profile and unlocks further categories on demand.
+   To reach the full 50-tool surface, set `CHROME_MCP_TOOL_PROFILE: full` in the server's `env` block; the stdio transport defaults to the `core` profile and unlocks further categories on demand.
 
 ## License
 
