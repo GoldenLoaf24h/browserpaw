@@ -23,12 +23,12 @@ const METADATA = {
       { name: 'package.json', desc: 'Monorepo root scripts, dependencies, workspaces, and metadata' },
       { name: 'pnpm-workspace.yaml', desc: 'PNPM workspace definition configuring packages and apps' },
       { name: 'README.md', desc: 'Project overview, quick start, architecture highlights, and setup guide' },
-      { name: 'README.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese README' },
+      { name: 'README.zh-CN.md', desc: 'Simplified Chinese translation of the repository README' },
       { name: 'PROJECT.md', desc: 'Engineering specifications, quality gates, and architecture summaries' },
-      { name: 'PROJECT.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese PROJECT' },
+      { name: 'PROJECT.zh-CN.md', desc: 'Simplified Chinese translation of the engineering project specification' },
       { name: 'TEST_INFRA.md', desc: 'Comprehensive E2E test infrastructure specification and test matrix' },
       { name: 'AGENT_CONFIG_GUIDE.md', desc: 'Client configuration instructions for Claude, Cursor, and Windsurf' },
-      { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese config guide' },
+      { name: 'AGENT_CONFIG_GUIDE.zh-CN.md', desc: 'Simplified Chinese translation of the AI agent client configuration guide' },
       { name: 'INSTALL.md', desc: 'Installation instructions for the native messaging host and extension' },
       { name: 'PRIVACY.md', desc: 'Privacy notice detailing data locality and local-only processing guarantees' },
       { name: 'CHANGELOG.md', desc: 'Concise pointer to the centralized release archive in docs/releases/' },
@@ -699,16 +699,16 @@ const METADATA = {
       { name: 'ARCHITECTURE.md', desc: 'Comprehensive 3-tier architecture, IPC protocols, and design decisions' },
       { name: 'TOOLS.md', desc: 'Auto-generated reference for all 50 canonical tools and arguments' },
       { name: 'TROUBLESHOOTING.md', desc: 'Diagnostic checklists for connection issues, token mismatch, and CDP' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese playbook' },
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the diagnostics and self-healing playbook' },
       { name: 'CONTRIBUTING.md', desc: 'Guidelines for contributors covering workflows and PR protocols' },
       { name: 'mcp-cli-config.md', desc: 'MCP configuration snippets for various CLI environments' }
     ],
     instructions: [
       'Do not edit docs/TOOLS.md manually; regenerate it using `node scripts/gen-tools-doc.mjs`.',
-      'Active documentation is English-only; `*.zh-CN.md` files are English redirect stubs kept so external inbound links keep resolving.'
+      'English remains canonical; every `*.zh-CN.md` file is a full Simplified Chinese translation kept in sync with its English source.'
     ],
     testing: 'Verify markdown link validity and table formatting.',
-    patterns: 'English canonical documentation with redirect stubs for retired translations; clear ASCII diagrams.',
+    patterns: 'English canonical documentation with parallel Simplified Chinese translations; clear ASCII diagrams.',
     internalDeps: ['scripts/gen-tools-doc.mjs'],
     externalDeps: ['Markdown / GitHub-flavored markdown']
   },
@@ -1013,7 +1013,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Plugin troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
     ],
     instructions: ['Mirrored from skill/config.'],
     testing: 'Verify file parity.',
@@ -1176,7 +1176,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Skill troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
     ],
     instructions: [
       'doctor.mjs performs automated connectivity checks for MCP and native host.',
@@ -1262,7 +1262,7 @@ const METADATA = {
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
       { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
       { name: 'TROUBLESHOOTING.md', desc: 'Troubleshooting documentation' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'English redirect stub kept for inbound links to the retired Chinese guide' }
+      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
     ],
     instructions: ['Mirrored from skill/config.'],
     testing: 'Verify sync script output.',
@@ -1306,7 +1306,7 @@ const METADATA = {
     purpose: 'Root directory for integration and end-to-end testing suites, mock servers, stress tests, and automated browser verification harnesses.',
     keyFiles: [
       { name: 'BROWSERPAW_MANUAL.md', desc: 'Manual testing checklist and verification guide' },
-      { name: 'BROWSERPAW_MANUAL.zh-CN.md', desc: 'Chinese manual testing checklist and verification guide' },
+      { name: 'BROWSERPAW_MANUAL.zh-CN.md', desc: 'Simplified Chinese translation of the integration and control manual' },
       { name: 'GAUNTLET_PLAYBOOK.md', desc: 'Adversarial edge-case testing gauntlet instructions' },
       { name: 'boost-features.test.ts', desc: 'Integration test suite for boost features and optimizations' },
       { name: 'boost-phase1-phase4.test.ts', desc: 'Phased regression verification tests' },

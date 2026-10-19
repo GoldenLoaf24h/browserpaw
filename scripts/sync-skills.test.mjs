@@ -116,9 +116,9 @@ try {
     ),
     'utf-8',
   );
-  // zh-CN mirrors carry the English canonical banner only (redirect-stub policy)
-  assert.ok(!m2TroubleZh.includes('工具可用性说明'));
-  assert.ok(m2TroubleZh.includes('not available in the Hermes plugin; use standard MCP'));
+  // zh-CN mirrors are translated documents, so the notice must match their language.
+  assert.ok(m2TroubleZh.includes('工具可用性说明'));
+  assert.ok(!m2TroubleZh.includes('not available in the Hermes plugin; use standard MCP'));
 
   // JSON files must NEVER receive markdown banners and must remain valid JSON
   const m2Json = fs.readFileSync(
