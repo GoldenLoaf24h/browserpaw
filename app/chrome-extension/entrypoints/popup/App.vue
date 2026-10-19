@@ -1151,7 +1151,6 @@ onUnmounted(() => {
               </Transition>
             </button>
           </div>
-          <p class="remote-vision-notice">{{ visionModelHint }}</p>
           <p v-if="remoteConfigError" class="remote-config-error" role="alert">
             {{ remoteConfigError }}
           </p>
@@ -1261,13 +1260,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.remote-vision-notice {
-  margin: 0;
-  font-size: 10px;
-  line-height: 1.4;
-  color: #6b7280;
-}
-
 .remote-config-error {
   margin: 0;
   font-size: 10px;
