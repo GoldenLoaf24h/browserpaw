@@ -264,11 +264,20 @@ function replaceTree(src, dest) {
     throw new Error(`Refusing to clear ${dest}: it is a symlink or junction`);
   }
   const realDest = destStat ? realpathSync(dest) : resolve(dest);
-  const relFromDest = relative(realDest, resolve(src));
+  const realSrc = resolve(src);
+  const relFromDest = relative(realDest, realSrc);
   const srcInsideDest =
     relFromDest === '' || (!relFromDest.startsWith('..') && !isAbsolute(relFromDest));
   if (srcInsideDest) {
     throw new Error(`Refusing to clear ${dest}: it contains the extension build output`);
+  }
+  // The reverse nesting corrupts the build the same way: clearing a descendant of
+  // the build deletes its files, and the copy then fails with ERR_FS_CP_EINVAL.
+  const relFromSrc = relative(realSrc, realDest);
+  const destInsideSrc =
+    relFromSrc === '' || (!relFromSrc.startsWith('..') && !isAbsolute(relFromSrc));
+  if (destInsideSrc) {
+    throw new Error(`Refusing to clear ${dest}: it is inside the extension build output`);
   }
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(dest)) {

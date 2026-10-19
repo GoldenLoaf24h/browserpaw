@@ -199,6 +199,29 @@ describe('doctor.mjs repair behaviour', () => {
     assert.ok(fs.lstatSync(standalone).isSymbolicLink(), 'the link itself must survive');
   });
 
+  it('--fix refuses a standalone directory nested inside the build tree without deleting it', () => {
+    // A descendant of the build: clearing it would delete build files, and the copy
+    // then fails with ERR_FS_CP_EINVAL, corrupting the extension build.
+    const buildDir = path.join(sandbox.root, 'app/chrome-extension/.output/chrome-mv3');
+    const standalone = path.join(buildDir, 'nested-load-dir');
+    write(path.join(standalone, 'background.js'), 'build-bg');
+
+    const proc = runDoctor(sandbox, ['--fix'], { BROWSERPAW_STANDALONE_DIRS: standalone });
+    const output = (proc.stdout || '') + (proc.stderr || '');
+
+    assert.match(output, /inside the extension build output/, output);
+    assert.strictEqual(
+      fs.readFileSync(path.join(standalone, 'background.js'), 'utf8'),
+      'build-bg',
+      'nothing inside the build may be deleted',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(buildDir, 'manifest.json'), 'utf8'),
+      '{"version":"4.0.0"}',
+      'the build must survive intact',
+    );
+  });
+
   it('--fix removes files that no longer exist in the current build', () => {
     const standalone = path.join(sandbox.root, 'load-dir');
     write(path.join(standalone, 'background.js'), 'build-bg');

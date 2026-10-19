@@ -5,8 +5,8 @@ import {
 } from '../entrypoints/background/tools/browser/javascript';
 
 describe('In-Page Agent Helpers & Workflows', () => {
-  const evaluateInPage = async (code: string) => {
-    const wrapped = wrapUserCode(code);
+  const evaluateInPage = async (code: string, refAttr = '') => {
+    const wrapped = wrapUserCode(code, refAttr);
     // wrapUserCode returns `(async () => { ... })()`.
     // In browser/CDP Runtime.evaluate with awaitPromise: true, this evaluates to the promise result.
     // In Node/vitest, evaluating `eval(wrapped)` evaluates and returns the Promise.
@@ -283,7 +283,6 @@ describe('In-Page Agent Helpers & Workflows', () => {
 
     afterEach(() => {
       for (const key of hidden) delete pageGlobals[key];
-      document.documentElement.removeAttribute('data-browserpaw-ref-attr');
     });
 
     it('cannot read the isolated fast action map directly', async () => {
@@ -315,7 +314,7 @@ describe('In-Page Agent Helpers & Workflows', () => {
       expect(result).toEqual({ fastVisible: 'undefined', mapVisible: 'undefined', resolved: null });
     });
 
-    it('resolves refs through the DOM bridge the background stamps for the evaluation', async () => {
+    it('resolves refs through the DOM stamp the evaluation is bound to', async () => {
       document.body.innerHTML = `
         <button id="fast-target">Fast</button>
         <button id="other-target">Other</button>
@@ -323,16 +322,18 @@ describe('In-Page Agent Helpers & Workflows', () => {
       const attr = 'data-browserpaw-ref-ab12cd34';
       document.getElementById('fast-target')!.setAttribute(attr, '1');
       document.getElementById('other-target')!.setAttribute(attr, '2');
-      document.documentElement.setAttribute('data-browserpaw-ref-attr', attr);
 
-      const result = await evaluateInPage(`
+      const result = await evaluateInPage(
+        `
         return {
           numeric: mcp.get(1)?.id,
           ref: mcp.get('ref_2')?.id,
           stringIndex: mcp.get('1')?.id,
           missing: mcp.get(3)?.id ?? null,
         };
-      `);
+      `,
+        attr,
+      );
 
       expect(result).toEqual({
         numeric: 'fast-target',
@@ -342,15 +343,24 @@ describe('In-Page Agent Helpers & Workflows', () => {
       });
     });
 
-    it('ignores the bridge once its pointer is gone, falling back to the standard map', async () => {
+    it('ignores another evaluation’s stamps and falls back to the standard map', async () => {
       document.body.innerHTML = `
         <button id="fast-target" data-browserpaw-ref-ab12cd34="1">Fast</button>
         <button id="standard-target" data-mcp-idx="1">Standard</button>
       `;
-      // The stamp survived but the pointer did not: no bridge is active.
-      const result = await evaluateInPage(`return mcp.get(1)?.id;`);
+      // This evaluation is bound to a different attribute, so the foreign stamp is
+      // invisible and the standard index map answers instead.
+      const result = await evaluateInPage(`return mcp.get(1)?.id;`, 'data-browserpaw-ref-ffffffff');
 
       expect(result).toBe('standard-target');
+    });
+
+    it('does not resolve through a stamp when the evaluation has no bridge', async () => {
+      document.body.innerHTML = `<button id="fast-target" data-browserpaw-ref-ab12cd34="1">Fast</button>`;
+
+      const result = await evaluateInPage(`return mcp.get(1)?.id ?? null;`);
+
+      expect(result).toBeNull();
     });
   });
 
