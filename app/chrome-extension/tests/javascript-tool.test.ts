@@ -528,4 +528,108 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
     const payload = JSON.parse((res.content[0] as { text: string }).text);
     expect(payload.engine).toBe('scripting');
   });
+
+  it('keeps a concurrent bridge alive when an earlier evaluation cleans up', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    // Two evaluations interleave: the first finishes and cleans up while the second
+    // is still in flight, and the second's ref must keep resolving afterwards.
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const secondGate = new Promise<void>((resolve) => (releaseSecond = resolve));
+    let stampCount = 0;
+    let evalCount = 0;
+    const observed: Array<string | null> = [];
+    // executeViaScripting's injected function is (userCode, inpageHelpers); the
+    // bridge stamp is (attr, pointer, ids) and cleanup is (attr, pointer).
+    const isEvaluation = (opts: { args?: unknown[] }) =>
+      opts.args?.length === 2 && !String(opts.args[0]).startsWith('data-browserpaw-ref-');
+    executeScript.mockImplementation(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        if (opts.args?.length === 3) {
+          stampCount++;
+          return [{ result: await opts.func(...opts.args) }];
+        }
+        if (!isEvaluation(opts)) {
+          return [{ result: await opts.func(...(opts.args ?? [])) }];
+        }
+        const call = ++evalCount;
+        await (call === 1 ? firstGate : secondGate);
+        observed.push(
+          await inPageWorld(() => (0, eval)(wrapUserCode('return mcp.get(1)?.id ?? null;'))),
+        );
+        // The injected function must return its own { ok, value } envelope.
+        return [{ result: await opts.func(...(opts.args ?? [])) }];
+      },
+    );
+
+    const first = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await vi.waitFor(() => expect(stampCount).toBe(1));
+    const second = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await vi.waitFor(() => expect(stampCount).toBe(2));
+
+    releaseFirst();
+    const firstRes = await first;
+    // The first cleanup dropped only its own entry; the second bridge still stands.
+    expect(document.documentElement.hasAttribute('data-browserpaw-ref-attr')).toBe(true);
+    releaseSecond();
+    const secondRes = await second;
+
+    expect(firstRes.isError).toBe(false);
+    expect(secondRes.isError).toBe(false);
+    expect(observed).toEqual(['fast-target', 'fast-target']);
+    // Both cleanups ran, leaving no extension-owned attribute behind.
+    expect(document.documentElement.hasAttribute('data-browserpaw-ref-attr')).toBe(false);
+    expect(document.getElementById('fast-target')!.attributes).toHaveLength(1);
+  });
+
+  it.each(['open', 'closed'] as const)('removes stamps inside %s shadow roots', async (mode) => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode });
+    const inner = document.createElement('button');
+    inner.id = 'shadow-target';
+    shadow.appendChild(inner);
+    document.body.appendChild(host);
+    (globalThis as Record<string | symbol, unknown>)[indexMapSymbol] = new Map([[2, inner]]);
+
+    await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(2)?.id;' });
+
+    // Cleanup removes the exact elements the stamping pass marked, so a closed
+    // root (unreachable by any page-level query) is cleaned too.
+    expect(inner.attributes).toHaveLength(1);
+    expect(inner.id).toBe('shadow-target');
+    expect(document.documentElement.hasAttribute('data-browserpaw-ref-attr')).toBe(false);
+  });
+
+  it('bounds a blocked renderer instead of hanging before the tool timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+        new Error('Another debugger is already attached to this target'),
+      );
+      // The bridge injection never settles, as with an open native dialog.
+      executeScript.mockImplementation(() => new Promise(() => {}));
+
+      const pending = javascriptTool.execute({
+        tabId: 42,
+        code: 'return mcp.get(1);',
+        timeoutMs: 500,
+      });
+      // Bridge deadline (500) + bounded cleanup (1000) + scripting deadline (500).
+      await vi.advanceTimersByTimeAsync(3000);
+
+      const res = await pending;
+      // The bridge gave up at the tool deadline instead of hanging the call before
+      // its own timeout could apply; the evaluation path reports the timeout.
+      expect(res.isError).toBe(true);
+      expect((res.content[0] as { text: string }).text).toContain('timed out');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

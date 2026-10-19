@@ -34,6 +34,8 @@ const REF_POINTER_ATTR = 'data-browserpaw-ref-attr';
 // Upper bound on the elements one evaluation may stamp; fast snapshots cap at 250
 // actions and a standard index tree beyond a few hundred is not a ref target.
 const REF_BRIDGE_MAX = 500;
+// Best-effort removal must not extend a call whose evaluation already finished.
+const CLEANUP_TIMEOUT_MS = 1_000;
 
 export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   const getMap = () => (
@@ -48,21 +50,26 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
 
   // Snapshot indexes live in the extension's isolated world, which page-world code
   // cannot read. While an evaluation runs, the background stamps the elements behind
-  // the indexes the code mentions and points documentElement at that attribute, so a
-  // numeric ref resolves through the DOM instead of the isolated caches.
+  // the indexes the code mentions and lists the stamps on documentElement, so a
+  // numeric ref resolves through the DOM instead of the isolated caches. Overlapping
+  // evaluations each add their own stamp, hence the list.
   const fromRefAttr = (id) => {
-    const attr =
+    const raw =
       typeof document !== 'undefined' && document.documentElement
         ? document.documentElement.getAttribute('data-browserpaw-ref-attr')
         : null;
-    if (!attr) return undefined;
-    let el = null;
-    try {
-      el = document.querySelector('[' + attr + '="' + id + '"]');
-    } catch {
-      return undefined;
+    if (!raw) return undefined;
+    for (const attr of raw.split(',')) {
+      if (!attr) continue;
+      let el = null;
+      try {
+        el = document.querySelector('[' + attr + '="' + id + '"]');
+      } catch {
+        continue;
+      }
+      if (el && el.isConnected !== false) return el;
     }
-    return el && el.isConnected !== false ? el : undefined;
+    return undefined;
   };
 
   // Robust :has-text evaluator supporting:
@@ -1248,13 +1255,20 @@ async function executeViaScripting(
  * runs in the page's MAIN world (CDP Runtime.evaluate and the scripting fallback
  * both target it), which cannot read them. Before evaluating, stamp the elements
  * behind the numeric literals in the code with a per-evaluation random attribute
- * and point documentElement at it; the helper resolves refs through that
- * attribute. Returns the cleanup that removes both, or a no-op.
+ * and list it on documentElement; the helper resolves refs through that list.
+ * Returns the cleanup that removes both, or a no-op.
  *
  * Only literals are bridged: a ref computed at runtime from a prior tool result
  * never appears in the code, and no DOM bridge can predict it.
+ *
+ * Both injections are bounded: a renderer blocked by a native dialog never acks,
+ * and an unbounded await would hang the call before its own timeout applies.
  */
-async function bridgeSnapshotIndexes(tabId: number, code: string): Promise<() => Promise<void>> {
+async function bridgeSnapshotIndexes(
+  tabId: number,
+  code: string,
+  timeoutMs: number,
+): Promise<() => Promise<void>> {
   const indexes = [...new Set((code.match(/\d+/g) ?? []).map((raw) => Number.parseInt(raw, 10)))]
     .filter((n) => n >= 1)
     .slice(0, REF_BRIDGE_MAX);
@@ -1265,38 +1279,77 @@ async function bridgeSnapshotIndexes(tabId: number, code: string): Promise<() =>
     // Cleanup runs in a finally path: a closed or restricted tab must not turn the
     // tool's real result into a cleanup error.
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: (a: string, pointer: string) => {
-          for (const el of document.querySelectorAll('[' + a + ']')) el.removeAttribute(a);
-          document.documentElement.removeAttribute(pointer);
-        },
-        args: [attr, REF_POINTER_ATTR],
-      });
+      await withTimeout(
+        chrome.scripting.executeScript({
+          target: { tabId },
+          func: (a: string, pointer: string) => {
+            // The stamping pass keeps the exact elements it marked (some may sit in
+            // closed shadow roots a query could never reach); remove those. A page
+            // reload or extension reload between the passes loses that list, so fall
+            // back to the light DOM.
+            const g = globalThis as any;
+            const stamps: Map<string, Element[]> | undefined = g.__browserpawRefStamps;
+            const marked = stamps?.get(a);
+            if (marked && stamps) {
+              for (const el of marked) el.removeAttribute(a);
+              stamps.delete(a);
+            } else {
+              for (const el of document.querySelectorAll('[' + a + ']')) el.removeAttribute(a);
+            }
+            // Only drop this evaluation's entry; a concurrent one keeps its own.
+            const pointerEl = document.documentElement;
+            const remaining = (pointerEl.getAttribute(pointer) || '')
+              .split(',')
+              .filter((entry) => entry && entry !== a);
+            if (remaining.length) pointerEl.setAttribute(pointer, remaining.join(','));
+            else pointerEl.removeAttribute(pointer);
+          },
+          args: [attr, REF_POINTER_ATTR],
+        }),
+        CLEANUP_TIMEOUT_MS,
+      );
     } catch {}
   };
 
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (a: string, pointer: string, ids: number[]) => {
-        // Isolated world: the snapshot maps are reachable here, not from the page.
-        const g = globalThis as any;
-        const fast = g.__pawFast || g.__clawFast;
-        const isFast = g[Symbol.for('__browser_use_last_snapshot_type__')] === 'fast';
-        const fastMap = fast && fast.actionElements;
-        const isoMap = g[Symbol.for('__browser_use_isolated_index_map__')];
-        const deref = (e: any) => (e && typeof e.deref === 'function' ? e.deref() : e);
-        for (const id of ids) {
-          const el = (isFast ? deref(fastMap?.get(id)) : null) || deref(isoMap?.get(id));
-          if (el instanceof Element && el.isConnected) el.setAttribute(a, String(id));
-        }
-        document.documentElement.setAttribute(pointer, a);
-      },
-      args: [attr, REF_POINTER_ATTR, indexes],
-    });
+    await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        func: (a: string, pointer: string, ids: number[]) => {
+          // Isolated world: the snapshot maps are reachable here, not from the page.
+          const g = globalThis as any;
+          const fast = g.__pawFast || g.__clawFast;
+          const isFast = g[Symbol.for('__browser_use_last_snapshot_type__')] === 'fast';
+          const fastMap = fast && fast.actionElements;
+          const isoMap = g[Symbol.for('__browser_use_isolated_index_map__')];
+          const deref = (e: any) => (e && typeof e.deref === 'function' ? e.deref() : e);
+          const marked: Element[] = [];
+          for (const id of ids) {
+            const el = (isFast ? deref(fastMap?.get(id)) : null) || deref(isoMap?.get(id));
+            if (el instanceof Element && el.isConnected) {
+              el.setAttribute(a, String(id));
+              marked.push(el);
+            }
+          }
+          // An empty bridge would make the helper search every open shadow root for
+          // nothing; skip the pointer when no element was reachable.
+          if (marked.length > 0) {
+            // Keep the exact elements for cleanup: shadow roots (closed ones
+            // especially) are not reachable from the page-level query.
+            g.__browserpawRefStamps = g.__browserpawRefStamps || new Map();
+            g.__browserpawRefStamps.set(a, marked);
+            const prev = document.documentElement.getAttribute(pointer);
+            document.documentElement.setAttribute(pointer, prev ? prev + ',' + a : a);
+          }
+          return marked.length;
+        },
+        args: [attr, REF_POINTER_ATTR, indexes],
+      }),
+      timeoutMs,
+    );
   } catch {
-    // Restricted or closing tab: let the evaluation path report the real error.
+    // Blocked renderer, restricted or closing tab: no bridge, and the evaluation
+    // path reports its own timeout or error.
     await cleanup();
     return async () => {};
   }
@@ -1344,7 +1397,7 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
 
       // The helper runs in the page world, so snapshot refs need a DOM bridge for
       // the duration of the evaluation; it is removed on every exit path.
-      const clearRefBridge = await bridgeSnapshotIndexes(tabId, code);
+      const clearRefBridge = await bridgeSnapshotIndexes(tabId, code, options.timeoutMs);
       try {
         // Try CDP execution first
         const cdpResult = await executeViaCdp(tabId, code, options, args.contextId);
