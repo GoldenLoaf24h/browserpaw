@@ -5,7 +5,7 @@
   <p>
     <a href="./docs/MAP.md">项目地图</a> ·
     <a href="./docs/TOOLS.md">工具参考（50 个）</a> ·
-    <a href="./AGENT_CONFIG_GUIDE.md">客户端配置</a> ·
+    <a href="./AGENT_CONFIG_GUIDE.zh-CN.md">客户端配置</a> ·
     <a href="./README.md">English</a> ·
     <a href="./LICENSE">AGPL-3.0 许可</a> ·
     <a href="https://github.com/GoldenLoaf24h/browserpaw/releases">版本发布</a>
@@ -236,9 +236,9 @@ Chrome MV3 扩展（Service Worker）
 - [项目地图](./docs/MAP.md) —— 导航枢纽与阅读路径。
 - [工具参考](./docs/TOOLS.md) —— 全部 50 个工具的 schema。
 - [安装与上手](./INSTALL.md) —— 逐步配置，含 Jev key。
-- [Agent 集成](./AGENT_CONFIG_GUIDE.md) —— MCP 客户端配置。
+- [Agent 集成](./AGENT_CONFIG_GUIDE.zh-CN.md) —— MCP 客户端配置。
 - [架构](./docs/ARCHITECTURE.md) —— 设计与决策。
-- [故障排查](./docs/TROUBLESHOOTING.md) —— 连接与执行问题。
+- [故障排查](./docs/TROUBLESHOOTING.zh-CN.md) —— 连接与执行问题。
 
 ---
 
