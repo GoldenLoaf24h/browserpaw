@@ -15,7 +15,8 @@ const targets = [
     isHermes: true,
   },
   { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw') },
-  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'), isPlugin: true },
+  // The DSH bridge exposes the literal `chrome_*` names; do NOT set isPlugin here.
+  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw') },
 ];
 
 const SCOPE_BANNER_EN =

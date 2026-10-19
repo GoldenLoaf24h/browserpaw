@@ -9,7 +9,7 @@ When automating repetitive or complex multi-step workflows on specific sites (e.
 By referencing or creating reusable playbooks here, agents and users can:
 
 1. **Save 80%+ Tokens**: Avoid dumping entire DOM trees when critical selectors and interaction sequences are already known.
-2. **Execute Instantly**: Directly run high-speed pipeline batches via `browserpaw_batch_actions`.
+2. **Execute Instantly**: Directly run high-speed pipeline batches via `chrome_batch_actions`.
 3. **Bypass Known Gotchas**: Record site-specific modal dismissals, hidden inputs, or timing requirements.
 
 ---
@@ -29,7 +29,7 @@ When creating a new site recipe (e.g. `recipes/my-service.md`), follow this stan
 - Search Input: `#search-box` or label "Search"
 - Submit Button: `button[type="submit"]` or `[asset N]`
 
-### 2. Fast-Path Pipeline (`browserpaw_batch_actions`)
+### 2. Fast-Path Pipeline (`chrome_batch_actions`)
 
 ```json
 {
@@ -47,6 +47,6 @@ When creating a new site recipe (e.g. `recipes/my-service.md`), follow this stan
 ### 3. Site Gotchas & Workarounds
 
 - _Gotcha_: Has a full-screen cookie consent modal on first visit.
-  - _Fix_: Call `browserpaw_dismiss_overlay` (or pass `dismissOverlays: true` to `browserpaw_navigate` / `browserpaw_read_dom`) — no DOM dump needed.
+  - _Fix_: Call `chrome_dismiss_overlay` (or pass `dismissOverlays: true` to `chrome_navigate` / `chrome_read_dom`) — no DOM dump needed.
 - _Gotcha_: Search input is debounced by 300ms.
   - _Fix_: Settle automatically waits for network quiescence.

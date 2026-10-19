@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,13 +10,31 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const pluginPath = resolve(repoRoot, 'plugins/browserpaw-dsh/index.js');
 const pluginSource = readFileSync(pluginPath, 'utf8');
+const pluginDir = resolve(repoRoot, 'plugins/browserpaw-dsh');
+const manifestPath = join(pluginDir, 'package.json');
+const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+// The DSH runtime this package was host-validated against (plugins/browserpaw-dsh/README.md).
+const TESTED_DSH_VERSION = '0.2.1-rc.1';
+
+// Stands in for the in-box client the harness loader resolves the bare specifier to.
+const mcpClientNamespace = { name: 'mcp-client', inject: ['tools'], apply() {} };
 
 function makeContext({ pluginGate } = {}) {
   const forks = [];
   const tools = [];
   const skills = new Map();
   const cleanups = [];
+  const loaderImports = [];
   const ctx = {
+    loader: {
+      // The harness mounts entry rows through its own resolver, and that resolver is what
+      // reaches the in-box client from a linked plugin; the double mirrors the same seam.
+      async import(specifier) {
+        loaderImports.push(specifier);
+        return mcpClientNamespace;
+      },
+    },
     skills: {
       register(skill) {
         if (!skill || typeof skill.name !== 'string' || !skill.description) {
@@ -79,17 +97,17 @@ function makeContext({ pluginGate } = {}) {
       return cleanup;
     },
   };
-  return { ctx, forks, tools, cleanups };
+  return { ctx, forks, tools, skills, cleanups, loaderImports };
 }
 
 async function bootSession({ pluginGate } = {}) {
   // Cache-bust so every case starts from a clean module instance.
   const mod = await import(`${pathToFileURL(pluginPath).href}?case=${Math.random()}`);
-  const { ctx, forks, tools, skills, cleanups } = makeContext({ pluginGate });
+  const { ctx, forks, tools, skills, cleanups, loaderImports } = makeContext({ pluginGate });
   await mod.apply(ctx);
   const tool = tools.find((entry) => entry.name === 'browserpaw_session');
   assert.ok(tool, 'browserpaw_session tool should be registered');
-  return { tool, forks, ctx, skills, tools, cleanups };
+  return { tool, forks, ctx, skills, tools, cleanups, loaderImports };
 }
 
 async function withEnv(overrides, fn) {
@@ -127,6 +145,34 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
     );
   });
 
+  it('B-05: the in-box client is resolved through the loader, never a static import', async () => {
+    // A top-level static import of the in-box client cannot resolve from a linked plugin
+    // outside the harness image, and cordis rejects a bare specifier string, so the
+    // loader seam is the only shape that works in both environments.
+    assert.doesNotMatch(
+      pluginSource,
+      /^\s*import\s+[^\n]*['"]@deepseek-ai\/dsh-mcp-client['"]/m,
+      'the in-box client must not be statically imported',
+    );
+
+    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token' }, async () => {
+      const { tool, forks, loaderImports } = await bootSession();
+      assert.deepEqual(loaderImports, [], 'boot must not resolve the client before open()');
+
+      await tool.execute({ action: 'open' });
+      assert.deepEqual(
+        loaderImports,
+        ['@deepseek-ai/dsh-mcp-client'],
+        'open() must resolve the in-box client through the loader',
+      );
+      assert.equal(forks.length, 1);
+      assert.equal(forks[0].name, mcpClientNamespace, 'the loader result is what cordis accepts');
+
+      await tool.execute({ action: 'close' });
+      assert.deepEqual(loaderImports, ['@deepseek-ai/dsh-mcp-client'], 'close must not re-resolve');
+    });
+  });
+
   it('B-05: open() honours CHROME_MCP_PORT', async () => {
     await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token', CHROME_MCP_PORT: '45678' }, async () => {
       const { tool, forks } = await bootSession();
@@ -134,6 +180,13 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
       assert.equal(forks.length, 1);
       assert.equal(forks[0].options.url, 'http://127.0.0.1:45678/mcp');
       assert.equal(forks[0].options.headers['x-mcp-token'], 'test-token');
+      // The client swallows a failed first connection by default and retries in the
+      // background, which would let open() report success with no tool registered.
+      assert.equal(
+        forks[0].options.failOnStartupError,
+        true,
+        'open() must surface a failed first connection instead of retrying silently',
+      );
     });
   });
 
@@ -388,5 +441,156 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
     assert.equal(defaultStatus.ok, true);
     assert.equal(defaultStatus.action, 'status');
     assert.equal(defaultStatus.active, false);
+  });
+});
+
+// `semver` is not resolvable from the repo root — it exists only in the pnpm virtual store, and
+// `plugins/*` is not a workspace package — so the engine range is evaluated inline instead of by
+// adding a dependency to a root script test.
+function parseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
+  assert.ok(match, `unparsable version: ${version}`);
+  return {
+    parts: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4] ?? null,
+  };
+}
+
+function compareVersions(a, b) {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  for (let i = 0; i < 3; i += 1) {
+    if (left.parts[i] !== right.parts[i]) return left.parts[i] < right.parts[i] ? -1 : 1;
+  }
+  if (left.prerelease === right.prerelease) return 0;
+  if (left.prerelease === null) return 1; // a release outranks its own prereleases
+  if (right.prerelease === null) return -1;
+  const l = left.prerelease.split('.');
+  const r = right.prerelease.split('.');
+  for (let i = 0; i < Math.max(l.length, r.length); i += 1) {
+    if (l[i] === undefined) return -1;
+    if (r[i] === undefined) return 1;
+    if (l[i] === r[i]) continue;
+    const lNumeric = /^\d+$/.test(l[i]);
+    const rNumeric = /^\d+$/.test(r[i]);
+    if (lNumeric && rNumeric) return Number(l[i]) < Number(r[i]) ? -1 : 1;
+    if (lNumeric !== rNumeric) return lNumeric ? -1 : 1; // numeric identifiers sort first
+    return l[i] < r[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+// Prerelease versions participate in range matching, so `includePrerelease` is the mode that
+// decides this package's declared `>=lo <hi` range.
+function satisfiesEngineRange(range, version) {
+  const match = /^>=(\S+)\s+<(\S+)$/.exec(range);
+  assert.ok(match, `unsupported engines.dsh range shape: ${range}`);
+  return compareVersions(version, match[1]) >= 0 && compareVersions(version, match[2]) < 0;
+}
+
+describe('dsh-browserpaw manifest and loader compliance', () => {
+  it('declares a bundle patch that resolves to a real file', () => {
+    // A package without `dsh.bundle` is reconciled as a plain dependency: the patch never
+    // applies, `apply()` never runs, and neither the skill nor the session tool exists.
+    const patch = manifest.dsh?.bundle?.patch;
+    assert.equal(typeof patch, 'string', 'dsh.bundle.patch must be a string');
+    assert.notEqual(patch.trim(), '', 'dsh.bundle.patch must not be empty');
+    const patchPath = resolve(pluginDir, patch);
+    assert.ok(existsSync(patchPath), `dsh.bundle.patch must point at a real file: ${patchPath}`);
+  });
+
+  it('declares manifestVersion 1', () => {
+    assert.equal(manifest.dsh?.manifestVersion, 1, 'dsh.manifestVersion must be 1');
+  });
+
+  it(`engines.dsh admits the host-validated runtime ${TESTED_DSH_VERSION} and rejects 0.3.0`, () => {
+    const range = manifest.engines?.dsh;
+    assert.equal(typeof range, 'string', 'engines.dsh must be a string');
+    assert.notEqual(range.trim(), '', 'engines.dsh must not be empty');
+
+    // An open-ended upper bound would claim compatibility with every future minor, which the
+    // host validation never established.
+    assert.ok(
+      satisfiesEngineRange(range, TESTED_DSH_VERSION),
+      `engines.dsh "${range}" must admit ${TESTED_DSH_VERSION}`,
+    );
+    assert.ok(!satisfiesEngineRange(range, '0.3.0'), `engines.dsh "${range}" must not claim 0.3.0`);
+  });
+
+  it('never hands ctx.plugin a bare specifier string', () => {
+    // Cordis rejects a string plugin (`expect function or object with an "apply" method`), so
+    // the loader-resolved namespace is the only shape that can be mounted.
+    assert.doesNotMatch(
+      pluginSource,
+      /ctx\.plugin\(\s*['"][^'"]+['"]/,
+      'ctx.plugin must receive the loader-resolved namespace, not a specifier string',
+    );
+  });
+
+  it('registers the skill body verbatim behind the generated tool-naming note', async () => {
+    const { ctx } = await bootSession();
+    const skill = ctx.skills.get('browserpaw');
+    assert.ok(skill, 'browserpaw skill must be registered');
+
+    // The registered content must be the on-disk skill plus a prepended note: the note is
+    // generated at apply() time because the skill directory is regenerated by sync-skills.mjs.
+    const skillBytes = readFileSync(join(pluginDir, 'skills/browserpaw/SKILL.md'), 'utf8');
+    const separator = '\n\n';
+    assert.ok(
+      skill.content.endsWith(`${separator}${skillBytes}`),
+      'the skill file bytes must be registered verbatim after the note',
+    );
+
+    const note = skill.content.slice(
+      0,
+      skill.content.length - skillBytes.length - separator.length,
+    );
+    assert.notEqual(note.trim(), '', 'a tool-naming note must be prepended');
+    assert.match(note, /mcp__browserpaw__/, 'the note must name the real server prefix');
+    assert.doesNotMatch(note, /<serverName>/, 'the note must interpolate the server name');
+    // The note must not offer `chrome_tool_docs` as a way to widen the tool set. That path is
+    // dead in DSH: the native host never declares the `tools.listChanged` capability, so the
+    // in-box client installs no list-changed handler and its tool table never refreshes after
+    // an `activateForSession` call. Only a host restart with a wider CHROME_MCP_TOOL_PROFILE
+    // changes what is callable, and the plugin cannot reach that from its own process.
+    assert.doesNotMatch(
+      note,
+      /activateForSession/,
+      'the note must not advertise a tool-unlock path that the host never observes',
+    );
+  });
+
+  it('marks the in-box client peer optional so no installer fetches a second copy', () => {
+    // The peer declaration documents the client this package was built against, and the loader
+    // resolves that client out of the harness image. An installer must therefore never resolve
+    // it a second time into the profile: a duplicate in-box `@deepseek-ai/*` package registers
+    // the same Cordis symbols twice and breaks every tool call (Discussion #8287).
+    //
+    // pnpm profiles already run with `autoInstallPeers: false`, but npm does not: measured, a
+    // required peer makes `npm install` pull 39 packages including
+    // `@deepseek-ai/dsh-mcp-client`. Marking the peer optional is what stops that, while the
+    // declared range stays readable as documentation.
+    assert.equal(
+      manifest.peerDependenciesMeta?.['@deepseek-ai/dsh-mcp-client']?.optional,
+      true,
+      'the in-box client peer must be optional so npm does not install a duplicate',
+    );
+  });
+
+  it('ships a publishable file set without internal agent notes', () => {
+    // `files` is what npm publishes; anything outside it is unreachable to a user who installs
+    // the package, so the loader patch, the entry module and the skill tree must all be listed.
+    const files = manifest.files;
+    assert.ok(Array.isArray(files), 'package.json must pin an explicit files list');
+    for (const entry of ['index.js', 'cordis.patch.yml', 'skills', 'LICENSE']) {
+      assert.ok(files.includes(entry), `files must include ${entry}`);
+    }
+    // AGENTS.md files are notes for agents working in the repo, not user documentation. The
+    // skill tree is published wholesale, so the exclusion has to be a negation pattern.
+    assert.ok(
+      files.includes('!**/AGENTS.md'),
+      'files must exclude the internal AGENTS.md notes from the published skill tree',
+    );
+    assert.ok(existsSync(join(pluginDir, 'LICENSE')), 'the published package needs its LICENSE');
   });
 });

@@ -1,4 +1,4 @@
-# Dual-Brain Semantic Micro-Loop Reference (`browserpaw_act_toward_goal`)
+# Dual-Brain Semantic Micro-Loop Reference (`chrome_act_toward_goal`)
 
 This reference documents BrowserPaw's Fast/System 1 local autonomous loop powered by TypeSafe Jev with built-in heuristic fallback.
 
@@ -11,7 +11,7 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
 │  High-level goal decomposition, multi-page strategy,    │
 │  reasoning, creative text generation, macro supervision │
 └────────────────────────────┬────────────────────────────┘
-                             │  browserpaw_act_toward_goal { goal: "..." }
+                             │  chrome_act_toward_goal { goal: "..." }
                              ▼
 ┌─ System 1: Semantic Micro-Loop (Local Native Server) ──┐
 │  Perceive compact DOM → Decide via Jev / Heuristic     │
@@ -61,7 +61,7 @@ This reference documents BrowserPaw's Fast/System 1 local autonomous loop powere
 
 1. **Tier 1 (Off)**:
    - Jev semantic execution is disabled by the user in the extension popup.
-   - `browserpaw_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions.
+   - `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions.
    - Direct execution attempts are intercepted with an explicit user authorization requirement.
 
 2. **Tier 2 (Local)**:
@@ -137,25 +137,25 @@ The micro-loop evaluates guard conditions in strict priority order:
 
 ## 6. Macro Supervisor Recovery Protocol
 
-When `browserpaw_act_toward_goal` yields with `status === "paused"`, `"escalate"`, `"stuck"`, or `"max_steps"`, the Macro Planner (System 2) resumes control using the following protocol:
+When `chrome_act_toward_goal` yields with `status === "paused"`, `"escalate"`, `"stuck"`, or `"max_steps"`, the Macro Planner (System 2) resumes control using the following protocol:
 
 1. **Handling Safety Breakpoint Pauses (`status === "paused"`)**:
    - Inspect `pausedBeforeAction` (e.g. `{ action: "click", target: { index: 12, text: "Post" } }`) and review draft content in `currentElements`.
-   - If draft/form state is verified and ready to commit, dispatch `browserpaw_interact_index { index: pausedBeforeAction.target.index }` (or prompt human user for final approval).
+   - If draft/form state is verified and ready to commit, dispatch `chrome_interact_index { index: pausedBeforeAction.target.index }` (or prompt human user for final approval).
    - Zero DOM re-read required: target indices are fresh and guaranteed valid.
 
 2. **Zero-Read Element Re-Use**:
    - The escalation response includes `currentElements`, an array of 1-based indexed element strings (e.g. `"[4] button: 'Confirm Purchase'"`).
-   - The Macro Planner can select the target index directly from this array without executing an extra `browserpaw_read_dom` call.
+   - The Macro Planner can select the target index directly from this array without executing an extra `chrome_read_dom` call.
 
 3. **Handling Sensitive / Destructive Actions**:
-   - If escalated due to `destructive >= 0.50` or protected keywords (`pay`, `delete`, `purchase`, `buy`, `submit`, `confirm`), the Macro Planner evaluates user intent and authorization before dispatching `browserpaw_interact_index { index: N }`.
+   - If escalated due to `destructive >= 0.50` or protected keywords (`pay`, `delete`, `purchase`, `buy`, `submit`, `confirm`), the Macro Planner evaluates user intent and authorization before dispatching `chrome_interact_index { index: N }`.
 
 4. **Fallback to Tier 0 Primitives**:
-   - For single clicks or selections: `browserpaw_interact_index { index: N, includeDelta: true }`.
-   - For single text entries: `browserpaw_fill_index { index: N, text: "...", pressEnter: true }`.
-   - For media injection: `browserpaw_insert_media { index: N, filePath: "..." }`.
-   - For multi-step sequences: `browserpaw_batch_actions { actions: [...] }` (_see `batch-pipeline.md`_).
+   - For single clicks or selections: `chrome_interact_index { index: N, includeDelta: true }`.
+   - For single text entries: `chrome_fill_index { index: N, text: "...", pressEnter: true }`.
+   - For media injection: `chrome_insert_media { index: N, filePath: "..." }`.
+   - For multi-step sequences: `chrome_batch_actions { actions: [...] }` (_see `batch-pipeline.md`_).
 
 5. **Handling CAPTCHA / Bot Blocks**:
-   - When `status === "blocked"`, immediately invoke `browserpaw_request_human_intervention { reason: "..." }` to yield control to the human user.
+   - When `status === "blocked"`, immediately invoke `chrome_request_human_intervention { reason: "..." }` to yield control to the human user.

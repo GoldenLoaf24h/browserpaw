@@ -1,17 +1,50 @@
 {
   "name": "dsh-browserpaw",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "DeepSeek Harness plugin for BrowserPaw: high-speed dual-brain Chrome automation with native CDP and local MCP bridge.",
   "type": "module",
   "main": "index.js",
+  "license": "AGPL-3.0-or-later",
+  "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GoldenLoaf24h/browserpaw.git",
+    "directory": "plugins/browserpaw-dsh"
+  },
+  "bugs": {
+    "url": "https://github.com/GoldenLoaf24h/browserpaw/issues"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw/tree/main/plugins/browserpaw-dsh#readme",
   "keywords": [
     "deepseek-harness",
+    "dsh-plugin",
     "cordis-plugin",
     "mcp",
     "browserpaw",
     "browser-automation"
   ],
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "skills",
+    "LICENSE",
+    "!**/AGENTS.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-mcp-client": ">=0.2.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }
