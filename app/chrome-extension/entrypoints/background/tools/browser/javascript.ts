@@ -30,8 +30,16 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const CDP_SESSION_KEY = 'javascript';
+// Upper bound on the elements one evaluation may stamp; fast snapshots cap at 250
+// actions and a standard index tree beyond a few hundred is not a ref target.
+const REF_BRIDGE_MAX = 500;
+// Best-effort removal must not extend a call whose evaluation already finished.
+const CLEANUP_TIMEOUT_MS = 1_000;
 
-export const MCP_INPAGE_HELPERS = `const mcp = (() => {
+// Each evaluation gets its own stamp attribute and binds the helper to it; the
+// binding is declared here so `MCP_INPAGE_HELPERS` stays self-contained.
+export const MCP_INPAGE_HELPERS = `let __browserpawRefAttr = '';
+const mcp = (() => {
   const getMap = () => (
     (typeof globalThis !== 'undefined' && (
       globalThis[Symbol.for('__browser_use_isolated_index_map__')] ||
@@ -41,6 +49,22 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
     )) || new Map()
   );
   const deref = (e) => (e && typeof e.deref === 'function' ? e.deref() : e);
+
+  // Snapshot indexes live in the extension's isolated world, which page-world code
+  // cannot read. While an evaluation runs, the background stamps the elements behind
+  // the indexes the code mentions with an attribute private to that evaluation and
+  // binds the helper to it, so a numeric ref resolves through the DOM instead of the
+  // isolated caches. Overlapping evaluations cannot see each other's stamps.
+  const fromRefAttr = (id) => {
+    if (typeof __browserpawRefAttr !== 'string' || !__browserpawRefAttr) return undefined;
+    let el = null;
+    try {
+      el = document.querySelector('[' + __browserpawRefAttr + '="' + id + '"]');
+    } catch {
+      return undefined;
+    }
+    return el && el.isConnected !== false ? el : undefined;
+  };
 
   // Robust :has-text evaluator supporting:
   // 1. Quotes with escaped characters: :has-text("Submit 'Now'")
@@ -327,6 +351,9 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
 
   const resolve = (t) => {
     if (typeof t === 'number') {
+      const fromRef = fromRefAttr(t);
+      if (fromRef) return fromRef;
+
       const fromMap = deref(getMap().get(t));
       if (fromMap && fromMap.isConnected !== false) return fromMap;
       const fpMap =
@@ -367,6 +394,8 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
       if (/^(?:ref_)?\\d+$/.test(trimmed)) {
         const p = parseInt(trimmed.replace(/^ref_/, ''), 10);
         if (!isNaN(p)) {
+          const fromRef = fromRefAttr(p);
+          if (fromRef) return fromRef;
           const fromMap = deref(getMap().get(p));
           if (fromMap && fromMap.isConnected !== false) return fromMap;
           const fpMap =
@@ -872,14 +901,14 @@ export function detectSingleExpression(code: string): string | null {
  * Wrap user code in an async IIFE to support top-level await and return statements.
  * Automatically adds a return statement if user code is a single expression.
  */
-export function wrapUserCode(code: string): string {
+export function wrapUserCode(code: string, refAttr = ''): string {
   if (!code.trim()) {
     // No helpers are injected for empty code, so there is nothing to scope.
     return `(async () => {\n${code}\n})()`;
   }
   const expr = detectSingleExpression(code);
   if (expr !== null) {
-    return wrapInScopedEvaluation(`return (\n${expr}\n);\n`);
+    return wrapInScopedEvaluation(`return (\n${expr}\n);\n`, refAttr);
   }
   const trimmed = code.trim();
   const declMatch = /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=([\s\S]+)$/.exec(
@@ -890,10 +919,10 @@ export function wrapUserCode(code: string): string {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     try {
       new AsyncFunction(`${trimmed}\nreturn ${varName};`);
-      return wrapInScopedEvaluation(`${trimmed}\nreturn ${varName};\n`);
+      return wrapInScopedEvaluation(`${trimmed}\nreturn ${varName};\n`, refAttr);
     } catch {}
   }
-  return wrapInScopedEvaluation(`${code}\n`);
+  return wrapInScopedEvaluation(`${code}\n`, refAttr);
 }
 
 /**
@@ -902,9 +931,12 @@ export function wrapUserCode(code: string): string {
  * the evaluation ends, including when user code throws. The helpers run in
  * the same function scope as the user code, so `mcp` stays a local binding:
  * page-owned globals such as `__mcp` are neither read nor written.
+ *
+ * `refAttr` is this evaluation's snapshot stamp; the helper resolves numeric
+ * refs only through it, so overlapping evaluations cannot cross-resolve.
  */
-function wrapInScopedEvaluation(body: string): string {
-  return `(async () => {\n${MCP_INPAGE_HELPERS}try {\n${body}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}\n})()`;
+function wrapInScopedEvaluation(body: string, refAttr = ''): string {
+  return `(async () => {\n${MCP_INPAGE_HELPERS}__browserpawRefAttr = ${JSON.stringify(refAttr)};\ntry {\n${body}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}\n})()`;
 }
 
 // ============================================================================
@@ -978,6 +1010,7 @@ async function executeViaCdp(
   code: string,
   options: ExecutionOptions,
   contextId?: number,
+  refAttr = '',
 ): Promise<ExecutionResult> {
   try {
     // Restricted pages (chrome://, web store, cloud metadata) are just as
@@ -985,7 +1018,7 @@ async function executeViaCdp(
     // so the guard has to run on the primary path too.
     await assertTabInjectable(tabId);
 
-    const expression = wrapUserCode(code);
+    const expression = wrapUserCode(code, refAttr);
 
     const response = await withTimeout(
       cdpSessionManager.withSession(tabId, CDP_SESSION_KEY, async () => {
@@ -1075,13 +1108,18 @@ async function executeViaScripting(
   tabId: number,
   code: string,
   options: ExecutionOptions,
+  refAttr = '',
 ): Promise<ExecutionResult> {
   const innerExecute = async (): Promise<ExecutionResult> => {
     await assertTabInjectable(tabId);
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: async (userCode: string, inpageHelpers?: string): Promise<ScriptingExecutionResult> => {
+      func: async (
+        userCode: string,
+        inpageHelpers?: string,
+        refAttrName?: string,
+      ): Promise<ScriptingExecutionResult> => {
         try {
           // Use AsyncFunction constructor to support top-level await
           const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -1128,8 +1166,9 @@ async function executeViaScripting(
           }
           // Helpers share the generated function scope with the user code, so
           // `mcp` is a local binding and the teardown never touches page globals.
+          // The ref binding is assigned here rather than passed through user code.
           const fn = new AsyncFunction(
-            `${inpageHelpers || ''}\ntry {\n${codeToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`,
+            `${inpageHelpers || ''}\n__browserpawRefAttr = ${JSON.stringify(refAttrName || '')};\ntry {\n${codeToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`,
           );
           const value = await fn();
           return { ok: true, value };
@@ -1145,7 +1184,7 @@ async function executeViaScripting(
           };
         }
       },
-      args: [code, MCP_INPAGE_HELPERS],
+      args: [code, MCP_INPAGE_HELPERS, refAttr],
     });
 
     // Extract the first result
@@ -1212,6 +1251,111 @@ async function executeViaScripting(
 }
 
 // ============================================================================
+// Snapshot Index Bridge
+// ============================================================================
+
+/**
+ * Snapshot indexes live only in the extension's isolated world, but the helper
+ * runs in the page's MAIN world (CDP Runtime.evaluate and the scripting fallback
+ * both target it), which cannot read them. Before evaluating, stamp the elements
+ * behind the numeric literals in the code with a per-evaluation random attribute;
+ * the evaluation is bound to that attribute, so the helper resolves refs only
+ * through its own stamps.
+ *
+ * `deadline` is the absolute end of the whole call: the stamping pass may only
+ * consume what is left of it, so bridge setup and evaluation share one budget.
+ * Returns the attribute the evaluation should bind to (empty when no element was
+ * stamped) and the cleanup that removes the stamps, or a no-op.
+ *
+ * Only literals are bridged: a ref computed at runtime from a prior tool result
+ * never appears in the code, and no DOM bridge can predict it.
+ *
+ * Both injections are bounded: a renderer blocked by a native dialog never acks,
+ * and an unbounded await would hang the call before its own timeout applies.
+ */
+async function bridgeSnapshotIndexes(
+  tabId: number,
+  code: string,
+  deadline: number,
+): Promise<{ refAttr: string; cleanup: () => Promise<void> }> {
+  const noBridge = async () => {};
+  const indexes = [...new Set((code.match(/\d+/g) ?? []).map((raw) => Number.parseInt(raw, 10)))]
+    .filter((n) => n >= 1)
+    .slice(0, REF_BRIDGE_MAX);
+  if (indexes.length === 0) return { refAttr: '', cleanup: noBridge };
+
+  const attr = 'data-browserpaw-ref-' + Math.random().toString(36).slice(2, 10);
+  const cleanup = async () => {
+    // Cleanup runs in a finally path: a closed or restricted tab must not turn the
+    // tool's real result into a cleanup error.
+    try {
+      await withTimeout(
+        chrome.scripting.executeScript({
+          target: { tabId },
+          func: (a: string) => {
+            // The stamping pass keeps the exact elements it marked (some may sit in
+            // closed shadow roots a query could never reach); remove those. A page
+            // reload or extension reload between the passes loses that list, so fall
+            // back to the light DOM.
+            const g = globalThis as any;
+            const stamps: Map<string, Element[]> | undefined = g.__browserpawRefStamps;
+            const marked = stamps?.get(a);
+            if (marked && stamps) {
+              for (const el of marked) el.removeAttribute(a);
+              stamps.delete(a);
+            } else {
+              for (const el of document.querySelectorAll('[' + a + ']')) el.removeAttribute(a);
+            }
+          },
+          args: [attr],
+        }),
+        CLEANUP_TIMEOUT_MS,
+      );
+    } catch {}
+  };
+
+  try {
+    await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        func: (a: string, ids: number[]) => {
+          // Isolated world: the snapshot maps are reachable here, not from the page.
+          const g = globalThis as any;
+          const fast = g.__pawFast || g.__clawFast;
+          const isFast = g[Symbol.for('__browser_use_last_snapshot_type__')] === 'fast';
+          const fastMap = fast && fast.actionElements;
+          const isoMap = g[Symbol.for('__browser_use_isolated_index_map__')];
+          const deref = (e: any) => (e && typeof e.deref === 'function' ? e.deref() : e);
+          const marked: Element[] = [];
+          for (const id of ids) {
+            const el = (isFast ? deref(fastMap?.get(id)) : null) || deref(isoMap?.get(id));
+            if (el instanceof Element && el.isConnected) {
+              el.setAttribute(a, String(id));
+              marked.push(el);
+            }
+          }
+          if (marked.length > 0) {
+            // Keep the exact elements for cleanup: shadow roots (closed ones
+            // especially) are not reachable from the page-level query.
+            g.__browserpawRefStamps = g.__browserpawRefStamps || new Map();
+            g.__browserpawRefStamps.set(a, marked);
+          }
+          return marked.length;
+        },
+        args: [attr, indexes],
+      }),
+      Math.max(1, deadline - performance.now()),
+    );
+  } catch {
+    // Blocked renderer, restricted or closing tab: no bridge, and the evaluation
+    // path reports its own timeout or error.
+    await cleanup();
+    return { refAttr: '', cleanup: noBridge };
+  }
+  return { refAttr: attr, cleanup };
+}
+
+// ============================================================================
 // Tool Implementation
 // ============================================================================
 
@@ -1247,33 +1391,57 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
         timeoutMs: normalizePositiveInt(args.timeoutMs, DEFAULT_TIMEOUT_MS),
         maxOutputBytes: normalizePositiveInt(args.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
       };
+      // One deadline for the whole call: bridge setup and evaluation share it, so
+      // `timeoutMs` bounds the call even when the renderer blocks one of the steps.
+      const deadline = performance.now() + options.timeoutMs;
 
       const warnings: string[] = [];
 
-      // Try CDP execution first
-      const cdpResult = await executeViaCdp(tabId, code, options, args.contextId);
-
-      if (cdpResult.ok) {
-        return this.buildSuccessResponse(tabId, cdpResult, startTime);
-      }
-
-      // If not a debugger conflict, return the CDP error
-      if (cdpResult.error.kind !== 'debugger_conflict') {
-        return this.buildErrorResponse(tabId, cdpResult, startTime);
-      }
-
-      // Debugger conflict - fallback to scripting API
-      warnings.push(
-        'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in MAIN world).',
+      // The helper runs in the page world, so snapshot refs need a DOM bridge for
+      // the duration of the evaluation; it is removed on every exit path.
+      const { refAttr, cleanup: clearRefBridge } = await bridgeSnapshotIndexes(
+        tabId,
+        code,
+        deadline,
       );
+      const remainingOptions = (): ExecutionOptions => ({
+        ...options,
+        timeoutMs: Math.max(1, Math.round(deadline - performance.now())),
+      });
+      try {
+        // Try CDP execution first
+        const cdpResult = await executeViaCdp(
+          tabId,
+          code,
+          remainingOptions(),
+          args.contextId,
+          refAttr,
+        );
 
-      const scriptingResult = await executeViaScripting(tabId, code, options);
+        if (cdpResult.ok) {
+          return this.buildSuccessResponse(tabId, cdpResult, startTime);
+        }
 
-      if (scriptingResult.ok) {
-        return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
+        // If not a debugger conflict, return the CDP error
+        if (cdpResult.error.kind !== 'debugger_conflict') {
+          return this.buildErrorResponse(tabId, cdpResult, startTime);
+        }
+
+        // Debugger conflict - fallback to scripting API
+        warnings.push(
+          'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in MAIN world).',
+        );
+
+        const scriptingResult = await executeViaScripting(tabId, code, remainingOptions(), refAttr);
+
+        if (scriptingResult.ok) {
+          return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
+        }
+
+        return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings);
+      } finally {
+        await clearRefBridge();
       }
-
-      return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings);
     } catch (error) {
       console.error('JavaScriptTool.execute error:', error);
       return createErrorResponse(

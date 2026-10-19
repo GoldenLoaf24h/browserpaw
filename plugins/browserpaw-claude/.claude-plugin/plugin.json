@@ -1,0 +1,14 @@
+{
+  "name": "browserpaw",
+  "displayName": "BrowserPaw",
+  "version": "4.0.0",
+  "description": "Control your own Chrome browser from Claude with 50 MCP tools for navigation, DOM perception, form filling, screenshots, and autonomous on-page micro-loops, reusing existing logins, cookies, and extensions.",
+  "author": {
+    "name": "BrowserPaw Team",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
+  "repository": "https://github.com/GoldenLoaf24h/browserpaw",
+  "license": "AGPL-3.0",
+  "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"]
+}

@@ -929,16 +929,33 @@ const METADATA = {
 
   'plugins': {
     title: 'plugins',
-    purpose: 'Container directory for platform-specific plugin integrations such as Codex and Hermes.',
+    purpose: 'Container directory for platform-specific plugin integrations such as Codex, Hermes, DeepSeek Harness, and Claude Code.',
     keyFiles: [],
     instructions: [
-      'Maintain compatibility with plugin manifest standards (plugin.yaml, .codex-plugin/plugin.json).',
+      'Maintain compatibility with plugin manifest standards (plugin.yaml, .codex-plugin/plugin.json, .claude-plugin/plugin.json).',
       'Python bridge scripts must remain compatible with Python 3.9+.'
     ],
     testing: 'Run python tests in plugins/browserpaw/tests/ if Python is available.',
     patterns: 'Plugin manifest wrapping local MCP server connections.',
     internalDeps: ['skill'],
     externalDeps: ['Python 3.9+ (optional test environment)']
+  },
+
+  'plugins/browserpaw-claude': {
+    title: 'browserpaw-claude',
+    purpose: 'Claude Code plugin distribution backed by the repository-root .claude-plugin/marketplace.json catalog.',
+    keyFiles: [
+      { name: 'README.md', desc: 'Claude Code plugin installation and usage documentation' }
+    ],
+    instructions: [
+      'Manifest lives at .claude-plugin/plugin.json; its name must match the catalog entry name in .claude-plugin/marketplace.json.',
+      'Skills are mirrored verbatim from skill/ by scripts/sync-skills.mjs and must keep canonical chrome_* tool names.',
+      'Plugin contract coverage lives in scripts/browserpaw-claude-plugin.test.mjs.'
+    ],
+    testing: '`node --test scripts/browserpaw-claude-plugin.test.mjs` and `claude plugin validate plugins/browserpaw-claude --strict`.',
+    patterns: 'Claude Code plugin manifest, marketplace catalog entry, and stdio .mcp.json server declaration.',
+    internalDeps: ['skill'],
+    externalDeps: ['Claude Code 2.1.299+', 'mcp-chrome-stdio on PATH']
   },
 
   'plugins/browserpaw': {

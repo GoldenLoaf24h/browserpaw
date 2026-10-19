@@ -133,7 +133,9 @@ Verify that all components are functioning with the built-in diagnostic suite:
 node skill/config/doctor.mjs
 ```
 
-Full onboarding (Codex Stdio setup, Cursor, Claude Desktop, Hermes, Jev API key) is in **[INSTALL.md](./INSTALL.md)**.
+**Claude Code users** can install the bundled plugin by running `/plugin marketplace add GoldenLoaf24h/browserpaw` and then `/plugin install browserpaw@browserpaw`, after which `/browserpaw` loads the operating guide.
+
+Full onboarding (Codex Stdio setup, Cursor, Claude Desktop, Claude Code, Hermes, Jev API key) is in **[INSTALL.md](./INSTALL.md)**.
 
 ---
 

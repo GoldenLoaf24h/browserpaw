@@ -240,7 +240,20 @@ Config file paths:
 
 ---
 
-### 3.5 Windsurf / Cascade (`~/.codeium/windsurf/mcp_config.json`)
+### 3.5 Claude Code (`/browserpaw` Marketplace Plugin)
+
+Claude Code installs BrowserPaw from this repository's plugin marketplace. The plugin bundles the operating skill and the stdio MCP server, so one install provides both the `/browserpaw` command and the browser tools:
+
+```text
+/plugin marketplace add GoldenLoaf24h/browserpaw
+/plugin install browserpaw@browserpaw
+```
+
+For a local checkout, add the repository root instead: `/plugin marketplace add <ABSOLUTE_PATH_TO_REPO>`. The plugin's MCP entry runs `mcp-chrome-stdio` from `PATH`, a bin exported by this repository's `mcp-chrome-bridge` package. Where that shim is unavailable, either install it from the checkout after building (`pnpm build`, then `npm install -g ./app/native-server`) or register the server manually with `claude mcp add browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`. After installation, type `/browserpaw` to load the operating guide. Chrome must be running with the extension loaded and the native host registered (Steps 1-2).
+
+---
+
+### 3.6 Windsurf / Cascade (`~/.codeium/windsurf/mcp_config.json`)
 
 ```json
 {
@@ -258,7 +271,7 @@ Config file paths:
 
 ---
 
-### 3.6 Generic Streamable HTTP MCP
+### 3.7 Generic Streamable HTTP MCP
 
 For clients connecting over Streamable HTTP:
 

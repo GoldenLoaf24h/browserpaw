@@ -107,6 +107,17 @@ Configuration file: `~/.claude/claude_desktop_config.json` or project-level `mcp
 }
 ```
 
+#### Option C: Claude Code Plugin (`/browserpaw`)
+
+Claude Code installs BrowserPaw from this repository's own plugin marketplace, which bundles the operating skill and the stdio MCP server in one step:
+
+```text
+/plugin marketplace add GoldenLoaf24h/browserpaw
+/plugin install browserpaw@browserpaw
+```
+
+Then type `/browserpaw` to load the skill; the tools arrive as `mcp__plugin_browserpaw_browserpaw__chrome_*`. The bundled server runs `mcp-chrome-stdio` from `PATH`, so the native host and a running Chrome with the extension loaded are still required.
+
 ---
 
 ### 3.3 Cursor Configuration

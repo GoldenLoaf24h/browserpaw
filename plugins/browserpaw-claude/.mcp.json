@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "browserpaw": {
+      "type": "stdio",
+      "command": "mcp-chrome-stdio",
+      "env": {
+        "CHROME_MCP_TOOL_PROFILE": "full"
+      }
+    }
+  }
+}

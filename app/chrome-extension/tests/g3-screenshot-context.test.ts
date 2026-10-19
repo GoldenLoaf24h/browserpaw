@@ -725,6 +725,71 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
     );
   });
 
+  describe('D-21: Jev helper fallback never prepares the page', () => {
+    it('skips preparePageForCapture so the bitmap matches the layout the caller clicks', async () => {
+      vi.useFakeTimers();
+      try {
+        const url = 'https://example.com/jev-fallback';
+        const scroll = { scrollX: 0, scrollY: 0, viewportWidth: 1000, viewportHeight: 1000 };
+        const probeOrder: string[] = [];
+
+        vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target, name) => {
+          probeOrder.push(name);
+          return [
+            {
+              documentId: 'vision-document',
+              result:
+                name === 'inPageGetScrollState'
+                  ? scroll
+                  : { url, title: 'Vision', activeInputs: [], alerts: [] },
+            },
+          ] as any;
+        });
+        // Force the CDP viewport path to fail so Jev falls back to the helper capture.
+        vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+          new Error('CDP viewport capture unavailable'),
+        );
+        vi.spyOn(screenshotTool as any, 'injectScreenshotHelper').mockResolvedValue(undefined);
+        const helperActions: string[] = [];
+        vi.spyOn(screenshotTool as any, 'sendToHelperWithRetry').mockImplementation(
+          async (_id: number, msg: any) => {
+            helperActions.push(msg.action);
+            return msg.action === TOOL_MESSAGE_TYPES.SCREENSHOT_GET_PAGE_DETAILS
+              ? {
+                  ...scroll,
+                  totalWidth: 1000,
+                  totalHeight: 1000,
+                  devicePixelRatio: 1,
+                  currentScrollX: 0,
+                  currentScrollY: 0,
+                }
+              : { success: true };
+          },
+        );
+
+        let settled = false;
+        const pending = screenshotTool
+          .execute({ tabId, format: 'png', _jevVision: true } as any)
+          .then((value) => {
+            settled = true;
+            return value;
+          });
+        await vi.advanceTimersByTimeAsync(2500);
+        expect(settled).toBe(true);
+        const result = await pending;
+        expect(result.isError, JSON.stringify(result)).toBeFalsy();
+
+        // The viewport bitmap and the registered frame must both describe the unrestored
+        // page the caller will click, so preparation never runs and no reset is needed.
+        expect(helperActions).not.toContain(TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE);
+        expect(helperActions).not.toContain(TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE);
+        expect(probeOrder.filter((name) => name === 'inPageGetScrollState')).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('4. P2 maxWidth Default Clamping and Parameter Contracts', () => {
     it('S-05 preserves CDP viewport dimensions through maxWidth scaling', async () => {
       vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_id, _owner, fn) =>

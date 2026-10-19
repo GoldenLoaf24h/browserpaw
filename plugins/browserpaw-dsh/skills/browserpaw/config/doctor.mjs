@@ -16,17 +16,50 @@
  *   node doctor.mjs --fix  # Diagnose and auto-repair common defects
  */
 
-import { existsSync, readFileSync, cpSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  cpSync,
+  lstatSync,
+  realpathSync,
+} from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve, delimiter } from 'node:path';
+import { join, resolve, relative, delimiter, dirname, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const AUTO_FIX = process.argv.includes('--fix');
-const PORT = 12306;
+// Same precedence and validation as the daemon and clients: CHROME_MCP_PORT > MCP_HTTP_PORT > 12306.
+const PORT = (() => {
+  const raw = process.env.CHROME_MCP_PORT || process.env.MCP_HTTP_PORT;
+  const parsed = raw ? Number.parseInt(String(raw), 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : 12306;
+})();
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
-const REPO_ROOT = resolve(process.cwd());
+// The repair wrappers cd into config/ before invoking doctor, so cwd is not the checkout.
+// The canonical copy sits at skill/config/, but plugin mirrors sit deeper
+// (plugins/<name>/skills/browserpaw/config/), so climb to the checkout marker instead of
+// assuming a fixed depth; an explicit BROWSERPAW_REPO_ROOT still wins.
+function findRepoRoot(start) {
+  let dir = start;
+  for (let depth = 0; depth < 12; depth++) {
+    if (existsSync(join(dir, 'app', 'chrome-extension', 'package.json'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Not inside a checkout (for example a plugin installed outside the repo): keep the
+  // historical two-level assumption so the build check still reports the missing output.
+  return join(start, '..', '..');
+}
+const REPO_ROOT = resolve(
+  process.env.BROWSERPAW_REPO_ROOT || findRepoRoot(dirname(fileURLToPath(import.meta.url))),
+);
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
 // Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths
 const STANDALONE_EXT_DIRS = process.env.BROWSERPAW_STANDALONE_DIRS
@@ -189,13 +222,78 @@ if (
   );
 }
 
-// Check Standalone Load Directories
+// Compare the complete build tree, not a sample: a stale manifest, content script, or
+// extra file left by an older build must count as out of sync even when two files match.
+function snapshotTree(dir) {
+  const files = new Map();
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.set(relative(dir, full), readFileSync(full));
+    }
+  };
+  walk(dir);
+  return files;
+}
+
+function treesMatch(a, b) {
+  const left = snapshotTree(a);
+  const right = snapshotTree(b);
+  if (left.size !== right.size) return false;
+  for (const [rel, content] of left) {
+    const other = right.get(rel);
+    if (!other || !other.equals(content)) return false;
+  }
+  return true;
+}
+
+// cpSync merges into an existing tree, so files dropped from the current build would
+// survive and the next run would still be out of sync. Clear the destination first,
+// unless the destination contains the build itself (clearing it would delete the source).
+function replaceTree(src, dest) {
+  // readdirSync/rmSync follow a symlink or junction, so clearing one would erase the
+  // real target's contents while the link itself survives and the copy still fails.
+  // Reject the link before touching anything, and resolve real paths so a destination
+  // that reaches the build through a link is still refused as self-destructive.
+  let destStat = null;
+  try {
+    destStat = lstatSync(dest);
+  } catch {}
+  if (destStat?.isSymbolicLink()) {
+    throw new Error(`Refusing to clear ${dest}: it is a symlink or junction`);
+  }
+  const realDest = destStat ? realpathSync(dest) : resolve(dest);
+  const realSrc = resolve(src);
+  const relFromDest = relative(realDest, realSrc);
+  const srcInsideDest =
+    relFromDest === '' || (!relFromDest.startsWith('..') && !isAbsolute(relFromDest));
+  if (srcInsideDest) {
+    throw new Error(`Refusing to clear ${dest}: it contains the extension build output`);
+  }
+  // The reverse nesting corrupts the build the same way: clearing a descendant of
+  // the build deletes its files, and the copy then fails with ERR_FS_CP_EINVAL.
+  const relFromSrc = relative(realSrc, realDest);
+  const destInsideSrc =
+    relFromSrc === '' || (!relFromSrc.startsWith('..') && !isAbsolute(relFromSrc));
+  if (destInsideSrc) {
+    throw new Error(`Refusing to clear ${dest}: it is inside the extension build output`);
+  }
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(dest)) {
+    rmSync(join(dest, entry), { recursive: true, force: true });
+  }
+  cpSync(src, dest, { recursive: true });
+  return treesMatch(src, dest);
+}
+
+// Check Standalone Load Directories. Each directory reports exactly once, so a repair
+// that succeeds does not leave the earlier failure counted against the final status.
 for (const dir of STANDALONE_EXT_DIRS) {
   if (!existsSync(dir)) {
     if (AUTO_FIX && buildOk) {
       try {
-        mkdirSync(dir, { recursive: true });
-        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+        replaceTree(EXT_SRC_OUTPUT, dir);
         report(true, `Created and Synced Standalone Directory: ${dir}`);
       } catch (err) {
         report(false, `Failed to create/sync ${dir}`, err.message);
@@ -205,35 +303,44 @@ for (const dir of STANDALONE_EXT_DIRS) {
     }
     continue;
   }
-  const standaloneBg = join(dir, 'background.js');
-  const srcBg = join(EXT_SRC_OUTPUT, 'background.js');
-  const standalonePopup = join(dir, 'popup.html');
-  const srcPopup = join(EXT_SRC_OUTPUT, 'popup.html');
-  let synced = false;
-  if (
-    existsSync(standaloneBg) &&
-    existsSync(srcBg) &&
-    existsSync(standalonePopup) &&
-    existsSync(srcPopup)
-  ) {
-    const s1 = readFileSync(standaloneBg).length;
-    const s2 = readFileSync(srcBg).length;
-    const p1 = readFileSync(standalonePopup, 'utf8').trim();
-    const p2 = readFileSync(srcPopup, 'utf8').trim();
-    synced = s1 === s2 && p1 === p2;
-  }
-  if (synced) {
-    report(true, `Standalone Directory Synced: ${dir}`, `Files matched perfectly.`);
-  } else {
-    report(false, `Standalone Directory Out of Sync: ${dir}`);
-    if (AUTO_FIX && buildOk) {
-      try {
-        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
-        report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
-      } catch (err) {
-        report(false, `Failed to copy build to ${dir}`, err.message);
-      }
+  // A configured path that is a file (or an unreadable directory) would make the tree
+  // walk throw ENOTDIR/EACCES and abort every remaining check, so report it as failed.
+  // A link is left to replaceTree, which refuses it with the clearer symlink message.
+  let stat = null;
+  let readable = false;
+  try {
+    stat = lstatSync(dir);
+    // readdirSync is the operation treesMatch will perform; let it surface EACCES here.
+    if (stat.isDirectory()) {
+      readdirSync(dir);
+      readable = true;
     }
+  } catch {
+    readable = false;
+  }
+  if (!readable && !stat?.isSymbolicLink()) {
+    report(
+      false,
+      `Standalone Directory Unreadable: ${dir}`,
+      'Configured path is not a readable directory',
+    );
+    continue;
+  }
+  if (buildOk && treesMatch(EXT_SRC_OUTPUT, dir)) {
+    report(true, `Standalone Directory Synced: ${dir}`, `All build files matched.`);
+    continue;
+  }
+  if (!(AUTO_FIX && buildOk)) {
+    report(false, `Standalone Directory Out of Sync: ${dir}`);
+    continue;
+  }
+  try {
+    if (!replaceTree(EXT_SRC_OUTPUT, dir)) {
+      throw new Error('copy completed but the destination still differs from the build');
+    }
+    report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
+  } catch (err) {
+    report(false, `Failed to copy build to ${dir}`, err.message);
   }
 }
 

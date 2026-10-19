@@ -40,6 +40,13 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - **Tab-Scoped Network Listeners**: `chrome_network_capture` registers one `webRequest` listener set per captured tab behind a `tabId` filter and removes exactly that set when the tab stops, closes, or restarts, so unrelated tabs' traffic is no longer delivered to the extension and multiple captures can be stopped independently.
 - **Single-Pass Shape Inference**: Visual shape inference caches nodes within one snapshot instead of rescanning each candidate's subtree, preserving traversal depth, precedence, and index output.
 
+### Claude Code Plugin Distribution
+
+- **Plugin Package**: Added `plugins/browserpaw-claude`, a Claude Code plugin bundling the canonical operating skill (`/browserpaw:browserpaw`, also reachable as bare `/browserpaw`) and a `.mcp.json` stdio server running `mcp-chrome-stdio`. It is deliberately separate from the Hermes/Codex package, whose `skills` manifest key appends a 16-tool `browserpaw_*` skill that would contradict the canonical `chrome_*` names on stdio.
+- **Marketplace Catalog**: Added the repository-root `.claude-plugin/marketplace.json` alongside the existing Codex-format `marketplace.json`; the two formats are read independently by their respective hosts. `claude plugin validate --strict` passes for both the catalog and the plugin directory.
+- **Skill Mirror**: `scripts/sync-skills.mjs` gained a fifth target that copies `skill/` verbatim, with no prefix rewriting and no Hermes scope banner. `scripts/browserpaw-claude-plugin.test.mjs` pins manifest/catalog agreement, the stdio entry, the command name, and byte parity.
+- **Documentation**: Installation steps added to `AGENT_CONFIG_GUIDE.md`, `INSTALL.md`, and `README.md`; the Claude Code host contract is recorded in `docs/development/PLUGIN_COMPATIBILITY.md`.
+
 ### Native Bridge Credential Security & Stdio Transport Architecture
 
 - **Default Stdio Transport**: Standardized all client configuration templates (Desktop, Editor, Cline, CLI, Hermes) on stdio (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) as the zero-config default without token or environment credential requirements.

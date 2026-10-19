@@ -340,6 +340,7 @@ describe('D-15 scripting fallback teardown', () => {
       `,
     });
 
+    // No numeric literal in the code, so no bridge is stamped: one evaluation only.
     expect(executeScript).toHaveBeenCalledTimes(1);
     expect(res.isError).toBe(false);
     const payload = JSON.parse((res.content[0] as { text: string }).text);
@@ -386,5 +387,309 @@ describe('D-15 scripting fallback teardown', () => {
     // String results are emitted verbatim by the output formatter.
     expect(payload.result).toBe('ok');
     expectPrototypesRestored();
+  });
+});
+
+describe('snapshot index bridge across the execution world (PR6 comment 4310322679)', () => {
+  const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
+  const snapshotSymbol = Symbol.for('__browser_use_last_snapshot_type__');
+  const indexMapSymbol = Symbol.for('__browser_use_isolated_index_map__');
+  const ISOLATED_KEYS = [
+    '__pawFast',
+    '__clawFast',
+    '__MCP_INDEX_MAP__',
+    snapshotSymbol,
+    indexMapSymbol,
+  ] as const;
+  let executeScript: ReturnType<typeof vi.fn>;
+  let world: 'MAIN' | 'ISOLATED';
+
+  // Run `fn` with the isolated-world globals hidden, as the MAIN world sees them.
+  const inPageWorld = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+    const saved = ISOLATED_KEYS.map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key as any),
+    ]);
+    for (const key of ISOLATED_KEYS) delete (globalThis as any)[key];
+    try {
+      return await fn();
+    } finally {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, key as any, descriptor);
+      }
+    }
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<button id="fast-target">Fast</button>';
+    (globalThis as Record<string, unknown>).__pawFast = {
+      actionElements: new Map<string | number, Element>([
+        [1, document.getElementById('fast-target')],
+      ]),
+    };
+    (globalThis as Record<string | symbol, unknown>)[snapshotSymbol] = 'fast';
+    (globalThis as Record<string | symbol, unknown>)[indexMapSymbol] = new Map([
+      [1, document.getElementById('fast-target')],
+    ]);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
+
+    // executeScript lands in whichever world `world` names: the bridge stamp runs
+    // isolated, the scripting-fallback evaluation runs in MAIN.
+    world = 'MAIN';
+    executeScript = vi.fn(async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+      const run = async () => [{ result: await opts.func(...(opts.args ?? [])) }];
+      return world === 'ISOLATED' ? run() : inPageWorld(run);
+    });
+    (chrome as unknown as { scripting: unknown }).scripting = { executeScript };
+  });
+
+  afterEach(() => {
+    delete (chrome as unknown as { scripting?: unknown }).scripting;
+    const g = globalThis as Record<string | symbol, unknown>;
+    for (const key of ISOLATED_KEYS) delete g[key];
+    delete g.__browserpawRefStamps;
+    document.body.innerHTML = '';
+  });
+
+  const bridgeAttrOn = (el: Element): string | undefined =>
+    [...el.attributes].map((a) => a.name).find((n) => n.startsWith('data-browserpaw-ref-'));
+
+  it('resolves a numeric ref through the DOM stamp while the page world cannot see the map', async () => {
+    // The bridge stamps through the isolated world; the evaluation runs in MAIN.
+    executeScript.mockImplementation(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        world = 'ISOLATED';
+        try {
+          return [{ result: await opts.func(...(opts.args ?? [])) }];
+        } finally {
+          world = 'MAIN';
+        }
+      },
+    );
+    // executeViaCdp hands the wrapped expression to CDP, evaluated here in MAIN.
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
+      async (_tab: number, method: string, params?: any) => {
+        if (method !== 'Runtime.evaluate') return {};
+        const value = await inPageWorld(() => (0, eval)(params.expression));
+        return { result: { value } };
+      },
+    );
+
+    const res = await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+
+    expect(res.isError).toBe(false);
+    const payload = JSON.parse((res.content[0] as { text: string }).text);
+    expect(payload.engine).toBe('cdp');
+    // String results are emitted verbatim by the output formatter.
+    expect(payload.result).toBe('fast-target');
+  });
+
+  it('removes the stamp after the evaluation, even when it throws', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    await javascriptTool.execute({ tabId: 42, code: 'throw new Error("boom");' });
+
+    expect(bridgeAttrOn(document.getElementById('fast-target')!)).toBeUndefined();
+    expect(document.getElementById('fast-target')!.attributes).toHaveLength(1);
+  });
+
+  it('does not bridge when the code mentions no positive numeric literal', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    await javascriptTool.execute({ tabId: 42, code: 'return "no refs";' });
+
+    expect(executeScript).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the evaluation result when the tab closes before cleanup', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    executeScript
+      .mockImplementationOnce(
+        async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => [
+          { result: await opts.func(...(opts.args ?? [])) },
+        ],
+      )
+      .mockImplementationOnce(
+        async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => [
+          { result: await opts.func(...(opts.args ?? [])) },
+        ],
+      )
+      .mockRejectedValueOnce(new Error('No tab with id: 42'));
+
+    const res = await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+
+    expect(res.isError).toBe(false);
+    const payload = JSON.parse((res.content[0] as { text: string }).text);
+    expect(payload.engine).toBe('scripting');
+  });
+
+  it('keeps a concurrent bridge alive when an earlier evaluation cleans up', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    // Two evaluations interleave: the first finishes and cleans up while the second
+    // is still in flight, and the second's ref must keep resolving afterwards.
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const secondGate = new Promise<void>((resolve) => (releaseSecond = resolve));
+    let stampCount = 0;
+    let evalCount = 0;
+    const observed: Array<string | null> = [];
+    // executeViaScripting's injected function is (userCode, inpageHelpers, attr);
+    // the bridge stamp is (attr, ids) and cleanup is (attr).
+    const isEvaluation = (opts: { args?: unknown[] }) =>
+      opts.args?.length === 3 && !String(opts.args[0]).startsWith('data-browserpaw-ref-');
+    executeScript.mockImplementation(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        if (opts.args?.length === 2) {
+          stampCount++;
+          return [{ result: await opts.func(...opts.args) }];
+        }
+        if (!isEvaluation(opts)) {
+          return [{ result: await opts.func(...(opts.args ?? [])) }];
+        }
+        const call = ++evalCount;
+        await (call === 1 ? firstGate : secondGate);
+        observed.push(
+          await inPageWorld(() =>
+            (0, eval)(wrapUserCode('return mcp.get(1)?.id ?? null;', String(opts.args?.[2] ?? ''))),
+          ),
+        );
+        // The injected function must return its own { ok, value } envelope.
+        return [{ result: await opts.func(...(opts.args ?? [])) }];
+      },
+    );
+
+    const first = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await vi.waitFor(() => expect(stampCount).toBe(1));
+    const second = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await vi.waitFor(() => expect(stampCount).toBe(2));
+
+    releaseFirst();
+    const firstRes = await first;
+    // The first cleanup removed only its own stamp; the second bridge still stands.
+    expect(bridgeAttrOn(document.getElementById('fast-target')!)).toBeDefined();
+    releaseSecond();
+    const secondRes = await second;
+
+    expect(firstRes.isError).toBe(false);
+    expect(secondRes.isError).toBe(false);
+    expect(observed).toEqual(['fast-target', 'fast-target']);
+    // Both cleanups ran, leaving no extension-owned attribute behind.
+    expect(bridgeAttrOn(document.getElementById('fast-target')!)).toBeUndefined();
+    expect(document.getElementById('fast-target')!.attributes).toHaveLength(1);
+  });
+
+  it('binds each evaluation to its own stamp instead of a shared pointer', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    document.body.insertAdjacentHTML('beforeend', '<button id="newer-target">Newer</button>');
+    // Two overlapping evaluations whose ref 1 points at different elements: the
+    // later stamp must not hijack the earlier evaluation's mcp.get(1). Both
+    // evaluations are held until both bridges are live, so each resolves while the
+    // other's stamp exists too.
+    const observed: Array<string | null> = [];
+    let stampCount = 0;
+    let bothStamped!: () => void;
+    const secondStamp = new Promise<void>((resolve) => (bothStamped = resolve));
+    executeScript.mockImplementation(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        if (opts.args?.length === 2) {
+          // Stamps are (attr, ids); cleanup is (attr).
+          stampCount++;
+          // The second evaluation's snapshot moved index 1 to the newer button, so
+          // its stamp pass marks that element. A fast snapshot resolves through
+          // __pawFast.actionElements, so the fast cache is what moves here.
+          if (stampCount === 2) {
+            (globalThis as any).__pawFast = {
+              actionElements: new Map([[1, document.getElementById('newer-target')]]),
+            };
+          }
+          const out = [{ result: await opts.func(...opts.args) }];
+          if (stampCount === 2) bothStamped();
+          return out;
+        }
+        if (opts.args?.length === 3) {
+          const attr = String(opts.args[2]);
+          await secondStamp;
+          observed.push(
+            (await inPageWorld(() =>
+              (0, eval)(wrapUserCode('return mcp.get(1)?.id ?? null;', attr)),
+            )) as string | null,
+          );
+          return [{ result: await opts.func(...(opts.args ?? [])) }];
+        }
+        return [{ result: await opts.func(...(opts.args ?? [])) }];
+      },
+    );
+
+    const first = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await vi.waitFor(() => expect(stampCount).toBe(1));
+    const second = javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+    await Promise.all([first, second]);
+
+    // Each helper resolved through its own stamp, not the other evaluation's.
+    expect(observed.sort()).toEqual(['fast-target', 'newer-target']);
+    expect(document.getElementById('fast-target')!.attributes).toHaveLength(1);
+    expect(document.getElementById('newer-target')!.attributes).toHaveLength(1);
+  });
+
+  it.each(['open', 'closed'] as const)('removes stamps inside %s shadow roots', async (mode) => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode });
+    const inner = document.createElement('button');
+    inner.id = 'shadow-target';
+    shadow.appendChild(inner);
+    document.body.appendChild(host);
+    (globalThis as Record<string | symbol, unknown>)[indexMapSymbol] = new Map([[2, inner]]);
+
+    await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(2)?.id;' });
+
+    // Cleanup removes the exact elements the stamping pass marked, so a closed
+    // root (unreachable by any page-level query) is cleaned too.
+    expect(inner.attributes).toHaveLength(1);
+    expect(inner.id).toBe('shadow-target');
+  });
+
+  it('charges bridge setup to the tool deadline instead of granting a fresh one', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+        new Error('Another debugger is already attached to this target'),
+      );
+      // The bridge injection never settles, as with an open native dialog; the
+      // evaluation itself would answer at once if it ever ran.
+      executeScript.mockImplementation((opts: { args?: unknown[] }) =>
+        opts.args?.length === 3
+          ? new Promise(() => {})
+          : Promise.resolve([{ result: { ok: true, value: 'done' } }]),
+      );
+
+      const pending = javascriptTool.execute({
+        tabId: 42,
+        code: 'return mcp.get(1);',
+        timeoutMs: 500,
+      });
+      // Bridge gives up at the single deadline (500); the remaining budget for the
+      // evaluation is already spent, so the call cannot wait another 500.
+      await vi.advanceTimersByTimeAsync(600);
+
+      const res = await pending;
+      expect(res.isError).toBe(true);
+      expect((res.content[0] as { text: string }).text).toContain('timed out');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { wrapUserCode, MCP_INPAGE_HELPERS } from '../entrypoints/background/tools/browser/javascript';
+import {
+  wrapUserCode,
+  MCP_INPAGE_HELPERS,
+} from '../entrypoints/background/tools/browser/javascript';
 
 describe('In-Page Agent Helpers & Workflows', () => {
-  const evaluateInPage = async (code: string) => {
-    const wrapped = wrapUserCode(code);
+  const evaluateInPage = async (code: string, refAttr = '') => {
+    const wrapped = wrapUserCode(code, refAttr);
     // wrapUserCode returns `(async () => { ... })()`.
     // In browser/CDP Runtime.evaluate with awaitPromise: true, this evaluates to the promise result.
     // In Node/vitest, evaluating `eval(wrapped)` evaluates and returns the Promise.
@@ -264,6 +267,103 @@ describe('In-Page Agent Helpers & Workflows', () => {
     });
   });
 
+  describe('snapshot index resolution across the execution-world boundary', () => {
+    // In production the helper runs in the page's MAIN world and cannot read the
+    // isolated-world snapshot maps at all. Hide every isolated global from this
+    // realm so only the DOM bridge the background installs can resolve a ref.
+    const snapshotSymbol = Symbol.for('__browser_use_last_snapshot_type__');
+    const indexMapSymbol = Symbol.for('__browser_use_isolated_index_map__');
+    const pageGlobals = globalThis as Record<string | symbol, unknown>;
+    let hidden: Array<string | symbol>;
+
+    beforeEach(() => {
+      hidden = ['__pawFast', '__clawFast', '__MCP_INDEX_MAP__', snapshotSymbol, indexMapSymbol];
+      for (const key of hidden) delete pageGlobals[key];
+    });
+
+    afterEach(() => {
+      for (const key of hidden) delete pageGlobals[key];
+    });
+
+    it('cannot read the isolated fast action map directly', async () => {
+      document.body.innerHTML = `<button id="fast-target">Fast</button>`;
+      pageGlobals.__pawFast = {
+        actionElements: new Map<string | number, Element>([
+          [1, document.getElementById('fast-target')],
+        ]),
+      };
+      pageGlobals[snapshotSymbol] = 'fast';
+      pageGlobals[indexMapSymbol] = new Map([[1, document.getElementById('fast-target')]]);
+
+      // Evaluate the way the page world does: the isolated globals are gone.
+      const saved = hidden.map((key) => [key, pageGlobals[key]]);
+      for (const key of hidden) delete pageGlobals[key];
+      let result: unknown;
+      try {
+        result = await evaluateInPage(`
+          return {
+            fastVisible: typeof globalThis.__pawFast,
+            mapVisible: typeof globalThis[Symbol.for('__browser_use_isolated_index_map__')],
+            resolved: mcp.get(1)?.id ?? null,
+          };
+        `);
+      } finally {
+        for (const [key, value] of saved) pageGlobals[key as string] = value;
+      }
+
+      expect(result).toEqual({ fastVisible: 'undefined', mapVisible: 'undefined', resolved: null });
+    });
+
+    it('resolves refs through the DOM stamp the evaluation is bound to', async () => {
+      document.body.innerHTML = `
+        <button id="fast-target">Fast</button>
+        <button id="other-target">Other</button>
+      `;
+      const attr = 'data-browserpaw-ref-ab12cd34';
+      document.getElementById('fast-target')!.setAttribute(attr, '1');
+      document.getElementById('other-target')!.setAttribute(attr, '2');
+
+      const result = await evaluateInPage(
+        `
+        return {
+          numeric: mcp.get(1)?.id,
+          ref: mcp.get('ref_2')?.id,
+          stringIndex: mcp.get('1')?.id,
+          missing: mcp.get(3)?.id ?? null,
+        };
+      `,
+        attr,
+      );
+
+      expect(result).toEqual({
+        numeric: 'fast-target',
+        ref: 'other-target',
+        stringIndex: 'fast-target',
+        missing: null,
+      });
+    });
+
+    it('ignores another evaluation’s stamps and falls back to the standard map', async () => {
+      document.body.innerHTML = `
+        <button id="fast-target" data-browserpaw-ref-ab12cd34="1">Fast</button>
+        <button id="standard-target" data-mcp-idx="1">Standard</button>
+      `;
+      // This evaluation is bound to a different attribute, so the foreign stamp is
+      // invisible and the standard index map answers instead.
+      const result = await evaluateInPage(`return mcp.get(1)?.id;`, 'data-browserpaw-ref-ffffffff');
+
+      expect(result).toBe('standard-target');
+    });
+
+    it('does not resolve through a stamp when the evaluation has no bridge', async () => {
+      document.body.innerHTML = `<button id="fast-target" data-browserpaw-ref-ab12cd34="1">Fast</button>`;
+
+      const result = await evaluateInPage(`return mcp.get(1)?.id ?? null;`);
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('End-to-End Single-Turn In-Page Agent Workflow', () => {
     it('executes a complex multi-step cart cleanup workflow in a single turn', async () => {
       document.body.innerHTML = `
@@ -455,4 +555,3 @@ describe('In-Page Agent Helpers & Workflows', () => {
     });
   });
 });
-

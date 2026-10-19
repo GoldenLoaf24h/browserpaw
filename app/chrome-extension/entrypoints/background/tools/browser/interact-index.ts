@@ -540,6 +540,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         return createErrorResponse(`No active tab found for ${resolveToolName('interact_index')}`);
       }
 
+      // Declared outside runAction so the surrounding finally can cancel it on every
+      // exit path: rejected visual clicks return before waitForHandover() runs.
+      let handoverTracker: ReturnType<typeof sessionTabAffinity.startHandoverTracking> | null =
+        null;
+      const cancelHandoverTracker = () => {
+        handoverTracker?.cancel();
+        handoverTracker = null;
+      };
+
       const runAction = async (): Promise<ToolResult> => {
         const previousUrl = tab.url || '';
         tabFaviconManager.markTabActive(tabId);
@@ -743,7 +752,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
 
         // Start Child Tab Affinity Handover tracking for click actions
         const isClickAction = action === 'click' || action === 'double_click';
-        const handoverTracker =
+        handoverTracker =
           isClickAction || hasPoints
             ? sessionTabAffinity.startHandoverTracking(
                 tabId,
@@ -1900,9 +1909,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         };
       };
 
-      return args.skipLock
-        ? await runAction()
-        : await sessionTabAffinity.runSerialized(tabId, runAction);
+      try {
+        return args.skipLock
+          ? await runAction()
+          : await sessionTabAffinity.runSerialized(tabId, runAction);
+      } finally {
+        // Every exit path must release the tracker, otherwise its navigation and tab
+        // listeners leak for the life of the extension.
+        cancelHandoverTracker();
+      }
     } catch (error) {
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);

@@ -33,3 +33,8 @@ stats-*.json
 
 # 锁文件
 pnpm-lock.yaml
+# Skill sources and mirrors must stay byte-identical (scripts/sync-skills.mjs)
+skill
+skills
+plugins/*/skills
+plugins/*/mcp-skills

@@ -17,6 +17,8 @@ const targets = [
   { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw') },
   // The DSH bridge exposes the literal `chrome_*` names; do NOT set isPlugin here.
   { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw') },
+  // Claude Code speaks the canonical chrome_* names over stdio, so this mirror stays verbatim.
+  { dir: path.join(repoRoot, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw') },
 ];
 
 const SCOPE_BANNER_EN =
@@ -89,6 +91,11 @@ function copyDir(src, dest, isPlugin = false, isHermes = false) {
 assertSafePath(rootSkill);
 for (const target of targets) {
   assertSafePath(target.dir);
+  // A copy-only sync leaves files that were renamed or deleted upstream in the mirror,
+  // so the plugin would keep distributing retired instructions. assertSafePath has
+  // already rejected symlinks/junctions and paths outside the repo, so the mirror
+  // directory itself is safe to rebuild from scratch.
+  fs.rmSync(target.dir, { recursive: true, force: true });
   copyDir(rootSkill, target.dir, target.isPlugin, target.isHermes);
 }
 

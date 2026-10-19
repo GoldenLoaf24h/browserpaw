@@ -182,6 +182,24 @@ try {
     ),
     false,
   );
+
+  // 2d. A file retired upstream must not survive in any mirror.
+  fs.rmSync(path.join(sandbox, 'skill', 'recipes', 'act.md'));
+  const res4 = runScript(sandbox);
+  assert.strictEqual(res4.status, 0, res4.stderr);
+  for (const mirror of [
+    path.join(sandbox, 'skills', 'browserpaw'),
+    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw'),
+    path.join(sandbox, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw'),
+    path.join(sandbox, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'),
+    path.join(sandbox, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw'),
+  ]) {
+    assert.strictEqual(
+      fs.existsSync(path.join(mirror, 'recipes', 'act.md')),
+      false,
+      `retired file survived in ${mirror}`,
+    );
+  }
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.rmSync(outsideCwd, { recursive: true, force: true });

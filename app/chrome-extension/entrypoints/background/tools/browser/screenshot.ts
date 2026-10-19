@@ -886,19 +886,29 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         await this.injectScreenshotHelper(tab.id!);
         await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_CONSTANTS.SCRIPT_INIT_DELAY));
 
+        // The Jev viewport path registers a vision frame whose coordinates the caller
+        // clicks after this tool returns. preparePageForCapture hides scrollbars, which
+        // reflows pages with non-overlay scrollbars; capturing under it would describe a
+        // layout that is gone by click time, and the pre/post probes cannot see the
+        // difference because both run after the reset. Skip preparation for this path.
+        const skipPrepareForVision =
+          isJevVision && !fullPage && !selector && typeof args.targetIndex !== 'number';
+
         // Prepare page (hide scrollbars, handle fixed elements)
         // Helper messages can die with a stale listener after extension
         // reloads or renderer swaps. One re-inject + retry recovers them;
         // a second failure surfaces as the original error.
-        didPreparePage = true;
-        const prepareResp = await this.sendToHelperWithRetry(tab.id!, {
-          action: TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
-          options: { fullPage },
-        });
-        if (!prepareResp || prepareResp.success !== true) {
-          throw new Error(
-            'Screenshot helper did not acknowledge page preparation. The content script may not be injected or cannot run on this page.',
-          );
+        if (!skipPrepareForVision) {
+          didPreparePage = true;
+          const prepareResp = await this.sendToHelperWithRetry(tab.id!, {
+            action: TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
+            options: { fullPage },
+          });
+          if (!prepareResp || prepareResp.success !== true) {
+            throw new Error(
+              'Screenshot helper did not acknowledge page preparation. The content script may not be injected or cannot run on this page.',
+            );
+          }
         }
 
         // Get page details with validation
