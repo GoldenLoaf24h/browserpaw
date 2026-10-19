@@ -91,6 +91,11 @@ function copyDir(src, dest, isPlugin = false, isHermes = false) {
 assertSafePath(rootSkill);
 for (const target of targets) {
   assertSafePath(target.dir);
+  // A copy-only sync leaves files that were renamed or deleted upstream in the mirror,
+  // so the plugin would keep distributing retired instructions. assertSafePath has
+  // already rejected symlinks/junctions and paths outside the repo, so the mirror
+  // directory itself is safe to rebuild from scratch.
+  fs.rmSync(target.dir, { recursive: true, force: true });
   copyDir(rootSkill, target.dir, target.isPlugin, target.isHermes);
 }
 

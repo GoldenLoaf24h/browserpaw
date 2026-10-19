@@ -19,6 +19,8 @@ function write(file, content) {
 function createSandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-doctor-'));
   write(path.join(root, 'skill/config/doctor.mjs'), fs.readFileSync(doctorSource));
+  // The checkout marker doctor climbs to; the build output lives below it.
+  write(path.join(root, 'app/chrome-extension/package.json'), '{"name":"chrome-mcp-server"}');
   write(
     path.join(root, 'app/chrome-extension/.output/chrome-mv3/manifest.json'),
     '{"version":"4.0.0"}',
@@ -90,6 +92,33 @@ describe('doctor.mjs repair behaviour', () => {
       !output.includes(path.join('skill', 'config', 'app')),
       'doctor must not resolve the build under config/',
     );
+  });
+
+  it('resolves the checkout from a plugin mirror nested four levels deep', () => {
+    const mirrorDir = path.join(sandbox.root, 'plugins/browserpaw-claude/skills/browserpaw/config');
+    write(path.join(mirrorDir, 'doctor.mjs'), fs.readFileSync(doctorSource));
+    const proc = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(sandbox.preload).href, 'doctor.mjs'],
+      {
+        cwd: mirrorDir,
+        env: {
+          ...process.env,
+          TEST_TEMP_HOME: sandbox.home,
+          HOME: sandbox.home,
+          USERPROFILE: sandbox.home,
+          BROWSERPAW_STANDALONE_DIRS: '',
+          BROWSERPAW_REPO_ROOT: '',
+        },
+        encoding: 'utf8',
+        timeout: 15000,
+      },
+    );
+    const output = (proc.stdout || '') + (proc.stderr || '');
+    const expected = path.join(sandbox.root, 'app', 'chrome-extension', '.output', 'chrome-mv3');
+
+    assert.ok(output.includes(`Extension Build Found: ${expected}`), output);
+    assert.ok(!output.includes(path.join('skills', 'app')), output);
   });
 
   it('--fix creates a missing standalone directory instead of reporting a ReferenceError', () => {

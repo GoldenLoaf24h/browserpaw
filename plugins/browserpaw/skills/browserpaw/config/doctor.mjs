@@ -42,9 +42,23 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
 // The repair wrappers cd into config/ before invoking doctor, so cwd is not the checkout.
-// Resolve from this file (skill/config/doctor.mjs -> repo root) and let an explicit root win.
+// The canonical copy sits at skill/config/, but plugin mirrors sit deeper
+// (plugins/<name>/skills/browserpaw/config/), so climb to the checkout marker instead of
+// assuming a fixed depth; an explicit BROWSERPAW_REPO_ROOT still wins.
+function findRepoRoot(start) {
+  let dir = start;
+  for (let depth = 0; depth < 12; depth++) {
+    if (existsSync(join(dir, 'app', 'chrome-extension', 'package.json'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Not inside a checkout (for example a plugin installed outside the repo): keep the
+  // historical two-level assumption so the build check still reports the missing output.
+  return join(start, '..', '..');
+}
 const REPO_ROOT = resolve(
-  process.env.BROWSERPAW_REPO_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..'),
+  process.env.BROWSERPAW_REPO_ROOT || findRepoRoot(dirname(fileURLToPath(import.meta.url))),
 );
 const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
 // Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths

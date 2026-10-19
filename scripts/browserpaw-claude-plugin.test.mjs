@@ -82,9 +82,7 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
   it('mirrors the canonical skill byte-for-byte', () => {
     const walk = (dir) =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-        entry.isDirectory()
-          ? walk(join(dir, entry.name))
-          : [join(dir, entry.name)],
+        entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
       );
 
     for (const src of walk(canonicalSkillDir)) {
@@ -96,6 +94,21 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
       // browserpaw_ prefix rewriting and no Hermes scope banner may appear.
       assert.deepEqual(readFileSync(dest), readFileSync(src), `mirror differs at ${rel}`);
     }
+
+    // Compare the relative-path sets too: a file retired upstream must not survive in
+    // the mirror, which a source-only walk would miss.
+    const canonicalFiles = walk(canonicalSkillDir)
+      .map((file) => relative(canonicalSkillDir, file))
+      .filter((rel) => rel !== 'HERMES_PLUGIN_SKILL.md')
+      .sort();
+    const mirrorFiles = walk(mirrorSkillDir)
+      .map((file) => relative(mirrorSkillDir, file))
+      .sort();
+    assert.deepEqual(
+      mirrorFiles,
+      canonicalFiles,
+      'mirror must contain exactly the canonical files',
+    );
 
     assert.ok(
       !existsSync(join(mirrorSkillDir, 'HERMES_PLUGIN_SKILL.md')),
