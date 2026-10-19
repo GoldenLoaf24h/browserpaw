@@ -8,27 +8,27 @@ Root of BrowserPaw — a high-efficiency Chrome browser automation MCP server an
 
 ## Key Files
 
-| File                          | Description                                                                      |
-| ----------------------------- | -------------------------------------------------------------------------------- |
-| `AGENT_CONFIG_GUIDE.md`       | Client configuration instructions for Claude, Cursor, and Windsurf               |
-| `AGENT_CONFIG_GUIDE.zh-CN.md` | English redirect stub kept for inbound links to the retired Chinese config guide |
-| `CHANGELOG.md`                | Concise pointer to the centralized release archive in docs/releases/             |
-| `CONTRIBUTING.md`             | Implementation file for CONTRIBUTING.md                                          |
-| `INSTALL.md`                  | Installation instructions for the native messaging host and extension            |
-| `LICENSE`                     | Implementation file for LICENSE                                                  |
-| `NOTICE`                      | Implementation file for NOTICE                                                   |
-| `PRIVACY.md`                  | Privacy notice detailing data locality and local-only processing guarantees      |
-| `PROJECT.md`                  | Engineering specifications, quality gates, and architecture summaries            |
-| `PROJECT.zh-CN.md`            | English redirect stub kept for inbound links to the retired Chinese PROJECT      |
-| `README.md`                   | Project overview, quick start, architecture highlights, and setup guide          |
-| `README.zh-CN.md`             | English redirect stub kept for inbound links to the retired Chinese README       |
-| `TEST_INFRA.md`               | Comprehensive E2E test infrastructure specification and test matrix              |
-| `commitlint.config.cjs`       | Conventional commits enforcement rules for git commit messages                   |
-| `eslint.config.js`            | Global ESLint 9 flat configuration across TypeScript and Vue files               |
-| `marketplace.json`            | MCP and plugin catalog registry metadata for plugin discovery                    |
-| `package.json`                | Monorepo root scripts, dependencies, workspaces, and metadata                    |
-| `pnpm-lock.yaml`              | Pinned dependency tree lockfile                                                  |
-| `pnpm-workspace.yaml`         | PNPM workspace definition configuring packages and apps                          |
+| File                          | Description                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `AGENT_CONFIG_GUIDE.md`       | Client configuration instructions for Claude, Cursor, and Windsurf          |
+| `AGENT_CONFIG_GUIDE.zh-CN.md` | Simplified Chinese translation of the AI agent client configuration guide   |
+| `CHANGELOG.md`                | Concise pointer to the centralized release archive in docs/releases/        |
+| `CONTRIBUTING.md`             | Implementation file for CONTRIBUTING.md                                     |
+| `INSTALL.md`                  | Installation instructions for the native messaging host and extension       |
+| `LICENSE`                     | Implementation file for LICENSE                                             |
+| `NOTICE`                      | Implementation file for NOTICE                                              |
+| `PRIVACY.md`                  | Privacy notice detailing data locality and local-only processing guarantees |
+| `PROJECT.md`                  | Engineering specifications, quality gates, and architecture summaries       |
+| `PROJECT.zh-CN.md`            | Simplified Chinese translation of the engineering project specification     |
+| `README.md`                   | Project overview, quick start, architecture highlights, and setup guide     |
+| `README.zh-CN.md`             | Simplified Chinese translation of the repository README                     |
+| `TEST_INFRA.md`               | Comprehensive E2E test infrastructure specification and test matrix         |
+| `commitlint.config.cjs`       | Conventional commits enforcement rules for git commit messages              |
+| `eslint.config.js`            | Global ESLint 9 flat configuration across TypeScript and Vue files          |
+| `marketplace.json`            | MCP and plugin catalog registry metadata for plugin discovery               |
+| `package.json`                | Monorepo root scripts, dependencies, workspaces, and metadata               |
+| `pnpm-lock.yaml`              | Pinned dependency tree lockfile                                             |
+| `pnpm-workspace.yaml`         | PNPM workspace definition configuring packages and apps                     |
 
 ## Subdirectories
 
