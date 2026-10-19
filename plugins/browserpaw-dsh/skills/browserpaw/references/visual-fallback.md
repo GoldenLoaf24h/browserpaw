@@ -11,7 +11,7 @@ This reference documents the secondary visual execution engine for canvas games,
 - **DOM Obfuscation**: Elements deliberately detached or hidden from accessibility trees.
 - **Visual Verification**: Checking visual styling, alignment, or screenshot-based evidence.
 
-_Rule: Never use visual fallback when a numeric index from `browserpaw_read_dom` is available. DOM interaction is 10x faster and 100% deterministic._
+_Rule: Never use visual fallback when a numeric index from `chrome_read_dom` is available. DOM interaction is 10x faster and 100% deterministic._
 
 ---
 
@@ -24,7 +24,7 @@ BrowserPaw automatically resamples all screenshots using `OffscreenCanvas` to ex
 
 ---
 
-## 3. Visual Perception Tools (`browserpaw_screenshot`)
+## 3. Visual Perception Tools (`chrome_screenshot`)
 
 ### A. Calibrated Coordinate Grid & Perimeter Rulers
 
@@ -74,7 +74,7 @@ BrowserPaw automatically resamples all screenshots using `OffscreenCanvas` to ex
 
 ---
 
-## 4. Multimodal Coordinate Actions (`browserpaw_computer`)
+## 4. Multimodal Coordinate Actions (`chrome_computer`)
 
 For visual clicks and typing, BrowserPaw supports Polymorphic Coordinate Input (PCIE):
 

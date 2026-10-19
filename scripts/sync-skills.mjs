@@ -15,7 +15,8 @@ const targets = [
     isHermes: true,
   },
   { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw') },
-  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'), isPlugin: true },
+  // The DSH bridge exposes the literal `chrome_*` names; do NOT set isPlugin here.
+  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw') },
   // Claude Code speaks the canonical chrome_* names over stdio, so this mirror stays verbatim.
   { dir: path.join(repoRoot, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw') },
 ];

@@ -139,13 +139,24 @@ try {
     ),
     canonicalSkill,
   );
-  assert.strictEqual(
-    fs.readFileSync(
-      path.join(sandbox, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw', 'SKILL.md'),
-      'utf-8',
-    ),
-    expectedPluginSkill,
+  // The DSH target must stay byte-exact with the canonical source: the DSH bridge exposes
+  // the literal `chrome_*` names, so it must NOT get the Hermes `chrome_` -> `browserpaw_` rewrite.
+  const dshSkillPath = path.join(
+    sandbox,
+    'plugins',
+    'browserpaw-dsh',
+    'skills',
+    'browserpaw',
+    'SKILL.md',
   );
+  const dshSkill = fs.readFileSync(dshSkillPath, 'utf-8');
+  assert.strictEqual(dshSkill, canonicalSkill);
+  assert.ok(
+    fs.readFileSync(dshSkillPath).equals(fs.readFileSync(path.join(sandbox, 'skill', 'SKILL.md'))),
+    'FAIL: dsh mirror SKILL.md is not byte-identical to the canonical skill/SKILL.md',
+  );
+  assert.ok((dshSkill.match(/chrome_/g) || []).length > 0);
+  assert.strictEqual((dshSkill.match(/browserpaw_/g) || []).length, 0);
 
   // Standard target: still canonical skill, HERMES_PLUGIN_SKILL.md not copied
   assert.strictEqual(
