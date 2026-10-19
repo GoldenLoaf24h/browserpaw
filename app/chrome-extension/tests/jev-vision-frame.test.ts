@@ -8,6 +8,7 @@ import {
 import { validateVisionFrame, type VisionFrameValidationOptions } from '../utils/screenshot-guard';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
+import { sessionTabAffinity } from '../utils/session-tab-affinity';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as cursor from '../entrypoints/background/tools/browser/agent-cursor';
 import type { PerceptiveSignature } from '../entrypoints/background/tools/browser/dom-indexer';
@@ -315,5 +316,31 @@ describe('Real interact executor with frame-bound click', () => {
   ])('rejects invalid inputs: %j', async (overrides) => {
     expect((await click(overrides)).isError).toBe(true);
     expect(events).toHaveLength(0);
+  });
+  it('cancels handover tracking when a visual click returns before waitForHandover', async () => {
+    const cancel = vi.fn();
+    const waitForHandover = vi.fn(async () => null);
+    const start = vi
+      .spyOn(sessionTabAffinity, 'startHandoverTracking')
+      .mockReturnValue({ waitForHandover, cancel } as any);
+
+    // The deadline check inside the pre-press wait returns after tracking started but
+    // before waitForHandover(), which used to leak the tab listeners.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    moved = () => {
+      clock.mockReturnValue(1200);
+    };
+    const rejected = await click({ expectedDeadlineAt: 1100, prePressDelayMs: 5 });
+    expect(rejected.isError).toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(waitForHandover).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    clock.mockRestore();
+
+    // A valid frame reaches dispatch and releases the tracker on the normal path too.
+    expect((await click()).isError).toBe(false);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(waitForHandover).toHaveBeenCalledTimes(1);
   });
 });

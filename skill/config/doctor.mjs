@@ -16,14 +16,19 @@
  *   node doctor.mjs --fix  # Diagnose and auto-repair common defects
  */
 
-import { existsSync, readFileSync, readdirSync, mkdirSync, cpSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, cpSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve, relative, delimiter, dirname } from 'node:path';
+import { join, resolve, relative, delimiter, dirname, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const AUTO_FIX = process.argv.includes('--fix');
-const PORT = 12306;
+// Same precedence and validation as the daemon and clients: CHROME_MCP_PORT > MCP_HTTP_PORT > 12306.
+const PORT = (() => {
+  const raw = process.env.CHROME_MCP_PORT || process.env.MCP_HTTP_PORT;
+  const parsed = raw ? Number.parseInt(String(raw), 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : 12306;
+})();
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const TOKEN_DIR = join(homedir(), '.chrome-mcp');
 const TOKEN_PATH = join(TOKEN_DIR, 'bridge-token');
@@ -220,14 +225,31 @@ function treesMatch(a, b) {
   return true;
 }
 
+// cpSync merges into an existing tree, so files dropped from the current build would
+// survive and the next run would still be out of sync. Clear the destination first,
+// unless the destination contains the build itself (clearing it would delete the source).
+function replaceTree(src, dest) {
+  const relFromDest = relative(resolve(dest), resolve(src));
+  const srcInsideDest =
+    relFromDest === '' || (!relFromDest.startsWith('..') && !isAbsolute(relFromDest));
+  if (srcInsideDest) {
+    throw new Error(`Refusing to clear ${dest}: it contains the extension build output`);
+  }
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(dest)) {
+    rmSync(join(dest, entry), { recursive: true, force: true });
+  }
+  cpSync(src, dest, { recursive: true });
+  return treesMatch(src, dest);
+}
+
 // Check Standalone Load Directories. Each directory reports exactly once, so a repair
 // that succeeds does not leave the earlier failure counted against the final status.
 for (const dir of STANDALONE_EXT_DIRS) {
   if (!existsSync(dir)) {
     if (AUTO_FIX && buildOk) {
       try {
-        mkdirSync(dir, { recursive: true });
-        cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+        replaceTree(EXT_SRC_OUTPUT, dir);
         report(true, `Created and Synced Standalone Directory: ${dir}`);
       } catch (err) {
         report(false, `Failed to create/sync ${dir}`, err.message);
@@ -246,7 +268,9 @@ for (const dir of STANDALONE_EXT_DIRS) {
     continue;
   }
   try {
-    cpSync(EXT_SRC_OUTPUT, dir, { recursive: true });
+    if (!replaceTree(EXT_SRC_OUTPUT, dir)) {
+      throw new Error('copy completed but the destination still differs from the build');
+    }
     report(true, `Standalone Directory Synced via Auto-Fix: ${dir}`);
   } catch (err) {
     report(false, `Failed to copy build to ${dir}`, err.message);

@@ -19,9 +19,15 @@ function write(file, content) {
 function createSandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-doctor-'));
   write(path.join(root, 'skill/config/doctor.mjs'), fs.readFileSync(doctorSource));
-  write(path.join(root, 'app/chrome-extension/.output/chrome-mv3/manifest.json'), '{"version":"4.0.0"}');
+  write(
+    path.join(root, 'app/chrome-extension/.output/chrome-mv3/manifest.json'),
+    '{"version":"4.0.0"}',
+  );
   write(path.join(root, 'app/chrome-extension/.output/chrome-mv3/background.js'), 'build-bg');
-  write(path.join(root, 'app/chrome-extension/.output/chrome-mv3/popup.html'), '<html>build</html>');
+  write(
+    path.join(root, 'app/chrome-extension/.output/chrome-mv3/popup.html'),
+    '<html>build</html>',
+  );
 
   const home = path.join(root, 'home');
   fs.mkdirSync(home, { recursive: true });
@@ -34,7 +40,7 @@ function createSandbox() {
       'os.homedir = () => process.env.TEST_TEMP_HOME;',
       "os.platform = () => 'linux';",
       'syncBuiltinESMExports();',
-      "globalThis.fetch = async () => { throw new Error('offline'); };",
+      "globalThis.fetch = async (url) => { throw new Error('offline: ' + url); };",
     ].join('\n'),
   );
   return { root, home, preload };
@@ -114,6 +120,39 @@ describe('doctor.mjs repair behaviour', () => {
     assert.match(output, /Diagnostic Complete: \d+ Passed, 1 Failed\./);
   });
 
+  it('probes the bridge port from CHROME_MCP_PORT/MCP_HTTP_PORT, not a hardcoded 12306', () => {
+    const fromChromePort = runDoctor(sandbox, [], { CHROME_MCP_PORT: '23456' });
+    const chromeOutput = (fromChromePort.stdout || '') + (fromChromePort.stderr || '');
+    assert.ok(chromeOutput.includes('127.0.0.1:23456'), chromeOutput);
+
+    const fromMcpPort = runDoctor(sandbox, [], {
+      CHROME_MCP_PORT: '',
+      MCP_HTTP_PORT: '34567',
+    });
+    const mcpOutput = (fromMcpPort.stdout || '') + (fromMcpPort.stderr || '');
+    assert.ok(mcpOutput.includes('127.0.0.1:34567'), mcpOutput);
+
+    // Invalid values fall back to the documented default instead of a bogus port.
+    const invalid = runDoctor(sandbox, [], { CHROME_MCP_PORT: '70000' });
+    const invalidOutput = (invalid.stdout || '') + (invalid.stderr || '');
+    assert.ok(invalidOutput.includes('127.0.0.1:12306'), invalidOutput);
+  });
+
+  it('--fix removes files that no longer exist in the current build', () => {
+    const standalone = path.join(sandbox.root, 'load-dir');
+    write(path.join(standalone, 'background.js'), 'build-bg');
+    write(path.join(standalone, 'popup.html'), '<html>build</html>');
+    write(path.join(standalone, 'removed-chunk.js'), 'old-build-only');
+
+    const proc = runDoctor(sandbox, ['--fix'], { BROWSERPAW_STANDALONE_DIRS: standalone });
+    const output = (proc.stdout || '') + (proc.stderr || '');
+    assert.ok(output.includes('Standalone Directory Synced via Auto-Fix'), output);
+    assert.ok(
+      !fs.existsSync(path.join(standalone, 'removed-chunk.js')),
+      'a file dropped from the build must not survive a repair',
+    );
+  });
+
   it('reports a repaired directory once, leaving no stale failure behind', () => {
     const standalone = path.join(sandbox.root, 'load-dir');
     write(path.join(standalone, 'background.js'), 'stale-bg');
@@ -123,6 +162,9 @@ describe('doctor.mjs repair behaviour', () => {
     const output = (proc.stdout || '') + (proc.stderr || '');
 
     assert.ok(output.includes('Synced via Auto-Fix'), output);
-    assert.ok(!output.includes('[FAIL] Standalone Directory'), 'a repaired directory must not be reported as failed');
+    assert.ok(
+      !output.includes('[FAIL] Standalone Directory'),
+      'a repaired directory must not be reported as failed',
+    );
   });
 });

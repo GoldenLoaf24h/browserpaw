@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { wrapUserCode, MCP_INPAGE_HELPERS } from '../entrypoints/background/tools/browser/javascript';
+import {
+  wrapUserCode,
+  MCP_INPAGE_HELPERS,
+} from '../entrypoints/background/tools/browser/javascript';
 
 describe('In-Page Agent Helpers & Workflows', () => {
   const evaluateInPage = async (code: string) => {
@@ -264,6 +267,61 @@ describe('In-Page Agent Helpers & Workflows', () => {
     });
   });
 
+  describe('fast-snapshot index resolution', () => {
+    const snapshotSymbol = Symbol.for('__browser_use_last_snapshot_type__');
+
+    afterEach(() => {
+      delete (globalThis as any).__pawFast;
+      delete (globalThis as any)[snapshotSymbol];
+    });
+
+    it('resolves numeric indices through __pawFast.actionElements while a fast snapshot is current', async () => {
+      document.body.innerHTML = `
+        <button id="fast-target">Fast</button>
+        <button id="standard-target" data-mcp-idx="1">Standard</button>
+      `;
+
+      (globalThis as any).__pawFast = {
+        actionElements: new Map<string | number, Element>([
+          [1, document.getElementById('fast-target')],
+        ]),
+      };
+      (globalThis as any)[snapshotSymbol] = 'fast';
+
+      const result = await evaluateInPage(`
+        return {
+          numeric: mcp.get(1)?.id,
+          ref: mcp.get('ref_1')?.id,
+          stringIndex: mcp.get('1')?.id
+        };
+      `);
+
+      expect(result).toEqual({
+        numeric: 'fast-target',
+        ref: 'fast-target',
+        stringIndex: 'fast-target',
+      });
+    });
+
+    it('ignores stale fast actions once a standard snapshot replaced them', async () => {
+      document.body.innerHTML = `
+        <button id="fast-target">Fast</button>
+        <button id="standard-target" data-mcp-idx="1">Standard</button>
+      `;
+
+      (globalThis as any).__pawFast = {
+        actionElements: new Map<string | number, Element>([
+          [1, document.getElementById('fast-target')],
+        ]),
+      };
+      (globalThis as any)[snapshotSymbol] = 'standard';
+
+      const result = await evaluateInPage(`return mcp.get(1)?.id;`);
+
+      expect(result).toBe('standard-target');
+    });
+  });
+
   describe('End-to-End Single-Turn In-Page Agent Workflow', () => {
     it('executes a complex multi-step cart cleanup workflow in a single turn', async () => {
       document.body.innerHTML = `
@@ -455,4 +513,3 @@ describe('In-Page Agent Helpers & Workflows', () => {
     });
   });
 });
-

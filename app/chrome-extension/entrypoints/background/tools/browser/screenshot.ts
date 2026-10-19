@@ -954,6 +954,33 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         throw new Error('Failed to capture image data');
       }
 
+      // The Jev viewport path clicks the coordinates described by its vision frame after
+      // this tool returns, but the outer finally restores preparePageForCapture's
+      // scrollbar-hiding stylesheet only then. Restore it now so the post-capture probes
+      // and the registered frame describe the layout the caller will actually interact
+      // with; didPreparePage is cleared to keep the outer finally from resetting twice.
+      if (
+        didPreparePage &&
+        isJevVision &&
+        !fullPage &&
+        !selector &&
+        typeof args.targetIndex !== 'number'
+      ) {
+        try {
+          const resetMessage: Record<string, unknown> = {
+            action: TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE,
+          };
+          if (originalScroll) {
+            resetMessage.scrollX = originalScroll.x;
+            resetMessage.scrollY = originalScroll.y;
+          }
+          await this.sendToHelperWithRetry(tab.id!, resetMessage);
+          didPreparePage = false;
+        } catch (err) {
+          console.warn('Failed to reset page after Jev viewport capture:', err);
+        }
+      }
+
       // TOOL01: Clamp to maxWidth before grid overlay, caching, and disk saving
       let viewportScale = 1;
       const effectiveMaxWidth =

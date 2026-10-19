@@ -42,6 +42,18 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   );
   const deref = (e) => (e && typeof e.deref === 'function' ? e.deref() : e);
 
+  // A fast snapshot clears the standard index maps and keeps its actions only in the
+  // fast action map, so a numeric ref must consult it while that snapshot is current.
+  const fromFastAction = (id) => {
+    if (typeof globalThis === 'undefined') return undefined;
+    if (globalThis[Symbol.for('__browser_use_last_snapshot_type__')] !== 'fast') return undefined;
+    const fast = globalThis.__pawFast || globalThis.__clawFast;
+    const map = fast && fast.actionElements;
+    if (!map || typeof map.get !== 'function') return undefined;
+    const el = deref(map.get(id));
+    return el && el.isConnected !== false ? el : undefined;
+  };
+
   // Robust :has-text evaluator supporting:
   // 1. Quotes with escaped characters: :has-text("Submit 'Now'")
   // 2. Regular expressions: :has-text(/失效|无货/)
@@ -327,6 +339,9 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
 
   const resolve = (t) => {
     if (typeof t === 'number') {
+      const fromFast = fromFastAction(t);
+      if (fromFast) return fromFast;
+
       const fromMap = deref(getMap().get(t));
       if (fromMap && fromMap.isConnected !== false) return fromMap;
       const fpMap =
@@ -367,6 +382,9 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
       if (/^(?:ref_)?\\d+$/.test(trimmed)) {
         const p = parseInt(trimmed.replace(/^ref_/, ''), 10);
         if (!isNaN(p)) {
+          // Fast-snapshot positions resolve through its action map first.
+          const fromFast = fromFastAction(p);
+          if (fromFast) return fromFast;
           const fromMap = deref(getMap().get(p));
           if (fromMap && fromMap.isConnected !== false) return fromMap;
           const fpMap =
