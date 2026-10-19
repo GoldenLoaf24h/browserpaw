@@ -130,6 +130,20 @@ describe('doctor.mjs repair behaviour', () => {
     assert.strictEqual(fs.readFileSync(path.join(standalone, 'background.js'), 'utf8'), 'build-bg');
   });
 
+  it('reports a configured path that is a file instead of crashing the remaining checks', () => {
+    const notADirectory = path.join(sandbox.root, 'load-dir');
+    write(notADirectory, 'i am a file');
+
+    const proc = runDoctor(sandbox, ['--fix'], { BROWSERPAW_STANDALONE_DIRS: notADirectory });
+    const output = (proc.stdout || '') + (proc.stderr || '');
+
+    assert.ok(output.includes('Standalone Directory Unreadable'), output);
+    assert.doesNotMatch(output, /ENOTDIR|EACCES|at Object\./, 'doctor must not crash with a stack');
+    // The run must still reach its summary and the later checks.
+    assert.match(output, /Diagnostic Complete: \d+ Passed, \d+ Failed\./);
+    assert.strictEqual(fs.readFileSync(notADirectory, 'utf8'), 'i am a file');
+  });
+
   it('compares the whole tree: a same-length stale background.js is still out of sync', () => {
     const standalone = path.join(sandbox.root, 'load-dir');
     write(path.join(standalone, 'background.js'), 'stale-bg');

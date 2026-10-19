@@ -30,6 +30,10 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const CDP_SESSION_KEY = 'javascript';
+const REF_POINTER_ATTR = 'data-browserpaw-ref-attr';
+// Upper bound on the elements one evaluation may stamp; fast snapshots cap at 250
+// actions and a standard index tree beyond a few hundred is not a ref target.
+const REF_BRIDGE_MAX = 500;
 
 export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   const getMap = () => (
@@ -42,15 +46,22 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
   );
   const deref = (e) => (e && typeof e.deref === 'function' ? e.deref() : e);
 
-  // A fast snapshot clears the standard index maps and keeps its actions only in the
-  // fast action map, so a numeric ref must consult it while that snapshot is current.
-  const fromFastAction = (id) => {
-    if (typeof globalThis === 'undefined') return undefined;
-    if (globalThis[Symbol.for('__browser_use_last_snapshot_type__')] !== 'fast') return undefined;
-    const fast = globalThis.__pawFast || globalThis.__clawFast;
-    const map = fast && fast.actionElements;
-    if (!map || typeof map.get !== 'function') return undefined;
-    const el = deref(map.get(id));
+  // Snapshot indexes live in the extension's isolated world, which page-world code
+  // cannot read. While an evaluation runs, the background stamps the elements behind
+  // the indexes the code mentions and points documentElement at that attribute, so a
+  // numeric ref resolves through the DOM instead of the isolated caches.
+  const fromRefAttr = (id) => {
+    const attr =
+      typeof document !== 'undefined' && document.documentElement
+        ? document.documentElement.getAttribute('data-browserpaw-ref-attr')
+        : null;
+    if (!attr) return undefined;
+    let el = null;
+    try {
+      el = document.querySelector('[' + attr + '="' + id + '"]');
+    } catch {
+      return undefined;
+    }
     return el && el.isConnected !== false ? el : undefined;
   };
 
@@ -339,8 +350,8 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
 
   const resolve = (t) => {
     if (typeof t === 'number') {
-      const fromFast = fromFastAction(t);
-      if (fromFast) return fromFast;
+      const fromRef = fromRefAttr(t);
+      if (fromRef) return fromRef;
 
       const fromMap = deref(getMap().get(t));
       if (fromMap && fromMap.isConnected !== false) return fromMap;
@@ -382,9 +393,8 @@ export const MCP_INPAGE_HELPERS = `const mcp = (() => {
       if (/^(?:ref_)?\\d+$/.test(trimmed)) {
         const p = parseInt(trimmed.replace(/^ref_/, ''), 10);
         if (!isNaN(p)) {
-          // Fast-snapshot positions resolve through its action map first.
-          const fromFast = fromFastAction(p);
-          if (fromFast) return fromFast;
+          const fromRef = fromRefAttr(p);
+          if (fromRef) return fromRef;
           const fromMap = deref(getMap().get(p));
           if (fromMap && fromMap.isConnected !== false) return fromMap;
           const fpMap =
@@ -1230,6 +1240,70 @@ async function executeViaScripting(
 }
 
 // ============================================================================
+// Snapshot Index Bridge
+// ============================================================================
+
+/**
+ * Snapshot indexes live only in the extension's isolated world, but the helper
+ * runs in the page's MAIN world (CDP Runtime.evaluate and the scripting fallback
+ * both target it), which cannot read them. Before evaluating, stamp the elements
+ * behind the numeric literals in the code with a per-evaluation random attribute
+ * and point documentElement at it; the helper resolves refs through that
+ * attribute. Returns the cleanup that removes both, or a no-op.
+ *
+ * Only literals are bridged: a ref computed at runtime from a prior tool result
+ * never appears in the code, and no DOM bridge can predict it.
+ */
+async function bridgeSnapshotIndexes(tabId: number, code: string): Promise<() => Promise<void>> {
+  const indexes = [...new Set((code.match(/\d+/g) ?? []).map((raw) => Number.parseInt(raw, 10)))]
+    .filter((n) => n >= 1)
+    .slice(0, REF_BRIDGE_MAX);
+  if (indexes.length === 0) return async () => {};
+
+  const attr = 'data-browserpaw-ref-' + Math.random().toString(36).slice(2, 10);
+  const cleanup = async () => {
+    // Cleanup runs in a finally path: a closed or restricted tab must not turn the
+    // tool's real result into a cleanup error.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (a: string, pointer: string) => {
+          for (const el of document.querySelectorAll('[' + a + ']')) el.removeAttribute(a);
+          document.documentElement.removeAttribute(pointer);
+        },
+        args: [attr, REF_POINTER_ATTR],
+      });
+    } catch {}
+  };
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (a: string, pointer: string, ids: number[]) => {
+        // Isolated world: the snapshot maps are reachable here, not from the page.
+        const g = globalThis as any;
+        const fast = g.__pawFast || g.__clawFast;
+        const isFast = g[Symbol.for('__browser_use_last_snapshot_type__')] === 'fast';
+        const fastMap = fast && fast.actionElements;
+        const isoMap = g[Symbol.for('__browser_use_isolated_index_map__')];
+        const deref = (e: any) => (e && typeof e.deref === 'function' ? e.deref() : e);
+        for (const id of ids) {
+          const el = (isFast ? deref(fastMap?.get(id)) : null) || deref(isoMap?.get(id));
+          if (el instanceof Element && el.isConnected) el.setAttribute(a, String(id));
+        }
+        document.documentElement.setAttribute(pointer, a);
+      },
+      args: [attr, REF_POINTER_ATTR, indexes],
+    });
+  } catch {
+    // Restricted or closing tab: let the evaluation path report the real error.
+    await cleanup();
+    return async () => {};
+  }
+  return cleanup;
+}
+
+// ============================================================================
 // Tool Implementation
 // ============================================================================
 
@@ -1268,30 +1342,37 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
 
       const warnings: string[] = [];
 
-      // Try CDP execution first
-      const cdpResult = await executeViaCdp(tabId, code, options, args.contextId);
+      // The helper runs in the page world, so snapshot refs need a DOM bridge for
+      // the duration of the evaluation; it is removed on every exit path.
+      const clearRefBridge = await bridgeSnapshotIndexes(tabId, code);
+      try {
+        // Try CDP execution first
+        const cdpResult = await executeViaCdp(tabId, code, options, args.contextId);
 
-      if (cdpResult.ok) {
-        return this.buildSuccessResponse(tabId, cdpResult, startTime);
+        if (cdpResult.ok) {
+          return this.buildSuccessResponse(tabId, cdpResult, startTime);
+        }
+
+        // If not a debugger conflict, return the CDP error
+        if (cdpResult.error.kind !== 'debugger_conflict') {
+          return this.buildErrorResponse(tabId, cdpResult, startTime);
+        }
+
+        // Debugger conflict - fallback to scripting API
+        warnings.push(
+          'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in MAIN world).',
+        );
+
+        const scriptingResult = await executeViaScripting(tabId, code, options);
+
+        if (scriptingResult.ok) {
+          return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
+        }
+
+        return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings);
+      } finally {
+        await clearRefBridge();
       }
-
-      // If not a debugger conflict, return the CDP error
-      if (cdpResult.error.kind !== 'debugger_conflict') {
-        return this.buildErrorResponse(tabId, cdpResult, startTime);
-      }
-
-      // Debugger conflict - fallback to scripting API
-      warnings.push(
-        'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in MAIN world).',
-      );
-
-      const scriptingResult = await executeViaScripting(tabId, code, options);
-
-      if (scriptingResult.ok) {
-        return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
-      }
-
-      return this.buildErrorResponse(tabId, scriptingResult, startTime, warnings);
     } catch (error) {
       console.error('JavaScriptTool.execute error:', error);
       return createErrorResponse(

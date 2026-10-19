@@ -725,8 +725,8 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
     );
   });
 
-  describe('D-21: Jev helper fallback restores page styles before probes', () => {
-    it('resets preparePageForCapture before post-capture probes and frame registration', async () => {
+  describe('D-21: Jev helper fallback never prepares the page', () => {
+    it('skips preparePageForCapture so the bitmap matches the layout the caller clicks', async () => {
       vi.useFakeTimers();
       try {
         const url = 'https://example.com/jev-fallback';
@@ -779,20 +779,11 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
         const result = await pending;
         expect(result.isError, JSON.stringify(result)).toBeFalsy();
 
-        const prepareIdx = helperActions.indexOf(
-          TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
-        );
-        const resetIdx = helperActions.indexOf(
-          TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE,
-        );
-        expect(prepareIdx).toBeGreaterThanOrEqual(0);
-        expect(resetIdx).toBeGreaterThan(prepareIdx);
-        // Post-capture probes run after the helper reset, so the frame describes the
-        // restored layout the caller will click; the outer finally must not reset twice.
+        // The viewport bitmap and the registered frame must both describe the unrestored
+        // page the caller will click, so preparation never runs and no reset is needed.
+        expect(helperActions).not.toContain(TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE);
+        expect(helperActions).not.toContain(TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE);
         expect(probeOrder.filter((name) => name === 'inPageGetScrollState')).toHaveLength(2);
-        expect(
-          helperActions.filter((a) => a === TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE),
-        ).toHaveLength(1);
       } finally {
         vi.useRealTimers();
       }

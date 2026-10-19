@@ -886,19 +886,29 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         await this.injectScreenshotHelper(tab.id!);
         await new Promise((resolve) => setTimeout(resolve, SCREENSHOT_CONSTANTS.SCRIPT_INIT_DELAY));
 
+        // The Jev viewport path registers a vision frame whose coordinates the caller
+        // clicks after this tool returns. preparePageForCapture hides scrollbars, which
+        // reflows pages with non-overlay scrollbars; capturing under it would describe a
+        // layout that is gone by click time, and the pre/post probes cannot see the
+        // difference because both run after the reset. Skip preparation for this path.
+        const skipPrepareForVision =
+          isJevVision && !fullPage && !selector && typeof args.targetIndex !== 'number';
+
         // Prepare page (hide scrollbars, handle fixed elements)
         // Helper messages can die with a stale listener after extension
         // reloads or renderer swaps. One re-inject + retry recovers them;
         // a second failure surfaces as the original error.
-        didPreparePage = true;
-        const prepareResp = await this.sendToHelperWithRetry(tab.id!, {
-          action: TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
-          options: { fullPage },
-        });
-        if (!prepareResp || prepareResp.success !== true) {
-          throw new Error(
-            'Screenshot helper did not acknowledge page preparation. The content script may not be injected or cannot run on this page.',
-          );
+        if (!skipPrepareForVision) {
+          didPreparePage = true;
+          const prepareResp = await this.sendToHelperWithRetry(tab.id!, {
+            action: TOOL_MESSAGE_TYPES.SCREENSHOT_PREPARE_PAGE_FOR_CAPTURE,
+            options: { fullPage },
+          });
+          if (!prepareResp || prepareResp.success !== true) {
+            throw new Error(
+              'Screenshot helper did not acknowledge page preparation. The content script may not be injected or cannot run on this page.',
+            );
+          }
         }
 
         // Get page details with validation
@@ -952,33 +962,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
 
       if (!finalImageDataUrl) {
         throw new Error('Failed to capture image data');
-      }
-
-      // The Jev viewport path clicks the coordinates described by its vision frame after
-      // this tool returns, but the outer finally restores preparePageForCapture's
-      // scrollbar-hiding stylesheet only then. Restore it now so the post-capture probes
-      // and the registered frame describe the layout the caller will actually interact
-      // with; didPreparePage is cleared to keep the outer finally from resetting twice.
-      if (
-        didPreparePage &&
-        isJevVision &&
-        !fullPage &&
-        !selector &&
-        typeof args.targetIndex !== 'number'
-      ) {
-        try {
-          const resetMessage: Record<string, unknown> = {
-            action: TOOL_MESSAGE_TYPES.SCREENSHOT_RESET_PAGE_AFTER_CAPTURE,
-          };
-          if (originalScroll) {
-            resetMessage.scrollX = originalScroll.x;
-            resetMessage.scrollY = originalScroll.y;
-          }
-          await this.sendToHelperWithRetry(tab.id!, resetMessage);
-          didPreparePage = false;
-        } catch (err) {
-          console.warn('Failed to reset page after Jev viewport capture:', err);
-        }
       }
 
       // TOOL01: Clamp to maxWidth before grid overlay, caching, and disk saving

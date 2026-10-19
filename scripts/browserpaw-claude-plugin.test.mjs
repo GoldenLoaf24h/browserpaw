@@ -60,8 +60,10 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
     assert.ok(server, '.mcp.json must declare the browserpaw server');
     assert.equal(server.type, 'stdio');
     assert.equal(server.command, 'mcp-chrome-stdio');
-    // The mirror stays verbatim, so the plugin must not rename tools via env.
-    assert.equal(server.env, undefined);
+    // The skill documents all 50 tools, and the low-level server does not advertise
+    // tools.listChanged, so clients never refresh a core-only list. The bundled server
+    // must therefore start on the full profile.
+    assert.deepEqual(server.env, { CHROME_MCP_TOOL_PROFILE: 'full' });
   });
 
   it('loads the skill under the bare /browserpaw name', () => {

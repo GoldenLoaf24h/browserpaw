@@ -340,6 +340,7 @@ describe('D-15 scripting fallback teardown', () => {
       `,
     });
 
+    // No numeric literal in the code, so no bridge is stamped: one evaluation only.
     expect(executeScript).toHaveBeenCalledTimes(1);
     expect(res.isError).toBe(false);
     const payload = JSON.parse((res.content[0] as { text: string }).text);
@@ -386,5 +387,145 @@ describe('D-15 scripting fallback teardown', () => {
     // String results are emitted verbatim by the output formatter.
     expect(payload.result).toBe('ok');
     expectPrototypesRestored();
+  });
+});
+
+describe('snapshot index bridge across the execution world (PR6 comment 4310322679)', () => {
+  const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
+  const snapshotSymbol = Symbol.for('__browser_use_last_snapshot_type__');
+  const indexMapSymbol = Symbol.for('__browser_use_isolated_index_map__');
+  const ISOLATED_KEYS = [
+    '__pawFast',
+    '__clawFast',
+    '__MCP_INDEX_MAP__',
+    snapshotSymbol,
+    indexMapSymbol,
+  ] as const;
+  let executeScript: ReturnType<typeof vi.fn>;
+  let world: 'MAIN' | 'ISOLATED';
+
+  // Run `fn` with the isolated-world globals hidden, as the MAIN world sees them.
+  const inPageWorld = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+    const saved = ISOLATED_KEYS.map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key as any),
+    ]);
+    for (const key of ISOLATED_KEYS) delete (globalThis as any)[key];
+    try {
+      return await fn();
+    } finally {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, key as any, descriptor);
+      }
+    }
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<button id="fast-target">Fast</button>';
+    (globalThis as Record<string, unknown>).__pawFast = {
+      actionElements: new Map<string | number, Element>([
+        [1, document.getElementById('fast-target')],
+      ]),
+    };
+    (globalThis as Record<string | symbol, unknown>)[snapshotSymbol] = 'fast';
+    (globalThis as Record<string | symbol, unknown>)[indexMapSymbol] = new Map([
+      [1, document.getElementById('fast-target')],
+    ]);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
+
+    // executeScript lands in whichever world `world` names: the bridge stamp runs
+    // isolated, the scripting-fallback evaluation runs in MAIN.
+    world = 'MAIN';
+    executeScript = vi.fn(async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+      const run = async () => [{ result: await opts.func(...(opts.args ?? [])) }];
+      return world === 'ISOLATED' ? run() : inPageWorld(run);
+    });
+    (chrome as unknown as { scripting: unknown }).scripting = { executeScript };
+  });
+
+  afterEach(() => {
+    delete (chrome as unknown as { scripting?: unknown }).scripting;
+    const g = globalThis as Record<string | symbol, unknown>;
+    for (const key of ISOLATED_KEYS) delete g[key];
+    document.body.innerHTML = '';
+    document.documentElement.removeAttribute('data-browserpaw-ref-attr');
+  });
+
+  it('resolves a numeric ref through the DOM stamp while the page world cannot see the map', async () => {
+    // The bridge stamps through the isolated world; the evaluation runs in MAIN.
+    executeScript.mockImplementation(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        world = 'ISOLATED';
+        try {
+          return [{ result: await opts.func(...(opts.args ?? [])) }];
+        } finally {
+          world = 'MAIN';
+        }
+      },
+    );
+    // executeViaCdp hands the wrapped expression to CDP, evaluated here in MAIN.
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
+      async (_tab: number, method: string, params?: any) => {
+        if (method !== 'Runtime.evaluate') return {};
+        const value = await inPageWorld(() => (0, eval)(params.expression));
+        return { result: { value } };
+      },
+    );
+
+    const res = await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+
+    expect(res.isError).toBe(false);
+    const payload = JSON.parse((res.content[0] as { text: string }).text);
+    expect(payload.engine).toBe('cdp');
+    // String results are emitted verbatim by the output formatter.
+    expect(payload.result).toBe('fast-target');
+  });
+
+  it('removes every stamp and the pointer after the evaluation, even when it throws', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    await javascriptTool.execute({ tabId: 42, code: 'throw new Error("boom");' });
+
+    expect(document.documentElement.hasAttribute('data-browserpaw-ref-attr')).toBe(false);
+    expect(document.querySelector('[data-browserpaw-ref-attr]')).toBeNull();
+    expect(document.querySelectorAll('[data-browserpaw-ref-\\w]')).toHaveLength(0);
+    expect(document.getElementById('fast-target')!.attributes).toHaveLength(1);
+  });
+
+  it('does not bridge when the code mentions no positive numeric literal', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    await javascriptTool.execute({ tabId: 42, code: 'return "no refs";' });
+
+    expect(executeScript).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.hasAttribute('data-browserpaw-ref-attr')).toBe(false);
+  });
+
+  it('keeps the evaluation result when the tab closes before cleanup', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    executeScript
+      .mockImplementationOnce(
+        async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => [
+          { result: await opts.func(...(opts.args ?? [])) },
+        ],
+      )
+      .mockImplementationOnce(
+        async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => [
+          { result: await opts.func(...(opts.args ?? [])) },
+        ],
+      )
+      .mockRejectedValueOnce(new Error('No tab with id: 42'));
+
+    const res = await javascriptTool.execute({ tabId: 42, code: 'return mcp.get(1)?.id;' });
+
+    expect(res.isError).toBe(false);
+    const payload = JSON.parse((res.content[0] as { text: string }).text);
+    expect(payload.engine).toBe('scripting');
   });
 });

@@ -294,6 +294,29 @@ for (const dir of STANDALONE_EXT_DIRS) {
     }
     continue;
   }
+  // A configured path that is a file (or an unreadable directory) would make the tree
+  // walk throw ENOTDIR/EACCES and abort every remaining check, so report it as failed.
+  // A link is left to replaceTree, which refuses it with the clearer symlink message.
+  let stat = null;
+  let readable = false;
+  try {
+    stat = lstatSync(dir);
+    // readdirSync is the operation treesMatch will perform; let it surface EACCES here.
+    if (stat.isDirectory()) {
+      readdirSync(dir);
+      readable = true;
+    }
+  } catch {
+    readable = false;
+  }
+  if (!readable && !stat?.isSymbolicLink()) {
+    report(
+      false,
+      `Standalone Directory Unreadable: ${dir}`,
+      'Configured path is not a readable directory',
+    );
+    continue;
+  }
   if (buildOk && treesMatch(EXT_SRC_OUTPUT, dir)) {
     report(true, `Standalone Directory Synced: ${dir}`, `All build files matched.`);
     continue;
