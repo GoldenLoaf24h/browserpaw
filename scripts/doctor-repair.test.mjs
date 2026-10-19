@@ -138,6 +138,24 @@ describe('doctor.mjs repair behaviour', () => {
     assert.ok(invalidOutput.includes('127.0.0.1:12306'), invalidOutput);
   });
 
+  it('--fix refuses a symlinked or junctioned standalone directory without touching its target', () => {
+    const realTarget = path.join(sandbox.root, 'real-target');
+    write(path.join(realTarget, 'user-data.txt'), 'keep-me');
+    const standalone = path.join(sandbox.root, 'load-dir');
+    fs.symlinkSync(realTarget, standalone, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const proc = runDoctor(sandbox, ['--fix'], { BROWSERPAW_STANDALONE_DIRS: standalone });
+    const output = (proc.stdout || '') + (proc.stderr || '');
+
+    assert.match(output, /symlink or junction/, output);
+    assert.strictEqual(
+      fs.readFileSync(path.join(realTarget, 'user-data.txt'), 'utf8'),
+      'keep-me',
+      'the link target must not be cleared',
+    );
+    assert.ok(fs.lstatSync(standalone).isSymbolicLink(), 'the link itself must survive');
+  });
+
   it('--fix removes files that no longer exist in the current build', () => {
     const standalone = path.join(sandbox.root, 'load-dir');
     write(path.join(standalone, 'background.js'), 'build-bg');

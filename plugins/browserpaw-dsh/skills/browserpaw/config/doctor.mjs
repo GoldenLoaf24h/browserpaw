@@ -16,7 +16,16 @@
  *   node doctor.mjs --fix  # Diagnose and auto-repair common defects
  */
 
-import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, cpSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdirSync,
+  rmSync,
+  cpSync,
+  lstatSync,
+  realpathSync,
+} from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve, relative, delimiter, dirname, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -229,7 +238,19 @@ function treesMatch(a, b) {
 // survive and the next run would still be out of sync. Clear the destination first,
 // unless the destination contains the build itself (clearing it would delete the source).
 function replaceTree(src, dest) {
-  const relFromDest = relative(resolve(dest), resolve(src));
+  // readdirSync/rmSync follow a symlink or junction, so clearing one would erase the
+  // real target's contents while the link itself survives and the copy still fails.
+  // Reject the link before touching anything, and resolve real paths so a destination
+  // that reaches the build through a link is still refused as self-destructive.
+  let destStat = null;
+  try {
+    destStat = lstatSync(dest);
+  } catch {}
+  if (destStat?.isSymbolicLink()) {
+    throw new Error(`Refusing to clear ${dest}: it is a symlink or junction`);
+  }
+  const realDest = destStat ? realpathSync(dest) : resolve(dest);
+  const relFromDest = relative(realDest, resolve(src));
   const srcInsideDest =
     relFromDest === '' || (!relFromDest.startsWith('..') && !isAbsolute(relFromDest));
   if (srcInsideDest) {
