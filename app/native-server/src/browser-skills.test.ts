@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { BrowserSkillStore, type SkillBrowser, type SkillDefinition } from './browser-skills';
 import { createDomExtractionStep } from './skill-read-program';
 import { JevClientWrapper } from './jev/jev-client';
+import { jevModelManager } from './server/jev-model-manager';
 
 const result = (value: unknown, isError = false) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -487,6 +488,7 @@ describe('verified browser skills', () => {
   });
 
   it('resolves find with exact zero-model only on explicit match, models single candidate under ambiguity, and flags coverage_limited above 32', async () => {
+    const modeSpy = jest.spyOn(jevModelManager, 'getActiveMode').mockReturnValue('remote');
     const querySpy = jest.spyOn(JevClientWrapper.prototype, 'query');
     try {
       await store.propose(definition());
@@ -605,6 +607,7 @@ describe('verified browser skills', () => {
       ).rejects.toThrow(/cancelled/i);
     } finally {
       querySpy.mockRestore();
+      modeSpy.mockRestore();
     }
   });
 

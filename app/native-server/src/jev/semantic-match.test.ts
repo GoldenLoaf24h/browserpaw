@@ -134,6 +134,7 @@ describe('semantic target response contract', () => {
     }
   });
   test('service errors do not produce an alternative target', async () => {
+    const mode = jest.spyOn(jevModelManager, 'getActiveMode').mockReturnValue('remote');
     const query = jest
       .spyOn(JevClientWrapper.prototype, 'query')
       .mockResolvedValue({ result: null, errorReason: 'network_error' });
@@ -147,6 +148,7 @@ describe('semantic target response contract', () => {
       expect(query.mock.calls[0][3]).toMatchObject({ retry: { maxRetries: 0 } });
     } finally {
       query.mockRestore();
+      mode.mockRestore();
     }
   });
 });
