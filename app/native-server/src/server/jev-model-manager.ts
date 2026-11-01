@@ -30,6 +30,20 @@ import { assertSafeUrlAsync, getSafeAgent } from '../file-handler';
 
 export type JevMode = 'off' | 'local' | 'remote';
 
+export interface JevModeState {
+  activeMode: JevMode;
+  requestedMode?: JevMode;
+  retryAfter?: number | null;
+  revision: number;
+  disabledReason: string | null;
+  changedAt: number;
+}
+
+export interface JevModeToken {
+  revision: number;
+  activeMode: JevMode;
+}
+
 export const HF_DOMESTIC_MIRRORS = [
   'https://hf-mirror.com',
   'https://hf-mirror.net',
@@ -64,7 +78,7 @@ export interface ModelDownloadProgress {
   selectedSource?: string;
 }
 
-export interface ModelStatusInfo {
+export interface ModelStatusInfo extends JevModeState {
   downloaded: boolean;
   path: string;
   sizeBytes: number;
@@ -100,6 +114,13 @@ const MODEL_FILES = [
 export class JevModelManager {
   private static instance: JevModelManager;
   private activeMode: JevMode = 'remote';
+  private requestedMode: JevMode = 'off';
+  private retryAfter: number | null = null;
+  private hasPersistedMode: boolean = false;
+  private revision: number = 1;
+  private disabledReason: string | null = null;
+  private modeChangedAt: number = Date.now();
+  private stateListeners: Set<(state: JevModeState) => void> = new Set();
   private activeModelName: string = DEFAULT_MODEL_NAME;
   private remoteConfig: {
     baseUrl?: string;
@@ -131,19 +152,27 @@ export class JevModelManager {
   private constructor() {
     this.ensureModelDir();
     this.loadRemoteConfig();
-    if (process.env.JEV_ACTIVE_MODE === 'local' || process.env.DECIDER_LOCAL === '1') {
-      this.activeMode = 'local';
-    } else if (
-      !this.activeMode ||
-      (this.activeMode === 'remote' &&
-        !this.remoteConfig.apiKey &&
-        !process.env.TYPESAFE_API_KEY &&
-        !process.env.JEV_API_KEY)
-    ) {
-      if (this.isModelDownloaded()) {
+    if (!this.hasPersistedMode) {
+      if (process.env.JEV_ACTIVE_MODE === 'local' || process.env.DECIDER_LOCAL === '1') {
         this.activeMode = 'local';
+      } else if (process.env.JEV_ACTIVE_MODE === 'off') {
+        this.activeMode = 'off';
+      } else {
+        this.activeMode = 'remote';
       }
     }
+    if (
+      this.activeMode === 'off' &&
+      ((this.requestedMode === 'remote' &&
+        ['remote_key_missing', 'no_api_key'].includes(this.disabledReason || '') &&
+        this.hasRemoteKey()) ||
+        (this.requestedMode === 'local' &&
+          this.disabledReason === 'local_model_missing' &&
+          this.isModelDownloaded()))
+    )
+      this.activeMode = this.requestedMode;
+    if (this.activeMode !== 'off')
+      this.setActiveMode(this.activeMode, undefined, { validate: true });
   }
 
   /**
@@ -151,6 +180,9 @@ export class JevModelManager {
    */
   public touchActivity(): void {
     this.lastActivityTime = Date.now();
+    if (this.activeMode === 'off') {
+      return;
+    }
     this.scheduleIdleCheck();
     // Non-blocking ping to the python service to sync activity timestamp
     if (typeof fetch === 'function') {
@@ -163,27 +195,21 @@ export class JevModelManager {
    * If Jev activeMode is 'local' (or auto-local) and weights are downloaded, starts service in background.
    */
   public onToolInvocation(): void {
+    if (this.activeMode === 'off') {
+      return;
+    }
     this.touchActivity();
-    if (this.isModelDownloaded()) {
-      const mode = this.getActiveMode();
-      if (
-        mode === 'local' ||
-        (mode !== 'off' &&
-          !this.remoteConfig.apiKey &&
-          !process.env.TYPESAFE_API_KEY &&
-          !process.env.JEV_API_KEY)
-      ) {
-        if (!this.isStartingService) {
-          this.isLocalServiceOnline(8009)
-            .then((online) => {
-              if (!online && !this.isStartingService) {
-                this.ensureLocalServiceRunning().catch((err) => {
-                  console.warn('[JevModelManager] Auto-preload error:', err?.message || err);
-                });
-              }
-            })
-            .catch(() => {});
-        }
+    if (this.activeMode === 'local' && this.isModelDownloaded()) {
+      if (!this.isStartingService) {
+        this.isLocalServiceOnline(8009)
+          .then((online) => {
+            if (!online && !this.isStartingService) {
+              this.ensureLocalServiceRunning().catch((err) => {
+                console.warn('[JevModelManager] Auto-preload error:', err?.message || err);
+              });
+            }
+          })
+          .catch(() => {});
       }
     }
   }
@@ -208,7 +234,8 @@ export class JevModelManager {
     this.idleTimer = setTimeout(async () => {
       const idleTime = Date.now() - this.lastActivityTime;
       if (idleTime >= JevModelManager.IDLE_TIMEOUT_MS) {
-        console.log(
+        // Native stdout carries framed messages; diagnostics must use stderr.
+        console.warn(
           '[JevModelManager] Local decider model idle for 10 minutes. Auto-unloading from memory/VRAM...',
         );
         await this.unloadLocalModel().catch(() => {});
@@ -242,6 +269,23 @@ export class JevModelManager {
             parsed.activeMode === 'remote'
           ) {
             this.activeMode = parsed.activeMode;
+            this.hasPersistedMode = true;
+          }
+          this.requestedMode = ['off', 'local', 'remote'].includes(parsed.requestedMode)
+            ? parsed.requestedMode
+            : this.activeMode;
+          this.retryAfter =
+            typeof parsed.retryAfter === 'number' && Number.isFinite(parsed.retryAfter)
+              ? parsed.retryAfter
+              : null;
+          if (typeof parsed.revision === 'number') {
+            this.revision = parsed.revision;
+          }
+          if (typeof parsed.disabledReason === 'string' || parsed.disabledReason === null) {
+            this.disabledReason = parsed.disabledReason;
+          }
+          if (typeof parsed.changedAt === 'number') {
+            this.modeChangedAt = parsed.changedAt;
           }
           if (typeof parsed.activeModel === 'string' && parsed.activeModel.trim()) {
             this.activeModelName = parsed.activeModel.trim();
@@ -263,7 +307,12 @@ export class JevModelManager {
       const payload = {
         ...this.remoteConfig,
         activeMode: this.activeMode,
+        requestedMode: this.requestedMode,
+        retryAfter: this.retryAfter,
         activeModel: this.activeModelName,
+        revision: this.revision,
+        disabledReason: this.disabledReason,
+        changedAt: this.modeChangedAt,
       };
       writeFileSync(CONFIG_FILE, JSON.stringify(payload, null, 2), {
         encoding: 'utf8',
@@ -311,19 +360,144 @@ export class JevModelManager {
   }
 
   public getActiveMode(): JevMode {
+    this.recoverIfDue();
     return this.activeMode;
   }
 
-  public setActiveMode(mode: JevMode): void {
-    if (mode === 'off' || mode === 'local' || mode === 'remote') {
-      this.activeMode = mode;
-      this.saveConfig();
-      if (mode === 'local') {
-        this.ensureLocalServiceRunning().catch(() => {});
-      } else if (mode === 'off') {
-        this.unloadLocalModel().catch(() => {});
+  private recoverIfDue(): void {
+    if (
+      this.activeMode !== 'off' ||
+      this.requestedMode === 'off' ||
+      this.retryAfter === null ||
+      Date.now() < this.retryAfter
+    )
+      return;
+    if (this.requestedMode === 'remote' && !this.hasRemoteKey()) return;
+    if (this.requestedMode === 'local' && !this.isModelDownloaded()) return;
+    // Resume the user's backend without preloading or replaying the failed request.
+    this.activeMode = this.requestedMode;
+    this.retryAfter = null;
+    this.disabledReason = null;
+    this.revision++;
+    this.modeChangedAt = Date.now();
+    this.saveConfig();
+    this.notifyModeStateChanged();
+  }
+
+  public getModeState(): JevModeState {
+    return {
+      activeMode: this.activeMode,
+      requestedMode: this.requestedMode,
+      retryAfter: this.retryAfter,
+      revision: this.revision,
+      disabledReason: this.disabledReason,
+      changedAt: this.modeChangedAt,
+    };
+  }
+
+  public onModeStateChanged(listener: (state: JevModeState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
+  }
+
+  private notifyModeStateChanged(): void {
+    const state = this.getModeState();
+    for (const listener of this.stateListeners) {
+      try {
+        listener(state);
+      } catch (err) {
+        console.error('[JevModelManager] Error in mode state listener:', err);
       }
     }
+  }
+
+  public captureModeToken(): JevModeToken {
+    this.recoverIfDue();
+    return {
+      revision: this.revision,
+      activeMode: this.activeMode,
+    };
+  }
+
+  public disableIfCurrent(token: JevModeToken, reason: string): boolean {
+    if (!token || typeof token.revision !== 'number') {
+      return false;
+    }
+    if (token.revision !== this.revision) {
+      return false;
+    }
+    if (this.activeMode === 'off') {
+      return false;
+    }
+
+    this.activeMode = 'off';
+    this.retryAfter = [
+      'network_error',
+      'local_service_offline',
+      'quota_exhausted',
+      'rate_limited',
+      'timeout',
+    ].includes(reason)
+      ? Date.now() + 30000
+      : null;
+    this.revision++;
+    this.disabledReason = reason;
+    this.modeChangedAt = Date.now();
+    this.saveConfig();
+    this.unloadLocalModel().catch(() => {});
+    this.notifyModeStateChanged();
+    return true;
+  }
+
+  public setActiveMode(
+    mode: JevMode,
+    reason?: string,
+    options?: { validate?: boolean },
+  ): JevModeState {
+    if (mode === 'off' || mode === 'local' || mode === 'remote') {
+      let targetMode = mode;
+      let targetReason = reason || null;
+
+      if (options?.validate) {
+        if (mode === 'remote') {
+          const envKey = (process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
+          const activeKey = (this.remoteConfig.apiKey || envKey || '').trim();
+          if (!activeKey) {
+            targetMode = 'off';
+            targetReason = 'remote_key_missing';
+          }
+        } else if (mode === 'local') {
+          if (!this.isModelDownloaded()) {
+            targetMode = 'off';
+            targetReason = 'local_model_missing';
+          }
+        }
+      }
+
+      this.activeMode = targetMode;
+      this.requestedMode = mode;
+      this.retryAfter = null;
+      this.revision++;
+      this.disabledReason = targetMode === 'off' ? targetReason : null;
+      this.modeChangedAt = Date.now();
+      this.saveConfig();
+
+      if (targetMode === 'local') {
+        const token = this.captureModeToken();
+        this.ensureLocalServiceRunning()
+          .then((result) => {
+            if (!result.success) this.disableIfCurrent(token, 'local_service_offline');
+          })
+          .catch(() => this.disableIfCurrent(token, 'local_service_offline'));
+      } else if (targetMode === 'off') {
+        this.unloadLocalModel().catch(() => {});
+      }
+
+      this.notifyModeStateChanged();
+    }
+    return this.getModeState();
   }
 
   public listModels(): string[] {
@@ -358,7 +532,17 @@ export class JevModelManager {
 
   public setActiveModel(name: string): boolean {
     if (!name) return false;
+    const modelChanged = this.activeModelName !== name;
     this.activeModelName = name;
+    if (modelChanged) {
+      this.revision++;
+      this.modeChangedAt = Date.now();
+      if (this.activeMode === 'local' && !this.isModelDownloaded(name)) {
+        this.activeMode = 'off';
+        this.disabledReason = 'local_model_missing';
+      }
+      this.notifyModeStateChanged();
+    }
     this.saveConfig();
     return true;
   }
@@ -406,11 +590,39 @@ export class JevModelManager {
   public setRemoteConfig(config: { baseUrl?: string; apiKey?: string; modelId?: string }): void {
     const rawModel = (config.modelId ?? this.remoteConfig.modelId)?.trim();
     const sanitizedModelId = !rawModel || rawModel === 'decider-2b' ? 'jev-latest' : rawModel;
-    this.remoteConfig = {
+    const nextConfig = {
       ...this.remoteConfig,
       ...config,
       modelId: sanitizedModelId,
     };
+    const identityChanged =
+      nextConfig.baseUrl !== this.remoteConfig.baseUrl ||
+      nextConfig.apiKey !== this.remoteConfig.apiKey ||
+      nextConfig.modelId !== this.remoteConfig.modelId;
+
+    this.remoteConfig = nextConfig;
+    if (identityChanged) {
+      this.revision++;
+      this.modeChangedAt = Date.now();
+      if (this.activeMode === 'remote') {
+        const envKey = (process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
+        const activeKey = (this.remoteConfig.apiKey || envKey || '').trim();
+        if (!activeKey) {
+          this.activeMode = 'off';
+          this.disabledReason = 'remote_key_missing';
+          this.retryAfter = null;
+        }
+      } else if (
+        this.activeMode === 'off' &&
+        this.requestedMode === 'remote' &&
+        this.hasRemoteKey()
+      ) {
+        this.activeMode = 'remote';
+        this.disabledReason = null;
+        this.retryAfter = null;
+      }
+      this.notifyModeStateChanged();
+    }
     this.saveConfig();
   }
 
@@ -526,8 +738,18 @@ export class JevModelManager {
   public isAvailable(): boolean {
     if (this.activeMode === 'off') return false;
     if (this.activeMode === 'local') return this.isModelDownloaded();
-    const envKey = (process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
-    return Boolean(this.remoteConfig.apiKey || envKey);
+    return this.hasRemoteKey();
+  }
+
+  private hasRemoteKey(): boolean {
+    return Boolean(
+      (
+        this.remoteConfig.apiKey ||
+        process.env.TYPESAFE_API_KEY ||
+        process.env.JEV_API_KEY ||
+        ''
+      ).trim(),
+    );
   }
 
   /**
@@ -953,7 +1175,7 @@ export class JevModelManager {
       downloaded,
       path: activeModel ? join(MODELS_ROOT_DIR, activeModel) : MODELS_ROOT_DIR,
       sizeBytes,
-      activeMode: this.activeMode,
+      ...this.getModeState(),
       localServiceOnline,
       models: this.listModels(),
       activeModel,

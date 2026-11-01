@@ -199,35 +199,17 @@ export class GrepTool extends BaseBrowserToolExecutor {
       const elements: IndexedElement[] = [...(mainFrame?.result?.indexedElements || [])];
       const indexMap: Record<number, any> = { ...(mainFrame?.result?.indexMap || {}) };
 
-      let currentIndex = elements.length + 1;
       for (const frame of prunerResults || []) {
         if (frame === mainFrame || !frame.result) continue;
         const subElements = frame.result.indexedElements;
         if (subElements && subElements.length > 0) {
-          const frameOffset = currentIndex - 1;
           for (const el of subElements) {
-            const remappedIndex = currentIndex++;
-            elements.push({
-              ...el,
-              index: remappedIndex,
-            });
-            indexMap[remappedIndex] = {
-              selector: el.attributes?.id
-                ? `#${el.attributes.id}`
-                : `${el.tagName}[data-mcp-idx="${remappedIndex}"]`,
+            elements.push(el);
+            indexMap[el.index] = {
+              selector: frame.result.indexMap?.[el.index]?.selector,
               frameId: String(frame.frameId),
               tagName: el.tagName,
             };
-          }
-          if (typeof frame.frameId === 'number') {
-            try {
-              await executeInPage({ tabId, frameIds: [frame.frameId] }, 'inPageReindexFrame', [
-                frameOffset,
-                false,
-              ]);
-            } catch (reindexErr) {
-              console.warn('Failed to synchronize subframe ' + frame.frameId + ' index map:', reindexErr);
-            }
           }
         }
       }
@@ -315,7 +297,6 @@ export class GrepTool extends BaseBrowserToolExecutor {
               tagName: sHit.tagName || 'element',
               text: sHit.text || args.query,
               isInteractive: true,
-              selector: `[data-mcp-idx="${sHit.index}"]`,
             });
           }
         } catch {}

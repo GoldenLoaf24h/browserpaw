@@ -86,6 +86,15 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
     const info1 = createBuildInfo({ repoRoot: root });
     assert.strictEqual(info1.sourceHash, fp1.sourceHash);
 
+    const sessionDir = path.join(extSrc, '.omc', 'state');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'session.json'), '{"transient":true}');
+    const withoutSessionState = calculateExtensionSourceFingerprint(root);
+    assert.strictEqual(withoutSessionState.sourceHash, fp1.sourceHash);
+    assert.ok(
+      !Object.keys(withoutSessionState.sourceInputs).some((name) => name.includes('/.omc/')),
+    );
+
     // Modifying shared source must alter sourceHash
     fs.writeFileSync(
       path.join(root, 'packages', 'shared', 'src', 'types.ts'),

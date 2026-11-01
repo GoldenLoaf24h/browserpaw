@@ -36,8 +36,8 @@ app/chrome-extension/
 2. **DOM XSS Defense**:
    All dynamic UI overlays (`agent-cursor.content.ts`, human intervention banner) use safe DOM creation APIs (`document.createElement`, `document.createTextNode`, `textContent`) within a closed Shadow DOM, completely eliminating `innerHTML` injection vulnerabilities.
 
-3. **Cross-Frame Message & Index Isolation**:
-   In-page indexing scripts execute in isolated worlds. Subframes are queried using `frameIds: [targetFrameId]` with index remapping (`inPageReindexFrame`), preventing element index collisions and WeakRef map pollution across frames.
+3. **Document Index Namespace & Cross-Frame Isolation**:
+   In-page indexing scripts execute in isolated worlds. Replaced frame index remapping with persistent document namespaces (`reserveIndexNamespaces` keyed by Chrome `documentId`), allocating globally distinct, non-overlapping index ranges across main frames and subframes. Disconnected nodes immediately invalidate on query, and namespace counters persist to storage to prevent reference collisions across service worker restarts.
 
 4. **CDP Domain-Level Reference Counting**:
    `CDPSessionManager` tracks domain enablement references (`enableDomain` / `disableDomain`). Core domains (`Page`, `Network`) remain permanently enabled while the session is active, preventing background dialog and settle monitors from breaking.

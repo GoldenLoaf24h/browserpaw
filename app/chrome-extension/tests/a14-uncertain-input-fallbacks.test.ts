@@ -303,6 +303,35 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
     );
   });
 
+  it.each([true, false, undefined])(
+    'does not infer a second submission from an unchanged URL (submitted=%s)',
+    async (submitted) => {
+      vi.spyOn(fillCoreModule, 'performPhysicalFill').mockResolvedValue({
+        success: true,
+        committed: true,
+        submitted,
+        submitMethod: submitted === undefined ? undefined : 'pressEnter',
+        submitButtonState: { found: true, index: 9, text: 'Search' },
+      } as any);
+      const click = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+        content: [{ type: 'text', text: '{"success":false}' }],
+        isError: true,
+      });
+      const response = await fillIndexTool.execute({
+        tabId,
+        index: 1,
+        text: 'query',
+        pressEnter: true,
+        waitForSettle: false,
+        includeDelta: false,
+      });
+      const result = JSON.parse(response.content[0].text as string);
+      expect(click).not.toHaveBeenCalled();
+      expect(result.submitted).toBe(submitted);
+      if (submitted !== true) expect(result.pressEnterDispatched).not.toBe(true);
+    },
+  );
+
   it('does not auto-click submit button or claim pressEnterDispatched when submit Enter outcome is unknown', async () => {
     vi.spyOn(fillCoreModule, 'performPhysicalFill').mockResolvedValue({
       success: true,

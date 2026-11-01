@@ -53,6 +53,8 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
     cmd: 'metaKey',
   };
 
+  const SHIFTED_DIGITS = ')!@#$%^&*(';
+
   /**
    * Parses a key string (e.g., "Ctrl+Shift+A", "Enter") into a main key and modifiers.
    * @param {string} keyString - String representation of a single key press (can include modifiers).
@@ -140,19 +142,21 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
 
     // For single characters or other unmapped keys
     if (mainKeyPart.length === 1) {
+      const isLetter = /^[a-z]$/i.test(mainKeyPart);
+      const isDigit = /^[0-9]$/.test(mainKeyPart);
       const charCode = mainKeyPart.charCodeAt(0);
-      // If Shift is active and it's a letter, use the uppercase version for 'key'
-      // This mimics more closely how keyboards behave.
       let keyChar = mainKeyPart;
-      if (modifiers.shiftKey && mainKeyPart.match(/^[a-z]$/i)) {
-        keyChar = mainKeyPart.toUpperCase();
+      if (modifiers.shiftKey) {
+        if (isLetter) keyChar = mainKeyPart.toUpperCase();
+        else if (isDigit) keyChar = SHIFTED_DIGITS[Number(mainKeyPart)];
+        else return null; // Shifted punctuation requires a physical layout.
       }
 
       return {
         key: keyChar,
-        code: `Key${mainKeyPart.toUpperCase()}`, // 'a' -> KeyA, 'A' -> KeyA
+        code: isLetter ? `Key${mainKeyPart.toUpperCase()}` : isDigit ? `Digit${mainKeyPart}` : '',
         keyCode: charCode,
-        charCode: charCode, // charCode is legacy, but some old systems might use it
+        charCode: keyChar.charCodeAt(0),
         modifiers,
       };
     }
@@ -256,29 +260,66 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
 
   async function simulateKeyboard(keysSequenceString, targetElement = null, delay = 0) {
     try {
-      const element = targetElement || document.activeElement || document.body;
+      let active = document.activeElement;
+      const seen = new Set();
+      while (
+        active &&
+        !seen.has(active) &&
+        !['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)
+      ) {
+        seen.add(active);
+        let root = active.shadowRoot;
+        try {
+          root = chrome.dom?.openOrClosedShadowRoot?.(active) || root;
+        } catch {}
+        const inner = root?.activeElement;
+        if (!inner || inner === active) break;
+        active = inner;
+      }
+      const element = targetElement || active || document.body;
 
-      if (element !== document.activeElement && typeof element.focus === 'function') {
+      if (element !== active && typeof element.focus === 'function') {
         element.focus();
         await new Promise((resolve) => setTimeout(resolve, 50)); // Small delay for focus
       }
 
       const keyCombinations = splitKeySequence(keysSequenceString);
-      const operationResults = [];
+      const parsedCombinations = keyCombinations.map((comboString) => ({
+        comboString,
+        parsedKeyInfo: parseSingleKeyCombination(comboString),
+      }));
+      const invalidCombination = parsedCombinations.find((item) => !item.parsedKeyInfo);
+      const targetInfo = {
+        tagName: element.tagName,
+        id: element.id,
+        className: element.className,
+        type: element.type, // if applicable e.g. for input
+      };
 
-      for (let i = 0; i < keyCombinations.length; i++) {
-        const comboString = keyCombinations[i];
-        const parsedKeyInfo = parseSingleKeyCombination(comboString);
-
-        if (!parsedKeyInfo) {
-          operationResults.push({
+      if (invalidCombination) {
+        return {
+          success: false,
+          status: 'blocked',
+          retry: true,
+          dispatched: false,
+          error: `Invalid key string or combination: ${invalidCombination.comboString}`,
+          message: 'Keyboard sequence rejected before dispatch',
+          results: parsedCombinations.map(({ comboString, parsedKeyInfo }) => ({
             keyCombination: comboString,
             success: false,
-            error: `Invalid key string or combination: ${comboString}`,
-          });
-          continue; // Skip to next combination in sequence
-        }
+            dispatched: false,
+            error: parsedKeyInfo
+              ? `Not dispatched because sequence contains invalid key: ${invalidCombination.comboString}`
+              : `Invalid key string or combination: ${comboString}`,
+          })),
+          targetElement: targetInfo,
+        };
+      }
 
+      const operationResults = [];
+
+      for (let i = 0; i < parsedCombinations.length; i++) {
+        const { comboString, parsedKeyInfo } = parsedCombinations[i];
         const dispatchResult = dispatchKeyEvents(parsedKeyInfo, element);
         operationResults.push({
           keyCombination: comboString,
@@ -293,7 +334,7 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
           );
         }
 
-        if (delay > 0 && i < keyCombinations.length - 1) {
+        if (delay > 0 && i < parsedCombinations.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -303,16 +344,12 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
 
       return {
         success: overallSuccess,
+        dispatched: true,
         message: overallSuccess
           ? `Keyboard events simulated successfully: ${keysSequenceString}`
           : `Some keyboard events failed for: ${keysSequenceString}`,
         results: operationResults, // Detailed results for each key combination
-        targetElement: {
-          tagName: element.tagName,
-          id: element.id,
-          className: element.className,
-          type: element.type, // if applicable e.g. for input
-        },
+        targetElement: targetInfo,
       };
     } catch (error) {
       console.error('Error in simulateKeyboard:', error);
@@ -326,17 +363,6 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
 
   // Listener for messages from the extension
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request.action === 'clipboardCopy' || request.action === 'clipboardPaste') {
-      runClipboard(request.action)
-        .then(sendResponse)
-        .catch((error) => {
-          sendResponse({
-            success: false,
-            error: error && error.message ? error.message : String(error),
-          });
-        });
-      return true;
-    }
     if (request.action === 'simulateKeyboard') {
       let targetEl = null;
       if (request.selector) {
@@ -373,52 +399,4 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
     // Not our message, or no async response needed
     return false;
   });
-}
-
-function describeElement(el) {
-  if (!el) return null;
-  return { tagName: el.tagName, id: el.id, className: el.className, type: el.type };
-}
-
-// Real system-clipboard primitive: copy the live selection, paste the real clipboard text.
-// ponytail: synthetic ClipboardEvent carries real clipboard text; upgrade to CDP edit
-// commands if Chromium ever exposes them.
-async function runClipboard(action) {
-  const el = document.activeElement;
-  if (action === 'clipboardCopy') {
-    let text = '';
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-      const value = el.value || '';
-      const start = typeof el.selectionStart === 'number' ? el.selectionStart : 0;
-      const end =
-        typeof el.selectionEnd === 'number' && el.selectionEnd > start
-          ? el.selectionEnd
-          : value.length;
-      text = value.slice(start, end);
-    } else {
-      const sel = window.getSelection();
-      text = sel ? sel.toString() : '';
-    }
-    await navigator.clipboard.writeText(text);
-    return { success: true, copied: text.length, text, targetElement: describeElement(el) };
-  }
-  const text = await navigator.clipboard.readText();
-  const dt = new DataTransfer();
-  dt.setData('text/plain', text);
-  let event;
-  try {
-    event = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      clipboardData: dt,
-    });
-  } catch (e) {
-    event = new Event('paste', { bubbles: true, cancelable: true, composed: true });
-  }
-  if (event && !event.clipboardData) {
-    Object.defineProperty(event, 'clipboardData', { value: dt });
-  }
-  (el || document.body).dispatchEvent(event);
-  return { success: true, pasted: text.length, text, targetElement: describeElement(el) };
 }

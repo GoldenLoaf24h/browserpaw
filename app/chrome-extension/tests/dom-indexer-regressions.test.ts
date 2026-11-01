@@ -4,10 +4,13 @@ import {
   inPageFocusIndex,
   inPageGetElementCoordinates,
   getIsolatedIndexMap,
-  getIndexFingerprintMap,
   findIndexedElement,
-  inPageReindexFrame,
+  inPageInteractIndex,
   wrapElement,
+  inPageSetIndexNamespace,
+  parseElementIndex,
+  INDEX_NAMESPACE_SIZE,
+  indexElement,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import {
   fastSnapshot,
@@ -37,6 +40,96 @@ import {
  * - live checkbox state must be exposed as an attribute
  */
 describe('dom-indexer regressions', () => {
+  beforeEach(() => {
+    // Each test starts a new document execution context.
+    const g = globalThis as any;
+    delete g[Symbol.for('__browser_use_index_identity__')];
+    delete g[Symbol.for('__browser_use_index_namespace__')];
+    getIsolatedIndexMap().clear();
+  });
+  describe('published index safety', () => {
+    beforeEach(() => {
+      getIsolatedIndexMap().clear();
+      getClawFastCache().actionElements?.clear();
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 10,
+        y: 10,
+        left: 10,
+        top: 10,
+        right: 110,
+        bottom: 60,
+        width: 100,
+        height: 50,
+        toJSON: () => ({}),
+      } as DOMRect);
+    });
+
+    afterEach(() => {
+      document.body.innerHTML = '';
+    });
+
+    it('rejects removed index 2 after a refresh instead of clicking spacer with success', () => {
+      document.body.innerHTML =
+        '<button>Swap</button><button id="gone">Gone target</button><div>spacer</div>';
+      const first = inPageDOMPruner();
+      const index = first.indexedElements!.find((el) => el.attributes?.id === 'gone')!.index;
+      expect(index).toBe(2);
+      const spacer = document.querySelector('div')!;
+      const clicked = vi.fn();
+      spacer.addEventListener('click', clicked);
+      document.getElementById('gone')!.remove();
+      inPageDOMPruner();
+
+      const result = inPageInteractIndex(index);
+      expect(clicked).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('refresh the index tree');
+    });
+
+    it('does not heal a removed node onto another button with identical text', () => {
+      document.body.innerHTML = '<button id="gone">Duplicate</button><button>Duplicate</button>';
+      const first = inPageDOMPruner();
+      const index = first.indexedElements!.find((el) => el.attributes?.id === 'gone')!.index;
+      const duplicate = document.querySelectorAll('button')[1];
+      const clicked = vi.fn();
+      duplicate.addEventListener('click', clicked);
+      document.getElementById('gone')!.remove();
+
+      expect(inPageInteractIndex(index).success).toBe(false);
+      expect(clicked).not.toHaveBeenCalled();
+    });
+
+    it('keeps a live target index across insertion, removal and reordered snapshots', () => {
+      document.body.innerHTML = '<button id="target">Target</button><button>Other</button>';
+      const first = inPageDOMPruner();
+      const index = first.indexedElements!.find((el) => el.attributes?.id === 'target')!.index;
+      const target = document.getElementById('target')!;
+      const clicked = vi.fn();
+      target.addEventListener('click', clicked);
+      expect(inPageInteractIndex(index).success).toBe(true);
+      document.body.insertAdjacentHTML('afterbegin', '<button id="inserted">Inserted</button>');
+      document.body.appendChild(target);
+      const second = inPageDOMPruner();
+      expect(second.indexedElements!.find((el) => el.attributes?.id === 'target')!.index).toBe(
+        index,
+      );
+      document.getElementById('inserted')!.remove();
+      inPageDOMPruner();
+      expect(findIndexedElement(index)).toBe(target);
+      expect(inPageInteractIndex(index).success).toBe(true);
+      expect(clicked).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not reuse a fast action reference when its node is removed', () => {
+      document.body.innerHTML = '<button id="gone">Gone</button><button id="other">Other</button>';
+      const first = fastSnapshot()!;
+      const oldAction = first.actions.find((a) => a.label === 'Gone')!;
+      document.getElementById('gone')!.remove();
+      fastSnapshot();
+      expect(findIndexedElement(oldAction.id)).toBeNull();
+    });
+  });
+
   it('counts informational nodes in elementCount but not in interactiveCount', () => {
     const prevRect = Element.prototype.getBoundingClientRect;
     Element.prototype.getBoundingClientRect = function () {
@@ -277,44 +370,26 @@ describe('dom-indexer regressions', () => {
     });
   });
 
-  describe('D-03: inPageReindexFrame subframe index migration and self-healing', () => {
-    it('migrates getIndexFingerprintMap keys when offsetting subframe indices', () => {
-      document.body.innerHTML = '<button id="btn-save">Save</button>';
-      const btn = document.getElementById('btn-save')!;
+  it('expires a replaced node even when its ID and text are unchanged', () => {
+    document.body.innerHTML = '<button id="save">Save</button>';
+    const oldNode = document.getElementById('save')!;
+    const oldIndex = indexElement(oldNode);
+    oldNode.outerHTML = '<button id="save">Save</button>';
+    expect(findIndexedElement(oldIndex)).toBeNull();
+    const newNode = document.getElementById('save')!;
+    const newIndex = indexElement(newNode);
+    expect(newIndex).toBeGreaterThan(oldIndex);
+    expect(findIndexedElement(newIndex)).toBe(newNode);
+  });
 
-      const isolatedMap = getIsolatedIndexMap();
-      isolatedMap.clear();
-      isolatedMap.set(1, wrapElement(btn));
-
-      const fpMap = getIndexFingerprintMap();
-      fpMap.clear();
-      fpMap.set(1, {
-        tag: 'button',
-        id: 'btn-save',
-        text: 'Save',
-        role: 'button',
-        isInteractive: true,
-      });
-
-      // Shift indices by offset +10 (subframe reindexing)
-      inPageReindexFrame(10);
-
-      // Verify fingerprint map entries were migrated from 1 -> 11
-      expect(fpMap.get(1)).toBeUndefined();
-      expect(fpMap.get(11)).toBeDefined();
-      expect(fpMap.get(11)?.id).toBe('btn-save');
-
-      // Simulate DOM element disconnection / React re-render: replace DOM node
-      btn.remove();
-      const newBtn = document.createElement('button');
-      newBtn.id = 'btn-save';
-      newBtn.textContent = 'Save';
-      document.body.appendChild(newBtn);
-
-      // Self-healing should recover the new element using the reindexed fingerprint key (11)
-      const recovered = findIndexedElement(11);
-      expect(recovered).toBe(newBtn);
-    });
+  it('clearing the lookup cache cannot recycle an issued reference', () => {
+    document.body.innerHTML = '<button>Old</button>';
+    const old = indexElement(document.querySelector('button')!);
+    getIsolatedIndexMap().clear();
+    document.body.innerHTML = '<button>New</button>';
+    const next = indexElement(document.querySelector('button')!);
+    expect(next).toBeGreaterThan(old);
+    expect(findIndexedElement(old)).toBeNull();
   });
 
   describe('D-20: fast snapshot must not corrupt the standard action index namespace', () => {
@@ -350,12 +425,11 @@ describe('dom-indexer regressions', () => {
       Element.prototype.getBoundingClientRect = prevRect;
       document.body.innerHTML = '';
       getIsolatedIndexMap().clear();
-      getIndexFingerprintMap().clear();
       (globalThis as any)[Symbol.for('__browser_use_last_snapshot_type__')] = undefined;
       resetFastCache();
     });
 
-    it('read_dom({fast:true}) keeps action index 2 on the input whose fast node id is 1', async () => {
+    it('read_dom({fast:true}) publishes numeric and e references to the same node', async () => {
       document.body.innerHTML = '<input id="field"><button id="btn">Save</button>';
       const input = document.getElementById('field')!;
       const button = document.getElementById('btn')!;
@@ -374,22 +448,20 @@ describe('dom-indexer regressions', () => {
         },
       );
 
-      const res = await readDOMTool.execute({ fast: true, tabId: 1 } as any);
+      const res = await readDOMTool.execute({ fast: true, includeDetails: true, tabId: 1 } as any);
       expect(res.isError).toBe(false);
       const payload = JSON.parse(res.content[0].text as string);
 
-      // Action 2 is the input's "Open" click action; its node identity is 1.
-      // That divergence is what the old code mis-resolved through the standard map.
-      const openAction = payload.actions.find((a: any) => a.id === 'e2');
-      expect(openAction).toBeDefined();
-      expect(openAction.node).toBe(1);
-      expect(openAction.node).not.toBe(2);
-
-      expect(findIndexedElement(2)).toBe(input);
-      expect(findIndexedElement(3)).toBe(button);
+      const inputAction = payload.actions.find((a: any) => a.kind === 'fill');
+      const buttonAction = payload.actions.find((a: any) => a.label === 'Save');
+      expect(inputAction).toBeDefined();
+      expect(buttonAction).toBeDefined();
+      expect(findIndexedElement(inputAction.id)).toBe(input);
+      expect(findIndexedElement(Number(inputAction.id.slice(1)))).toBe(input);
+      expect(findIndexedElement(buttonAction.id)).toBe(button);
     });
 
-    it('standard -> fast -> standard keeps both index namespaces isolated', () => {
+    it('standard -> fast -> standard keeps one stable element identity', () => {
       document.body.innerHTML = '<input id="field"><button id="btn">Save</button>';
       const input = document.getElementById('field')!;
       const button = document.getElementById('btn')!;
@@ -400,15 +472,134 @@ describe('dom-indexer regressions', () => {
 
       const fast = fastSnapshot();
       expect(fast).toBeTruthy();
-      // Fast snapshot must never publish traversal node ids into the standard map.
-      expect(getIsolatedIndexMap().size).toBe(0);
-      expect(fast!.actions.find((a) => a.id === 'e2')!.node).not.toBe(2);
-      // Index 2 is the input's "Open" action, not the standard-indexed button.
-      expect(findIndexedElement(2)).toBe(input);
+      expect(getIsolatedIndexMap().size).toBeGreaterThan(0);
+      expect(findIndexedElement('e1')).toBe(input);
+      expect(findIndexedElement('e2')).toBe(button);
+      expect(findIndexedElement(2)).toBe(button);
 
       inPageDOMPruner();
       expect(findIndexedElement(1)).toBe(input);
       expect(findIndexedElement(2)).toBe(button);
+    });
+  });
+  describe('Index Safety and Namespace Isolation Suite', () => {
+    let prevRect: any;
+
+    beforeEach(() => {
+      getIsolatedIndexMap().clear();
+      prevRect = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () {
+        return {
+          x: 10,
+          y: 10,
+          left: 10,
+          top: 10,
+          right: 110,
+          bottom: 60,
+          width: 100,
+          height: 50,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+    });
+
+    afterEach(() => {
+      document.body.innerHTML = '';
+      if (prevRect) Element.prototype.getBoundingClientRect = prevRect;
+    });
+
+    it('parseElementIndex strictly rejects invalid strings, whitespace, and phantom zero inputs', () => {
+      expect(parseElementIndex('')).toBeNull();
+      expect(parseElementIndex('   ')).toBeNull();
+      expect(parseElementIndex('e')).toBeNull();
+      expect(parseElementIndex('ref_')).toBeNull();
+      expect(parseElementIndex('ref_abc')).toBeNull();
+      expect(parseElementIndex('e_123')).toBeNull();
+      expect(parseElementIndex(0)).toBeNull();
+      expect(parseElementIndex('0')).toBeNull();
+      expect(parseElementIndex(-1)).toBeNull();
+      expect(parseElementIndex('-1')).toBeNull();
+      expect(parseElementIndex(null)).toBeNull();
+      expect(parseElementIndex(undefined)).toBeNull();
+
+      expect(parseElementIndex(5)).toEqual({ numericIndex: 5, isExplicitFast: false });
+      expect(parseElementIndex('5')).toEqual({
+        numericIndex: 5,
+        isExplicitFast: false,
+        rawString: '5',
+      });
+      expect(parseElementIndex('e12')).toEqual({
+        numericIndex: 12,
+        isExplicitFast: true,
+        rawString: 'e12',
+      });
+      expect(parseElementIndex('ref_42')).toEqual({
+        numericIndex: 42,
+        isExplicitFast: false,
+        rawString: 'ref_42',
+      });
+    });
+
+    it('inPageGetElementCoordinates rejects invalid ref/e strings without mapping to index 0', () => {
+      const emptyRes = inPageGetElementCoordinates('');
+      expect(emptyRes.success).toBe(false);
+      expect(emptyRes.error).toContain('Invalid index or ref format');
+
+      const refOnlyRes = inPageGetElementCoordinates('ref_');
+      expect(refOnlyRes.success).toBe(false);
+      expect(refOnlyRes.error).toContain('Invalid index or ref format');
+
+      const eOnlyRes = inPageGetElementCoordinates('e');
+      expect(eOnlyRes.success).toBe(false);
+      expect(eOnlyRes.error).toContain('Invalid index or ref format');
+
+      const zeroRes = inPageGetElementCoordinates(0);
+      expect(zeroRes.success).toBe(false);
+      expect(zeroRes.error).toContain('Invalid index or ref format');
+    });
+
+    it('preserves document namespace across context resets to prevent subframe collision', () => {
+      document.body.innerHTML = '<button id="b9">One</button>';
+      const b9 = document.getElementById('b9')!;
+
+      expect(inPageSetIndexNamespace(INDEX_NAMESPACE_SIZE)).toBe(true);
+      inPageDOMPruner();
+      expect(findIndexedElement(INDEX_NAMESPACE_SIZE + 1)).toBe(b9);
+
+      const g = globalThis as any;
+      delete g[Symbol.for('__browser_use_index_identity__')];
+      expect(inPageSetIndexNamespace(INDEX_NAMESPACE_SIZE * 2)).toBe(true);
+
+      const b10 = document.createElement('button');
+      b10.id = 'b10';
+      b10.textContent = 'Two';
+      document.body.appendChild(b10);
+
+      inPageDOMPruner();
+      expect(findIndexedElement(INDEX_NAMESPACE_SIZE + 1)).toBe(b9);
+      expect(findIndexedElement(INDEX_NAMESPACE_SIZE + 2)).toBe(b10);
+    });
+
+    it('ensures node churn never silently re-assigns published indices to other nodes', () => {
+      document.body.innerHTML = '<button id="stay">Stay</button><button id="churn">Churn</button>';
+      const stay = document.getElementById('stay')!;
+      const churn = document.getElementById('churn')!;
+
+      inPageDOMPruner();
+      expect(findIndexedElement(1)).toBe(stay);
+      expect(findIndexedElement(2)).toBe(churn);
+
+      churn.remove();
+      const fresh = document.createElement('button');
+      fresh.id = 'fresh';
+      fresh.textContent = 'Fresh';
+      document.body.appendChild(fresh);
+
+      inPageDOMPruner();
+
+      expect(findIndexedElement(1)).toBe(stay);
+      expect(findIndexedElement(2)).toBeNull();
+      expect(findIndexedElement(3)).toBe(fresh);
     });
   });
 });

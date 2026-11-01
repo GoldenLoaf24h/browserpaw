@@ -79,6 +79,103 @@ export interface AnimateCursorOptions {
   actionNote?: string;
 }
 
+export interface CursorActionTarget {
+  text?: string;
+  tagName?: string;
+  role?: string;
+  inputType?: string;
+  attributes?: Record<string, string>;
+}
+
+const CURSOR_ACTION_LABELS: Record<string, string> = {
+  click: 'Clicking',
+  double_click: 'Double-clicking',
+  right_click: 'Right-clicking',
+  hover: 'Hovering over',
+  focus: 'Focusing',
+  drag: 'Dragging',
+  fill: 'Filling',
+};
+
+const CURSOR_GENERIC_KINDS = new Set(['generic', 'none', 'presentation', 'div', 'span']);
+const CURSOR_KIND_LABELS: Record<string, string> = {
+  a: 'link',
+  img: 'image',
+  textarea: 'text box',
+  select: 'dropdown',
+  combobox: 'dropdown',
+  textbox: 'text box',
+  searchbox: 'search box',
+  button: 'button',
+  submit: 'button',
+  reset: 'button',
+  search: 'search box',
+  email: 'email field',
+  password: 'password field',
+  checkbox: 'checkbox',
+  radio: 'radio button',
+  input: 'input',
+};
+const CURSOR_TECHNICAL_LABEL = /^(?:\[\d+\]|ref_\d+|e\d+)$/i;
+
+function normalizeCursorLabel(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return '';
+  const normalized = Array.from(value)
+    .map((char) => (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? ' ' : char))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = Array.from(normalized);
+  return chars.length > maxLength ? `${chars.slice(0, maxLength - 3).join('')}...` : normalized;
+}
+
+function resolveCursorTargetKind(target?: CursorActionTarget): string {
+  const role = normalizeCursorLabel(target?.role, 24).toLowerCase();
+  const tagName = normalizeCursorLabel(target?.tagName, 18).toLowerCase();
+  const kind = [role, tagName].find((value) => value && !CURSOR_GENERIC_KINDS.has(value)) || '';
+
+  // Coordinate-only paths use synthetic tags, which are not user-facing object types.
+  if (kind.startsWith('visual_')) return '';
+  const inputType = normalizeCursorLabel(target?.inputType, 18).toLowerCase();
+  const inputKey =
+    tagName === 'input' &&
+    inputType &&
+    inputType !== 'text' &&
+    ['', 'input', 'textbox', 'searchbox'].includes(kind)
+      ? inputType
+      : kind;
+  return CURSOR_KIND_LABELS[inputKey] ?? inputKey;
+}
+
+/**
+ * Describe an existing action target without another page read or model call.
+ * ARIA names win over visible text; technical element indexes are suppressed.
+ */
+export function formatAgentCursorAction(action: string, target?: CursorActionTarget): string {
+  const normalizedAction = normalizeCursorLabel(action, 32).toLowerCase().replace(/\s+/g, '_');
+  const fallbackVerb = normalizeCursorLabel(action.replace(/_/g, ' '), 32);
+  const verb =
+    CURSOR_ACTION_LABELS[normalizedAction] ||
+    (fallbackVerb ? fallbackVerb[0].toUpperCase() + fallbackVerb.slice(1) : 'Interacting with');
+
+  const attributes = target?.attributes;
+  const label =
+    [
+      attributes?.['aria-label'],
+      target?.text,
+      attributes?.title,
+      attributes?.placeholder,
+      attributes?.alt,
+      attributes?.name,
+    ]
+      .map((value) => normalizeCursorLabel(value, 44))
+      .find((value) => value && !CURSOR_TECHNICAL_LABEL.test(value)) || '';
+
+  const kind = resolveCursorTargetKind(target);
+  const targetLabel = label && label.toLowerCase() !== kind ? ` "${label}"` : '';
+  return `${verb}${kind ? ` ${kind}` : ''}${targetLabel}`;
+}
+
 export function getLastKnownCursorPosition(tabId: number): { x: number; y: number } | null {
   const pos = lastTabCursorPositions.get(tabId);
   if (!pos) return null;

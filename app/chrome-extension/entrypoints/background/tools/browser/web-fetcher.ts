@@ -2,6 +2,7 @@ import { isCloudMetadataUrl, restrictedUrlErrorMessage } from '@/utils/restricte
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
+import { tabGroupManager } from './tab-group-manager';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { isPopupUrl } from '@/utils/popup-guard';
 
@@ -73,6 +74,9 @@ class WebFetcherTool extends BaseBrowserToolExecutor {
           // Create new tab with the URL (default active: false to protect focus)
           console.log(`No existing tab found with URL: ${url}, creating new tab`);
           tab = await chrome.tabs.create({ url, active: background === false });
+          if (typeof tab.id === 'number' && tab.id > 0) {
+            tabGroupManager.registerAgentTab(tab.id);
+          }
 
           // Wait for page to load
           if (tab.id && tab.status !== 'complete') {

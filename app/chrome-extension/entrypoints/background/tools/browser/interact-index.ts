@@ -1,4 +1,9 @@
-import { createErrorResponse, ToolResult } from '../../../../common/tool-handler';
+import {
+  createErrorResponse,
+  type ToolCallContext,
+  ToolResult,
+} from '../../../../common/tool-handler';
+import { throwIfAborted, waitWithAbort, TaskCancelledError } from '../../../../utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES, resolveToolName, type CaptureNetworkOptions } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '../../../../utils/cdp-session-manager';
@@ -26,6 +31,10 @@ import {
   type VisionFrameContext,
 } from '../../../../utils/screenshot-context';
 import { screenshotOriginViolation, validateVisionFrame } from '../../../../utils/screenshot-guard';
+import {
+  SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
+  validateScreenshotCoordinateBinding,
+} from '../../../../utils/screenshot-validity';
 import { computeHumanizedPoints } from '../../../../utils/mouse-trajectory';
 import type { CdpEventObserver } from '../../../../utils/cdp-session-manager';
 import {
@@ -33,19 +42,30 @@ import {
   type PolymorphicCoordinate,
 } from '../../../../utils/coordinate-parser';
 import { sessionTabAffinity } from '../../../../utils/session-tab-affinity';
-import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
 import {
-  captureDeltaIfRequested,
+  animateAgentCursor,
+  animateAgentCursorClick,
+  formatAgentCursorAction,
+} from './agent-cursor';
+import {
+  captureChainedSnapshot,
+  captureGoalObservation,
   ensureSnapshotBaseline,
-  captureChainedSnapshotSummary,
 } from '../../../../utils/delta-helper';
 import { tabFaviconManager } from './tab-favicon';
 import { startActionNetworkCapture } from '../../../../utils/action-network-capture';
+import { projectFramePoint } from '../../../../utils/frame-coordinates';
+import { withActionReceipt, attachActionReceipt } from '../../../../utils/action-receipt';
+import { assertObservedTarget } from '../../../../utils/observed-target-guard';
 
 export interface InteractIndexParams {
+  expectedGuard?: unknown[];
   index?: number;
+  frameId?: number;
   coordinate?: { x: number; y: number } | PolymorphicCoordinate;
   coordinateSpace?: 'viewport' | 'screenshot';
+  /** Ordinary screenshot identity from chrome_screenshot. Screenshot-space coordinates must name it. */
+  captureId?: string;
   /** Internal: Bind action execution to a specific immutable TypeSafe vision frame.
    * If the page or frame has drifted or been superseded, execution fails closed before dispatch. */
   expectedScreenshotId?: string;
@@ -61,6 +81,8 @@ export interface InteractIndexParams {
   holdMs?: number;
   dnd?: boolean;
   modifiers?: string[];
+  /** Internal compatibility target for legacy click callers. */
+  button?: 'left' | 'right' | 'middle';
   tabId?: number;
   windowId?: number;
   waitForSettle?: boolean;
@@ -100,240 +122,22 @@ if (typeof chrome !== 'undefined' && chrome?.tabs?.onRemoved?.addListener) {
 
 export { computeHumanizedPoints };
 
-export async function getSubframeViewportOffset(
-  tabId: number,
-  frameId: number,
-): Promise<{ offsetX: number; offsetY: number }> {
-  if (!frameId || frameId === 0) return { offsetX: 0, offsetY: 0 };
-  let cdpOffset: { offsetX: number; offsetY: number } | null = null;
-  const rawToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const probeAttr = 'data-bp-fprobe-' + rawToken.replace(/[^a-z0-9_]/gi, '');
-
-  try {
-    // Phase 1: Tag target frame document element using chrome.scripting (bridges Isolated & Main worlds)
-    await chrome.scripting
-      .executeScript({
-        target: { tabId, frameIds: [frameId] },
-        func: (attrName: string) => {
-          try {
-            document.documentElement.setAttribute(attrName, '1');
-          } catch {}
-        },
-        args: [probeAttr],
-      })
-      .catch(() => null);
-
-    // Track 1: DOM traversal across accessible browsing context tree with full ancestor chain verification
-    const domResult = await chrome.scripting
-      .executeScript({
-        target: { tabId },
-        func: (attrName: string) => {
-          try {
-            const visited = new Set<Window>();
-            function findTargetIframe(win: Window): HTMLIFrameElement | null {
-              if (!win || visited.has(win)) return null;
-              visited.add(win);
-              const iframes = Array.from(win.document.querySelectorAll('iframe'));
-              for (const ifr of iframes) {
-                try {
-                  const doc = ifr.contentDocument || ifr.contentWindow?.document;
-                  if (doc && doc.documentElement.hasAttribute(attrName)) {
-                    return ifr;
-                  }
-                  if (ifr.contentWindow && ifr.contentWindow !== win) {
-                    const deep = findTargetIframe(ifr.contentWindow);
-                    if (deep) return deep;
-                  }
-                } catch {
-                  // Inaccessible cross-origin iframe boundary
-                }
-              }
-              return null;
-            }
-
-            const targetIfr = findTargetIframe(window);
-            if (!targetIfr) return null;
-
-            let totalX = 0;
-            let totalY = 0;
-            let curr: HTMLIFrameElement | null = targetIfr;
-            let reachedTop = false;
-
-            while (curr) {
-              const r = curr.getBoundingClientRect();
-              const win = curr.ownerDocument.defaultView || window;
-              const s = win.getComputedStyle(curr);
-              const bl = parseFloat(s?.borderLeftWidth || '0') || 0;
-              const bt = parseFloat(s?.borderTopWidth || '0') || 0;
-              totalX += r.left + bl;
-              totalY += r.top + bt;
-
-              const parentWin: any = curr.ownerDocument.defaultView;
-              if (!parentWin || parentWin === window) {
-                reachedTop = true;
-                break;
-              }
-
-              try {
-                const grandParentDoc: any = parentWin.parent?.document;
-                if (!grandParentDoc) {
-                  return null; // Cannot traverse parent document, fall through to Track 2
-                }
-                const parentIframes: any[] = Array.from(grandParentDoc.querySelectorAll('iframe'));
-                const matchedParent: any = parentIframes.find(
-                  (f: any) => f.contentWindow === parentWin,
-                );
-                if (!matchedParent) {
-                  return null; // Broken parent chain, fall through to Track 2
-                }
-                curr = matchedParent;
-              } catch {
-                return null; // Cross-origin parent boundary, fall through to Track 2
-              }
-            }
-
-            if (!reachedTop) {
-              return null; // Partial path rejected, must reach top window
-            }
-
-            return { offsetX: Math.round(totalX), offsetY: Math.round(totalY) };
-          } catch {
-            return null;
-          }
-        },
-        args: [probeAttr],
-      })
-      .catch(() => null);
-
-    const track1Res = domResult?.[0]?.result;
-    if (
-      track1Res &&
-      typeof track1Res.offsetX === 'number' &&
-      typeof track1Res.offsetY === 'number'
-    ) {
-      return track1Res;
-    }
-
-    // Track 2: CDP FrameTree + Page.createIsolatedWorld + Runtime.evaluate({contextId}) + DOM.getFrameOwner
-    if (cdpSessionManager.isAttached(tabId)) {
-      try {
-        await (async () => {
-          await cdpSessionManager.sendCommand(tabId, 'DOM.enable').catch(() => {});
-          const treeRes: any = await cdpSessionManager.sendCommand(tabId, 'Page.getFrameTree');
-          const rootTree = treeRes?.frameTree;
-
-          let matchedCdpFrameId: string | null = null;
-
-          const checkCdpFrameNode = async (frameNode: any): Promise<string | null> => {
-            if (!frameNode || !frameNode.frame) return null;
-            const fid = frameNode.frame.id;
-            if (fid && frameNode.frame.parentId) {
-              try {
-                const worldRes: any = await cdpSessionManager.sendCommand(
-                  tabId,
-                  'Page.createIsolatedWorld',
-                  {
-                    frameId: fid,
-                    worldName: 'bp_probe_world_' + fid,
-                    grantUniveralAccess: false,
-                  },
-                );
-                const contextId = worldRes?.executionContextId;
-                if (typeof contextId === 'number') {
-                  const evalExpr =
-                    "Boolean(document.documentElement && document.documentElement.hasAttribute('" +
-                    probeAttr +
-                    "'))";
-                  const evalRes: any = await cdpSessionManager.sendCommand(
-                    tabId,
-                    'Runtime.evaluate',
-                    {
-                      contextId,
-                      expression: evalExpr,
-                      returnByValue: true,
-                    },
-                  );
-                  if (evalRes?.result?.value === true) {
-                    return fid; // EXACT UNAMBIGUOUS UNIQUE ATTRIBUTE MATCH
-                  }
-                }
-              } catch {}
-            }
-            if (Array.isArray(frameNode.childFrames)) {
-              for (const child of frameNode.childFrames) {
-                const res = await checkCdpFrameNode(child);
-                if (res) return res;
-              }
-            }
-            return null;
-          };
-
-          if (rootTree) {
-            matchedCdpFrameId = await checkCdpFrameNode(rootTree);
-          }
-
-          if (matchedCdpFrameId) {
-            const owner: any = await cdpSessionManager.sendCommand(tabId, 'DOM.getFrameOwner', {
-              frameId: matchedCdpFrameId,
-            });
-            if (owner?.backendNodeId) {
-              const boxRes: any = await cdpSessionManager.sendCommand(tabId, 'DOM.getBoxModel', {
-                backendNodeId: owner.backendNodeId,
-              });
-              const model = boxRes?.model;
-              if (model?.content && Array.isArray(model.content) && model.content.length >= 2) {
-                cdpOffset = {
-                  offsetX: Math.round(model.content[0]),
-                  offsetY: Math.round(model.content[1]),
-                };
-              }
-            }
-          }
-        })();
-      } catch (cdpErr) {
-        console.warn('Track 2 CDP frame resolution failed:', cdpErr);
-      }
-    }
-
-    if (cdpOffset) {
-      return cdpOffset;
-    }
-  } finally {
-    // Phase 3: Await cleanup of our specific ephemeral attribute
-    await chrome.scripting
-      .executeScript({
-        target: { tabId, frameIds: [frameId] },
-        func: (attrName: string) => {
-          try {
-            document.documentElement.removeAttribute(attrName);
-          } catch {}
-        },
-        args: [probeAttr],
-      })
-      .catch(() => null);
-  }
-
-  throw new Error(
-    'Could not resolve bounding rect for subframe ' +
-      frameId +
-      ': target iframe not found in parent document',
-  );
-}
-
 /**
  * Resolve an indexed drag endpoint in the current top-level viewport.
  */
 async function resolveDragEndPoint(
   tabId: number,
   end: InteractIndexParams['end'],
+  frameId?: number,
 ): Promise<{ x: number; y: number } | null> {
   if (!end) return null;
   if (typeof end.index === 'number' && end.index > 0) {
+    const lookupTarget = frameId === undefined ? { tabId } : { tabId, frameIds: [frameId] };
     let coordResult: any = (
-      await executeInPage({ tabId }, 'inPageGetElementCoordinates', [end.index])
+      await executeInPage(lookupTarget, 'inPageGetElementCoordinates', [end.index])
     )?.[0]?.result;
-    let endFrameId: number | undefined = undefined;
-    if (!coordResult?.success) {
+    let endFrameId: number | undefined = frameId;
+    if (!coordResult?.success && frameId === undefined) {
       const frameResults = await executeInPage(
         { tabId, allFrames: true },
         'inPageGetElementCoordinates',
@@ -353,9 +157,10 @@ async function resolveDragEndPoint(
       let endX = coordResult.x;
       let endY = coordResult.y;
       if (endFrameId && endFrameId !== 0 && !coordResult.isFrameCompensated) {
-        const offset = await getSubframeViewportOffset(tabId, endFrameId);
-        endX += offset.offsetX;
-        endY += offset.offsetY;
+        ({ x: endX, y: endY } = await projectFramePoint(tabId, endFrameId, {
+          x: endX - (coordResult.frameOffsetX || 0),
+          y: endY - (coordResult.frameOffsetY || 0),
+        }));
       }
       return { x: endX, y: endY };
     }
@@ -457,7 +262,9 @@ function computeModifierMask(modifiers?: string[]): number {
 export class InteractIndexTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.INTERACT_INDEX;
 
-  async execute(args: InteractIndexParams): Promise<ToolResult> {
+  async execute(args: InteractIndexParams, context?: ToolCallContext): Promise<ToolResult> {
+    const signal = context?.signal;
+    let actionDispatched = false;
     const action = args.action ?? 'click';
     const hasPath = action === 'drag' && Array.isArray(args.path) && args.path.length >= 2;
     const hasIndex = typeof args?.index === 'number' && args.index > 0;
@@ -470,6 +277,17 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         !isNaN((args.coordinate as any).y)) ||
       (args?.coordinate && parseUnifiedCoordinate(args.coordinate)),
     );
+
+    if (args.captureId && args.expectedScreenshotId) {
+      return createErrorResponse(
+        'captureId and expectedScreenshotId are distinct screenshot identities and cannot be combined. Use captureId for ordinary screenshot coordinates or expectedScreenshotId for a Jev vision-frame click.',
+      );
+    }
+    if (args.captureId && !hasCoord && !hasPoints && !hasPath) {
+      return createErrorResponse(
+        'captureId only supports screenshot coordinate actions (coordinate, points, or drag path); index/selector-only actions do not use screenshot coordinates.',
+      );
+    }
 
     if (hasPoints && action !== 'click') {
       return createErrorResponse(
@@ -525,6 +343,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
     }
 
     try {
+      throwIfAborted(signal, 'before interact_index');
       // D3: snapshot BEFORE resolveAffinityTab — its active-tab fallback binds
       // the fallback tab, so post-resolution checks always pass (live-tested).
       const interactHadPreexistingBinding = sessionTabAffinity.hasBinding(
@@ -539,6 +358,9 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       if (!tabId) {
         return createErrorResponse(`No active tab found for ${resolveToolName('interact_index')}`);
       }
+      if (args.frameId !== undefined && (!Number.isSafeInteger(args.frameId) || args.frameId < 0)) {
+        return createErrorResponse('frameId must be a non-negative safe integer');
+      }
 
       // Declared outside runAction so the surrounding finally can cancel it on every
       // exit path: rejected visual clicks return before waitForHandover() runs.
@@ -550,14 +372,39 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       };
 
       const runAction = async (): Promise<ToolResult> => {
+        throwIfAborted(signal, 'before interact_index action');
         const previousUrl = tab.url || '';
         tabFaviconManager.markTabActive(tabId);
+
+        const isScreenshotSpace =
+          args.coordinateSpace === 'screenshot' ||
+          Boolean(args.captureId) ||
+          Boolean(args.expectedScreenshotId);
+        let captureBindingValidated = false;
+        const validateCaptureBinding = async (): Promise<string | undefined> => {
+          const binding = await validateScreenshotCoordinateBinding({
+            tabId,
+            captureId: args.captureId,
+            coordinateSpace: args.coordinateSpace,
+            visionFrameId: args.expectedScreenshotId,
+          });
+          if (binding.error) return binding.error;
+          captureBindingValidated = Boolean(binding.captureId);
+          return undefined;
+        };
+        const assertCaptureBinding = async () => {
+          const error = await validateCaptureBinding();
+          if (error) throw new Error(error);
+        };
+
+        const initialBindingError = await validateCaptureBinding();
+        if (initialBindingError) return createErrorResponse(initialBindingError);
 
         const preSignature = await executeInPage({ tabId }, 'inPageDetectPerceptiveSignature', [])
           .then((r) => r?.[0]?.result)
           .catch(() => null);
 
-        await ensureSnapshotBaseline(tabId, args.includeDelta !== false);
+        await ensureSnapshotBaseline(tabId, !args.expectedGuard && args.includeDelta !== false);
 
         // D3 (TESTING-NOTES #19): when no explicit tabId/session bound the
         // target, resolveAffinityTab fell through to the user's ACTIVE tab -
@@ -611,8 +458,6 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           visionFrame = validation.frame;
         }
 
-        const isScreenshotSpace =
-          args.coordinateSpace === 'screenshot' || Boolean(args.expectedScreenshotId);
         let screenshotCtx: any;
         if (isScreenshotSpace && !visionFrame) {
           screenshotCtx = screenshotContextManager.getContext(tabId);
@@ -778,10 +623,16 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             scaledPoints.push(aligned);
           }
           let dispatched = 0;
-          await executeInPage({ tabId }, 'inPageLockScroll', [true]).catch(() => {});
+          const shouldLockScroll = !args.captureId;
+          if (shouldLockScroll) {
+            await executeInPage({ tabId }, 'inPageLockScroll', [true]).catch(() => {});
+          }
           try {
             await cdpSessionManager.withSession(tabId, 'interact-index', async () => {
+              await assertCaptureBinding();
               for (const pt of scaledPoints) {
+                throwIfAborted(signal, 'before sequence click press');
+                await assertCaptureBinding();
                 await dispatchMousePressRelease(
                   (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
                   {
@@ -808,7 +659,9 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               `click_sequence failed after ${dispatched} points: ${burstErr instanceof Error ? burstErr.message : String(burstErr)}`,
             );
           } finally {
-            await executeInPage({ tabId }, 'inPageLockScroll', [false]).catch(() => {});
+            if (shouldLockScroll) {
+              await executeInPage({ tabId }, 'inPageLockScroll', [false]).catch(() => {});
+            }
           }
           // D1: read back the delivery probe before returning. click_sequence is
           // a native-CDP path, so delivered=false here means throttling ate the
@@ -887,18 +740,25 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             } catch {}
           }
         } else {
+          const frameScopedTarget =
+            args.frameId === undefined ? { tabId } : { tabId, frameIds: [args.frameId] };
           coordResult = (
-            await executeInPage({ tabId }, 'inPageGetElementCoordinates', [args.index!])
+            await executeInPage(frameScopedTarget, 'inPageWaitForActionable', [args.index!, action])
           )?.[0]?.result;
 
           // Check subframes if not in main frame
-          if (!coordResult || !coordResult.success) {
+          if (coordResult?.notFound === false && !coordResult.success) {
+            return createErrorResponse(coordResult.error || 'Target is not actionable');
+          }
+          if ((!coordResult || !coordResult.success) && args.frameId === undefined) {
             const frameResults = await executeInPage(
               { tabId, allFrames: true },
-              'inPageGetElementCoordinates',
-              [args.index!],
+              'inPageWaitForActionable',
+              [args.index!, action],
             );
-            const match = frameResults.find((r) => r.result?.success);
+            const match = frameResults.find(
+              (r) => r.result?.success || r.result?.notFound === false,
+            );
             if (match?.result) {
               coordResult = match.result;
               targetFrameId = match.frameId;
@@ -908,18 +768,30 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           // [ACT-01] Stagehand-inspired Self-Healing Retry:
           // If the element index was momentarily detached due to dynamic framework rerendering,
           // perform a micro quiet-wait and retry coordinate resolution once before giving up.
+          if (coordResult?.notFound === false && !coordResult.success) {
+            return createErrorResponse(coordResult.error || 'Target is not actionable');
+          }
           if (!coordResult || !coordResult.success) {
             await new Promise((r) => setTimeout(r, 120));
             coordResult = (
-              await executeInPage({ tabId }, 'inPageGetElementCoordinates', [args.index!])
+              await executeInPage(frameScopedTarget, 'inPageWaitForActionable', [
+                args.index!,
+                action,
+              ])
             )?.[0]?.result;
-            if (!coordResult || !coordResult.success) {
+            if (
+              (!coordResult || !coordResult.success) &&
+              coordResult?.notFound !== false &&
+              args.frameId === undefined
+            ) {
               const frameResults = await executeInPage(
                 { tabId, allFrames: true },
-                'inPageGetElementCoordinates',
-                [args.index!],
+                'inPageWaitForActionable',
+                [args.index!, action],
               );
-              const match = frameResults.find((r) => r.result?.success);
+              const match = frameResults.find(
+                (r) => r.result?.success || r.result?.notFound === false,
+              );
               if (match?.result) {
                 coordResult = match.result;
                 targetFrameId = match.frameId;
@@ -927,6 +799,9 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             }
           }
 
+          if (coordResult?.notFound === false && !coordResult.success) {
+            return createErrorResponse(coordResult.error || 'Target is not actionable');
+          }
           if (!coordResult || !coordResult.success) {
             if (hasCoord) {
               // Hybrid Visual Fallback: DOM extraction failed, fallback to coordinate
@@ -966,12 +841,17 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           } else {
             x = coordResult.x!;
             y = coordResult.y!;
+            if (args.frameId !== undefined) {
+              targetFrameId = args.frameId;
+            }
             tagName = coordResult.tagName;
             text = coordResult.text;
             if (coordResult.warning) {
               coordWarning = coordResult.warning;
             }
             if (coordResult.isSelectOption && (action === 'click' || !action)) {
+              await assertObservedTarget(tabId, args.index, targetFrameId, args.expectedGuard);
+              throwIfAborted(signal, 'before observed option selection');
               const selectRes = (
                 await executeInPage(
                   targetFrameId ? { tabId, frameIds: [targetFrameId] } : { tabId },
@@ -991,12 +871,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           return createErrorResponse(`Failed to resolve valid pixel coordinates for interaction`);
         }
 
+        const localPoint = {
+          x: x - (coordResult?.frameOffsetX || 0),
+          y: y - (coordResult?.frameOffsetY || 0),
+        };
+        if (targetFrameId && !isFallback && !coordResult?.isFrameCompensated) {
+          ({ x, y } = await projectFramePoint(tabId, targetFrameId, localPoint));
+        }
+
         if (action === 'drag') {
-          if (targetFrameId && !isFallback && !coordResult?.isFrameCompensated) {
-            const offset = await getSubframeViewportOffset(tabId, targetFrameId);
-            x += offset.offsetX;
-            y += offset.offsetY;
-          }
           const readScrollState = async () => {
             const state = (await executeInPage({ tabId }, 'inPageGetScrollState', []))?.[0]?.result;
             if (
@@ -1041,7 +924,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           if (!hasPath) {
             const indexedEnd = typeof args.end?.index === 'number' && args.end.index > 0;
             const end = indexedEnd
-              ? await resolveDragEndPoint(tabId, args.end)
+              ? await resolveDragEndPoint(tabId, args.end, args.frameId)
               : projectCoord(args.end?.coordinate);
             if (args.end?.coordinate && !end && lastCoordinateError) {
               return createErrorResponse(lastCoordinateError);
@@ -1145,15 +1028,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         const actNote =
           (args as any).note ||
           (args as any).actionNote ||
-          (actName === 'click'
-            ? `Clicking [${args.index ?? ''}]`
-            : actName === 'hover'
-              ? `Hovering [${args.index ?? ''}]`
-              : actName === 'double_click'
-                ? `Double clicking [${args.index ?? ''}]`
-                : actName === 'focus'
-                  ? `Focusing [${args.index ?? ''}]`
-                  : actName);
+          formatAgentCursorAction(actName, {
+            text,
+            tagName,
+            role: coordResult?.role,
+            inputType: coordResult?.inputType,
+            attributes: coordResult?.attributes,
+          });
         await animateAgentCursor(tabId, x, y, {
           waitForArrival: true,
           timeoutMs: 350,
@@ -1168,7 +1049,11 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         if (args.index !== undefined && !isFallback && action === 'click') {
           try {
             const interceptRes = (
-              await executeInPage(targetScope, 'inPageCheckInterception', [args.index, x, y])
+              await executeInPage(targetScope, 'inPageCheckInterception', [
+                args.index,
+                localPoint.x,
+                localPoint.y,
+              ])
             )?.[0]?.result;
             if (interceptRes?.intercepted && interceptRes?.description) {
               if (interceptRes.canPierce && args.pierceOverlay !== false) {
@@ -1191,28 +1076,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         }
 
         const modifierMask = computeModifierMask(args.modifiers);
+        const clickButton = args.button ?? 'left';
+        const clickButtons = clickButton === 'right' ? 2 : clickButton === 'middle' ? 4 : 1;
         usedNativeCDP = false;
-        // 2. Compensate cumulative frame offset if target is inside a nested or cross-origin subframe
-        if (
-          action !== 'drag' &&
-          targetFrameId !== undefined &&
-          targetFrameId !== 0 &&
-          !isFallback
-        ) {
-          const offset = await getSubframeViewportOffset(tabId, targetFrameId);
-          // Only add external subframe offset if not already compensated inside page
-          const alreadyCompensated = Boolean(coordResult?.isFrameCompensated);
-          if (!alreadyCompensated) {
-            x = x + offset.offsetX;
-            y = y + offset.offsetY;
-          }
-        }
-
         let dragOutcome: any = undefined;
         if (action === 'drag') {
           dragOutcome = { dragIntercepted: false, dndDispatched: false };
           const endPoint = dragPoints![dragPoints!.length - 1];
           await cdpSessionManager.withSession(tabId, 'interact-index-drag', async () => {
+            await assertCaptureBinding();
             const enableDnd = args.dnd !== false;
             const dragSteps = Math.max(2, Math.min(120, args.steps ?? 48));
             const holdMs = Math.max(0, Math.min(1000, args.holdMs ?? 80));
@@ -1254,6 +1126,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 await new Promise((r) => setTimeout(r, dragPrePress));
               }
 
+              throwIfAborted(signal, 'before drag mousePressed');
               await dragMouseGuard.press({
                 type: 'mousePressed',
                 x: startX,
@@ -1264,7 +1137,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 modifiers: modifierMask,
               });
               if (holdMs > 0) {
-                await new Promise((r) => setTimeout(r, holdMs));
+                await waitWithAbort(holdMs, signal, 'during drag hold');
               }
 
               // Concurrently animate virtual cursor to drag destination during physical drag
@@ -1277,6 +1150,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
 
               if (hasPath) {
                 for (let pi = 1; pi < dragPoints!.length && !dragData; pi++) {
+                  throwIfAborted(signal, 'during drag step');
                   const pt = dragPoints![pi];
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                     type: 'mouseMoved',
@@ -1299,6 +1173,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 // below completes the HTML5 drag without any further input acks.
                 let dragIntercepted = false;
                 for (let i = 1; i <= dragSteps && !dragIntercepted; i++) {
+                  throwIfAborted(signal, 'during drag step');
                   const curX = Math.round(startX + (endPoint.x - startX) * (i / dragSteps));
                   const curY = Math.round(startY + (endPoint.y - startY) * (i / dragSteps));
                   await raceCdp(tabId, 'Input.dispatchMouseEvent', {
@@ -1423,9 +1298,10 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 let targetX = occRes.x;
                 let targetY = occRes.y;
                 if (targetFrameId !== undefined && targetFrameId !== 0 && !isFallback) {
-                  const offset = await getSubframeViewportOffset(tabId, targetFrameId);
-                  targetX += offset.offsetX;
-                  targetY += offset.offsetY;
+                  ({ x: targetX, y: targetY } = await projectFramePoint(tabId, targetFrameId, {
+                    x: targetX,
+                    y: targetY,
+                  }));
                 }
                 if (x !== targetX || y !== targetY) {
                   x = targetX;
@@ -1440,9 +1316,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             }
 
             await armProbe(targetScope);
-            await executeInPage({ tabId }, 'inPageLockScroll', [true]).catch(() => {});
+            const shouldLockScroll = !args.captureId;
+            if (shouldLockScroll) {
+              await executeInPage({ tabId }, 'inPageLockScroll', [true]).catch(() => {});
+            }
             try {
               await cdpSessionManager.withSession(tabId, 'interact-index', async () => {
+                await assertCaptureBinding();
                 // Always dispatch mouse movement to target coordinates before pressing (ensures authentic pointer path)
                 await dispatchMouseMovement(tabId, x, y, modifierMask, args.humanize === true);
 
@@ -1462,6 +1342,14 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   const clickGuard = createMousePressGuard(
                     async (params) => {
                       if (params.type === 'mousePressed') {
+                        throwIfAborted(signal, 'before mousePressed');
+                        await assertObservedTarget(
+                          tabId,
+                          args.index,
+                          targetFrameId,
+                          args.expectedGuard,
+                        );
+                        throwIfAborted(signal, 'after observed target validation');
                         if (visionFrame) {
                           // Check deadline immediately before press
                           if (
@@ -1534,15 +1422,21 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                               `Vision frame "${visionFrame.id}" could not be consumed (already consumed, superseded, or expired)`,
                             );
                           }
+                        } else if (args.captureId) {
+                          await assertCaptureBinding();
                         }
 
                         physicalPressDispatched = true;
+                        actionDispatched = true;
                         return raceCdp(tabId, 'Input.dispatchMouseEvent', params);
                       }
 
                       if (params.type === 'mouseReleased') {
                         // Suppress compensating mouseReleased if mousePressed was never dispatched
-                        if (visionFrame && !physicalPressDispatched) {
+                        if (
+                          (visionFrame || args.captureId || args.expectedGuard !== undefined) &&
+                          !physicalPressDispatched
+                        ) {
                           return;
                         }
                         return raceCdp(tabId, 'Input.dispatchMouseEvent', params);
@@ -1554,7 +1448,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       type: 'mouseReleased',
                       x,
                       y,
-                      button: 'left',
+                      button: clickButton,
                       buttons: 0,
                       clickCount: 1,
                       modifiers: modifierMask,
@@ -1565,15 +1459,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       type: 'mousePressed',
                       x,
                       y,
-                      button: 'left',
-                      buttons: 1,
+                      button: clickButton,
+                      buttons: clickButtons,
                       clickCount: 1,
                       modifiers: modifierMask,
                     });
                     // Animate cursor ONLY after successful press
                     await animateAgentCursorClick(tabId, x, y, actNote);
                     const clickHoldMs = Math.max(35, Math.min(3000, args.holdMs ?? 45));
-                    await new Promise((r) => setTimeout(r, clickHoldMs));
+                    await waitWithAbort(clickHoldMs, signal, 'during click hold');
                     await clickGuard.release();
                   } finally {
                     await clickGuard.compensate();
@@ -1581,13 +1475,14 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 } else if (action === 'double_click') {
                   await animateAgentCursorClick(tabId, x, y, actNote);
                   // First click
+                  throwIfAborted(signal, 'before double_click first press');
                   const firstClickGuard = createMousePressGuard(
                     (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
                     {
                       type: 'mouseReleased',
                       x,
                       y,
-                      button: 'left',
+                      button: clickButton,
                       buttons: 0,
                       clickCount: 1,
                       modifiers: modifierMask,
@@ -1598,19 +1493,21 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       type: 'mousePressed',
                       x,
                       y,
-                      button: 'left',
-                      buttons: 1,
+                      button: clickButton,
+                      buttons: clickButtons,
                       clickCount: 1,
                       modifiers: modifierMask,
                     });
-                    await new Promise((r) => setTimeout(r, 45));
+                    await waitWithAbort(45, signal, 'during double_click first hold');
                     await firstClickGuard.release();
+                    actionDispatched = true;
                   } finally {
                     await firstClickGuard.compensate();
                   }
                   // Inter-click pause for OS double-click recognition
-                  await new Promise((r) => setTimeout(r, 60));
+                  await waitWithAbort(60, signal, 'between double_click presses');
                   // Second click with clickCount: 2
+                  throwIfAborted(signal, 'before double_click second press');
                   await animateAgentCursorClick(tabId, x, y, actNote);
                   await dispatchMousePressRelease(
                     (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
@@ -1618,8 +1515,8 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       type: 'mousePressed',
                       x,
                       y,
-                      button: 'left',
-                      buttons: 1,
+                      button: clickButton,
+                      buttons: clickButtons,
                       clickCount: 2,
                       modifiers: modifierMask,
                     },
@@ -1627,7 +1524,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       type: 'mouseReleased',
                       x,
                       y,
-                      button: 'left',
+                      button: clickButton,
                       buttons: 0,
                       clickCount: 2,
                       modifiers: modifierMask,
@@ -1645,6 +1542,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   if (rightPrePress > 0) {
                     await new Promise((r) => setTimeout(r, rightPrePress));
                   }
+                  throwIfAborted(signal, 'before right_click press');
                   await dispatchMousePressRelease(
                     (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
                     {
@@ -1692,9 +1590,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               });
               usedNativeCDP = true;
             } finally {
-              await executeInPage({ tabId }, 'inPageLockScroll', [false]).catch(() => {});
+              if (shouldLockScroll) {
+                await executeInPage({ tabId }, 'inPageLockScroll', [false]).catch(() => {});
+              }
             }
           } catch (cdpErr) {
+            if (args.expectedGuard !== undefined) {
+              netCapture.dispose();
+              throw cdpErr;
+            }
             if (cdpErr instanceof DialogOpenedError) {
               throw cdpErr;
             }
@@ -1718,9 +1622,19 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}. Hint: If a native dialog is open, call ${resolveToolName('handle_dialog')}. If this is a slider or captcha verification, call ${resolveToolName('request_human_intervention')}.`,
               );
             }
+            if (cdpErr instanceof TaskCancelledError) {
+              netCapture.dispose();
+              throw cdpErr;
+            }
             if (visionFrame) {
               netCapture.dispose();
               return createErrorResponse(cdpErr instanceof Error ? cdpErr.message : String(cdpErr));
+            }
+            if (args.captureId) {
+              netCapture.dispose();
+              return createErrorResponse(
+                `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}. The capture-bound action was not replayed through the synthetic fallback; inspect page state before retrying.`,
+              );
             }
             console.warn(
               `CDP native mouse event dispatch failed for tab ${tabId}, falling back to synthetic event:`,
@@ -1728,6 +1642,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             );
             // Fallback to inPageInteractIndex if CDP is unavailable and index is provided
             if (typeof args.index === 'number' && args.index > 0) {
+              if (args.button === 'middle') {
+                return createErrorResponse(
+                  `CDP middle click failed for index [${args.index}]: ${
+                    cdpErr instanceof Error ? cdpErr.message : String(cdpErr)
+                  }`,
+                );
+              }
               const frameTarget = targetFrameId ? { tabId, frameIds: [targetFrameId] } : { tabId };
               const fallbackResults = await executeInPage(frameTarget, 'inPageInteractIndex', [
                 args.index,
@@ -1765,58 +1686,25 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         // D1: read back the delivery probe. Only meaningful when armed and the
         // action used native CDP (synthetic fallback fires the same listeners
         // synchronously, so a false there would be a probe artifact).
+        // If native CDP click delivery is uncertain, return verifiable diagnostic
+        // hints without blind synthetic re-dispatch (avoids double submission / toggle bounce).
         let deliveryVerified: boolean | undefined;
         let deliveryHits: any[] | undefined;
-        let fallbackTriggered: string | undefined;
+        let deliveryWarning: string | undefined;
         if (probeArmed && usedNativeCDP) {
           try {
             const probe = (await executeInPage(targetScope, 'inPageReadDeliveryProbe', [true]))?.[0]
               ?.result;
             deliveryVerified = Boolean(probe?.delivered);
-            if (!deliveryVerified || maskPierced) {
+            if (!deliveryVerified) {
               deliveryHits = probe?.hits ?? [];
-              // Click Probe / Mask Piercing Fallback: if native CDP events were dropped (e.g. background tab throttling)
-              // or if a transparent/transient mask intercepted the click, fall back to synthetic DOM event dispatch
-              // directly on the underlying target element to ensure 100% execution.
-              if (action === 'click' && !visionFrame) {
-                try {
-                  const synRes = (
-                    await executeInPage(targetScope, 'inPageDispatchSyntheticClick', [
-                      args.index ?? null,
-                      x,
-                      y,
-                    ])
-                  )?.[0]?.result;
-                  if (synRes) {
-                    deliveryVerified = true;
-                    fallbackTriggered = maskPierced
-                      ? 'synthetic_click_pierce'
-                      : 'synthetic_click_probe';
-                    usedNativeCDP = false;
-                  }
-                } catch {
-                  // Ignore fallback error
-                }
-              }
+              deliveryWarning = maskPierced
+                ? `Native click was dispatched over transient overlay (${maskPierced.description}), but delivery probe was unconfirmed. Inspect page state before retrying.`
+                : 'Native click was dispatched via CDP, but delivery probe was unconfirmed (possible background throttling, custom pointer handler, or late event). Inspect page state before retrying.';
             }
           } catch {
             deliveryVerified = undefined;
           }
-        } else if (maskPierced && action === 'click' && !visionFrame) {
-          try {
-            const synRes = (
-              await executeInPage(targetScope, 'inPageDispatchSyntheticClick', [
-                args.index ?? null,
-                x,
-                y,
-              ])
-            )?.[0]?.result;
-            if (synRes) {
-              deliveryVerified = true;
-              fallbackTriggered = 'synthetic_click_pierce';
-              usedNativeCDP = false;
-            }
-          } catch {}
         }
 
         if (visionFrame && deliveryVerified === false) {
@@ -1835,12 +1723,16 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             ? `screenshot coordinate context expires in ${Math.round(ctxTtlMs / 1000)}s; re-capture to refresh`
             : undefined;
 
-        const chainedSnapshot =
-          args.includeDelta !== false
-            ? await captureChainedSnapshotSummary(tabId, previousUrl, { maxItems: 10, delayMs: 80 })
+        const observation =
+          !args.expectedGuard && args.includeDelta !== false
+            ? await captureChainedSnapshot(tabId, previousUrl, {
+                maxItems: 10,
+                delayMs: 80,
+                frameId: targetFrameId,
+              })
             : undefined;
-        const delta =
-          args.includeDelta === true ? await captureDeltaIfRequested(tabId, true, 0) : undefined;
+        const chainedSnapshot = observation?.summary;
+        const delta = args.includeDelta === true ? observation?.delta : undefined;
 
         let currentUrl = previousUrl;
         try {
@@ -1855,6 +1747,10 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           .then((r) => r?.[0]?.result)
           .catch(() => null);
         const perceptiveDelta = computePerceptiveDelta(preSignature, postSignature);
+
+        const goalObservation = args.expectedGuard
+          ? await captureGoalObservation(tabId, args.sessionId || args.sessionContext)
+          : undefined;
 
         const tabHandover = handoverTracker ? await handoverTracker.waitForHandover(800) : null;
 
@@ -1872,11 +1768,28 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   action,
                   tagName,
                   text,
-                  ...(coordWarning ? { warning: coordWarning } : {}),
+                  ...(coordWarning || deliveryWarning
+                    ? { warning: [coordWarning, deliveryWarning].filter(Boolean).join('; ') }
+                    : {}),
+                  ...(deliveryWarning ? { deliveryWarning } : {}),
                   ...(networkResult ? { networkResult } : {}),
                   isTrusted: usedNativeCDP,
+                  ...(coordResult?.method
+                    ? {
+                        actionability: {
+                          method: coordResult.method,
+                          stableFrames: coordResult.stableFrames,
+                        },
+                      }
+                    : {}),
                   coordinates: { x, y },
-                  fallbackTriggered,
+                  ...(args.captureId && captureBindingValidated
+                    ? {
+                        captureId: args.captureId,
+                        captureValidated: true,
+                        captureValidationBoundary: SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
+                      }
+                    : {}),
                   ...(tabHandover ? { tabHandover } : {}),
                   ...(maskPierced ? { piercedOverlay: maskPierced } : {}),
                   mode: isFallback
@@ -1894,11 +1807,12 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   ...(delta ? { delta } : {}),
                   ...(chainedSnapshot ? { chainedSnapshot } : {}),
                   ...(perceptiveDelta ? { perceptiveDelta } : {}),
+                  ...(goalObservation ? { goalObservation } : {}),
                   ...(deliveryVerified === undefined
                     ? {}
                     : deliveryVerified
                       ? { deliveryVerified: true }
-                      : { deliveryVerified: false, deliveryHits }),
+                      : { deliveryVerified: false, deliveryHits: deliveryHits ?? [] }),
                 },
                 null,
                 2,
@@ -1911,19 +1825,63 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
 
       try {
         return args.skipLock
-          ? await runAction()
-          : await sessionTabAffinity.runSerialized(tabId, runAction);
+          ? await withActionReceipt(tabId, runAction)
+          : await sessionTabAffinity.runSerialized(tabId, () =>
+              withActionReceipt(tabId, runAction),
+            );
       } finally {
         // Every exit path must release the tracker, otherwise its navigation and tab
         // listeners leak for the life of the extension.
         cancelHandoverTracker();
       }
     } catch (error) {
+      if ((error as any)?.status === 'blocked' && (error as any)?.requestDispatched === false) {
+        return attachActionReceipt(
+          {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  status: 'blocked',
+                  requestDispatched: false,
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              },
+            ],
+            isError: true,
+          },
+          (error as any)?.receipt,
+        );
+      }
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);
       }
-      return createErrorResponse(
-        `Error executing ${resolveToolName('interact_index')}: ${error instanceof Error ? error.message : String(error)}`,
+      if (error instanceof TaskCancelledError && actionDispatched) {
+        return attachActionReceipt(
+          {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  status: 'unknown',
+                  retry: false,
+                  dispatched: true,
+                  error: error.message,
+                }),
+              },
+            ],
+            isError: true,
+          },
+          (error as any)?.receipt,
+        );
+      }
+      return attachActionReceipt(
+        createErrorResponse(
+          `Error executing ${resolveToolName('interact_index')}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+        (error as any)?.receipt,
       );
     }
   }

@@ -97,7 +97,7 @@ globalThis.fetch = async (url) => {
 
     return spawnSync(
       process.execPath,
-      ['--import', preloadUrl, 'skill/config/doctor.mjs', ...args],
+      ['--import', preloadUrl, 'skills/browserpaw/scripts/doctor.mjs', ...args],
       {
         cwd: process.cwd(),
         env,

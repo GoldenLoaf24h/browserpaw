@@ -195,6 +195,7 @@ export class Server {
         pathOnly === '/ping' ||
         pathOnly.startsWith('/media-asset/') ||
         pathOnly === '/jev/model-status' ||
+        (request.method === 'GET' && pathOnly === '/jev/mode-state') ||
         pathOnly === '/jev/download-progress'
       ) {
         return;
@@ -601,7 +602,19 @@ export class Server {
       },
     );
 
-    // POST /jev/set-mode: Updates active in-memory routing mode ('off' | 'local' | 'remote') in <= 2ms
+    // GET /jev/mode-state: Returns active mode, revision, disabled reason, and timestamp
+    this.fastify.get('/jev/mode-state', async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const modeState = jevModelManager.getModeState();
+        return reply.status(HTTP_STATUS.OK).send(modeState);
+      } catch (err: any) {
+        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
+          error: err?.message || 'Failed to query Jev mode state',
+        });
+      }
+    });
+
+    // POST /jev/set-mode: Validates configuration and updates active in-memory routing mode
     this.fastify.post(
       '/jev/set-mode',
       async (request: FastifyRequest<{ Body: { mode: JevMode } }>, reply: FastifyReply) => {
@@ -611,11 +624,12 @@ export class Server {
             error: 'Invalid Jev mode. Must be one of: "off", "local", "remote"',
           });
         }
-        jevModelManager.setActiveMode(mode);
+        const state = jevModelManager.setActiveMode(mode, undefined, { validate: true });
         mcpSessionManager.broadcastToolListChanged();
         return reply.status(HTTP_STATUS.OK).send({
           success: true,
-          mode: jevModelManager.getActiveMode(),
+          mode: state.activeMode,
+          modeState: state,
         });
       },
     );

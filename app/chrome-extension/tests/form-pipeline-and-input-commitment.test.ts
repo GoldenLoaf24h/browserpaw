@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  inPageDeepResetElement,
   inPageVerifyInputCommitment,
   inPageDetectPerceptiveSignature,
   computePerceptiveDelta,
@@ -8,6 +7,7 @@ import {
   inPageLocateByText,
   getIsolatedIndexMap,
   extractElementLocationDetails,
+  findIndexedElement,
   wrapElement,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';
@@ -18,49 +18,6 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
     document.body.innerHTML = '';
     getIsolatedIndexMap().clear();
     vi.clearAllMocks();
-  });
-
-  describe('1. Cross-Platform Deep Reset Protocol (inPageDeepResetElement)', () => {
-    it('clears standard input and dispatches input/change events', () => {
-      const input = document.createElement('input');
-      input.value = 'Existing text';
-      document.body.appendChild(input);
-
-      let inputFired = false;
-      let changeFired = false;
-      input.addEventListener('input', () => {
-        inputFired = true;
-      });
-      input.addEventListener('change', () => {
-        changeFired = true;
-      });
-
-      getIsolatedIndexMap().set(1, input);
-
-      const res = inPageDeepResetElement(1);
-      expect(res.success).toBe(true);
-      expect(res.cleared).toBe(true);
-      expect(res.currentLength).toBe(0);
-      expect(input.value).toBe('');
-      expect(inputFired).toBe(true);
-      expect(changeFired).toBe(true);
-    });
-
-    it('resets rich-text contenteditable element contents', () => {
-      const editor = document.createElement('div');
-      editor.setAttribute('contenteditable', 'true');
-      editor.setAttribute('role', 'textbox');
-      editor.innerText = 'Draft tweet text';
-      document.body.appendChild(editor);
-
-      getIsolatedIndexMap().set(2, editor);
-
-      const res = inPageDeepResetElement(2);
-      expect(res.success).toBe(true);
-      expect(res.cleared).toBe(true);
-      expect(editor.innerText.trim()).toBe('');
-      expect(res.isComposer).toBe(true);
-    });
   });
 
   describe('2. True Input Commitment Verification (inPageVerifyInputCommitment)', () => {
@@ -229,10 +186,14 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       document.body.appendChild(container);
 
       // Mock viewport bounding client rects
-      heading.getBoundingClientRect = () => ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 } as any);
-      progress.getBoundingClientRect = () => ({ top: 10, bottom: 30, left: 20, right: 100, width: 80, height: 20 } as any);
-      input.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 } as any);
-      alert.getBoundingClientRect = () => ({ top: 140, bottom: 170, left: 20, right: 250, width: 230, height: 30 } as any);
+      heading.getBoundingClientRect = () =>
+        ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 }) as any;
+      progress.getBoundingClientRect = () =>
+        ({ top: 10, bottom: 30, left: 20, right: 100, width: 80, height: 20 }) as any;
+      input.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 }) as any;
+      alert.getBoundingClientRect = () =>
+        ({ top: 140, bottom: 170, left: 20, right: 250, width: 230, height: 30 }) as any;
 
       const sig = inPageDetectPerceptiveSignature();
       expect(sig.question).toBe('What is your company size?');
@@ -297,10 +258,14 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       activeSlide.appendChild(activeInput);
       document.body.appendChild(activeSlide);
 
-      ghostHeading.getBoundingClientRect = () => ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 } as any);
-      ghostInput.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 } as any);
-      activeHeading.getBoundingClientRect = () => ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 } as any);
-      activeInput.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 } as any);
+      ghostHeading.getBoundingClientRect = () =>
+        ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 }) as any;
+      ghostInput.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 }) as any;
+      activeHeading.getBoundingClientRect = () =>
+        ({ top: 50, bottom: 80, left: 20, right: 300, width: 280, height: 30 }) as any;
+      activeInput.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 20, right: 250, width: 230, height: 30 }) as any;
 
       const sig = inPageDetectPerceptiveSignature();
       expect(sig.question).toBe('Active Step 2: Current question');
@@ -347,8 +312,10 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       hiddenContainer.appendChild(ghostBtn);
       document.body.appendChild(hiddenContainer);
 
-      visibleBox.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 50, right: 150, width: 100, height: 30 } as any);
-      ghostBtn.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 50, right: 150, width: 100, height: 30 } as any);
+      visibleBox.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 50, right: 150, width: 100, height: 30 }) as any;
+      ghostBtn.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 50, right: 150, width: 100, height: 30 }) as any;
 
       const res = inPageDOMPruner({ activeViewportOnly: true });
       expect(res.treeString).toContain('Active Visible Button');
@@ -365,9 +332,11 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       document.body.appendChild(offscreenSlide);
 
       // In viewport (window width is typically 1024 or 1280 in tests)
-      activeSlide.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 100, right: 300, width: 200, height: 30 } as any);
+      activeSlide.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 100, right: 300, width: 200, height: 30 }) as any;
       // Offscreen to the right (left = 2500)
-      offscreenSlide.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 2500, right: 2700, width: 200, height: 30 } as any);
+      offscreenSlide.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 2500, right: 2700, width: 200, height: 30 }) as any;
 
       const res = inPageDOMPruner({ activeViewportOnly: true });
       expect(res.treeString).toContain('Active Slide Button');
@@ -375,8 +344,8 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
     });
   });
 
-  describe('5. Active Viewport Bias in inPageLocateByText', () => {
-    it('prioritizes element in active viewport over off-screen duplicate text element', () => {
+  describe('5. Strict visibility in inPageLocateByText', () => {
+    it('rejects duplicate text even when one match is outside the viewport', () => {
       const offscreenBtn = document.createElement('button');
       offscreenBtn.textContent = 'Continue';
       document.body.appendChild(offscreenBtn);
@@ -385,16 +354,18 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       inViewportBtn.textContent = 'Continue';
       document.body.appendChild(inViewportBtn);
 
-      offscreenBtn.getBoundingClientRect = () => ({ top: -1500, bottom: -1450, left: 100, right: 200, width: 100, height: 50 } as any);
-      inViewportBtn.getBoundingClientRect = () => ({ top: 200, bottom: 250, left: 100, right: 200, width: 100, height: 50 } as any);
+      offscreenBtn.getBoundingClientRect = () =>
+        ({ top: -1500, bottom: -1450, left: 100, right: 200, width: 100, height: 50 }) as any;
+      inViewportBtn.getBoundingClientRect = () =>
+        ({ top: 200, bottom: 250, left: 100, right: 200, width: 100, height: 50 }) as any;
 
       getIsolatedIndexMap().set(10, offscreenBtn);
       getIsolatedIndexMap().set(11, inViewportBtn);
 
       const loc = inPageLocateByText('Continue', 'button');
-      expect(loc.success).toBe(true);
-      // In-viewport element has +1000 score bonus and must be picked (y = 225 vs y = -1475)
-      expect(loc.y).toBeGreaterThan(0);
+      expect(loc.success).toBe(false);
+      expect(loc.matchCount).toBe(2);
+      expect(loc.error).toContain('Strict mode violation');
     });
 
     it('ignores elements contained within aria-hidden="true" or inert ancestors', () => {
@@ -405,7 +376,8 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       hiddenContainer.appendChild(hiddenBtn);
       document.body.appendChild(hiddenContainer);
 
-      hiddenBtn.getBoundingClientRect = () => ({ top: 100, bottom: 130, left: 100, right: 200, width: 100, height: 30 } as any);
+      hiddenBtn.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 130, left: 100, right: 200, width: 100, height: 30 }) as any;
       getIsolatedIndexMap().set(12, hiddenBtn);
 
       const loc = inPageLocateByText('Submit Hidden', 'button');
@@ -431,65 +403,67 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       });
 
       let step = 1;
-      vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string, args: any[]) => {
-        if (fnName === 'inPageCheckCaptcha') {
-          return [{ result: { detected: false } }] as any;
-        }
-        if (fnName === 'inPageDetectPerceptiveSignature') {
-          if (step === 1) {
-            return [
-              {
-                result: {
-                  question: 'What is your username?',
-                  progress: '1 / 2',
-                  activeInputs: [{ index: 1, name: 'username', tagName: 'input' }],
-                  alerts: [],
-                },
-              },
-            ] as any;
-          } else if (step === 2) {
-            return [
-              {
-                result: {
-                  question: 'What is your team size?',
-                  progress: '2 / 2',
-                  activeInputs: [{ index: 2, name: 'teamSize', tagName: 'input' }],
-                  alerts: [],
-                },
-              },
-            ] as any;
-          } else {
-            return [
-              {
-                result: {
-                  question: 'All set! Welcome aboard.',
-                  progress: '2 / 2',
-                  activeInputs: [],
-                  alerts: [],
-                },
-              },
-            ] as any;
+      vi.spyOn(engine, 'executeInPage').mockImplementation(
+        async (_target: any, fnName: string, args: any[]) => {
+          if (fnName === 'inPageCheckCaptcha') {
+            return [{ result: { detected: false } }] as any;
           }
-        }
-        if (fnName === 'inPageLocateByText') {
-          return [{ result: { success: true, index: 99, tagName: 'button' } }] as any;
-        }
-        if (fnName === 'inPageGetElementCoordinates') {
-          return [{ result: { success: true, x: 100, y: 100, tagName: 'input' } }] as any;
-        }
-        if (fnName === 'inPageVerifyInputCommitment') {
-          step++;
-          return [{ result: { success: true, committed: true } }] as any;
-        }
-        if (fnName === 'inPageFillIndex') {
-          step++;
-          return [{ result: { success: true, committed: true } }] as any;
-        }
-        if (fnName === 'inPageWaitForDOMSettle') {
-          return [{ result: { settled: true, durationMs: 0, mutationsObserved: 0 } }] as any;
-        }
-        return [{ result: { success: true } }] as any;
-      });
+          if (fnName === 'inPageDetectPerceptiveSignature') {
+            if (step === 1) {
+              return [
+                {
+                  result: {
+                    question: 'What is your username?',
+                    progress: '1 / 2',
+                    activeInputs: [{ index: 1, name: 'username', tagName: 'input' }],
+                    alerts: [],
+                  },
+                },
+              ] as any;
+            } else if (step === 2) {
+              return [
+                {
+                  result: {
+                    question: 'What is your team size?',
+                    progress: '2 / 2',
+                    activeInputs: [{ index: 2, name: 'teamSize', tagName: 'input' }],
+                    alerts: [],
+                  },
+                },
+              ] as any;
+            } else {
+              return [
+                {
+                  result: {
+                    question: 'All set! Welcome aboard.',
+                    progress: '2 / 2',
+                    activeInputs: [],
+                    alerts: [],
+                  },
+                },
+              ] as any;
+            }
+          }
+          if (fnName === 'inPageLocateByText') {
+            return [{ result: { success: true, index: 99, tagName: 'button' } }] as any;
+          }
+          if (fnName === 'inPageGetElementCoordinates') {
+            return [{ result: { success: true, x: 100, y: 100, tagName: 'input' } }] as any;
+          }
+          if (fnName === 'inPageVerifyInputCommitment') {
+            step++;
+            return [{ result: { success: true, committed: true } }] as any;
+          }
+          if (fnName === 'inPageFillIndex') {
+            step++;
+            return [{ result: { success: true, committed: true } }] as any;
+          }
+          if (fnName === 'inPageWaitForDOMSettle') {
+            return [{ result: { settled: true, durationMs: 0, mutationsObserved: 0 } }] as any;
+          }
+          return [{ result: { success: true } }] as any;
+        },
+      );
 
       const res = await formPipelineTool.execute({
         fields: [
@@ -646,9 +620,9 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
 
       expect(loc.success).toBe(true);
       // Under old bug: target.contains(el) matched form, assigning index 1 to the button!
-      // Under 2-pass fix: button receives its own distinct index (2)
+      // The child receives its own reference; allocation need not be contiguous.
       expect(loc.index).not.toBe(1);
-      expect(loc.index).toBe(2);
+      expect(findIndexedElement(loc.index!)).toBe(submitBtn);
       expect(loc.isClickable).toBe(true);
       expect(loc.role).toBeUndefined(); // native button has no explicit role attribute
     });
@@ -679,7 +653,8 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       expect(verification.submitButtonState?.found).toBe(true);
       // Must NOT be the form's index 10!
       expect(verification.submitButtonState?.index).not.toBe(10);
-      expect(verification.submitButtonState?.index).toBe(12);
+      expect(verification.submitButtonState?.index).not.toBe(11);
+      expect(findIndexedElement(verification.submitButtonState!.index!)).toBe(submitBtn);
     });
   });
 });

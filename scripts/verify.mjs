@@ -374,9 +374,11 @@ export function parsePytestJunit(xmlContent) {
 
   for (const sc of skippedCases) {
     const isAllowed =
-      ['test_display_integration', 'plugins.browserpaw.tests.test_display_integration'].includes(
-        sc.name,
-      ) && /Hermes host (environment|not attached)/.test(sc.body);
+      [
+        'test_display_integration',
+        'plugins.browserpaw.tests.test_display_integration',
+        'plugins.browserpaw-hermes.tests.test_display_integration',
+      ].includes(sc.name) && /Hermes host (environment|not attached)/.test(sc.body);
     if (!isAllowed) {
       throw new Error(
         `Unexpected test skip in pytest: ${sc.name} (${sc.reason}). Only test_display_integration Hermes skip is allowed.`,
@@ -648,10 +650,18 @@ export async function executeSteps(root = repoRoot) {
     });
 
     // Step 12: Python pytest (only fallback to uv on command ENOENT, disallow retry on test failure)
-    recordStep('plugin-pytest', 'pytest plugins/browserpaw/tests --junitxml=<tmp>', () => {
+    recordStep(
+      'plugin-pytest',
+      'pytest plugins/browserpaw-hermes/tests --junitxml=<tmp>',
+      () => {
       const junitXmlPath = path.join(tempDir, 'pytest-junit.xml');
       const pyCmd = process.env.PYTHON || 'python';
-      const pyArgs = ['-m', 'pytest', 'plugins/browserpaw/tests', `--junitxml=${junitXmlPath}`];
+      const pyArgs = [
+        '-m',
+        'pytest',
+        'plugins/browserpaw-hermes/tests',
+        `--junitxml=${junitXmlPath}`,
+      ];
       const probe = spawnSync(pyCmd, ['-c', 'import pytest'], { cwd: root, encoding: 'utf-8' });
       const useUv = needsIsolatedPytest(probe);
       if (!useUv && (probe.error || probe.status !== 0)) {
@@ -668,7 +678,7 @@ export async function executeSteps(root = repoRoot) {
               '--with',
               'pytest',
               'pytest',
-              'plugins/browserpaw/tests',
+              'plugins/browserpaw-hermes/tests',
               `--junitxml=${junitXmlPath}`,
             ],
             { cwd: root, encoding: 'utf-8' },
@@ -690,7 +700,8 @@ export async function executeSteps(root = repoRoot) {
         ...parsed,
         hermesSkipReason: 'Hermes known module integration skip (host not attached)',
       };
-    });
+      },
+    );
 
     // Step 13: Validate docs
     recordStep('validate-docs', 'node scripts/validate-docs.mjs', () => {

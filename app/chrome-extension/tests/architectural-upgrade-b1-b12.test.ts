@@ -8,12 +8,11 @@ import {
   CHUNK_SIZE,
 } from '../utils/safe-post-message';
 import {
+  findIndexedElement,
   inPageDOMPruner,
   inPageGetElementCoordinates,
   inPageInteractIndex,
   inPageFillIndex,
-  inPageDispatchInputEvents,
-  getIndexFingerprintMap,
   getIsolatedIndexMap,
   wrapElement,
 } from '../entrypoints/background/tools/browser/dom-indexer';
@@ -28,7 +27,6 @@ import {
 describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
-    getIndexFingerprintMap().clear();
     getIsolatedIndexMap().clear();
   });
 
@@ -192,7 +190,7 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
   });
 
   describe('Task B3: Controlled Component Input Commitment & Dispatch', () => {
-    it('dispatches bubbling input and change events in inPageFillIndex and inPageDispatchInputEvents', () => {
+    it('dispatches bubbling input and change events once in the synthetic inPageFillIndex fallback', () => {
       document.body.innerHTML = `
         <input type="text" id="username" />
       `;
@@ -223,14 +221,8 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
 
       inPageFillIndex(idx, 'hello_antigravity');
       expect(input.value).toBe('hello_antigravity');
-      expect(inputEventsCount).toBeGreaterThan(0);
-      expect(changeEventsCount).toBeGreaterThan(0);
-
-      // inPageDispatchInputEvents explicitly fires synthetic bubbling input/change
-      const dispatchRes = inPageDispatchInputEvents(idx);
-      expect(dispatchRes.success).toBe(true);
-      expect(inputEventsCount).toBeGreaterThanOrEqual(2);
-      expect(changeEventsCount).toBeGreaterThanOrEqual(2);
+      expect(inputEventsCount).toBe(1);
+      expect(changeEventsCount).toBe(1);
     });
   });
 
@@ -275,10 +267,18 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
       } as any);
       btn.replaceWith(newBtn);
 
-      // Now the weakref/original element in the map is detached
-      const coords = inPageGetElementCoordinates(idx);
-      expect(coords.success).toBe(true);
-      expect(coords.warning).toContain('auto-healed target using element fingerprint');
+      // Now the weakref/original element in the map is detached: stale index is invalidated
+      expect(findIndexedElement(idx)).toBeNull();
+
+      // Must re-observe DOM to acquire fresh index for the updated node
+      const freshRes = inPageDOMPruner(true, undefined, undefined, 'compact');
+      const freshIdx = freshRes.indexedElements.find(
+        (e: any) => e.attributes?.['data-testid'] === 'submit-action',
+      )?.index;
+      expect(freshIdx).toBeDefined();
+      const freshCoords = inPageGetElementCoordinates(freshIdx!);
+      expect(freshCoords.success).toBe(true);
+      expect(freshCoords.text).toContain('Submit Order');
     });
   });
 
@@ -359,6 +359,10 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
       expect(downloadsWd.listensTo).toEqual([
         'chrome.downloads.onCreated',
         'chrome.downloads.onChanged',
+        'Page.downloadWillBegin',
+        'Page.downloadProgress',
+        'debugger.onDetach',
+        'tabs.onRemoved',
       ]);
       expect(crashWd.listensTo).toEqual([
         'Inspector.targetCrashed',
@@ -463,10 +467,18 @@ describe('Architectural Upgrade Verification Suite (B1-B12)', () => {
       } as any);
       btn.replaceWith(freshBtn);
 
-      const coords = inPageGetElementCoordinates(idx);
-      expect(coords.success).toBe(true);
-      expect(coords.warning).toContain('auto-healed target using element fingerprint');
-      expect(coords.text).toContain('Proceed to Final Step');
+      // Stale index is invalidated; must not blindly re-bind via fingerprint
+      expect(findIndexedElement(idx)).toBeNull();
+
+      // Must re-observe DOM to acquire fresh index for the updated node
+      const freshRes = inPageDOMPruner(true, undefined, undefined, 'compact');
+      const freshIdx = freshRes.indexedElements.find((e: any) =>
+        e.text?.includes('Proceed to Final Step'),
+      )?.index;
+      expect(freshIdx).toBeDefined();
+      const freshCoords = inPageGetElementCoordinates(freshIdx!);
+      expect(freshCoords.success).toBe(true);
+      expect(freshCoords.text).toContain('Proceed to Final Step');
     });
 
     it('Task B7: penetrates button wrapper containers', () => {

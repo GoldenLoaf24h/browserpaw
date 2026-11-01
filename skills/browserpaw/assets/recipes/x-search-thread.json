@@ -1,0 +1,321 @@
+{
+  "id": "x-search-thread",
+  "name": "X search results reader",
+  "description": "Read visible X search results and return source-linked posts; this recipe does not read a full conversation thread. It waits briefly for the authenticated search timeline, returns an explicit empty result only for recognized no-results text, and reports loading_timeout instead of treating transient login text as authentication failure.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://x.com/search?q=fetch&src=typed_query&f=live",
+      "https://help.x.com/en/using-x/x-search"
+    ]
+  },
+  "domains": [
+    "x.com",
+    "twitter.com"
+  ],
+  "keywords": [
+    "x",
+    "twitter",
+    "search",
+    "posts"
+  ],
+  "startUrl": "https://x.com/search?q={{query}}&src=typed_query&f=live",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 8
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "author": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://(?:x|twitter)\\.com/.+/status/\\d+"
+                },
+                "publishedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "author",
+                "url",
+                "publishedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "posts",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "posts",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "status": {
+            "enum": [
+              "requires_auth",
+              "loading_timeout",
+              "unreadable"
+            ]
+          },
+          "requiresLogin": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^https://(?:x|twitter)\\.com/"
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "requiresLogin",
+          "message",
+          "query",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 8, 20));\nconst source = new URL('/search', location.origin);\nsource.searchParams.set('q', query);\nsource.searchParams.set('src', 'typed_query');\nsource.searchParams.set('f', 'live');\nconst loginPath = /^\\/(?:i\\/flow\\/login|login)(?:\\/|$)/.test(location.pathname);\nconst isVisible = element => {\n  if (!element || !element.getBoundingClientRect) return false;\n  if (element.hidden || (typeof element.getAttribute === 'function' && element.getAttribute('aria-hidden') === 'true')) return false;\n  const rect = element.getBoundingClientRect();\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  return rect.width > 0 && rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));\n};\nconst hasVisibleLoginForm = () => Array.from(document.querySelectorAll('form')).some(form =>\n  isVisible(form) && Array.from(form.querySelectorAll('input[autocomplete=\"username\"], input[name=\"text\"], input[type=\"password\"]')).some(isVisible)\n);\nconst hasExplicitEmptyState = () => {\n  if (typeof document.querySelector !== 'function') return false;\n  const element = document.querySelector('main [data-testid=\"emptyState\"]');\n  if (!isVisible(element)) return false;\n  const normalizeQuotes = value => value.replace(/[“”]/g, '\"').replace(/[‘’]/g, \"'\");\n  const text = normalizeQuotes(String(element.innerText || element.textContent || '')).replace(/\\s+/g, ' ').trim().toLowerCase();\n  const normalizedQuery = normalizeQuotes(query).replace(/\\s+/g, ' ').trim().toLowerCase();\n  return !!normalizedQuery && (\n    text.includes(`no results for \"${normalizedQuery}\"`) ||\n    text.includes(`no results for '${normalizedQuery}'`) ||\n    text.includes(`没有关于\"${normalizedQuery}\"的结果`) ||\n    text.includes(`没有关于'${normalizedQuery}'的结果`)\n  );\n};\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nlet articles = [];\nlet loginForm = false;\nlet emptyState = false;\nfor (let attempt = 0; attempt < 40; attempt += 1) {\n  if (loginPath) break;\n  articles = Array.from(document.querySelectorAll('article'));\n  if (articles.length) break;\n  loginForm = hasVisibleLoginForm();\n  if (loginForm) break;\n  emptyState = hasExplicitEmptyState();\n  if (emptyState) break;\n  if (attempt < 39) await sleep(250);\n}\nif (loginPath || loginForm) {\n  return {\n    success: false,\n    status: 'requires_auth',\n    requiresLogin: true,\n    message: 'X requires authentication to read this search timeline',\n    query,\n    source: source.href\n  };\n}\nif (emptyState) {\n  return { success: true, status: 'empty', query, posts: [], sources: { page: source.href } };\n}\nif (!articles.length) {\n  return { success: false, status: 'loading_timeout', requiresLogin: false, message: 'X search articles did not become visible within 10 seconds', query, source: source.href };\n}\nconst mainStatusLink = article => Array.from(article.querySelectorAll('a:has(time)')).find(link => {\n  const href = link.getAttribute('href') || '';\n  try {\n    return /^\\/[^/]+\\/status\\/\\d+$/.test(new URL(href, location.origin).pathname);\n  } catch {\n    return false;\n  }\n});\nconst posts = articles.slice(0, limit).map(article => {\n  const text = String(article.querySelector('[data-testid=\"tweetText\"]') && article.querySelector('[data-testid=\"tweetText\"]').innerText || '').trim();\n  const nameBlock = String(article.querySelector('[data-testid=\"User-Name\"]') && article.querySelector('[data-testid=\"User-Name\"]').innerText || '').trim();\n  const author = nameBlock.split('\\n').map(part => part.trim()).find(Boolean) || '';\n  const statusLink = mainStatusLink(article);\n  const href = statusLink ? statusLink.getAttribute('href') || '' : '';\n  const time = statusLink ? statusLink.querySelector('time') : null;\n  return {\n    text,\n    author,\n    url: href ? new URL(href, location.origin).href : '',\n    publishedAt: time ? String(time.getAttribute('datetime') || '') : ''\n  };\n}).filter(post => post.text && post.url);\nif (!posts.length) {\n  return { success: false, status: 'unreadable', requiresLogin: false, message: 'Visible X articles did not expose readable text and main status links', query, source: source.href };\n}\nreturn { success: true, status: 'ok', query, posts, sources: { page: source.href } };",
+        "timeoutMs": 20000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 240
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "query": "browser automation",
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "const": "browser automation"
+          },
+          "status": {
+            "const": "ok"
+          },
+          "success": {
+            "const": true
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://(?:x|twitter)\\.com/.+/status/\\d+"
+                }
+              },
+              "required": [
+                "text",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "posts"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "minLength": 100,
+        "pattern": "(?:Post|post|Search|search|status|Log in|Sign in)"
+      }
+    },
+    {
+      "inputs": {
+        "query": "typescript",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "const": "typescript"
+          },
+          "status": {
+            "const": "ok"
+          },
+          "success": {
+            "const": true
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://(?:x|twitter)\\.com/.+/status/\\d+"
+                }
+              },
+              "required": [
+                "text",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "posts"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "minLength": 100,
+        "pattern": "(?:Post|post|Search|search|status|Log in|Sign in)"
+      }
+    }
+  ]
+}

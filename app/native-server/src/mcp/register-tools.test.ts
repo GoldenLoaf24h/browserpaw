@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { describe, expect, it, beforeEach } from '@jest/globals';
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import {
   AgentUpdateNotifier,
   formatAgentUpdateNotice,
@@ -15,6 +16,69 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
   beforeEach(() => {
     notifier = new AgentUpdateNotifier();
     storage = new MemoryVersionCacheStorage();
+  });
+
+  it('keeps durable tasks recoverable when only their MCP request is aborted', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'browserpaw-abort-owner-'));
+    try {
+      await jest.isolateModulesAsync(async () => {
+        const services = await import('../browser-services');
+        const service = services.createBrowserServices(async () => {
+          throw new Error('Aborted requests must not contact Chrome');
+        }, root);
+        const owner = 'bound-request-owner';
+        const own = await service.tasks.execute({ action: 'start', name: 'Own task' }, owner);
+        const other = await service.tasks.execute(
+          { action: 'start', name: 'Other task' },
+          'other-owner',
+        );
+        const factory = jest.spyOn(services, 'createBrowserServices').mockReturnValue(service);
+        try {
+          const { setupTools } = await import('./register-tools');
+          const { CallToolRequestSchema: callSchema } =
+            await import('@modelcontextprotocol/sdk/types.js');
+          let handler: any;
+          setupTools(
+            {
+              setRequestHandler(schema: unknown, callback: unknown) {
+                if (schema === callSchema) handler = callback;
+              },
+            } as any,
+            owner,
+          );
+          const controller = new AbortController();
+          controller.abort();
+          for (const task of [own.task!, other.task!]) {
+            await handler(
+              {
+                params: {
+                  name: 'chrome_javascript',
+                  arguments: { taskId: task.id, sessionId: 'other-owner' },
+                },
+              },
+              { signal: controller.signal },
+            );
+          }
+          const ownedStatus = await service.tasks.execute(
+            { action: 'status', taskId: own.task!.id },
+            owner,
+          );
+          const otherStatus = await service.tasks.execute(
+            { action: 'status', taskId: other.task!.id },
+            'other-owner',
+          );
+          expect(ownedStatus.task?.status).toBe('active');
+          expect(otherStatus.task?.status).toBe('active');
+        } finally {
+          factory.mockRestore();
+        }
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('attaches update notice strictly on the first MCP call when an update exists', async () => {
@@ -182,19 +246,10 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
     const { setupTools } = await import('./register-tools');
     const nativeMessagingHostInstance = (await import('../native-messaging-host')).default;
 
-    let callToolHandler: ((req: any) => Promise<any>) | null = null;
+    let callToolHandler: ((req: any, extra?: any) => Promise<any>) | null = null;
     const mockServer = {
       setRequestHandler: (schema: any, handler: any) => {
-        if (
-          schema.name === 'CallToolRequestSchema' ||
-          schema._def?.description?.includes('CallTool') ||
-          Object.keys(schema).length > 0
-        ) {
-          // Second handler registered is CallTool
-          if (!callToolHandler && handler.length === 1) {
-            callToolHandler = handler;
-          }
-        }
+        if (schema === CallToolRequestSchema) callToolHandler = handler;
       },
     };
 
@@ -229,6 +284,16 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
       // args.sessionId must also be consistently injected with bound serverSessionId
       expect(sentPayload.args.sessionId).toBe(BOUND_SESSION);
       expect(sentPayload.args.sessionContext).toBe(BOUND_SESSION);
+      sendSpy.mockClear();
+      const controller = new AbortController();
+      controller.abort();
+      const cancelled = await callToolHandler!(
+        { params: { name: 'chrome_screenshot', arguments: {} } },
+        { signal: controller.signal },
+      );
+      expect(cancelled.isError).toBe(true);
+      expect(JSON.parse(cancelled.content[0].text).status).toBe('cancelled');
+      expect(sendSpy).not.toHaveBeenCalled();
     } finally {
       sendSpy.mockRestore();
       nativeMessagingHostInstance.isConnected = false;
@@ -275,6 +340,60 @@ describe('AgentUpdateNotifier - Strict Single-Turn Update Prompt Enforcement', (
       nativeMessagingHostInstance.isConnected = false;
       if (prevEnv !== undefined) process.env.ENABLE_MCP_VERSION_CHECK = prevEnv;
       else delete process.env.ENABLE_MCP_VERSION_CHECK;
+    }
+  });
+});
+
+describe('raw MCP request delivery evidence', () => {
+  it.each([false, true])(
+    'preserves requestDispatched=%s without claiming UI delivery',
+    async (sent) => {
+      const { handleToolCall } = await import('./register-tools');
+      const host = (await import('../native-messaging-host')).default;
+      const previous = host.isConnected;
+      host.isConnected = true;
+      const send = jest.spyOn(host, 'sendRequestToExtensionAndWait').mockRejectedValue(
+        Object.assign(new Error('Transport did not return a result'), {
+          requestDispatched: sent,
+        }),
+      );
+      try {
+        const result = await handleToolCall('chrome_interact_index', { index: 1, action: 'click' });
+        expect(result.isError).toBe(true);
+        const data = result.structuredContent;
+        expect(data).toMatchObject({
+          success: false,
+          status: sent ? 'unknown' : 'blocked',
+          retry: false,
+          requestDispatched: sent,
+        });
+        if (sent) expect(data).not.toHaveProperty('dispatched');
+        else expect(data).toHaveProperty('dispatched', false);
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        send.mockRestore();
+        host.isConnected = previous;
+      }
+    },
+  );
+
+  it('reports disconnected raw actions as blocked before sending', async () => {
+    const { handleToolCall } = await import('./register-tools');
+    const host = (await import('../native-messaging-host')).default;
+    const previous = host.isConnected;
+    host.isConnected = false;
+    const send = jest.spyOn(host, 'sendRequestToExtensionAndWait');
+    try {
+      const result = await handleToolCall('chrome_interact_index', { index: 1, action: 'click' });
+      expect(result.structuredContent).toMatchObject({
+        status: 'blocked',
+        retry: false,
+        dispatched: false,
+      });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
+      host.isConnected = previous;
     }
   });
 });

@@ -326,8 +326,8 @@ describe('Jev Client & Helper Unit Tests', () => {
   });
 
   describe('6. Destructive keywords verification (§2.3)', () => {
-    test('detects all 14 built-in destructive keywords', () => {
-      expect(DESTRUCTIVE_KEYWORDS).toHaveLength(14);
+    test('detects all 16 built-in destructive keywords including send and publish', () => {
+      expect(DESTRUCTIVE_KEYWORDS).toHaveLength(16);
       for (const kw of DESTRUCTIVE_KEYWORDS) {
         expect(isDestructiveTarget(`[1] button "${kw}"`)).toBe(true);
         expect(isDestructiveTarget(`Confirm ${kw.toUpperCase()} action`)).toBe(true);
@@ -361,6 +361,12 @@ describe('Jev Client & Helper Unit Tests', () => {
       expect(isDestructiveTarget('[24] button "Post" #reddit-post-flair-button')).toBe(true);
       expect(isDestructiveTarget('[25] button "Submit Post" #btn-123')).toBe(true);
       expect(isDestructiveTarget('[26] button "发布" #post-btn')).toBe(true);
+      expect(isDestructiveTarget('[27] button "Send"')).toBe(true);
+      expect(isDestructiveTarget('[28] button "Publish"')).toBe(true);
+      expect(isDestructiveTarget('[29] button "Send Message"')).toBe(true);
+      expect(isDestructiveTarget('[30] button "Publish Post"')).toBe(true);
+      expect(isDestructiveTarget('[31] button "sender"')).toBe(false);
+      expect(isDestructiveTarget('[32] button "publisher"')).toBe(false);
     });
   });
 
@@ -454,24 +460,49 @@ describe('Jev Client & Helper Unit Tests', () => {
   });
 
   describe('10. scoreOptions shortlisting and usage return (§2.3, §5.2)', () => {
-    test('shortlists >10 options by relevance and returns token usage', async () => {
+    test('returns null without sending request when options exceed 32 or empty', async () => {
       const client = new JevClientWrapper('dummy_key');
-      const manyOptions = Array.from({ length: 25 }, (_, i) => ({
-        text: `State ${i}`,
-        value: `ST_${i}`,
+      let callCount = 0;
+      (client as any).client = {
+        systemOne: async () => {
+          callCount++;
+          return {};
+        },
+      };
+
+      const over32 = Array.from({ length: 33 }, (_, i) => ({
+        text: 'Opt ' + i,
+        value: 'val_' + i,
       }));
-      manyOptions.push({ text: 'California', value: 'CA' });
+      expect(await client.scoreOptions('Select something', over32)).toBeNull();
+      expect(await client.scoreOptions('Select something', [])).toBeNull();
+      expect(callCount).toBe(0);
+    });
+
+    test('does not truncate >20 options, includes all candidates plus none in choice criteria', async () => {
+      const client = new JevClientWrapper('dummy_key');
+      const options25 = Array.from({ length: 25 }, (_, i) => ({
+        text: 'State ' + i,
+        value: 'ST_' + i,
+      }));
+      let capturedCriteria: Record<string, string> = {};
 
       (client as any).client = {
         systemOne: async (req: any) => {
+          capturedCriteria = req.questions.select_option.criteria;
+          const keys = Object.keys(capturedCriteria);
+          const probs: Record<string, number> = {};
+          keys.forEach((k) => {
+            probs[k] = k === '24' ? 0.9 : 0.1 / (keys.length - 1);
+          });
           return {
             model: 'jev-latest',
             answers: {
               select_option: {
-                type: 'score',
-                score: 0,
-                confidence: 0.95,
-                probabilities: { '0': 0.95, '1': 0.05 },
+                type: 'choice',
+                choice: '24',
+                confidence: 0.9,
+                probabilities: probs,
               },
             },
             usage: { input_tokens: 420, output_tokens: 15 },
@@ -479,24 +510,205 @@ describe('Jev Client & Helper Unit Tests', () => {
         },
       };
 
-      const result = await client.scoreOptions('Ship to California', manyOptions);
+      const result = await client.scoreOptions('Select last state', options25);
+      expect(Object.keys(capturedCriteria).length).toBe(26); // 25 options + 'none'
+      expect(capturedCriteria).toHaveProperty('none');
       expect(result).not.toBeNull();
-      expect(result!.bestOption.text).toBe('California');
-      expect(result!.confidence).toBe(0.95);
+      expect(result!.bestIndex).toBe(24);
+      expect(result!.bestOption.text).toBe('State 24');
+      expect(result!.confidence).toBe(0.9);
       expect(result!.usage?.inputTokens).toBe(420);
+      expect(result!.usage?.outputTokens).toBe(15);
     });
 
-    test('returns index 0 immediately for single option without calling Jev', async () => {
+    test('single option evaluates via Jev with none support rather than picking blindly', async () => {
       const client = new JevClientWrapper('dummy_key');
-      const single = [{ text: 'Only Option', value: 'only' }];
-      const result = await client.scoreOptions('Select', single);
-      expect(result).toEqual({
-        bestIndex: 0,
-        bestOption: single[0],
-        confidence: 1.0,
-        score: 0,
-        usage: { inputTokens: 0 },
+      const single = [{ text: 'Delete Account', value: 'del' }];
+
+      // Case A: Jev resolves to none -> returns null
+      (client as any).client = {
+        systemOne: async (req: any) => {
+          expect(Object.keys(req.questions.select_option.criteria)).toEqual(['0', 'none']);
+          return {
+            model: 'jev-latest',
+            answers: {
+              select_option: {
+                type: 'choice',
+                choice: 'none',
+                confidence: 0.95,
+                probabilities: { '0': 0.05, none: 0.95 },
+              },
+            },
+            usage: { input_tokens: 100, output_tokens: 10 },
+          };
+        },
+      };
+      const noneResult = await client.scoreOptions('Search flights', single);
+      expect(noneResult).toBeNull();
+
+      // Case B: Jev resolves to option 0 with high confidence -> returns option
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'choice',
+              choice: '0',
+              confidence: 0.92,
+              probabilities: { '0': 0.92, none: 0.08 },
+            },
+          },
+          usage: { input_tokens: 120, output_tokens: 12 },
+        }),
+      };
+      const matchResult = await client.scoreOptions('Delete my profile account', single);
+      expect(matchResult).not.toBeNull();
+      expect(matchResult!.bestIndex).toBe(0);
+      expect(matchResult!.bestOption.value).toBe('del');
+      expect(matchResult!.confidence).toBe(0.92);
+    });
+
+    test('enforces confidence >= 0.85 and top gap >= 0.20 thresholds', async () => {
+      const client = new JevClientWrapper('dummy_key');
+      const options = [
+        { text: 'Option A', value: 'a' },
+        { text: 'Option B', value: 'b' },
+      ];
+
+      // Low confidence (< 0.85) -> null
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'choice',
+              choice: '0',
+              confidence: 0.8,
+              probabilities: { '0': 0.8, '1': 0.15, none: 0.05 },
+            },
+          },
+        }),
+      };
+      expect(await client.scoreOptions('Choose A', options)).toBeNull();
+
+      // Narrow top gap (< 0.20) -> null (even with confidence >= 0.85 if gap is ambiguous)
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'choice',
+              choice: '0',
+              confidence: 0.86,
+              probabilities: { '0': 0.55, '1': 0.4, none: 0.05 },
+            },
+          },
+        }),
+      };
+      expect(await client.scoreOptions('Choose A', options)).toBeNull();
+    });
+
+    test('rejects legacy score format, missing confidence, and invalid choice without default 0 fallback', async () => {
+      const client = new JevClientWrapper('dummy_key');
+      const options = [
+        { text: 'First', value: '1' },
+        { text: 'Second', value: '2' },
+      ];
+
+      // Legacy score format
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'score',
+              score: 0,
+              probabilities: { '0': 0.9, '1': 0.1 },
+            },
+          },
+        }),
+      };
+      expect(await client.scoreOptions('Choose first', options)).toBeNull();
+
+      // Missing confidence
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'choice',
+              choice: '0',
+              probabilities: { '0': 0.95, '1': 0.05, none: 0 },
+            },
+          },
+        }),
+      };
+      expect(await client.scoreOptions('Choose first', options)).toBeNull();
+
+      // Invalid choice not in criteria
+      (client as any).client = {
+        systemOne: async () => ({
+          model: 'jev-latest',
+          answers: {
+            select_option: {
+              type: 'choice',
+              choice: '99',
+              confidence: 0.95,
+              probabilities: { '0': 0.05, '1': 0.05, none: 0.9 },
+            },
+          },
+        }),
+      };
+      expect(await client.scoreOptions('Choose first', options)).toBeNull();
+    });
+
+    test('respects 1500ms deadline, abort signal, disables retry, and sets unknown usage to null', async () => {
+      const client = new JevClientWrapper('dummy_key');
+      const options = [{ text: 'Alpha', value: 'a' }];
+      let passedRequestOptions: any;
+
+      (client as any).client = {
+        systemOne: async (_req: any, opts: any) => {
+          passedRequestOptions = opts;
+          return {
+            model: 'jev-latest',
+            answers: {
+              select_option: {
+                type: 'choice',
+                choice: '0',
+                confidence: 0.95,
+                probabilities: { '0': 0.95, none: 0.05 },
+              },
+            },
+          };
+        },
+      };
+
+      const result = await client.scoreOptions('Select Alpha', options, undefined, {
+        timeout: 3000,
       });
+      expect(result).not.toBeNull();
+      expect(passedRequestOptions.timeout).toBe(1500);
+      expect(passedRequestOptions.retry).toEqual({ maxRetries: 0 });
+      expect(result!.usage?.inputTokens).toBeNull();
+      expect(result!.usage?.outputTokens).toBeNull();
+
+      // Already aborted signal short-circuits
+      const controller = new AbortController();
+      controller.abort();
+      expect(
+        await client.scoreOptions('Select Alpha', options, undefined, {
+          signal: controller.signal,
+        }),
+      ).toBeNull();
+    });
+
+    test('respects global off and mode mismatch without switching backend', async () => {
+      const client = new JevClientWrapper('dummy_key');
+      const options = [{ text: 'Alpha', value: 'a' }];
+
+      // If mode requested does not match active mode (active is remote, request local)
+      expect(await client.scoreOptions('Select Alpha', options, 'local')).toBeNull();
     });
   });
 
@@ -648,18 +860,17 @@ describe('Jev Client & Helper Unit Tests', () => {
         expect(supportsBoxQuestions(undefined)).toBe(false);
       });
 
-      test('the real SDK stops retry backoff when the total request signal aborts', async () => {
+      test('the real SDK stops an in-flight visual request when its signal aborts', async () => {
         jevModelManager.setActiveMode('remote');
         jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
         let requestStarted!: () => void;
         const started = new Promise<void>((resolve) => {
           requestStarted = resolve;
         });
-        const fetchMock = jest.fn(async () => {
+        const fetchMock = jest.fn(async (_url: any, init: any) => {
           requestStarted();
-          return new Response('{"error":"rate limited"}', {
-            status: 429,
-            headers: { 'Content-Type': 'application/json', 'Retry-After': '10' },
+          return new Promise<Response>((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
           });
         });
         const sdk = new TypeSafeClient({
@@ -681,6 +892,29 @@ describe('Jev Client & Helper Unit Tests', () => {
         const result = await pending;
         expect(result.result).toBeNull();
         expect(result.rawError?.name).toBe('APIUserAbortError');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+
+      test('a real SDK visual rate limit returns without an implicit retry', async () => {
+        jevModelManager.setActiveMode('remote');
+        jevModelManager.setRemoteConfig({ apiKey: 'dummy_key' });
+        const fetchMock = jest.fn(
+          async () =>
+            new Response('{"error":"rate limited"}', {
+              status: 429,
+              headers: { 'Content-Type': 'application/json', 'Retry-After': '10' },
+            }),
+        );
+        const sdk = new TypeSafeClient({
+          apiKey: 'dummy_key',
+          fetch: fetchMock,
+          compression: false,
+        });
+        const client = new JevClientWrapper('dummy_key');
+        jest.spyOn(client, 'getRemoteClient').mockReturnValue(sdk);
+        (client as any).resolvedModelId = 'jev-1.14.0';
+        const result = await client.queryVision(fakeBuf, 'bell icon', 'remote', { timeout: 1000 });
+        expect(result.errorReason).toBe('quota_exhausted');
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
 

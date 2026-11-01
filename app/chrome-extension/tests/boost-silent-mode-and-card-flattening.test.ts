@@ -147,6 +147,7 @@ describe('Silent Background Operation, Intent Tab Grouping & Composite Card Flat
           session: {
             get: vi.fn(async () => ({
               tab_group_manager_managed_groups: [555],
+              tab_group_manager_agent_tabs: [9999],
             })),
             set: vi.fn(async () => {}),
           },

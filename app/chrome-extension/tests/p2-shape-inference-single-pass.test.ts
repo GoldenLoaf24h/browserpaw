@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   inPageDOMPruner,
   getIsolatedIndexMap,
-  getIndexFingerprintMap,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 
 /**
@@ -19,7 +18,6 @@ describe('P2-3: shape inference scans each node once per snapshot', () => {
 
   beforeEach(() => {
     getIsolatedIndexMap().clear();
-    getIndexFingerprintMap().clear();
     document.body.innerHTML = '';
 
     originalRect = Element.prototype.getBoundingClientRect;

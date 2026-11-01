@@ -4,6 +4,14 @@ This document defines the single canonical acceptance contract for BrowserPaw de
 
 Prerequisites: Node.js ≥ 22.6, the pinned pnpm version from `package.json`, and Python with pytest installed or `uv` to prepare an isolated pytest environment. An explicit `PYTHON` environment variable selects an interpreter that must already provide pytest. Test failures are never retried using a different interpreter.
 
+## Development checks versus release acceptance
+
+During iteration, run the affected tests and contract checks. Documentation-only work normally requires link/governance validation, relevant generator tests and `git diff --check`; it does not require deployment or browser reload. A complete `pnpm verify` is mandatory before claiming a release or current-source delivery. Any later source or documentation edit invalidates that report's fingerprint.
+
+After a complete passing gate, deploy its existing output with `node scripts/extension-artifacts.mjs --deploy`, then run `pnpm verify:delivery`. The destination must be explicitly configured. Use `pnpm build:deploy` when a build is actually needed; avoid rebuilding merely to copy an already verified output. Do not deploy as a side effect of documentation maintenance.
+
+For session-lifetime acceptance, record the Native PID/start time, client identity, keepalive results and a final call on the same connection after the idle threshold. A Native restart invalidates continuity even when automatic reconnect produces a healthy doctor. Preserve the failure and diagnose it before claiming the lifetime issue is fixed.
+
 ---
 
 ## 🎯 Verification Command Interface

@@ -10,7 +10,7 @@ An authoritative, step-by-step onboarding guide for **AI Agents** (Codex Desktop
 
 1. Install the extension from a release package or build it from source.
 2. Register the Native Messaging Host from the repository build.
-3. Connect an MCP client using Stdio or HTTP transport.
+3. Connect an MCP client using Stdio or HTTP transport, or install the DeepSeek Harness plugin.
 4. Optionally configure Jev and pin the extension.
 5. Optionally enable Chromium's silent debugger flag.
 6. Install agent skills if your client supports them.
@@ -49,6 +49,8 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 > **Local Development & Deployment Synchronization:**
 > The default build output is located at `<repo-root>/app/chrome-extension/.output/chrome-mv3`. To stage the unpacked extension to a custom local directory, configure `extensionSyncDir` in `browserpaw.local.json` or set the `BROWSERPAW_EXTENSION_SYNC_DIR` environment variable and run `pnpm build:deploy`. Standard pnpm build skips deployment synchronization by default. If no target directory is configured, pnpm build:deploy fails with an error rather than silently succeeding.
 
+Use one unpacked extension directory, and load that same directory in Chrome. Changing `extensionSyncDir` does not change an extension's registered path. When migrating an older directory, load the new build through `chrome://extensions`, verify the runtime `buildId` with verbose `chrome_doctor`, and retire the old directory only after the new path and build are confirmed. Keep the native host's registered extension ID aligned with the loaded build.
+
 ---
 
 ### Loading into Google Chrome
@@ -66,7 +68,7 @@ The unpacked extension will be output to: `<repo-root>/app/chrome-extension/.out
 
 ## Step 2: Register Native Messaging Host (One-Time OS Binding)
 
-The Native Messaging Host provides high-speed, secure IPC between Chrome and your local AI Agent clients.
+The Native Messaging Host provides local IPC between Chrome and your local AI Agent clients.
 
 This step requires a source checkout with the native server built. A prebuilt extension ZIP alone does not include this server.
 
@@ -133,7 +135,8 @@ args = ["<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js"
 startup_timeout_sec = 60
 
 [mcp_servers.browserpaw.env]
-# "full" exposes all 50 registered tools (including autonomous micro-loop chrome_act_toward_goal)
+# "full" exposes the complete runtime tool surface, including chrome_act_toward_goal.
+# Use chrome_tool_docs for the live list instead of relying on a version-specific count.
 # "core" exposes standard CDP tools
 CHROME_MCP_TOOL_PROFILE = "full"
 # Optional: Inject Jev API key directly here for instant autonomous execution
@@ -157,7 +160,7 @@ If installing through the ChatGPT Desktop or Codex Plugin Marketplace:
 
 - **Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)**:
 
-  Configure Hermes with native Stdio transport in your Hermes configuration (`config.yaml`) to expose all ~50 standard MCP tools:
+  Configure Hermes with native Stdio transport in your Hermes configuration (`config.yaml`) to expose the full standard MCP tool set:
 
   ```yaml
   mcp_servers:
@@ -169,9 +172,11 @@ If installing through the ChatGPT Desktop or Codex Plugin Marketplace:
         CHROME_MCP_TOOL_PROFILE: full
   ```
 
-- **Option B: Optional Legacy 16-Tool Plugin**:
+- **Option B: Optional Native Hermes Plugin**:
 
-  If your workflow specifically requires legacy 16-tool names, Hermes provides an optional plugin (`plugins/browserpaw`). It requires Hermes `>=0.21.5` and explicit user authorization in `config.yaml`:
+  Hermes also has a native plugin (`plugins/browserpaw-hermes`) with a curated
+  `browserpaw_*` wrapper surface. It requires Hermes `>=0.21.5` and explicit user
+  authorization in `config.yaml`:
 
   ```yaml
   plugins:
@@ -180,11 +185,11 @@ If installing through the ChatGPT Desktop or Codex Plugin Marketplace:
         mcp_allowlist: ['browserpaw']
   ```
 
-  You can optionally configure `settings.isolate_modal: false` as needed. To avoid duplicate tool definitions between MCP stdio and the plugin, our recommended migration strategy is to keep the optional plugin disabled unless legacy tool names are specifically required:
+  You can optionally configure `settings.isolate_modal: false` as needed. To avoid duplicate tool exposure, keep the native plugin disabled unless its wrapper surface is specifically required:
 
   ```bash
-  hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
-  # Only enable if legacy 16-tool names are explicitly needed:
+  hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw-hermes
+  # Only enable if the native browserpaw_* wrapper set is required:
   hermes plugins enable browserpaw
   ```
 
@@ -290,6 +295,53 @@ For clients connecting over Streamable HTTP:
 
 ---
 
+### 3.8 DeepSeek Harness (Plugin Package, Not an MCP Entry)
+
+DeepSeek Harness consumes BrowserPaw as a **plugin package**, not as an `mcpServers` entry. The package in `plugins/browserpaw-dsh` (npm name `dsh-browserpaw`) registers the `browserpaw` skill and a single `browserpaw_session` tool; that tool opens the connection to this bridge at `http://127.0.0.1:12306/mcp` and authenticates with the token in `~/.chrome-mcp/bridge-token`.
+
+Steps 1 and 2 must already be complete, and Chrome must be running with the extension enabled, because the plugin only proxies to the bridge.
+
+> **Not published to a registry.** The package name is `dsh-browserpaw`, but no npm release exists yet. DSH Git installs expect a package at the repository root, so this monorepo plugin must be installed from a packed tarball or a local checkout.
+
+#### Option A: DeepSeek Harness Desktop
+
+Use the Desktop CLI shim with the same tarball or local-path commands shown below. The profile records the package as a bundle layer and applies its `cordis.patch.yml` on the next start.
+
+#### Option B: `dsh plugin` CLI
+
+```bash
+cd plugins/browserpaw-dsh
+npm pack
+dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.0.tgz
+
+# Or from a local checkout:
+dsh plugin --profile <PROFILE> add "<ABSOLUTE_PATH_TO_REPO>/plugins/browserpaw-dsh"
+```
+
+- `<PROFILE>` is a profile directory under `$DSH_HOME/profiles`. `--profile` is mandatory, and the command initializes the profile when it does not exist yet.
+- The Desktop application owns its reserved `desktop` profile: a standalone npm `dsh` refuses `--profile desktop` with `profile "desktop" is managed exclusively by the Electron application`. Use the Desktop CLI shim (`<DSH_INSTALL>/resources/runtime/cli/bin/dsh.cmd` on Windows).
+- `dsh plugin` installs through pnpm, so the host needs registry and `codeload.github.com` access. Failures print the path of a diagnostics log naming the exact failing step.
+
+#### Verify the Plugin
+
+```bash
+dsh --profile <PROFILE> --dump-config
+```
+
+The composed tree lists a `# == dsh-browserpaw` layer header followed by its inserted `browserpaw-skill` entry. Then, inside a DeepSeek Harness session:
+
+```text
+browserpaw_session { "action": "open" }
+```
+
+`open` connects to the bridge and injects the tools, `status` reports whether the session is active, and `close` unloads them. A missing bridge token or a bridge that is not listening makes `open` reject rather than report a false success.
+
+#### Tool-Profile Boundary
+
+The native host announces its `core` profile by default, and a DeepSeek Harness session sees exactly that list. `chrome_tool_docs` with `activateForSession: true` widens the list on the server side; BrowserPaw advertises `tools.listChanged` and forwards that notification through the HTTP and stdio bridge, so clients that implement the standard refresh observe the new list. Use `CHROME_MCP_TOOL_PROFILE=full` when a client cannot refresh its tool table.
+
+---
+
 ## Step 4: Pin Extension & Configure Jev Decision Engine (Recommended)
 
 ### 4.1 Pin BrowserPaw to the Chrome Toolbar
@@ -298,12 +350,12 @@ Click the puzzle piece icon (Extensions) in Chrome's top toolbar, locate **Brows
 
 ---
 
-### 4.2 Why Enable Jev? (Dual-Brain Architecture)
+### 4.2 Why Enable Jev? (Interactive Micro-Loop)
 
-BrowserPaw features an advanced **Hierarchical Dual-Brain Architecture**:
+BrowserPaw offers an optional **interactive micro-loop**:
 
-- **Macro Planner (System 2)**: Your host AI Agent (Codex, Claude, Cursor) performs broad reasoning and decomposes complex goals.
-- **Fast Semantic Micro-Loop (System 1)**: Powered by the Jev Decision Engine (`chrome_act_toward_goal`), it performs on-page perceive-decide-act steps without a separate MCP request for each internal step. Latency depends on the selected Jev mode, hardware, and page complexity.
+- **Macro Planner**: The host agent performs broad reasoning and decomposes complex goals.
+- **Semantic Micro-Loop**: The Jev Decision Engine (`chrome_act_toward_goal`) performs supported on-page perceive-decide-act steps without a separate MCP request for each internal step. Latency depends on the selected Jev mode, hardware, and page complexity.
 
 **Tri-State Decision Mode**:
 Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select your preferred mode:
@@ -425,29 +477,39 @@ google-chrome --silent-debugger-extension-api &
 
 ---
 
-## Step 6: Install Agent Skills (Recommended)
+## Step 6: Install the Client-Neutral Agent Skill (Optional)
 
-If your agent supports skill definitions (Codex, Hermes, or Claude Code), copy the bundled skill folder so your agent has the tool parameter schemas and workflow guidance:
+The official plugin packages already include their matching skill. For a standalone
+Agent Skills client, install the same client-neutral `skills/browserpaw/` package with
+the BrowserPaw CLI instead of copying files by hand:
 
-> **Important**: Always copy the **entire `skill/` directory** including its `references/` subdirectory.
+```bash
+browserpaw skill install
+```
 
-- **Codex Desktop / CLI**:
+This writes `~/.agents/skills/browserpaw`. To use another skills root:
 
-  ```powershell
-  # Windows PowerShell
-  $target = "$env:USERPROFILE\.codex\skills\browserpaw"
-  if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force }
-  Copy-Item -Path "skill\*" -Destination $target -Recurse -Force
-  ```
+```bash
+browserpaw skill install --target <skills-root>
+browserpaw skill install --target <skills-root> --force
+```
 
-  ```bash
-  # macOS / Linux
-  mkdir -p ~/.codex/skills/browserpaw
-  cp -R skill/* ~/.codex/skills/browserpaw/
-  ```
+`--target` is the skills root, so the resulting directory is always
+`<skills-root>/browserpaw`. The installer refuses an existing unmarked directory;
+`--force` only replaces a previous BrowserPaw installation carrying its marker.
+It also rejects symlinks or junctions on the target path.
 
-- **Hermes Agent**: Automatically installed when loading the plugin (`skill_view("browserpaw:browserpaw")`).
-- **Claude Code**: Copy `skill/` into `.claude/skills/browserpaw/`.
+Use the official plugin-specific installation paths for packaged clients:
+
+- **ChatGPT/Codex**: install the portable plugin from `.agents/plugins/marketplace.json`.
+- **Hermes Agent**: install `plugins/browserpaw-hermes`; its Hermes-specific skill is
+  loaded as `skill_view("browserpaw:browserpaw")`.
+- **Claude Code**: install the `browserpaw@browserpaw` marketplace plugin.
+- **DeepSeek Harness**: install the `dsh-browserpaw` bundle package.
+
+Self-learning skills are different: `chrome_skill` stores them in
+`$BROWSERPAW_HOME/skills` (default `~/.browserpaw/skills`). All clients connected to the
+same Native Host share that library; it is never copied into a client plugin.
 
 ---
 
@@ -456,7 +518,7 @@ If your agent supports skill definitions (Codex, Hermes, or Claude Code), copy t
 Verify your complete BrowserPaw installation with the built-in diagnostic doctor:
 
 ```bash
-node skill/config/doctor.mjs
+node skills/browserpaw/scripts/doctor.mjs
 ```
 
 ---

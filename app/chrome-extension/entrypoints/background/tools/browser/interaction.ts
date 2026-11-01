@@ -1,15 +1,15 @@
-import { createErrorResponse, ToolResult } from '@/common/tool-handler';
+import { createErrorResponse, type ToolCallContext, ToolResult } from '@/common/tool-handler';
+import { throwIfAborted } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
+import { TOOL_NAMES, type UnifiedLocatorResult } from 'chrome-mcp-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
-import { resolveTargetLocation } from './unified-locator';
-import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import { resolveTargetLocation, formatLocatorDiagnostics } from './unified-locator';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
-import { executeInPage } from './in-page-engine';
 import type { PolymorphicCoordinate } from '@/utils/coordinate-parser';
-import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
-import { createMousePressGuard, isCdpOutcomeUncertainError } from '@/utils/race-cdp';
+import { attachActionReceipt } from '@/utils/action-receipt';
+import { interactIndexTool } from './interact-index';
+import { performPhysicalFill } from './fill-core';
 
 /**
  * D3 (TESTING-NOTES #19): resolveAffinityTab falls back to the user's ACTIVE
@@ -36,27 +36,42 @@ async function resolveAffinityWarning(
   return undefined;
 }
 
-/**
- * D1: one-shot delivery probe around a CDP input dispatch. Hidden-tab
- * throttling acks the command but drops the event, so success:true lied.
- * Arming uses the in-page engine; failures degrade to undefined (no field).
- */
-async function armDeliveryProbe(tabId: number, events: string[]): Promise<boolean> {
+function addResultWarning(
+  result: ToolResult,
+  warning?: string,
+  locator?: UnifiedLocatorResult,
+): ToolResult {
+  if (!warning && !locator) return result;
+  const resolution = locator ? formatLocatorDiagnostics(locator) : {};
+  const block = result.content.at(-1);
+  if (block?.type !== 'text') return result;
   try {
-    await executeInPage({ tabId }, 'inPageArmDeliveryProbe', [events]);
-    return true;
+    const parsed = JSON.parse(block.text);
+    block.text = JSON.stringify({
+      ...parsed,
+      ...resolution,
+      ...(warning ? { affinityWarning: warning } : {}),
+    });
   } catch {
-    return false;
+    block.text = JSON.stringify({
+      success: !result.isError,
+      text: block.text,
+      ...resolution,
+      ...(warning ? { affinityWarning: warning } : {}),
+    });
   }
+  return result;
 }
 
-async function readDeliveryProbe(tabId: number): Promise<boolean | undefined> {
-  try {
-    const probe = (await executeInPage({ tabId }, 'inPageReadDeliveryProbe', [true]))?.[0]?.result;
-    return Boolean(probe?.delivered);
-  } catch {
-    return undefined;
-  }
+function toInteractModifiers(modifiers?: ClickToolParams['modifiers']): string[] | undefined {
+  if (!modifiers) return undefined;
+  const values = [
+    modifiers.altKey ? 'Alt' : undefined,
+    modifiers.ctrlKey ? 'Control' : undefined,
+    modifiers.metaKey ? 'Meta' : undefined,
+    modifiers.shiftKey ? 'Shift' : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return values.length > 0 ? values : undefined;
 }
 
 interface Coordinates {
@@ -65,6 +80,8 @@ interface Coordinates {
 }
 
 interface ClickToolParams {
+  exact?: boolean;
+  label?: string;
   selector?: string; // CSS selector or XPath for the element to click
   selectorType?: 'css' | 'xpath'; // Type of selector (default: 'css')
   ref?: string; // Element ref from accessibility tree (window.__mcpElementMap)
@@ -74,6 +91,7 @@ interface ClickToolParams {
   coordinate?: Coordinates | PolymorphicCoordinate; // Preferred unified coordinate parameter
   coordinates?: Coordinates | PolymorphicCoordinate; // Alias coordinates to click at (x, y relative to viewport)
   coordinateSpace?: 'viewport' | 'screenshot'; // Space of coordinate/coordinates (default: viewport)
+  captureId?: string; // Screenshot identity required when coordinate fallback uses screenshot space
   waitForNavigation?: boolean; // Whether to wait for navigation to complete after click
   timeout?: number; // Timeout in milliseconds for waiting for the element or navigation
   frameId?: number; // Target frame for ref/selector resolution
@@ -97,7 +115,7 @@ class ClickTool extends BaseBrowserToolExecutor {
   /**
    * Execute click operation
    */
-  async execute(args: ClickToolParams): Promise<ToolResult> {
+  async execute(args: ClickToolParams, context?: ToolCallContext): Promise<ToolResult> {
     const coordinates = args.coordinate || args.coordinates;
     const {
       selector,
@@ -106,16 +124,12 @@ class ClickTool extends BaseBrowserToolExecutor {
       timeout = TIMEOUTS.DEFAULT_WAIT * 5,
       frameId,
       button,
-      bubbles,
-      cancelable,
       modifiers,
     } = args;
 
-    console.log(`Starting click operation with options:`, args);
-
     const hasRef = Boolean(args.ref || args.index !== undefined);
     const hasSelector = Boolean(selector);
-    const hasTextOrRole = Boolean(args.text || args.role);
+    const hasTextOrRole = Boolean(args.text || args.role || args.label);
     const hasCoords = Boolean(coordinates);
 
     if (!hasRef && !hasSelector && !hasTextOrRole && !hasCoords) {
@@ -126,6 +140,7 @@ class ClickTool extends BaseBrowserToolExecutor {
     }
 
     try {
+      throwIfAborted(context?.signal, 'before click');
       const clickHadPreexistingBinding = sessionTabAffinity.hasBinding(
         args.sessionId || (args as any).sessionContext,
       );
@@ -184,221 +199,63 @@ class ClickTool extends BaseBrowserToolExecutor {
         selector: finalSelector,
         selectorType,
         text: args.text,
+        exact: args.exact,
+        label: args.label,
         role: args.role,
         coordinate: coordinates,
         coordinateSpace: (args as any).coordinateSpace,
+        captureId: (args as any).captureId,
+        frameId,
+        operation: 'click',
+        taskId: context?.taskId,
+        signal: context?.signal,
+        deadlineAt: (args as any)?.deadlineAt ?? (args as any)?.deadline,
       });
 
-      if (loc.success) {
-        // Task B4: Direct single-step selection for select-option entries
-        if ((loc as any).isSelectOption || loc.tagName === 'option') {
-          const targetIndex = args.index ?? loc.index;
-          if (targetIndex !== undefined) {
-            const selectRes = (
-              await executeInPage(
-                loc.frameId ? { tabId, frameIds: [loc.frameId] } : { tabId },
-                'inPageInteractIndex',
-                [targetIndex, 'click'],
-              )
-            )?.[0]?.result;
-            if (selectRes?.success) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify({
-                      success: true,
-                      message: 'Select option selected successfully',
-                      clickMethod: 'select_option_inpage',
-                      resolutionPath: loc.resolutionPath,
-                      tagName: loc.tagName,
-                      text: loc.text,
-                      ...(loc.warning ? { warning: loc.warning } : {}),
-                    }),
-                  },
-                ],
-                isError: false,
-              };
-            }
-          }
-        }
-
-        let isTrusted = false;
-        let deliveryVerified: boolean | undefined;
-        // CDP modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8). Without this the
-        // primary CDP path silently dropped modifiers, so callers such as
-        // chrome_computer left_click({modifiers:{shiftKey:true}}) produced
-        // shiftKey=false on the page while the content-script fallback path worked.
-        const modifierMask =
-          (modifiers?.altKey ? 1 : 0) |
-          (modifiers?.ctrlKey ? 2 : 0) |
-          (modifiers?.metaKey ? 4 : 0) |
-          (modifiers?.shiftKey ? 8 : 0);
-        try {
-          const probeArmed = await armDeliveryProbe(tabId, ['mousedown', 'mouseup', 'click']);
-          // Animate virtual agent cursor before physical click
-          const clickNote =
-            (args as any).note ||
-            (args as any).actionNote ||
-            (args.double
-              ? 'Double click'
-              : button === 'right'
-                ? 'Right click'
-                : args.ref
-                  ? `Clicking ref ${args.ref}`
-                  : args.selector
-                    ? `Clicking ${args.selector.slice(0, 20)}`
-                    : 'Clicking');
-          await animateAgentCursor(tabId, loc.x, loc.y, {
-            waitForArrival: true,
-            timeoutMs: 350,
-            actionNote: clickNote,
-          });
-          await cdpSessionManager.withSession(tabId, 'click-tool', async () => {
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-              type: 'mouseMoved',
-              x: loc.x,
-              y: loc.y,
-              modifiers: modifierMask,
-            });
-            const clickCount = args.double ? 2 : 1;
-            const buttonName = button || 'left';
-            // `buttons` is the pressed-button bitmask (left=1, right=2, middle=4).
-            // CDP infers it inconsistently for mousePressed when modifiers are
-            // present, so state it explicitly.
-            const buttonsMask = buttonName === 'right' ? 2 : buttonName === 'middle' ? 4 : 1;
-            // CDP only synthesises dblclick when the press/release pairs carry
-            // clickCount 1 then 2; a single pair with clickCount:2 fires click
-            // alone on several renderers. Mirrors computer.ts double/triple path.
-            for (let i = 1; i <= clickCount; i++) {
-              await animateAgentCursorClick(tabId, loc.x, loc.y, clickNote);
-              const clickGuard = createMousePressGuard(
-                (eventParams) =>
-                  cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', eventParams),
-                {
-                  type: 'mouseReleased',
-                  x: loc.x,
-                  y: loc.y,
-                  button: buttonName,
-                  buttons: 0,
-                  clickCount: i,
-                  modifiers: modifierMask,
-                },
-              );
-              try {
-                await clickGuard.press({
-                  type: 'mousePressed',
-                  x: loc.x,
-                  y: loc.y,
-                  button: buttonName,
-                  buttons: buttonsMask,
-                  clickCount: i,
-                  modifiers: modifierMask,
-                });
-                await new Promise((r) => setTimeout(r, 35));
-                await clickGuard.release();
-              } finally {
-                await clickGuard.compensate();
-              }
-              if (i < clickCount) {
-                await new Promise((r) => setTimeout(r, 50));
-              }
-            }
-            isTrusted = true;
-          });
-          if (probeArmed) {
-            deliveryVerified = await readDeliveryProbe(tabId);
-          }
-        } catch (cdpErr) {
-          // The CDP click may still have landed: falling back to a content-script
-          // click here would activate the target twice. Fail closed instead.
-          if (isCdpOutcomeUncertainError(cdpErr)) {
-            return createErrorResponse(
-              `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)} The click may still have been delivered; inspect the page state before retrying.`,
-            );
-          }
-          console.warn('[ClickTool] CDP click failed, falling back to content script:', cdpErr);
-        }
-
-        if (isTrusted) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message: 'Click operation successful (CDP Input)',
-                  clickMethod: loc.resolutionPath,
-                  resolutionPath: loc.resolutionPath,
-                  coordinates: { x: loc.x, y: loc.y },
-                  tagName: loc.tagName,
-                  text: loc.text,
-                  isTrusted: true,
-                  ...(clickAffinityWarning ? { affinityWarning: clickAffinityWarning } : {}),
-                  ...(deliveryVerified === undefined ? {} : { deliveryVerified }),
-                  ...(loc.warning ? { warning: loc.warning } : {}),
-                  _canonicalRecommendation: `For 10x higher reliability and native Shadow DOM support, prefer '${resolveToolName('interact_index')}'.`,
-                }),
-              },
-            ],
-            isError: false,
-          };
-        }
+      if (!loc.success) {
+        return addResultWarning(
+          createErrorResponse(loc.error || 'Target not found'),
+          clickAffinityWarning,
+          loc,
+        );
       }
 
-      await this.injectContentScript(tab.id, ['inject-scripts/click-helper.js']);
-
-      // Send click message to content script
-      const result = await this.sendMessageToTab(
-        tab.id,
+      throwIfAborted(context?.signal, 'before click action');
+      const action = args.double ? 'double_click' : button === 'right' ? 'right_click' : 'click';
+      const usedCoordinateFallback = loc.resolutionPath === 'coordinate';
+      const delegated = await interactIndexTool.execute(
         {
-          action: TOOL_MESSAGE_TYPES.CLICK_ELEMENT,
-          selector: finalSelector,
-          coordinates,
-          ref: finalRef,
-          waitForNavigation,
-          timeout,
-          double: args.double === true,
-          button,
-          bubbles,
-          cancelable,
-          modifiers,
+          tabId,
+          ...(usedCoordinateFallback
+            ? {
+                coordinate: coordinates,
+                coordinateSpace: (args as any).coordinateSpace,
+                captureId: (args as any).captureId,
+              }
+            : {
+                index: loc.index,
+                coordinate: loc.index === undefined ? { x: loc.x, y: loc.y } : undefined,
+                frameId: loc.index === undefined ? undefined : (loc.frameId ?? frameId),
+              }),
+          action,
+          button: button ?? 'left',
+          modifiers: toInteractModifiers(modifiers),
+          waitForSettle: waitForNavigation === true,
+          settleTimeoutMs: waitForNavigation ? timeout : undefined,
+          includeDelta: false,
+          sessionId: args.sessionId,
+          sessionContext: args.sessionContext,
         },
-        frameId,
+        context,
       );
-
-      // Determine actual click method used
-      let clickMethod: string;
-      if (coordinates) {
-        clickMethod = 'coordinates';
-      } else if (finalRef) {
-        clickMethod = 'ref';
-      } else if (finalSelector) {
-        clickMethod = 'selector';
-      } else {
-        clickMethod = 'unknown';
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              success: true,
-              message: result.message || 'Click operation successful',
-              elementInfo: result.elementInfo,
-              navigationOccurred: result.navigationOccurred,
-              clickMethod,
-              _canonicalRecommendation: `For 10x higher reliability and native Shadow DOM support, prefer '${resolveToolName('interact_index')}'.`,
-            }),
-          },
-        ],
-        isError: false,
-      };
+      return addResultWarning(delegated, clickAffinityWarning, loc);
     } catch (error) {
       console.error('Error in click operation:', error);
-      return createErrorResponse(
-        `Error performing click: ${error instanceof Error ? error.message : String(error)}`,
+      return attachActionReceipt(
+        createErrorResponse(
+          `Error performing click: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+        (error as any)?.receipt,
       );
     }
   }
@@ -407,6 +264,8 @@ class ClickTool extends BaseBrowserToolExecutor {
 export const clickTool = new ClickTool();
 
 interface FillToolParams {
+  exact?: boolean;
+  label?: string;
   selector?: string;
   selectorType?: 'css' | 'xpath'; // Type of selector (default: 'css')
   ref?: string; // Element ref from accessibility tree
@@ -416,6 +275,7 @@ interface FillToolParams {
   coordinate?: Coordinates | PolymorphicCoordinate; // Preferred unified coordinate parameter
   coordinates?: Coordinates | PolymorphicCoordinate; // Alias coordinates to click and focus before typing
   coordinateSpace?: 'viewport' | 'screenshot'; // Space of coordinate/coordinates (default: viewport)
+  captureId?: string; // Screenshot identity required when coordinate fallback uses screenshot space
   // Unified text parameter (alias for value)
   text?: string;
   // Accept string | number | boolean for broader form input coverage
@@ -436,17 +296,15 @@ class FillTool extends BaseBrowserToolExecutor {
   /**
    * Execute fill operation
    */
-  async execute(args: FillToolParams): Promise<ToolResult> {
+  async execute(args: FillToolParams, context?: ToolCallContext): Promise<ToolResult> {
     const coordinates = args.coordinate || args.coordinates;
     const value = args.value !== undefined ? args.value : args.text;
     const targetText = args.targetText || (args.value !== undefined ? args.text : undefined);
     const { selector, selectorType = 'css', ref, frameId } = args;
 
-    console.log(`Starting fill operation with options:`, args);
-
     const hasRef = Boolean(ref || args.index !== undefined);
     const hasSelector = Boolean(selector);
-    const hasTargetTextOrRole = Boolean(targetText || args.role);
+    const hasTargetTextOrRole = Boolean(targetText || args.role || args.label);
     const hasCoords = Boolean(coordinates);
 
     if (!hasRef && !hasSelector && !hasTargetTextOrRole && !hasCoords) {
@@ -463,6 +321,7 @@ class FillTool extends BaseBrowserToolExecutor {
     }
 
     try {
+      throwIfAborted(context?.signal, 'before fill');
       const fillHadPreexistingBinding = sessionTabAffinity.hasBinding(
         args.sessionId || (args as any).sessionContext,
       );
@@ -520,180 +379,89 @@ class FillTool extends BaseBrowserToolExecutor {
         selector: finalSelector,
         selectorType,
         targetText,
+        exact: args.exact,
+        label: args.label,
         text: targetText,
         role: args.role,
         coordinate: coordinates,
         coordinateSpace: (args as any).coordinateSpace,
+        captureId: (args as any).captureId,
+        frameId,
+        operation: 'fill',
+        taskId: context?.taskId,
+        signal: context?.signal,
+        deadlineAt: (args as any)?.deadlineAt ?? (args as any)?.deadline,
       });
 
-      if (loc.success) {
-        let isTrusted = false;
-        let deliveryVerified: boolean | undefined;
-        try {
-          const probeArmed = await armDeliveryProbe(tabId, ['focus', 'input', 'change']);
-          // Animate virtual agent cursor before physical click-to-focus
-          const valStr = args.value !== undefined && args.value !== true ? String(args.value) : '';
-          const fillNote =
-            (args as any).note ||
-            (args as any).actionNote ||
-            (valStr
-              ? `Typing "${valStr.length > 18 ? valStr.slice(0, 15) + '...' : valStr}"`
-              : 'Focusing input');
-          await animateAgentCursor(tabId, loc.x, loc.y, {
-            waitForArrival: true,
-            timeoutMs: 350,
-            actionNote: fillNote,
-          });
-          await cdpSessionManager.withSession(tabId, 'fill-tool', async () => {
-            // Click to focus
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
-              type: 'mouseMoved',
-              x: loc.x,
-              y: loc.y,
-            });
-            await animateAgentCursorClick(tabId, loc.x, loc.y, fillNote);
-            const focusGuard = createMousePressGuard(
-              (eventParams) =>
-                cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', eventParams),
-              {
-                type: 'mouseReleased',
-                x: loc.x,
-                y: loc.y,
-                button: 'left',
-                clickCount: 1,
-              },
-            );
-            try {
-              await focusGuard.press({
-                type: 'mousePressed',
-                x: loc.x,
-                y: loc.y,
-                button: 'left',
-                clickCount: 1,
-              });
-              await new Promise((r) => setTimeout(r, 35));
-              await focusGuard.release();
-            } finally {
-              await focusGuard.compensate();
-            }
+      if (!loc.success) {
+        return addResultWarning(
+          createErrorResponse(loc.error || 'Target not found'),
+          fillAffinityWarning,
+          loc,
+        );
+      }
 
-            // Clear input
-            let isMac = false;
-            try {
-              const platform = await chrome.runtime.getPlatformInfo();
-              isMac = platform?.os === 'mac';
-            } catch {}
-            const selectAllMod = isMac ? 4 : 2;
-
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-              type: 'rawKeyDown',
-              modifiers: selectAllMod,
-              windowsVirtualKeyCode: 65,
-              key: 'a',
-              code: 'KeyA',
-            });
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-              type: 'keyUp',
-              modifiers: selectAllMod,
-              windowsVirtualKeyCode: 65,
-              key: 'a',
-              code: 'KeyA',
-            });
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-              type: 'rawKeyDown',
-              windowsVirtualKeyCode: 8,
-              key: 'Backspace',
-              code: 'Backspace',
-            });
-            await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-              type: 'keyUp',
-              windowsVirtualKeyCode: 8,
-              key: 'Backspace',
-              code: 'Backspace',
-            });
-
-            // Insert text
-            const textToInsert = String(value);
-            if (textToInsert.length > 0) {
-              await cdpSessionManager.sendCommand(tabId, 'Input.insertText', {
-                text: textToInsert,
-              });
-            }
-            isTrusted = true;
-          });
-          if (probeArmed) {
-            deliveryVerified = await readDeliveryProbe(tabId);
-          }
-        } catch (cdpErr) {
-          // Same rule as the click path: an unacknowledged CDP fill may still have
-          // typed, so re-typing via the content script would duplicate the input.
-          if (isCdpOutcomeUncertainError(cdpErr)) {
-            return createErrorResponse(
-              `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)} The input may still have been delivered; inspect the page state before retrying.`,
-            );
-          }
-          console.warn('[FillTool] CDP fill failed, falling back to content script:', cdpErr);
-        }
-
-        if (isTrusted) {
-          return {
+      throwIfAborted(context?.signal, 'before fill action');
+      const fillResult = await performPhysicalFill({
+        tabId,
+        target: loc.index ?? '',
+        coordinate:
+          loc.index === undefined ? { x: Math.round(loc.x), y: Math.round(loc.y) } : undefined,
+        frameId: loc.index === undefined ? frameId : (loc.frameId ?? frameId),
+        text: String(value),
+        clear: true,
+        sessionId: args.sessionId,
+        sessionContext: args.sessionContext,
+        signal: context?.signal,
+        deadlineAt: (args as any)?.deadlineAt ?? (args as any)?.deadline,
+      });
+      if (!fillResult.success || fillResult.committed === false) {
+        const status =
+          fillResult.status === 'unknown' || fillResult.submitResult?.status === 'unknown'
+            ? 'unknown'
+            : fillResult.status === 'timeout'
+              ? 'timeout'
+              : 'failed';
+        return attachActionReceipt(
+          {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
-                  success: true,
-                  message: 'Fill operation successful (CDP Input)',
-                  fillMethod: loc.resolutionPath,
-                  resolutionPath: loc.resolutionPath,
-                  coordinates: { x: loc.x, y: loc.y },
-                  tagName: loc.tagName,
-                  isTrusted: true,
-                  ...(fillAffinityWarning ? { affinityWarning: fillAffinityWarning } : {}),
-                  ...(deliveryVerified === undefined ? {} : { deliveryVerified }),
-                  ...(loc.warning ? { warning: loc.warning } : {}),
+                  ...fillResult,
+                  success: false,
+                  status,
+                  retry: status === 'unknown' ? false : undefined,
+                  error:
+                    fillResult.error ||
+                    fillResult.diagnostics ||
+                    `Failed to fill element [${loc.index}]`,
+                  ...formatLocatorDiagnostics(loc),
                 }),
               },
             ],
-            isError: false,
-          };
-        }
-      }
-
-      await this.injectContentScript(tab.id, ['inject-scripts/fill-helper.js']);
-
-      // Send fill message to content script
-      const result = await this.sendMessageToTab(
-        tab.id,
-        {
-          action: TOOL_MESSAGE_TYPES.FILL_ELEMENT,
-          selector: finalSelector,
-          ref: finalRef,
-          value,
-        },
-        frameId,
-      );
-
-      if (result && result.error) {
-        return createErrorResponse(result.error);
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              success: true,
-              message: result.message || 'Fill operation successful',
-              elementInfo: result.elementInfo,
-            }),
+            isError: true,
           },
-        ],
+          fillResult.receipt,
+        );
+      }
+
+      const payload = {
+        ...fillResult,
+        ...formatLocatorDiagnostics(loc),
+        ...(fillAffinityWarning ? { affinityWarning: fillAffinityWarning } : {}),
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
         isError: false,
       };
     } catch (error) {
       console.error('Error in fill operation:', error);
-      return createErrorResponse(
-        `Error filling element: ${error instanceof Error ? error.message : String(error)}`,
+      return attachActionReceipt(
+        createErrorResponse(
+          `Error filling element: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+        (error as any)?.receipt,
       );
     }
   }

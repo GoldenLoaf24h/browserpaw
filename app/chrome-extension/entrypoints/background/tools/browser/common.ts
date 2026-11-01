@@ -9,6 +9,7 @@ import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { isPopupUrl } from '@/utils/popup-guard';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { executeInPage } from './in-page-engine';
+import { getBrowserInstanceId } from '@/utils/browser-identity';
 
 export { isPopupUrl };
 
@@ -19,6 +20,7 @@ const DEFAULT_WINDOW_HEIGHT = 720;
 interface NavigateToolParams {
   url?: string;
   action?: 'back' | 'forward' | string;
+  newTab?: boolean;
   newWindow?: boolean;
   width?: number;
   height?: number;
@@ -456,9 +458,10 @@ class NavigateTool extends BaseBrowserToolExecutor {
         }
       }
 
-      const existingTab = protectedPersonalTab
-        ? null
-        : explicitTab || pickBestMatch(url, candidateTabs);
+      const existingTab =
+        newWindow || args.newTab === true || protectedPersonalTab
+          ? null
+          : explicitTab || pickBestMatch(url, candidateTabs);
       if (existingTab?.id !== undefined) {
         if (sessionId && typeof existingTab.id === 'number') {
           sessionTabAffinity.setAffinity(sessionId, existingTab.id);
@@ -511,6 +514,9 @@ class NavigateTool extends BaseBrowserToolExecutor {
         console.log(`Activated existing Tab ID: ${existingTab.id}`);
         // Get updated tab information and return it
         const updatedTab = await chrome.tabs.get(existingTab.id);
+        const pendingUrl = updatedTab.pendingUrl;
+        const navigationPending =
+          updatedTab.status === 'loading' || Boolean(pendingUrl && pendingUrl !== updatedTab.url);
 
         return {
           content: [
@@ -518,10 +524,13 @@ class NavigateTool extends BaseBrowserToolExecutor {
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                message: 'Activated existing tab',
+                message: navigationPending
+                  ? 'Navigation started; page still loading'
+                  : 'Activated existing tab',
                 tabId: updatedTab.id,
                 windowId: updatedTab.windowId,
-                url: updatedTab.url || (updatedTab as any).pendingUrl || url,
+                url: pendingUrl || updatedTab.url || url,
+                ...(navigationPending ? { navigationPending: true, status: 'loading' } : {}),
               }),
             },
           ],
@@ -712,6 +721,10 @@ class NavigateTool extends BaseBrowserToolExecutor {
 
           if (fallbackWindow && fallbackWindow.id !== undefined) {
             console.log(`URL opened in fallback new Window ID: ${fallbackWindow.id}`);
+            for (const createdTab of fallbackWindow.tabs || []) {
+              if (typeof createdTab.id === 'number')
+                tabGroupManager.registerAgentTab(createdTab.id);
+            }
 
             return {
               content: [
@@ -720,6 +733,8 @@ class NavigateTool extends BaseBrowserToolExecutor {
                   text: JSON.stringify({
                     success: true,
                     message: 'Opened URL in new window',
+                    created: true,
+                    tabId: fallbackWindow.tabs?.[0]?.id,
                     windowId: fallbackWindow.id,
                     tabs: fallbackWindow.tabs
                       ? fallbackWindow.tabs.map((tab) => ({
@@ -761,6 +776,11 @@ interface CloseTabsToolParams {
   sessionId?: string;
   sessionContext?: string;
   allManagedGroups?: boolean;
+  expectedTabs?: Array<{
+    tabId: number;
+    documentId: string;
+    browserInstanceId: string;
+  }>;
 }
 
 /**
@@ -782,6 +802,11 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
     console.log(`Attempting to close tabs with options:`, args);
 
     try {
+      if (args.expectedTabs && (!tabIds?.length || url || args.allManagedGroups === true)) {
+        return createErrorResponse(
+          'Expected tab identities require explicit tabIds and cannot be combined with URL or managed-group selectors',
+        );
+      }
       if (args.allManagedGroups === true || (args as any).agentGroups === true) {
         const closedCount = await tabGroupManager.closeAllManagedGroups();
         return {
@@ -969,6 +994,52 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
           .filter((tab): tab is chrome.tabs.Tab => tab !== null)
           .map((tab) => tab.id)
           .filter((id): id is number => id !== undefined);
+
+        if (args.expectedTabs) {
+          const expectedIds = new Set(args.expectedTabs.map((item) => item.tabId));
+          if (
+            expectedIds.size !== tabIds.length ||
+            tabIds.some((tabId) => !expectedIds.has(tabId)) ||
+            args.expectedTabs.length !== expectedIds.size
+          ) {
+            return createErrorResponse('Expected tab identities must exactly match tabIds');
+          }
+          await tabGroupManager.ensureStorageLoaded();
+          const browserInstanceId = await getBrowserInstanceId();
+          for (const expected of args.expectedTabs) {
+            if (
+              !Number.isInteger(expected.tabId) ||
+              expected.tabId <= 0 ||
+              !expected.documentId ||
+              !expected.browserInstanceId
+            ) {
+              return createErrorResponse('Expected tab identity is malformed');
+            }
+            if (expected.browserInstanceId !== browserInstanceId) {
+              return createErrorResponse(
+                `Refusing to close tab ${expected.tabId}: browser identity changed`,
+              );
+            }
+            if (!tabGroupManager.isAgentTab(expected.tabId)) {
+              return createErrorResponse(
+                `Refusing to close tab ${expected.tabId}: page is no longer agent-owned`,
+              );
+            }
+            let frame: chrome.webNavigation.GetFrameResultDetails | null = null;
+            try {
+              frame =
+                (await chrome.webNavigation.getFrame({
+                  tabId: expected.tabId,
+                  frameId: 0,
+                })) || null;
+            } catch {}
+            if (!frame?.documentId || frame.documentId !== expected.documentId) {
+              return createErrorResponse(
+                `Refusing to close tab ${expected.tabId}: document identity changed`,
+              );
+            }
+          }
+        }
 
         if (validTabIds.length === 0) {
           return {

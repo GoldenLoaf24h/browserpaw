@@ -2,10 +2,65 @@
 import { sanitizeText, sanitizeValue, sanitizeAndLimitOutput } from '../utils/output-sanitizer';
 
 describe('Output Sanitizer Regression & False-Positive Tests', () => {
+  it('recognizes a repository identity only when its canonical public source proves the path', () => {
+    const repository = 'microsoft/TypeScript';
+    const sources = { page: 'https://github.com/microsoft/TypeScript/releases' };
+    expect(sanitizeValue({ repository, sources }).value).toEqual({ repository, sources });
+    expect(sanitizeText(repository).redacted).toBe(true);
+    expect(
+      (sanitizeValue({ repository, sources }, { maxStringLength: 10 }).value as any).repository,
+    ).toBe('microsoft/... [truncated 10 chars]');
+    expect(
+      (sanitizeValue({ data: { repository, sources } }, { maxDepth: 1 }).value as any).data
+        .repository,
+    ).toBe('[MaxDepth]');
+    for (const page of [
+      'https://example.com/microsoft/TypeScript/releases',
+      'https://github.com/microsoft/TypeScriptOther/releases',
+      'https://user:password@github.com/microsoft/TypeScript/releases',
+    ]) {
+      expect((sanitizeValue({ repository, sources: { page } }).value as any).repository).not.toBe(
+        repository,
+      );
+    }
+    expect((sanitizeValue({ repository, sources, cookie: 'secret' }).value as any).cookie).toBe(
+      '<redacted>',
+    );
+  });
+
   describe('1. Security Redaction Tests (Must retain strict protection)', () => {
     it('blocks standalone cookie/query string data', () => {
       const cookieStr = 'session_id=xyz12345; path=/; HttpOnly';
       const res = sanitizeText(cookieStr);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('keeps complete benign HTTP(S) URLs intact when they contain multiple query params', () => {
+      const url = 'https://developer.mozilla.org/api/v1/search?q=fetch&locale=en-US';
+      const res = sanitizeText(url);
+      expect(res.text).toBe(url);
+      expect(res.redacted).toBe(false);
+    });
+
+    it('still redacts sensitive query params after preserving a complete URL', () => {
+      const url = 'https://example.com/path?token=SECRET&lang=en';
+      const res = sanitizeText(url);
+      expect(res.text).toContain('https://example.com/path?token=<redacted>');
+      expect(res.text).not.toContain('SECRET');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('still blocks bare query-string data that is not a complete URL', () => {
+      const query = 'a=b&c=d';
+      const res = sanitizeText(query);
+      expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
+      expect(res.redacted).toBe(true);
+    });
+
+    it('does not bypass the existing URL userinfo protection', () => {
+      const url = 'https://user:password@example.com/path?a=b&c=d';
+      const res = sanitizeText(url);
       expect(res.text).toBe('[BLOCKED: Cookie/query string data]');
       expect(res.redacted).toBe(true);
     });

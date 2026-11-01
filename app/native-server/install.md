@@ -40,7 +40,7 @@ node dist/scripts/doctor.js
 Or from repository root:
 
 ```bash
-node skill/config/doctor.mjs
+node skills/browserpaw/scripts/doctor.mjs
 ```
 
 ### 4. Enable Jev Semantic Engine (Optional but Recommended)

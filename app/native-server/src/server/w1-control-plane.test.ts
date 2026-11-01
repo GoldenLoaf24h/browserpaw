@@ -44,8 +44,16 @@ import { mcpSessionManager } from '../mcp/session-manager';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import http from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const W1_TEST_PORT = 14599;
+
+async function listenOnEphemeralPort(server: http.Server): Promise<number> {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  return (server.address() as AddressInfo).port;
+}
 
 describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
   beforeAll(async () => {
@@ -315,10 +323,10 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
           res.end();
         }
       });
-      await new Promise<void>((resolve) => dummyServer.listen(18009, '127.0.0.1', () => resolve()));
+      const port = await listenOnEphemeralPort(dummyServer);
 
       try {
-        const isOnline = await jevModelManager.isLocalServiceOnline(18009);
+        const isOnline = await jevModelManager.isLocalServiceOnline(port);
         expect(isOnline).toBe(false);
       } finally {
         await new Promise<void>((resolve) => dummyServer.close(() => resolve()));
@@ -342,12 +350,10 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
           res.end();
         }
       });
-      await new Promise<void>((resolve) =>
-        deciderServer.listen(18009, '127.0.0.1', () => resolve()),
-      );
+      const port = await listenOnEphemeralPort(deciderServer);
 
       try {
-        const isOnline = await jevModelManager.isLocalServiceOnline(18009);
+        const isOnline = await jevModelManager.isLocalServiceOnline(port);
         expect(isOnline).toBe(true);
       } finally {
         await new Promise<void>((resolve) => deciderServer.close(() => resolve()));
@@ -363,10 +369,10 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
       dummyServer.on('close', () => {
         wasKilled = true;
       });
-      await new Promise<void>((resolve) => dummyServer.listen(18009, '127.0.0.1', () => resolve()));
+      const port = await listenOnEphemeralPort(dummyServer);
 
       try {
-        await jevModelManager.killProcessOnPort(18009);
+        await jevModelManager.killProcessOnPort(port);
         expect(wasKilled).toBe(false);
       } finally {
         await new Promise<void>((resolve) => dummyServer.close(() => resolve()));

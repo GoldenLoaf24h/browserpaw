@@ -47,32 +47,33 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
         `Either "index" (1-based from ${resolveToolName('read_dom')}) or "selector" must be provided`,
       );
     }
+    if (args.index !== undefined && (!Number.isSafeInteger(args.index) || args.index <= 0)) {
+      return createErrorResponse('index must be a positive safe integer');
+    }
 
     // Path 1: In-Memory Lossless Canvas/Image Extraction
     let inMemOutcome: any = null;
     let inMemError: string | null = null;
     try {
       const inMemoryResults = await this.safeExecuteScript(tabId, {
-        target: { tabId },
+        target: args.index !== undefined ? { tabId, allFrames: true } : { tabId },
         func: (targetIdx?: number | null, targetSelector?: string | null) => {
           try {
             let el: Element | null = null;
             if (typeof targetIdx === 'number') {
-              const isolatedMap =
-                (window as any)[Symbol.for('__browser_use_isolated_index_map__')] ||
-                (window as any)[Symbol.for('BROWSERPAW_ISOLATED_INDEX_MAP')] ||
-                (window as any)[Symbol.for('BROWSERCLAW_ISOLATED_INDEX_MAP')] ||
-                (window as any).__MCP_INDEX_MAP__;
+              const isolatedMap = (globalThis as any)[
+                Symbol.for('__browser_use_isolated_index_map__')
+              ];
               const raw = isolatedMap?.get(targetIdx);
-              el = raw?.deref ? (raw.deref() ?? null) : raw || null;
-              if (el && (el as any).isConnected === false) el = null;
-              if (!el) {
-                try {
-                  el = document.querySelector(`[data-mcp-idx="${targetIdx}"]`);
-                } catch {}
+              const candidate = raw && typeof raw.deref === 'function' ? raw.deref() : raw;
+              if (
+                candidate instanceof Element &&
+                candidate.isConnected &&
+                candidate.ownerDocument === document
+              ) {
+                el = candidate;
               }
-            }
-            if (!el && targetSelector) {
+            } else if (targetSelector) {
               try {
                 el = document.querySelector(targetSelector);
               } catch {}
@@ -166,7 +167,12 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
         args: [args.index ?? null, args.selector ?? null],
       });
 
-      inMemOutcome = inMemoryResults?.[0]?.result;
+      inMemOutcome = inMemoryResults?.find((entry) => entry.result?.found)?.result;
+      if (args.index !== undefined && !inMemOutcome) {
+        return createErrorResponse(
+          `Element [${args.index}] not found. Run ${resolveToolName('read_dom')} to refresh references.`,
+        );
+      }
       const outcome = inMemOutcome;
       if (outcome && outcome.found && outcome.dataUrl) {
         return {
@@ -201,11 +207,14 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
 
     // Path 2: Super-sampled crop fallback (200%-300% zoom)
     try {
-      const zoomFactor = typeof args.zoom === 'number' && Number.isFinite(args.zoom) && args.zoom >= 1.0 ? args.zoom : 2.0;
+      const zoomFactor =
+        typeof args.zoom === 'number' && Number.isFinite(args.zoom) && args.zoom >= 1.0
+          ? args.zoom
+          : 2.0;
       const cropResult = await screenshotTool.execute({
         tabId,
         targetIndex: args.index,
-        selector: args.selector,
+        selector: args.index !== undefined ? undefined : args.selector,
         zoom: zoomFactor,
 
         autoExpand: true,

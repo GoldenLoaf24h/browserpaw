@@ -1,19 +1,50 @@
+import type { IndexedElement } from 'chrome-mcp-shared';
+import { observationPriority } from '@/utils/observation-priority';
+import {
+  buildTableObservation,
+  composedContains,
+  composedParent,
+  createTableObservationCache,
+  findIndexedElement,
+  getDeepActiveElement,
+  getSameRootReference,
+  getShadowRoot,
+  getTableObservationRole,
+  hasDirectTableAction,
+  indexElement,
+  isPresentationalNativeTable,
+  observationFocusScope,
+  pruneDetachedIndices,
+  querySelectorAllDeep,
+  readFormObservationMetadata,
+  withinObservationFocusScope,
+} from './dom-indexer';
+
 /**
  * BrowserPaw Ultrafast Atomic DOM Snapshot & Perception Engine
  *
  * Single-pass TreeWalker traversal, WeakMap metric caching, native checkVisibility,
  * and code-owned WeakMap/Map node identity registry (`window.__pawFast` / `window.__clawFast`).
  *
- * Execution target: 10-30ms, payload budget <=15KB, <=250 actions, <=6000 text chars.
+ * Bounded by a 250 unique-element budget and 6000 text characters.
  */
 
 export interface FastSnapshotOptions {
   legacyVisibility?: boolean;
+  selector?: string;
+  scope?: string;
+  exclude?: string | string[];
+  viewportThreshold?: number;
+  viewportOnly?: boolean;
+  activeViewportOnly?: boolean;
+  limit?: number;
+  maxTextLength?: number;
 }
 
 export interface FastAction {
   id: string;
   node?: number;
+  domId?: string;
   role?: string;
   label: string;
   rect?: { x: number; y: number; w: number; h: number };
@@ -23,6 +54,16 @@ export interface FastAction {
   checked?: string;
   selected?: string;
   expanded?: string;
+  invalid?: boolean;
+  invalidReason?: string;
+  validationMessage?: string;
+  required?: boolean;
+  valid?: boolean;
+  ariaInvalid?: string;
+  errormessage?: string;
+  description?: string;
+  focused?: boolean;
+  withinFocusScope?: boolean;
   delta?: number;
 }
 
@@ -34,10 +75,15 @@ export interface FastSnapshotResult {
   text: string;
   scroll: { y: number; height: number };
   actions: FastAction[];
+  structuralElements?: IndexedElement[];
   marker: any[];
   page_key: any[];
   guards: Record<string | number, any>;
   omitted_actions: number;
+  omitted_elements?: number;
+  selectorMatched?: boolean;
+  textTruncated?: boolean;
+  omitted_text?: number;
 }
 
 export interface PawFastCache {
@@ -51,6 +97,19 @@ export interface PawFastCache {
 }
 
 export type ClawFastCache = PawFastCache;
+
+export function inPageValidateObservedGuard(index: number, expected: unknown[]): boolean {
+  const cache = getPawFastCache();
+  const actual = cache.guard?.(findIndexedElement(index));
+  return (
+    Array.isArray(expected) &&
+    expected.length >= 3 &&
+    Array.isArray(actual) &&
+    JSON.stringify(actual) === JSON.stringify(expected)
+  );
+}
+
+const MAX_SELECT_ACTIONS_PER_ELEMENT = 50;
 
 export function getPawFastCache(): PawFastCache {
   const g = globalThis as any;
@@ -68,10 +127,11 @@ export function getPawFastCache(): PawFastCache {
   } else if (g.__pawFast && !g.__clawFast) {
     g.__clawFast = g.__pawFast;
   }
-  if (!g.__pawFast.actionElements) {
-    g.__pawFast.actionElements = new Map<string | number, Element>();
+  const active = g.__pawFast as PawFastCache;
+  if (!active.actionElements) {
+    active.actionElements = new Map<string | number, Element>();
   }
-  return g.__pawFast;
+  return active;
 }
 
 export const getClawFastCache = getPawFastCache;
@@ -142,20 +202,17 @@ export function getNativeCheckedSetter(element: HTMLInputElement): ((v: boolean)
 /**
  * Execute ultrafast atomic snapshot of visible DOM interactive elements and body text.
  */
+export function clearFastSnapshotMetrics(): void {
+  DOM_CACHE.clearCache();
+}
+
 export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult | null {
   if (typeof document === 'undefined' || !document.body) return null;
 
   (globalThis as any)[Symbol.for('__browser_use_last_snapshot_type__')] = 'fast';
+  const tableObservationCache = createTableObservationCache();
 
-  const isoMap = (globalThis as any)[Symbol.for('__browser_use_isolated_index_map__')];
-  if (isoMap && typeof isoMap.clear === 'function') {
-    isoMap.clear();
-  }
-  const fpMap = (globalThis as any)[Symbol.for('__browser_use_index_fingerprint_map__')];
-  if (fpMap && typeof fpMap.clear === 'function') {
-    fpMap.clear();
-  }
-
+  pruneDetachedIndices();
   const cache = getClawFastCache();
 
   const identity = (e: Element): number => {
@@ -175,18 +232,44 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
   }
   cache.actionElements?.clear();
 
+  const fastActiveElement = getDeepActiveElement();
+  const focusScope = observationFocusScope(fastActiveElement);
+
   const safe = (e: any): boolean => !['password', 'file', 'hidden'].includes(e.type);
 
-  const visible = (e: Element | null): boolean => {
-    if (!e || e.closest('[aria-hidden="true"],[inert]')) return false;
-    if (options?.legacyVisibility || typeof (e as any).checkVisibility !== 'function') {
-      const style = getCachedComputedStyle(e);
+  const hiddenByAncestor = (element: Element): boolean => {
+    const seen = new Set<Element>();
+    for (let node: Element | null = element; node && !seen.has(node); node = composedParent(node)) {
+      seen.add(node);
       if (
-        style.display === 'none' ||
-        style.visibility === 'hidden' ||
-        parseFloat(style.opacity || '1') === 0
+        node.getAttribute('aria-hidden') === 'true' ||
+        node.hasAttribute('inert') ||
+        (node as HTMLElement).inert === true
       ) {
-        return false;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const visible = (e: Element | null): boolean => {
+    if (!e || hiddenByAncestor(e)) return false;
+    if (options?.legacyVisibility || typeof (e as any).checkVisibility !== 'function') {
+      const seen = new Set<Element>();
+      for (
+        let current: Element | null = e;
+        current && !seen.has(current);
+        current = composedParent(current)
+      ) {
+        seen.add(current);
+        const style = getCachedComputedStyle(current);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          parseFloat(style.opacity || '1') === 0
+        ) {
+          return false;
+        }
       }
       const r = getCachedBoundingRect(e);
       return r.width > 0 && r.height > 0;
@@ -199,7 +282,8 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     seen.add(e);
     const referenced = (e.getAttribute('aria-labelledby') || '')
       .split(/\s+/)
-      .map((id) => name(document.getElementById(id), seen))
+      .filter(Boolean)
+      .map((id) => name(getSameRootReference(e, id), seen))
       .filter(Boolean)
       .join(' ');
     if (referenced) return referenced;
@@ -251,7 +335,13 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
 
   const selector =
     'a[href],button,input,textarea,select,summary,[contenteditable="true"],' +
-    roles.map((r) => `[role="${r}"]`).join(',');
+    roles.map((r) => '[role="' + r + '"]').join(',');
+  const tableStructuralSelector =
+    'table,tr,td,th,[role="table"],[role="grid"],[role="row"],' +
+    '[role="cell"],[role="gridcell"],[role="columnheader"],[role="rowheader"]';
+  const liveSelector = '[role="alert"],[role="status"],[aria-live]';
+  const actionSelector = selector + ',' + tableStructuralSelector;
+  const candidateSelector = actionSelector + ',' + liveSelector;
 
   const getRole = (e: Element): string | null => {
     const explicit = e.getAttribute('role');
@@ -268,23 +358,39 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
       if (type === 'number') return 'spinbutton';
       if (['text', 'email', 'url', 'tel'].includes(type)) return 'textbox';
     }
-    return null;
+    return getTableObservationRole(e);
   };
 
-  cache.pageKey = () => [
-    performance.timeOrigin,
-    location.href,
-    window.scrollX,
-    window.scrollY,
-    window.innerWidth,
-    window.innerHeight,
-    [...document.querySelectorAll('input,textarea,select')]
-      .filter(safe)
-      .map((e: any) => [identity(e), e.value, e.checked, e.selectedIndex, e.disabled, e.readOnly]),
-  ];
+  const isLiveRegion = (element: Element): boolean => {
+    const role = (element.getAttribute('role') || '').trim().toLowerCase();
+    const live = (element.getAttribute('aria-live') || '').trim().toLowerCase();
+    return role === 'alert' || role === 'status' || (live !== '' && live !== 'off');
+  };
+
+  cache.pageKey = () => {
+    const controls = querySelectorAllDeep('input,textarea,select', document).filter((element) =>
+      safe(element),
+    );
+    return [
+      performance.timeOrigin,
+      location.href,
+      window.scrollX,
+      window.scrollY,
+      window.innerWidth,
+      window.innerHeight,
+      controls.map((e: any) => [
+        identity(e),
+        e.value,
+        e.checked,
+        e.selectedIndex,
+        e.disabled,
+        e.readOnly,
+      ]),
+    ];
+  };
 
   cache.guard = (e: any) => {
-    if (!e?.isConnected || !visible(e)) return null;
+    if (!e?.isConnected || !visible(e) || !safe(e)) return null;
     const scope =
       e.closest?.('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     return [
@@ -305,132 +411,464 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     ];
   };
 
-  const actions: FastAction[] = [];
-  const rawElements = document.querySelectorAll(selector);
+  let actions: FastAction[] = [];
+  const maxElementTextLen =
+    typeof options?.maxTextLength === 'number' && options.maxTextLength > 0
+      ? options.maxTextLength
+      : 120;
+  let hasTextTruncated = false;
+  let omittedTextChars = 0;
+  let omittedOptionActions = 0;
 
-  for (let i = 0; i < rawElements.length; i++) {
-    const e = rawElements[i];
-    if (
-      !safe(e) ||
-      !visible(e) ||
-      (typeof (e as any).matches === 'function' && (e as any).matches(':disabled')) ||
-      (typeof e.closest === 'function' && e.closest('[aria-disabled="true"]'))
-    ) {
-      continue;
-    }
-
-    const r = getCachedBoundingRect(e);
-    const x = r.x + r.width / 2;
-    const y = r.y + r.height / 2;
-    const rname = getRole(e);
-    if (
-      !rname ||
-      r.width <= 0 ||
-      r.height <= 0 ||
-      x < 0 ||
-      y < 0 ||
-      x >= window.innerWidth ||
-      y >= window.innerHeight
-    ) {
-      continue;
-    }
-
-    if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) {
-      continue;
-    }
-
-    const base: any = {
-      node: identity(e),
-      role: rname,
-      label: name(e) || rname,
-      rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-    };
-
-    for (const key of ['checked', 'selected', 'expanded']) {
-      const val = e.getAttribute('aria-' + key);
-      if (val !== null) base[key] = val;
-    }
-
-    if (['checkbox', 'radio'].includes((e as any).type)) {
-      base.checked = String((e as HTMLInputElement).checked);
-    }
-
-    if (e.tagName === 'SELECT') {
-      const selEl = e as HTMLSelectElement;
-      for (const o of selEl.options) {
-        if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]')) {
-          actions.push({
-            ...base,
-            kind: 'select',
-            value: o.value,
-            current_value: [...selEl.selectedOptions].map((opt) => opt.label).join(', '),
-            label: base.label + ' → ' + o.label,
-          });
+  const excludeList: string[] = [];
+  if (options?.exclude) {
+    const rawExclude = Array.isArray(options.exclude) ? options.exclude : [options.exclude];
+    for (const item of rawExclude) {
+      if (typeof item === 'string' && item.trim()) {
+        const sel = item.trim();
+        try {
+          document.querySelector(sel);
+        } catch (err) {
+          throw new Error(
+            'Invalid exclude selector: "' + sel + '" (' + ((err as Error)?.message || err) + ')',
+          );
         }
-      }
-    } else {
-      const isReadOnly = (e as any).readOnly || e.getAttribute('aria-readonly') === 'true';
-      const editable =
-        !isReadOnly &&
-        (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
-          (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
-      const value =
-        'value' in e
-          ? String((e as any).value)
-          : (e as HTMLElement).isContentEditable || rname === 'combobox'
-            ? (e as HTMLElement).innerText?.trim() || ''
-            : '';
-
-      actions.push({ ...base, kind: editable ? 'fill' : 'click', value });
-      if (editable) {
-        actions.push({ ...base, kind: 'click', value, label: 'Open ' + base.label });
+        excludeList.push(sel);
       }
     }
   }
 
-  // Single-pass TreeWalker text extraction bounded by 6000 characters
-  const words: string[] = [];
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const range = document.createRange();
-  let node: Node | null;
-  let textLength = 0;
+  const matchesExclude = (element: Element): boolean => {
+    const seen = new Set<Element>();
+    for (let node: Element | null = element; node && !seen.has(node); node = composedParent(node)) {
+      seen.add(node);
+      for (const sel of excludeList) {
+        if (typeof node.matches === 'function' && node.matches(sel)) return true;
+      }
+    }
+    return false;
+  };
 
-  while ((node = walker.nextNode()) && textLength < 6000) {
-    const val = node.textContent?.trim() || '';
-    const parent = node.parentElement;
-    if (!val || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) {
+  const isExcluded = (e: Element | null): boolean =>
+    !!e && excludeList.length > 0 && matchesExclude(e);
+
+  const ariaDisabled = (element: Element): boolean => {
+    const seen = new Set<Element>();
+    for (let node: Element | null = element; node && !seen.has(node); node = composedParent(node)) {
+      seen.add(node);
+      if (node.getAttribute('aria-disabled') === 'true') return true;
+    }
+    return false;
+  };
+
+  const targetSelector = options?.scope || options?.selector;
+  let roots: Element[] = [];
+  let selectorMatched: boolean | undefined = undefined;
+
+  if (targetSelector) {
+    try {
+      document.querySelector(targetSelector);
+    } catch (err) {
+      throw new Error(
+        'Invalid scope/selector: "' +
+          targetSelector +
+          '" (' +
+          ((err as Error)?.message || err) +
+          ')',
+      );
+    }
+    try {
+      const matched = querySelectorAllDeep(targetSelector, document);
+      selectorMatched = matched.length > 0;
+      roots = matched.filter(
+        (root) => !matched.some((other) => other !== root && composedContains(other, root)),
+      );
+    } catch {
+      selectorMatched = false;
+      roots = [];
+    }
+    if (roots.length === 0) {
+      return {
+        url: location.href,
+        title: document.title,
+        w: window.innerWidth,
+        h: window.innerHeight,
+        text: '',
+        scroll: {
+          y: window.scrollY,
+          height: document.documentElement
+            ? document.documentElement.scrollHeight
+            : document.body.scrollHeight,
+        },
+        actions: [],
+        marker: [],
+        page_key: cache.pageKey ? cache.pageKey() : [],
+        guards: {},
+        omitted_actions: 0,
+        selectorMatched: false,
+      };
+    }
+  } else {
+    roots = [document.body];
+  }
+
+  let pad = 0;
+  let checkViewport = true;
+  if (options?.activeViewportOnly === true || (options?.activeViewportOnly as any) === 'true') {
+    pad = 0;
+    checkViewport = true;
+  } else if (typeof options?.viewportThreshold === 'number') {
+    pad = options.viewportThreshold;
+    checkViewport = true;
+  } else if (options?.viewportOnly === true || (options?.viewportOnly as any) === 'true') {
+    pad = 150;
+    checkViewport = true;
+  } else if (options?.viewportOnly === false || (options?.viewportOnly as any) === 'false') {
+    checkViewport = false;
+  }
+
+  const inViewport = (rect: DOMRect): boolean => {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    if (!checkViewport) return true;
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    return x >= -pad && y >= -pad && x < window.innerWidth + pad && y < window.innerHeight + pad;
+  };
+
+  const rawElements: Element[] = [];
+  const seenCandidates = new Set<Element>();
+  const pushCandidate = (element: Element | null) => {
+    if (!element || seenCandidates.has(element)) return;
+    seenCandidates.add(element);
+    rawElements.push(element);
+  };
+  for (const root of roots) {
+    if (isExcluded(root)) continue;
+    if (typeof root.matches === 'function' && root.matches(candidateSelector)) pushCandidate(root);
+    for (const element of querySelectorAllDeep(candidateSelector, root)) pushCandidate(element);
+  }
+
+  let structuralElements: IndexedElement[] = [];
+  const rank = new Map<number, number>();
+  const remember = (masterId: number, priority: number) => {
+    rank.set(masterId, Math.max(rank.get(masterId) || 0, priority));
+  };
+
+  for (const e of rawElements) {
+    if (isExcluded(e) || !visible(e)) continue;
+    const rect = getCachedBoundingRect(e);
+    if (!inViewport(rect)) continue;
+    const inScope = withinObservationFocusScope(e, focusScope);
+    let masterId: number | null = null;
+    const ensureId = () => (masterId ??= indexElement(e));
+    const roundedRect = {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+
+    if (
+      typeof e.matches === 'function' &&
+      e.matches(actionSelector) &&
+      safe(e) &&
+      !(typeof e.matches === 'function' && e.matches(':disabled')) &&
+      !ariaDisabled(e)
+    ) {
+      const rname = getRole(e);
+      const blockedTable = !!getTableObservationRole(e) && !hasDirectTableAction(e);
+      const blockedGrid = rname === 'gridcell' && !!e.querySelector('button,[role="button"]');
+      if (rname && !blockedTable && !blockedGrid) {
+        const id = ensureId();
+        const formMeta = readFormObservationMetadata(e);
+        remember(
+          id,
+          observationPriority({
+            focused: fastActiveElement === e,
+            invalid: !!formMeta?.invalid,
+            role: rname,
+            withinFocusScope: inScope,
+            attributes: {
+              role: e.getAttribute('role') || undefined,
+              'aria-invalid': e.getAttribute('aria-invalid') || undefined,
+              'aria-live': e.getAttribute('aria-live') || undefined,
+            },
+          }),
+        );
+        const base: any = {
+          id: 'e' + id,
+          node: identity(e),
+          ...(e.id ? { domId: e.id } : {}),
+          role: rname,
+          withinFocusScope: inScope || undefined,
+          label: (() => {
+            const fullLabel = name(e) || rname;
+            if (fullLabel.length > maxElementTextLen) {
+              hasTextTruncated = true;
+              omittedTextChars += fullLabel.length - maxElementTextLen;
+              return fullLabel.slice(0, maxElementTextLen);
+            }
+            return fullLabel;
+          })(),
+          rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+        };
+        for (const key of ['checked', 'selected', 'expanded']) {
+          const val = e.getAttribute('aria-' + key);
+          if (val !== null) base[key] = val;
+        }
+        if (['checkbox', 'radio'].includes((e as any).type)) {
+          base.checked = String((e as HTMLInputElement).checked);
+        }
+        if (formMeta?.invalid) {
+          base.invalid = true;
+          base.invalidReason = formMeta.invalidReason;
+        }
+        if (formMeta?.valid !== undefined) base.valid = formMeta.valid;
+        if (formMeta?.required) base.required = true;
+        if (formMeta?.validationMessage) base.validationMessage = formMeta.validationMessage;
+        if (formMeta?.invalidRaw) base.ariaInvalid = formMeta.invalidRaw;
+        if (formMeta?.errormessage) base.errormessage = formMeta.errormessage;
+        if (formMeta?.description) base.description = formMeta.description;
+        if (fastActiveElement === e) base.focused = true;
+
+        if (e.tagName === 'SELECT') {
+          const selEl = e as HTMLSelectElement;
+          actions.push({
+            ...base,
+            kind: 'click',
+            current_value: [...selEl.selectedOptions].map((option) => option.label).join(', '),
+          });
+          let emittedSelectActions = 0;
+          for (const o of selEl.options) {
+            if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]')) {
+              if (emittedSelectActions >= MAX_SELECT_ACTIONS_PER_ELEMENT) {
+                omittedOptionActions++;
+                continue;
+              }
+              actions.push({
+                ...base,
+                kind: 'select',
+                value: o.value,
+                current_value: [...selEl.selectedOptions].map((opt) => opt.label).join(', '),
+                label: base.label + ' → ' + o.label,
+              });
+              emittedSelectActions++;
+            }
+          }
+        } else {
+          const isReadOnly = (e as any).readOnly || e.getAttribute('aria-readonly') === 'true';
+          const editable =
+            !isReadOnly &&
+            (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
+              (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
+          const value =
+            'value' in e
+              ? String((e as any).value)
+              : (e as HTMLElement).isContentEditable || rname === 'combobox'
+                ? (e as HTMLElement).innerText?.trim() || ''
+                : '';
+          actions.push({ ...base, kind: editable ? 'fill' : 'click', value });
+          if (editable) {
+            actions.push({ ...base, kind: 'click', value, label: 'Open ' + base.label });
+          }
+        }
+      }
+    }
+
+    if (isLiveRegion(e)) {
+      const full = (e.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!full) continue;
+      const id = ensureId();
+      const role = (e.getAttribute('role') || '').trim().toLowerCase();
+      const liveRole = role === 'alert' || role === 'status' ? role : undefined;
+      let text = full;
+      if (full.length > maxElementTextLen) {
+        hasTextTruncated = true;
+        omittedTextChars += full.length - maxElementTextLen;
+        text = full.slice(0, maxElementTextLen);
+      }
+      remember(
+        id,
+        observationPriority({
+          focused: fastActiveElement === e,
+          role: liveRole,
+          withinFocusScope: inScope,
+          attributes: {
+            role: role || undefined,
+            'aria-live': e.getAttribute('aria-live') || undefined,
+          },
+        }),
+      );
+      structuralElements.push({
+        index: id,
+        tagName: e.tagName.toLowerCase(),
+        role: liveRole,
+        text,
+        attributes: {
+          ...(e.id ? { id: e.id } : {}),
+          ...(role ? { role } : {}),
+          ...(e.getAttribute('aria-live') ? { 'aria-live': e.getAttribute('aria-live')! } : {}),
+        },
+        rect: roundedRect,
+        isInteractive: false,
+        withinFocusScope: inScope || undefined,
+        inShadowDom: e.getRootNode() !== document || undefined,
+      });
       continue;
     }
+
+    if (!getTableObservationRole(e)) continue;
+    const observation = buildTableObservation(e, maxElementTextLen, tableObservationCache);
+    if (!observation) continue;
+    const id = ensureId();
+    remember(
+      id,
+      observationPriority({
+        focused: fastActiveElement === e,
+        role: observation.role,
+        withinFocusScope: inScope,
+        attributes: {
+          role: e.getAttribute('role') || undefined,
+          'aria-live': e.getAttribute('aria-live') || undefined,
+        },
+      }),
+    );
+    structuralElements.push({
+      index: id,
+      tagName: e.tagName.toLowerCase(),
+      role: observation.role,
+      text: observation.text,
+      attributes: {
+        ...(e.id ? { id: e.id } : {}),
+        ...(e.getAttribute('role') ? { role: e.getAttribute('role')! } : {}),
+        ...observation.attributes,
+      },
+      rect: roundedRect,
+      isInteractive: false,
+      withinFocusScope: inScope || undefined,
+      inShadowDom: e.getRootNode() !== document || undefined,
+    });
+  }
+
+  const BODY_TEXT_BUDGET = 6000;
+  const words: string[] = [];
+  const walkerRoots = targetSelector ? roots : [document.body];
+  const range = document.createRange();
+  let bodyTextLength = 0;
+  const visitedTextRoots = new Set<Node>();
+  const nativeControl = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+  const consumeText = (node: Node) => {
+    const rawVal = node.textContent?.trim() || '';
+    const parent = node.parentElement;
+    const tableAncestor = parent?.closest('table,[role="table"],[role="grid"]');
+    if (
+      !rawVal ||
+      !parent ||
+      parent.closest('script,style,noscript,template') ||
+      (tableAncestor && !isPresentationalNativeTable(tableAncestor)) ||
+      isExcluded(parent) ||
+      !visible(parent)
+    ) {
+      return;
+    }
+    if (bodyTextLength >= BODY_TEXT_BUDGET) {
+      hasTextTruncated = true;
+      omittedTextChars += rawVal.length;
+      return;
+    }
+    const pushText = (val: string, omitted: number) => {
+      if (omitted > 0) {
+        hasTextTruncated = true;
+        omittedTextChars += omitted;
+      }
+      words.push(val);
+      bodyTextLength += val.length;
+    };
     try {
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
       if (
         r.width > 0 &&
         r.height > 0 &&
-        r.bottom > 0 &&
-        r.top < window.innerHeight &&
-        r.right > 0 &&
-        r.left < window.innerWidth
+        (!checkViewport ||
+          (r.bottom > -pad &&
+            r.top < window.innerHeight + pad &&
+            r.right > -pad &&
+            r.left < window.innerWidth + pad))
       ) {
-        words.push(val);
-        textLength += val.length;
+        const remaining = BODY_TEXT_BUDGET - bodyTextLength;
+        const val = rawVal.length > remaining ? rawVal.slice(0, remaining) : rawVal;
+        pushText(val, rawVal.length > remaining ? rawVal.length - remaining : 0);
       }
     } catch {
-      words.push(val);
-      textLength += val.length;
+      const remaining = BODY_TEXT_BUDGET - bodyTextLength;
+      const val = rawVal.length > remaining ? rawVal.slice(0, remaining) : rawVal;
+      pushText(val, rawVal.length > remaining ? rawVal.length - remaining : 0);
     }
+  };
+
+  const walkTextRoot = (container: ParentNode) => {
+    if (!container || visitedTextRoots.has(container)) return;
+    visitedTextRoots.add(container);
+    if (container instanceof Element && !nativeControl.has(container.tagName)) {
+      const ownShadow = getShadowRoot(container);
+      if (ownShadow) walkTextRoot(ownShadow);
+    }
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    );
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        consumeText(node);
+        continue;
+      }
+      const element = node as Element;
+      if (nativeControl.has(element.tagName)) continue;
+      const shadow = getShadowRoot(element);
+      if (shadow) walkTextRoot(shadow);
+    }
+  };
+
+  for (const rootNode of walkerRoots) {
+    if (isExcluded(rootNode)) continue;
+    walkTextRoot(rootNode);
   }
 
-  const text = words.join('\n').slice(0, 6000);
+  const text = words.join('\n').slice(0, BODY_TEXT_BUDGET);
   const height = document.documentElement
     ? document.documentElement.scrollHeight
     : document.body.scrollHeight;
+  const maxElements =
+    typeof options?.limit === 'number' && options.limit > 0 ? Math.min(options.limit, 250) : 250;
+  const ranked = [...rank.entries()].sort((a, b) => b[1] - a[1]);
+  const keptElementIds = new Set(ranked.slice(0, maxElements).map(([id]) => id));
+  const omittedElements = Math.max(0, rank.size - keptElementIds.size);
+  const originalActionCount = actions.length;
+  actions = actions.filter((action) => keptElementIds.has(Number(action.id.slice(1))));
+  const omitted_actions = omittedOptionActions + originalActionCount - actions.length;
+  structuralElements = structuralElements.filter((element) => keptElementIds.has(element.index));
+  // Public actions and executor guards share the document's stable ref namespace.
+  actions.forEach((a) => {
+    if (typeof a.node === 'number') {
+      const el = cache.nodes.get(a.node);
+      if (el) {
+        const actNum = indexElement(el);
+        a.id = 'e' + actNum;
+        a.node = actNum;
+        cache.actionElements?.set(a.id, el);
+        cache.actionElements?.set(actNum, el);
+      }
+    }
+  });
   const page_key = cache.pageKey();
   const guards: Record<string | number, any> = {};
 
   for (const a of actions) {
     if (typeof a.node === 'number' && !(a.node in guards)) {
-      guards[a.node] = cache.guard ? cache.guard(cache.nodes.get(a.node)) : null;
+      guards[a.node] = cache.guard ? cache.guard(findIndexedElement(a.node)) : null;
     }
   }
 
@@ -447,20 +885,6 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     semantics,
     page_key[6],
   ];
-
-  const omitted_actions = Math.max(0, actions.length - 250);
-  actions.splice(250);
-  actions.forEach((a, i) => {
-    a.id = 'e' + (i + 1);
-    if (typeof a.node === 'number') {
-      const el = cache.nodes.get(a.node);
-      if (el) {
-        cache.actionElements?.set(a.id, el);
-        cache.actionElements?.set(i + 1, el);
-      }
-    }
-  });
-
   if (window.scrollY + window.innerHeight < height - 2) {
     actions.push({ id: 'scroll_down', kind: 'scroll', label: 'Scroll down', delta: 560 });
   }
@@ -480,10 +904,14 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     text,
     scroll: { y: window.scrollY, height },
     actions,
+    structuralElements,
     marker,
     page_key,
     guards,
     omitted_actions,
+    omitted_elements: omittedElements,
+    ...(selectorMatched !== undefined ? { selectorMatched } : {}),
+    ...(hasTextTruncated ? { textTruncated: true, omitted_text: omittedTextChars } : {}),
   };
 }
 
@@ -497,36 +925,8 @@ export function inPageCheckOcclusion(action: {
 }): { x: number; y: number } | null {
   if (typeof document === 'undefined') return null;
 
-  const g = globalThis as any;
-  const cache = g.__pawFast || g.__clawFast;
-
-  let targetId: number | undefined;
-  if (typeof action.node === 'number') {
-    targetId = action.node;
-  } else if (typeof action.node === 'string') {
-    if (action.node.startsWith('e')) {
-      targetId = parseInt(action.node.slice(1), 10);
-    } else if (action.node.startsWith('ref_')) {
-      targetId = parseInt(action.node.slice(4), 10);
-    } else if (/^\d+$/.test(action.node)) {
-      targetId = parseInt(action.node, 10);
-    }
-  }
-
-  let e: Element | undefined =
-    (typeof action.node === 'string' ? cache?.actionElements?.get(action.node) : undefined) ||
-    (targetId !== undefined ? cache?.actionElements?.get(targetId) : undefined) ||
-    (targetId !== undefined ? cache?.nodes?.get(targetId) : undefined);
-
-  if (!e && targetId !== undefined) {
-    const isoMap = (globalThis as any)[Symbol.for('__browser_use_isolated_index_map__')];
-    const wrapped = isoMap?.get(targetId);
-    e = wrapped?.deref ? wrapped.deref() : wrapped;
-  }
-  if (!e && targetId !== undefined) {
-    e = (document.querySelector(`[data-mcp-idx="${targetId}"]`) as Element) || undefined;
-  }
-  if (!e || !e.isConnected) return null;
+  const e = findIndexedElement(action.node);
+  if (!e) return null;
   if (typeof (e as any).matches === 'function' && (e as any).matches(':disabled')) return null;
   if (typeof e.closest === 'function' && e.closest('[aria-disabled="true"],[inert]')) return null;
 
@@ -570,9 +970,9 @@ export function inPageCheckOcclusion(action: {
         ? (root as any).elementFromPoint(px, py)
         : null;
     let sDepth = 0;
-    while (el && (el as any).shadowRoot && sDepth < 20) {
-      const sr = (el as any).shadowRoot;
-      if (typeof sr.elementFromPoint !== 'function') break;
+    while (el && sDepth < 20) {
+      const sr = getShadowRoot(el);
+      if (!sr || typeof sr.elementFromPoint !== 'function') break;
       const inner = sr.elementFromPoint(px, py);
       if (!inner || inner === el) break;
       el = inner;

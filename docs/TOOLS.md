@@ -4,11 +4,11 @@
 
 | Profile            | Tool Count | Estimated Prompt Footprint (chars/4) | Description                                                                           |
 | :----------------- | :--------: | :----------------------------------: | :------------------------------------------------------------------------------------ |
-| **core** (default) |     14     |                ~9.2k                 | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
-| **full**           |     50     |                ~20.4k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
-| **crawl**          |     12     |                ~6.1k                 | High-throughput web extraction, markdown summarization, and media inspection          |
+| **core** (default) |     16     |                ~11.0k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
+| **full**           |     52     |                ~24.1k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
+| **crawl**          |     12     |                ~6.5k                 | High-throughput web extraction, markdown summarization, and media inspection          |
 
-Canonical surface: 50 tools = 49 extension-executed tools + 1 native-server tool (`chrome_act_toward_goal`, served by the local Jev engine). Profile counts are Core 14 / Crawl 12 / Full 50. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
+Canonical surface: 52 tools = 49 extension-executed tools + 3 native-server tools (`chrome_task`, `chrome_skill`, `chrome_act_toward_goal`). Profile counts are Core 16 / Crawl 12 / Full 52. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 
 Tools hidden under the active profile can be inspected and dynamically activated for the session via `chrome_tool_docs` without restarting the server.
 
@@ -21,6 +21,7 @@ Navigate to a URL, refresh the current tab, or navigate browser history (back/fo
 - `url` — URL to navigate to. Special values: "back" or "forward" to navigate browser history in the target tab.
 - `action:back|forward` — Alternative to url="back"|"forward": navigate browser history backward or forward.
 - `newWindow` — Create a new window to navigate to the URL or not. Defaults to false
+- `newTab` — Create a new tab even when a matching page is already open. Defaults to false
 - `tabId` — Target an existing tab by ID (if provided, navigate/refresh/back/forward that tab instead of the active tab).
 - `windowId` — Target an existing window by ID (when creating a new tab in existing window, or picking active tab if tabId is not provided).
 - `background` — Perform the operation without stealing focus (do not activate the tab or focus the window). Default: true (set false only if user explicitly asks to bring tab to foreground)
@@ -31,6 +32,7 @@ Navigate to a URL, refresh the current tab, or navigate browser history (back/fo
 - `groupColor:grey|blue|red|yellow|green|pink|purple|cyan|orange` — Color for the Chrome tab group. Fallback: "blue"
 - `autoGroup` — Automatically place newly opened tab into an Agent-managed tab group with dedicated title and color. Default: true
 - `dismissOverlays` — Automatically detect and dismiss visible marketing popups, coupon modals, and promotional overlays after navigation completes (default: false)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_switch_tab`
 
@@ -39,6 +41,7 @@ Switch to a specific browser tab
 - `tabId` (required) — The ID of the tab to switch to.
 - `windowId` — The ID of the window where the tab is located.
 - `background` — If true, binds session affinity only without activating the tab in the Chrome UI or stealing user focus. Default: false
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_close_tabs`
 
@@ -46,9 +49,11 @@ Close one or more browser tabs
 
 - `tabId` — Single tab ID to close (convenience alternative to tabIds array).
 - `tabIds` — Array of tab IDs to close. If not provided, will close the active tab (requires confirm: true or session affinity).
+- `expectedTabs` — Fail-closed tab identities for task-owned cleanup. All tab IDs must match the current document and browser before any tab is closed.
 - `url` — Close tabs matching this URL. Can be used instead of tabIds.
 - `confirm` — Explicit confirmation required to close the active tab when tabIds or url are not specified.
 - `allManagedGroups` — Close all Agent-managed tab groups and their tabs created during automation sessions. Default: false
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_move_tab`
 
@@ -58,6 +63,7 @@ Move one or more tabs to a new position index or to another window.
 - `tabIds` — Multiple tab IDs to move
 - `index` (required) — Target position index in the window (0-based, or -1 for end of window)
 - `windowId` — Target window ID (optional, defaults to current window)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_attach_tab`
 
@@ -65,6 +71,7 @@ Explicitly attach CDP debugger and session affinity to a specific tab (by tabId)
 
 - `tabId` — The target tab ID to attach. If omitted, attaches to the user's currently active foreground tab.
 - `sessionId` — Session identifier to bind affinity to this tab.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_detach_tab`
 
@@ -72,10 +79,13 @@ Detach CDP debugger from the tab and release session affinity, dismissing the Ch
 
 - `tabId` — The target tab ID to detach (defaults to session bound tab or active tab).
 - `sessionId` — Session identifier to release affinity from.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `get_windows_and_tabs`
 
 Get all currently open browser windows and tabs
+
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ## Perception & Content Extraction
 
@@ -95,16 +105,17 @@ Extract and prune interactive DOM tree with compact 1-based index assignment, vi
 - `cursor` — Pagination cursor offset for traversing very large DOM pages incrementally (default: 0)
 - `limit` — Maximum number of indexed elements to return for current page cursor slice (default: unlimited)
 - `maxTextLength` — Maximum text length before truncation for element text content (default: 120)
-- `includeDetails` — Also return the bulky indexedElements/indexMap detail blocks (geometry, occlusion flags, safe click points). Off by default because the tree already carries index/tag/attributes/text; enable only when you need per-element rects or visibility flags.
+- `includeDetails` — Also return detailed element geometry and flags, or structured actions and validation metadata in fast mode. Off by default; the tree already carries actionable refs, labels, and values.
 - `viewportOnly` — When true, only index elements inside or immediately near the visible viewport (default: false)
 - `activeViewportOnly` — When true, strictly constrains indexing to elements currently visible within the active viewport (threshold = 0) with horizontal/vertical frustum clipping, eliminating ghost elements from SPA wizards, carousels, and multi-step forms.
-- `format:compact|html|fast` — Output format for treeString. "compact" (default) produces a concise, accessibility-tree-inspired representation without closing tags, slashing token usage by 60%+. "html" returns legacy pseudo-HTML tags. "fast" activates ultrafast atomic snapshot mode (10-30ms, <=15KB).
-- `fast` — When true, activates the ultrafast atomic DOM snapshot engine (10-30ms, <=15KB payload) with WeakMap caching and native checkVisibility.
+- `format:compact|html|fast` — Output format for treeString. "compact" (default) uses a concise accessibility-inspired tree without closing tags. "html" returns pseudo-HTML tags. "fast" returns a budgeted snapshot; latency and total bytes depend on the page and frames.
+- `fast` — When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit.
 - `legacyVisibility` — When true, uses legacy visibility fallback (computedStyle display/visibility/opacity) instead of element.checkVisibility.
-- `deltaOnly` — When true, returns only changed/added/removed diffs compared to the previous snapshot, saving 90%+ tokens on repeated reads.
+- `deltaOnly` — When true, returns changes compared to the previous compatible snapshot. A missing or incompatible baseline returns a full snapshot; fast mode uses the standard representation for delta requests.
 - `dismissOverlays` — When true, automatically detects and dismisses visible marketing popups, coupon modals, and promotional overlays before indexing DOM nodes, preventing modal overlays from polluting the DOM tree (default: false)
 - `virtualizeViewport` — When true (enabled by default on infinite scroll, long feeds, and waterfall pages when selector/scope is omitted), intelligently virtualizes and folds repetitive offscreen subtrees into compact summaries, drastically slashing token usage while strictly preserving visible viewport elements and key navigation.
-- `flattenCards` — When true (default: true), identifies composite card containers (article, [role="article"], [role="listitem"], li) and aggregates fragmented leaf nodes into unified structured card summaries while preserving actionable link/click indices. Slashes token usage by 60%+ on eCommerce, search feeds, and news listings.
+- `flattenCards` — When true (default: true), identifies composite card containers (article, [role="article"], [role="listitem"], li) and aggregates fragmented leaf nodes into structured card summaries while preserving actionable link/click indices.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_get_markdown`
 
@@ -115,6 +126,7 @@ Extract clean, structured hierarchical markdown from the active tab DOM stripped
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_inspect_media`
 
@@ -124,6 +136,7 @@ Inspect and extract high-fidelity media assets (images, canvas, captchas, icons)
 - `selector` — CSS selector fallback
 - `zoom` — Super-sampling zoom factor (default: 2.0)
 - `tabId` — Target tab ID
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_grep`
 
@@ -138,6 +151,7 @@ Search the page without dumping full DOM tree. Supports searching interactive el
 - `stepPx` — Pixel distance to scroll on each probing step (default: 800)
 - `tabId` — Target tab ID (optional)
 - `sessionId` — Session identifier for tab affinity (optional)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_get_dropdown_options`
 
@@ -148,41 +162,47 @@ Get all options from a native `<select>` dropdown, ARIA combobox, or custom menu
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tool_docs`
 
 Return compact parameter documentation for a category of BrowserPaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.
 
-- `category:navigate|perceive|act|observe|manage|crawl|diagnose|network` (required) — Tool category to document
+- `category:navigate|perceive|act|observe|manage|workflow|crawl|diagnose|network` (required) — Tool category to document
 - `activateForSession` — When true, dynamically exposes all tools in this category for the current MCP session without server restart. Default: false
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ## Interaction & Form Automation
 
 ### `chrome_act_toward_goal`
 
-Autonomous semantic micro-loop that perceives, decides, and acts toward a natural-language goal within a local Native Server loop (~200-400ms/step). Powered by TypeSafe Jev System One (Cloud or local resident CUDA GPU/MPS). Requires configured model; fails closed when unavailable. Automatically escalates ambiguous, destructive, or complex actions back to the macro planner with pre-fetched page context.
+Run a bounded semantic micro-loop toward a natural-language page goal. The loop perceives the current page, chooses an action, verifies the result, and escalates ambiguous, destructive, or low-confidence decisions back to the calling agent.
 
 - `goal` (required) — Natural language goal or objective to advance toward on the current page
 - `tabId` — Target tab ID (optional, defaults to active tab)
-- `maxSteps` — Maximum decision steps before terminating (default: 10, max: 60; heuristic capped at <= 5)
+- `maxSteps` — Maximum decision steps before terminating (default: 10, max: 60)
 - `timeoutMs` — Total execution timeout in milliseconds (default: 90000, max: 300000)
 - `textHint` — Explicit text hint to enter when typing, if not clearly quoted in goal
-- `confidenceThreshold` — Minimum confidence threshold to commit an action (default: 0.55)
+- `confidenceThreshold` — Minimum confidence threshold to commit an action (minimum/default: 0.85)
 - `pauseBeforeKeywords` — List of keywords (e.g. ["Post", "Submit", "Pay"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status "paused" with target element context for System 2 confirmation.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
 - `pressEnter` — Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.
-- `mode:off|local|remote` — Optional override for the Jev semantic execution engine mode ("off", "local", or "remote"). Defaults to the mode configured in the extension popup.
+- `mode:off|local|remote` — Requested Jev mode. Must match the globally enabled backend; cannot override off or switch backends.
+- `verification` — Read-only independent observations required to declare the goal complete. Without these, completion remains unverified.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_interact_index`
 
 Click, hover, or interact with an element using its compact 1-based numeric index from browserpaw_read_dom. When performing predictable multi-step actions (e.g. form submission or chain navigation), prefer browserpaw_batch_actions to finish in a single round-trip.
 
 - `index` — Compact 1-based numeric index of the target element
+- `frameId` — Resolve only in this frame, including explicit main frame 0; never cross-frame fallback.
 - `coordinate` — Visual fallback coordinates in viewport/CSS pixels: { x, y } object, [x, y] point, or [ymin, xmin, ymax, xmax] bounding box (supports 0~~1.0 normalized, 0~~1000 per-mille, or absolute viewport pixels across modern vision agents).
-- `coordinateSpace:viewport|screenshot` — Coordinate reference space. "viewport" (default) assumes standard CSS viewport pixels. "screenshot" scales coordinates based on the latest screenshot capture resolution.
+- `coordinateSpace:viewport|screenshot` — Coordinate reference space. "viewport" (default) assumes standard CSS viewport pixels. "screenshot" scales coordinates through the capture named by captureId and requires that identity.
+- `captureId` — Screenshot identity returned by browserpaw_screenshot. Required when coordinateSpace is "screenshot"; dispatch fails if the document, DOM revision, viewport, DPR, scroll position, or capture identity is stale or superseded.
 - `autoSnap` — When clicking via coordinates or visual fallback, magnetically snap to the closest interactive element if clicked within 24px of whitespace. Default: true.
-- `points` — Click sequence: dispatch a full CDP click at each viewport point with intervalMs pacing (rapid burst for moving canvas targets)
+- `points` — Click sequence: dispatch a full CDP click at each point with intervalMs pacing. When captureId is provided, the capture is revalidated before every point; the sequence stops after the first DOM/geometry drift instead of replaying.
 - `intervalMs` — Delay between points in the click sequence, 5-500ms (default 35)
 - `action:click|hover|double_click|right_click|drag` — Interaction action to perform (default: click). "drag" requires `end` and moves from the indexed element to that target.
 - `path` — Continuous drag path: an ordered array of { x, y } coordinates to smoothly drag the mouse through while pressed. Ideal for circular gestures, sliders, and drawing on canvas.
@@ -202,12 +222,14 @@ Click, hover, or interact with an element using its compact 1-based numeric inde
 - `waitForNetworkQuiescence` — Wait for in-flight network requests to settle after this interaction before returning (default: false)
 - `quiescenceTimeoutMs` — Network quiescence timeout in ms (default: 2000)
 - `captureNetwork` — Inline capture of network response triggered by this interaction in a single round-trip
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_fill_index`
 
 Fill text into an input or textarea element using its compact 1-based numeric index. For single search/form submission, pass pressEnter: true to fill and submit in 1 turn without needing a separate click. When filling multiple fields or clicking submit, use browserpaw_batch_actions to pipeline in 1 turn.
 
 - `index` (required) — Compact 1-based numeric index of the target element
+- `frameId` — Resolve only in this frame, including explicit main frame 0; never cross-frame fallback.
 - `text` — Text content to fill into the element
 - `value` — Alias for text parameter
 - `clear` — Whether to clear existing field content before typing (default: true)
@@ -219,6 +241,7 @@ Fill text into an input or textarea element using its compact 1-based numeric in
 - `settleTimeoutMs` — Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)
 - `includeDelta` — Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_keyboard`
 
@@ -227,18 +250,24 @@ Simulate keyboard input on a web page. Supports single keys (Enter, Tab, Escape)
 - `keys` (required) — Keys or key combinations to simulate. Examples: "Enter", "Tab", "Ctrl+C", "Shift+Tab", "Hello World".
 - `index` — Target element index (1-based integer from browserpaw_read_dom) to focus before sending keyboard events.
 - `selector` — CSS selector or XPath for target element to receive keyboard events.
+- `text` — Target element by visible text or accessible name.
+- `role` — Target element by a supported implicit or explicit ARIA role.
+- `label` — Target element by associated native or ARIA label.
+- `exact` — Require an exact text, accessible name, or label match.
 - `selectorType:css|xpath` — Type of selector (default: "css").
 - `delay` — Delay between keystrokes in milliseconds (default: 50).
 - `tabId` — Target tab ID. If omitted, uses the current active tab.
 - `windowId` — Window ID to select active tab from (when tabId is omitted).
 - `frameId` — Target frame ID for iframe support.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_upload_file`
 
 Upload files to web forms with file input elements using Chrome DevTools Protocol
 
 - `tabId` — Target tab ID (default: active tab)
+- `frameId` — Explicit frame containing the target; selectors never fall back to another frame.
 - `windowId` — Target window ID to pick active tab when tabId is omitted
 - `selector` — CSS selector for the file input element (optional if index is provided)
 - `index` — Compact 1-based numeric index of the file input element from browserpaw_read_dom
@@ -249,6 +278,7 @@ Upload files to web forms with file input elements using Chrome DevTools Protoco
 - `fileName` — Optional filename when using base64 or URL (default: "uploaded-file")
 - `multiple` — Whether the input accepts multiple files (default: false)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_insert_media`
 
@@ -265,24 +295,32 @@ Injects an image or media asset from local disk, URL, or base64 into a rich-text
 - `windowId` — Target window ID (optional)
 - `sessionId` — Session identifier for tab affinity binding
 - `sessionContext` — Optional alias for sessionId
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_handle_dialog`
 
 Handle JavaScript dialogs (alert/confirm/prompt) via CDP
 
+- `dialogId` — Required when multiple source sessions have pending dialogs. Read IDs from action receipts.
 - `action:accept|dismiss` (required) — accept: click OK and submit promptText if provided. dismiss: click Cancel.
 - `promptText` — Optional prompt text when accepting a prompt
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_handle_download`
 
-Wait for a browser download and return details (id, filename, url, state, size)
+Wait for a download. With tabId/taskId, use an observed guid or clickTargetIndex to watch that page before clicking; source identity never falls back to browser-wide filename matching. CDP suggestedFilename is not a verified disk path. Without a page scope, the legacy filename filter observes browser-wide downloads.
 
-- `filenameContains` — Filter by substring in filename or URL
+- `tabId` — Source page; taskId can supply its verified page.
+- `guid` — Observed download GUID from a receipt or task status; never repeats the initiating action.
+- `clickTargetIndex` — Observed element ref to click once after source tracking is ready. Mutually exclusive with guid.
+- `frameId` — Chrome numeric frame for clickTargetIndex; returned download.frameId is a CDP token and cannot be passed here.
+- `filenameContains` — Filter within this page by suggested filename or sanitized URL; query values are redacted. Without a page scope, matches browser-wide filename/URL.
 - `timeoutMs` — Timeout in ms (default 60000, max 300000)
 - `waitForComplete` — Wait until completed (default true)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_batch_actions`
 
@@ -298,12 +336,14 @@ Execute a sequential multi-step pipeline of browser actions in a single round-tr
 - `includeDelta` — Automatically capture and return DOM changes caused by the batch in the delta field (default: false)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `captureNetwork` — Inline capture of network response triggered during batch execution in a single round-trip
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_computer`
 
 Use a mouse and keyboard to interact with a web browser, and take screenshots.
 
 - `tabId` — Target tab ID (default: active tab)
+- `captureId` — Screenshot identity returned by browserpaw_screenshot. Required for screenshot-space coordinates; refuse dispatch if its document, DOM revision, viewport, DPR, scroll position, or capture identity changed.
 - `groupTitle` — Title for the Chrome tab group created or joined for this task. Agent should generate a short, task-aligned title in the user language. Default: "Agent"
 - `groupColor:grey|blue|red|yellow|green|pink|purple|cyan|orange` — Color for the Chrome tab group. Default: "blue"
 - `autoGroup` — Automatically place the newly opened tab into an Agent-managed tab group with dedicated title and color. Default: true
@@ -312,7 +352,7 @@ Use a mouse and keyboard to interact with a web browser, and take screenshots.
 - `action:left_click|right_click|double_click|triple_click|left_click_drag|scroll|scroll_to|type|key|fill|fill_form|hover|wait|resize_page|zoom|screenshot` (required) — Action to perform. There is no plain "click" — use left_click.
 - `ref` — Element ref/index from browserpaw_read_dom. For click/scroll/scroll_to/key/type and drag end when provided; takes precedence over coordinates.
 - `coordinates` — Coordinates for actions: { x, y } object, [x, y] point, or [ymin, xmin, ymax, xmax] bounding box (supports 0~~1.0 normalized, 0~~1000 per-mille, or absolute viewport pixels across modern vision agents). Interpreted in the space set by coordinateSpace (default: viewport). Required for click/scroll and as end point for drag.
-- `coordinateSpace:viewport|screenshot` — Space of coordinates: viewport (default, absolute CSS pixels) or screenshot (mapped through the most recent screenshot context for this tab).
+- `coordinateSpace:viewport|screenshot` — Space of coordinates: viewport (default, absolute CSS pixels) or screenshot (mapped through the capture named by captureId). Screenshot space requires captureId.
 - `autoSnap` — Magnetically snap coordinate clicks to the closest interactive element if clicked within 24px of whitespace. Default: true.
 - `startCoordinates` — Starting coordinates for drag action: { x, y } object, [x, y] point, or [ymin, xmin, ymax, xmax] bounding box.
 - `startRef` — Drag start ref/index from browserpaw_read_dom (alternative to startCoordinates).
@@ -337,6 +377,7 @@ Use a mouse and keyboard to interact with a web browser, and take screenshots.
 - `duration` — Seconds to wait for action=wait (max 30s)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_cdp_execute`
 
@@ -346,6 +387,7 @@ Execute raw Chrome DevTools Protocol (CDP) commands directly on a target tab. Gi
 - `method` (required) — CDP method name (e.g. "Page.navigate", "Runtime.evaluate", "Input.dispatchMouseEvent", "DOMSnapshot.captureSnapshot").
 - `params` — Parameters object passed to the CDP method.
 - `timeoutMs` — Timeout in milliseconds for this CDP command. Default: 10000.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_request_human_intervention`
 
@@ -354,12 +396,14 @@ Request user assistance for high-friction barriers (SMS 2FA, puzzle captcha, pay
 - `reason` (required) — Clear instruction explaining what the human user needs to do
 - `timeoutMs` — Timeout in milliseconds (default: 60000)
 - `tabId` — Target tab ID
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_undo_last_action`
 
 Rolls back the most recent mutating action on this tab (e.g. reverts form field input to previous value, or triggers browser history back navigation for mistaken links).
 
 - `tabId` — Target tab ID
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_form_pipeline`
 
@@ -367,11 +411,13 @@ Autonomously fill and advance multi-step forms / wizards (e.g. Typeform, onboard
 
 - `fields` (required) — Ordered list of fields and values to fulfill throughout the form flow
 - `maxSteps` — Maximum form advancement steps to attempt before returning (default: 20)
+- `timeoutMs` — Total pipeline deadline, including nested operations (default: 60000ms).
 - `autoAdvance` — Automatically trigger step advance via Enter or clicking OK/Next button after input (default: true)
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_dismiss_overlay`
 
@@ -384,6 +430,7 @@ Fast 1-step dismissal for visible high-z-index marketing popups, coupon dialogs,
 - `settleTimeoutMs` — Maximum time in milliseconds to wait for page settle (default: 1500)
 - `sessionId` — Session ID for tab affinity routing
 - `sessionContext` — Session context alias
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ## Observation & Scrolling
 
@@ -419,6 +466,7 @@ Fast 1-step dismissal for visible high-z-index marketing popups, coupon dialogs,
 - `quality` — Image compression quality from 0 to 100 for webp/jpeg formats (default: 80)
 - `highClarity` — Prioritize 100% full-resolution clarity without downsampling (disables dimension scaling, keeps 1:1 CSS pixel sharpness for reading fine details or dice dots).
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_smart_scroll`
 
@@ -436,6 +484,7 @@ Intelligently detects and scrolls the most prominent scrollable container on the
 - `waitForSettle` — Wait for DOM and network activity to settle after scroll completes (default: true)
 - `settleTimeoutMs` — Maximum settle wait timeout in ms (default: 1500)
 - `note` — Optional intent note displayed on virtual agent cursor during scrolling (e.g. "Scrolling down timeline")
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_scroll_until_found`
 
@@ -457,6 +506,7 @@ Performs automated client-side RAF auto-scrolling and live DOM / Shadow-DOM dete
 - `windowId` — Target window ID (optional).
 - `sessionId` — Session identifier for tab affinity (optional).
 - `sessionContext` — Session context alias (optional).
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_console`
 
@@ -475,6 +525,7 @@ Capture console output from a browser tab. Supports snapshot mode (default; one-
 - `pattern` — Optional regex filter applied to message/exception text. Supports /pattern/flags syntax.
 - `onlyErrors` — Only return error-level console messages (and exceptions when includeExceptions=true). Default: false.
 - `limit` — Deprecated alias for maxMessages. Prefer maxMessages.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ## Data & Tab Management
 
@@ -487,6 +538,7 @@ Retrieve and search browsing history from Chrome
 - `endTime` — End time as a date string. Supports ISO format (e.g., "2023-10-31", "2023-10-31T14:30:00"), relative times (e.g., "1 day ago", "2 weeks ago", "3 months ago", "1 year ago"), and special keywords ("now", "today", "yesterday"). Default: current time
 - `maxResults` — Maximum number of history entries to return. Use this to limit results for performance or to focus on the most relevant entries. (default: 100)
 - `excludeCurrentTabs` — When set to true, filters out URLs that are currently open in any browser tab. Useful for finding pages you've visited but don't have open anymore. (default: false)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_bookmark_search`
 
@@ -495,6 +547,7 @@ Search Chrome bookmarks by title and URL
 - `query` — Search query to match against bookmark titles and URLs. Leave empty to retrieve all bookmarks.
 - `maxResults` — Maximum number of bookmarks to return (default: 50)
 - `folderPath` — Optional folder path or ID to limit search to a specific bookmark folder. Can be a path string (e.g., "Work/Projects") or a folder ID.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_bookmark_add`
 
@@ -504,6 +557,7 @@ Add a new bookmark to Chrome
 - `title` — Title for the bookmark. If not provided, uses the page title from the URL.
 - `parentId` — Parent folder path or ID to add the bookmark to. Can be a path string (e.g., "Work/Projects") or a folder ID. If not provided, adds to the "Bookmarks Bar" folder.
 - `createFolder` — Whether to create the parent folder if it does not exist (default: false)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_bookmark_delete`
 
@@ -512,6 +566,7 @@ Delete a bookmark from Chrome
 - `bookmarkId` — ID of the bookmark to delete. Either bookmarkId or url must be provided.
 - `url` — URL of the bookmark to delete. Used if bookmarkId is not provided.
 - `title` — Title of the bookmark to help with matching when deleting by URL.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tab_group_create`
 
@@ -523,6 +578,7 @@ Create a new tab group with specified tabs or add tabs to an existing group.
 - `color:grey|blue|red|yellow|green|pink|purple|cyan|orange` — Optional color for the tab group
 - `collapsed` — Whether the tab group should be collapsed (default: false)
 - `windowId` — Target window ID (optional)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tab_group_update`
 
@@ -532,6 +588,7 @@ Update properties (title, color, collapsed state) of an existing tab group.
 - `title` — New title for the tab group
 - `color:grey|blue|red|yellow|green|pink|purple|cyan|orange` — New color for the tab group
 - `collapsed` — Whether the group should be collapsed
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tab_group_list`
 
@@ -539,18 +596,52 @@ List all open tab groups in the browser or within a specific window.
 
 - `windowId` — Optional window ID to filter groups by
 - `title` — Optional group title to filter by
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tab_group_ungroup`
 
 Remove one or more tabs from their current tab group.
 
 - `tabIds` (required) — Array of tab IDs to ungroup
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_tab_group_close`
 
 Close all tabs in a tab group and delete the group.
 
 - `groupId` (required) — The ID of the tab group to close
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
+
+## Durable Tasks & Verified Skills
+
+### `chrome_task`
+
+Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unidentified creation receipts without closing them or claiming cleanup. Default finish stays unverified while those receipts exist.
+
+- `action:start|list|status|resume|takeOver|open|borrow|handOff|finish|cancel` (required)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
+- `name`
+- `goal`
+- `url`
+- `tabId`
+- `keep` — Owned tab IDs to hand back to the user when finishing.
+- `keepUnknownPages` — Finish while retaining every unidentified page-creation receipt. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts exist.
+- `adopt` — On resume, explicitly accept only the new document identity observed after this task's own navigation-producing action.
+- `confirm` — Required by takeOver to transfer a durable task from a disconnected or different MCP session. Also required with keepUnknownPages: true on finish.
+
+### `chrome_skill`
+
+Find and execute independently verified read-only site skills. Proposals remain candidates until at least two fresh-task tests with different inputs and output assertions pass. Automatic JavaScript steps require a locally reviewed program; new DOM extraction uses args.program="dom-extract" with data-only config. Arbitrary JavaScript and write-capable options are unsupported. Never replay unknown outcomes.
+
+- `action:find|list|get|propose|validate|run|disable|rollback` (required)
+- `id`
+- `url`
+- `intent`
+- `version`
+- `definitionHash` — Expected active skill definition hash; execution stops if it changed after discovery.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
+- `inputs`
+- `definition` — Executable recipe: id/name/description/domains/keywords/startUrl/inputSchema/outputSchema/steps[{tool,args,resultPath?}]/verification{tool,args,resultPath?}/tests[{inputs,expect,observe}]. Tool identifiers inside recipes always use the chrome_ backend prefix, regardless of displayed MCP tool names. DOM extraction uses the javascript backend with args={program:"dom-extract",config:{fields:[{name,selector,value:"text"|"attribute",attribute?,multiple?}]}}, resultPath="/result". It returns success, fields and sources.page. For multiple sources, verification and observe are matching arrays of 1–8 checks; every independent DOM/GET assertion must pass. URL parameters use {{key}}. Do not persist credentials, tab identities or refs.
 
 ## Diagnostics & Debugging
 
@@ -559,15 +650,18 @@ Close all tabs in a tab group and delete the group.
 Diagnose BrowserPaw environment, Native Host connectivity, Chrome silent-debugger flags, port availability, and token security.
 
 - `verbose` — Return full path and configuration details (default: false)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_javascript`
 
-Execute JavaScript code in a browser tab and return the result. Built-in "mcp" helper supports end-to-end in-page agent workflows: mcp.run(async () => ...), mcp.waitFor, mcp.click, mcp.fill, mcp.check, mcp.sleep, mcp.queryAll, and :has-text("...") pseudo-selector support, eliminating multi-turn LLM ping-pong latency. Uses CDP Runtime.evaluate with awaitPromise and returnByValue; automatically falls back to chrome.scripting.executeScript if the debugger is busy. Output is sanitized (sensitive data redacted) and truncated by default.
+Execute JavaScript code in a browser tab and return the result. Built-in "mcp" helper supports end-to-end in-page agent workflows: mcp.run(async () => ...), mcp.waitFor, mcp.click, mcp.fill, mcp.check, mcp.sleep, mcp.queryAll, and :has-text("...") pseudo-selector support, eliminating multi-turn LLM ping-pong latency. Uses CDP Runtime.evaluate with awaitPromise and returnByValue; automatically falls back to chrome.scripting.executeScript if the debugger is busy. Set frameId to execute only in that frame. Output is sanitized (sensitive data redacted) and truncated by default.
 
 - `code` (required) — JavaScript code to execute. Runs inside an async function body, so top-level await and "return ..." are supported.
+- `frameId` — Target frame ID from observation (0 = main frame; default). Executes only in this frame.
 - `tabId` — Target tab ID. If omitted, uses the current active tab.
 - `timeoutMs` — Execution timeout in milliseconds (default: 15000).
 - `maxOutputBytes` — Maximum output size in bytes after sanitization (default: 51200). Output exceeding this limit will be truncated.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_storage`
 
@@ -580,6 +674,7 @@ Read localStorage, sessionStorage, and cookies for the current tab. Cookies incl
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Session ID for tab affinity (optional)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_intercept_api`
 
@@ -589,6 +684,7 @@ Intercepts backend JSON API responses matching a URL pattern (e.g. "_/api/v1/dat
 - `triggerAction:inspect_recent|wait_next` — Wait for next response or inspect most recent match (default: inspect_recent)
 - `timeoutMs` — Timeout in milliseconds (default: 10000)
 - `tabId` — Target tab ID
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `performance_start_trace`
 
@@ -597,6 +693,7 @@ Starts a performance trace recording on the selected page. Optionally reloads th
 - `reload` — Determines if, once tracing has started, the page should be automatically reloaded (ignore cache).
 - `autoStop` — Determines if the trace should be automatically stopped (default false).
 - `durationMs` — Auto-stop duration in milliseconds when autoStop is true (default 5000).
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `performance_stop_trace`
 
@@ -604,6 +701,7 @@ Stops the active performance trace recording on the selected page.
 
 - `saveToDownloads` — Whether to save the trace as a JSON file in Downloads (default true).
 - `filenamePrefix` — Optional filename prefix for the downloaded trace JSON.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `performance_analyze_insight`
 
@@ -611,6 +709,7 @@ Provides a lightweight summary of the last recorded trace. For deep insights (CW
 
 - `insightName` — Optional insight name for future deep analysis (e.g., "DocumentLatency"). Currently informational only.
 - `timeoutMs` — Timeout for deep analysis via native host (milliseconds). Default 60000. Increase for large traces.
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ## Network Interception & Capture
 
@@ -628,6 +727,7 @@ Send a network request from the browser with cookies and other browser context
 - `tabUrl` — Optional URL of the tab to execute the request within
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 
 ### `chrome_network_capture`
 
@@ -639,3 +739,4 @@ Unified network capture tool. Use action="start" to begin capturing, action="sto
 - `maxCaptureTime` — Maximum capture time in milliseconds (default: 180000)
 - `inactivityTimeout` — Stop after inactivity in milliseconds (default: 60000). Set 0 to disable.
 - `includeStatic` — Include static resources like images/scripts/styles (default: false)
+- `taskId` — Optional durable task identity; restricts this operation to its verified pages.

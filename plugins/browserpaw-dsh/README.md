@@ -1,17 +1,36 @@
 # dsh-browserpaw
 
-DeepSeek Harness plugin for [BrowserPaw](https://github.com/GoldenLoaf24h/browserpaw): high-speed dual-brain Chrome automation with native CDP and local MCP bridge.
+DeepSeek Harness bundle for [BrowserPaw](https://github.com/GoldenLoaf24h/browserpaw). It registers the `browserpaw` skill and `browserpaw_session` tool, then connects that session to the local BrowserPaw MCP bridge.
 
 ## Install
 
+The package is not currently published to npm. DeepSeek Harness installs pnpm-compatible package paths, so build an installable tarball from this repository:
+
 ```sh
-dsh plugin --profile web add dsh-browserpaw
+cd plugins/browserpaw-dsh
+npm pack
+dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.0.tgz
 ```
+
+For local development, install the package directory directly:
+
+```sh
+dsh plugin --profile <PROFILE> add "<ABSOLUTE_PATH_TO_REPO>/plugins/browserpaw-dsh"
+```
+
+Do not install `github:GoldenLoaf24h/browserpaw` directly: that repository root is not the DSH package, and DSH Git installs do not select a monorepo subdirectory.
+
+Official packaging guidance: <https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish>.
+
+`--profile` is mandatory, and the command initializes the profile when it does not exist yet. The `desktop` profile is owned by the Electron host: a standalone npm `dsh` refuses it with `profile "desktop" is managed exclusively by the Electron application`, so use the Desktop CLI shim (`<DSH_INSTALL>/resources/runtime/cli/bin/dsh.cmd` on Windows) or the Plugins panel for that profile. `dsh plugin` installs through pnpm and therefore needs registry and `codeload.github.com` access.
 
 The installer reads this package's `dsh.bundle.patch`, so it registers itself as a profile
 bundle layer on the way in — no manifest editing, no separate mount line. Restart the host
 afterwards; both the `browserpaw` skill and the `browserpaw_session` tool appear once
 `apply()` has run.
+
+Verify the layer registered before restarting: `dsh --profile <PROFILE> --dump-config` shows a
+`# == dsh-browserpaw` layer header followed by its inserted `browserpaw-skill` entry.
 
 BrowserPaw itself must be running: the native server listens on `127.0.0.1:12306` and writes
 `~/.chrome-mcp/bridge-token`, and the plugin needs both before `open` can connect. Install
@@ -19,7 +38,8 @@ BrowserPaw first if `browserpaw_session { action: "open" }` reports a missing br
 
 ## Verification & Official Upstream
 
-- **Audit Date**: 2026-10-15
+- **Audit Date**: 2026-10-31
+- **Current Package Validation**: DSH `0.2.1-rc.3` successfully passes `npm pack`, isolated package installation, Cordis skill/tool registration, parameter projection, output rendering, and `dsh --profile <PROFILE> --dump-config`. The dump contains the `# == dsh-browserpaw` layer and the inserted `browserpaw-skill` entry.
 - **Host Validation Date**: 2026-10-18 (DSH `0.2.1-rc.1`, isolated profile)
 - **Official Pinned Upstream**: [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness) at commit [`571902028a75c64c1d767f4ae5fd099485f0ddf0`](https://github.com/deepseek-ai/deepseek-harness/commit/571902028a75c64c1d767f4ae5fd099485f0ddf0) (master branch, verified 2026-10-15).
 - **Declared Peer Dependency**: This plugin declares `@deepseek-ai/dsh-mcp-client >=0.2.0-rc.1` as its peer dependency, marked optional. The range documents the client the plugin was built against; the client itself always comes from the harness image. Marking the peer optional is what keeps an installer from resolving a second copy — npm auto-installs a required peer, and a duplicate in-box `@deepseek-ai/*` package registers the same Cordis symbols twice (see Discussion #8287).
@@ -37,9 +57,9 @@ On 2026-10-18 the plugin was exercised end to end against a real DeepSeek Harnes
 
 The native host and `~/.chrome-mcp/bridge-token` were both in place for that run.
 
-**Boundary**: the `desktop` profile is owned exclusively by the Electron host and was not exercised; this validation does not claim readiness under it.
+**Boundary**: the `desktop` profile is owned exclusively by the Electron host and was not exercised. The 0.2.1-rc.1 bridge result above is historical; a fresh live headless model session against the current package was not completed. Current validation establishes packaging, installation, configuration, and component contracts, not live current-runtime tool execution.
 
-**Tool-profile boundary**: the native host announces only its `core` profile by default (14 tools), while the bundled skill body references the wider canonical set. Calling `chrome_tool_docs` with `activateForSession: true` does widen the server's list, but DeepSeek Harness never observes the change: the host does not declare the `tools.listChanged` capability, so the in-box MCP client installs no list-changed handler and its tool table never refreshes. Tools outside the announced profile therefore stay uncallable until the native host is restarted with `CHROME_MCP_TOOL_PROFILE=full`, which the plugin cannot reach from its own process. The injected tool-naming note states this limit rather than promising an unlock path that does not work.
+**Tool-profile boundary**: the native host announces its `core` profile by default, while the bundled skill body references the wider canonical set. `chrome_tool_docs` with `activateForSession: true` widens the server-side list, and BrowserPaw advertises `tools.listChanged` and forwards the notification through its bridge. Clients that implement the standard refresh can observe the new list; clients that cannot should run with `CHROME_MCP_TOOL_PROFILE=full`.
 
 ## Bundle Manifest Declarations
 

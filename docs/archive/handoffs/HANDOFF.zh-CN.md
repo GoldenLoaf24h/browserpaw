@@ -1,4 +1,4 @@
-# BrowserClaw (原 MCP-Chrome) 终极交接文档 (HANDOFF)
+# BrowserPaw (原 MCP-Chrome) 终极交接文档 (HANDOFF)
 
 > **更新时间**：2026-09-07 15:15  
 > **状态里程碑**：**全域通关达成（12/12 Protocols Sealed, 79/79 Assertions 100% Pass）**  
@@ -26,7 +26,7 @@
 
 - **主工程根目录**：`D:\workspace\mcp-chrome-master\mcp-chrome-master`
 - **纯净独立扩展目录（可直接在 Chrome 开发者模式中加载）**：
-  👉 [`D:\workspace\browserclaw`](file:///D:/workspace/browserclaw)
+  👉 [`D:\workspace\browserpaw`](file:///D:/workspace/browserpaw)
 - **实战测试靶场工程**：
   👉 [`test\complex-html-testing`](file:///D:/workspace/mcp-chrome-master/mcp-chrome-master/test/complex-html-testing)
   - 静态服务端口：`http://127.0.0.1:4173`（入口：`node test/complex-html-testing/serve.mjs`）
@@ -102,8 +102,8 @@ pnpm --filter mcp-chrome-bridge test
 # 1. 编译 Chrome 扩展
 pnpm --filter chrome-mcp-server build
 
-# 2. 同步产物至 D:\workspace\browserclaw（使用 node 避免 powershell 通配符被策略拦截）
-node -e "require('fs').cpSync('app/chrome-extension/.output/chrome-mv3', 'D:/workspace/browserclaw', { recursive: true }); console.log('SYNCED');"
+# 2. 同步产物至 D:\workspace\browserpaw（使用 node 避免 powershell 通配符被策略拦截）
+node -e "require('fs').cpSync('app/chrome-extension/.output/chrome-mv3', 'D:/workspace/browserpaw', { recursive: true }); console.log('SYNCED');"
 
 # 3. 触发扩展重载
 node test/manual/reload-extension.mjs

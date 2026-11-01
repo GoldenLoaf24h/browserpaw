@@ -14,7 +14,9 @@ function withStubbedGeometry() {
   // test output clean; the validation logic under test does not use it.
   const prevStyle = window.getComputedStyle;
   window.getComputedStyle = ((el: Element, pseudo?: string | null) =>
-    pseudo ? ({ getPropertyValue: () => '' } as unknown as CSSStyleDeclaration) : prevStyle(el)) as any;
+    pseudo
+      ? ({ getPropertyValue: () => '' } as unknown as CSSStyleDeclaration)
+      : prevStyle(el)) as any;
   Element.prototype.getBoundingClientRect = function () {
     return {
       x: 10,
@@ -34,16 +36,20 @@ function withStubbedGeometry() {
   };
 }
 
-function attrsOf(html: string, match: (el: any) => boolean) {
+function indexedOf(html: string, match: (el: any) => boolean) {
   const restore = withStubbedGeometry();
   try {
     document.body.innerHTML = html;
     const res = inPageDOMPruner();
-    return (res.indexedElements || []).find(match)?.attributes;
+    return (res.indexedElements || []).find(match);
   } finally {
     restore();
     document.body.innerHTML = '';
   }
+}
+
+function attrsOf(html: string, match: (el: any) => boolean) {
+  return indexedOf(html, match)?.attributes;
 }
 
 describe('form validation state in chrome_read_dom', () => {
@@ -111,5 +117,82 @@ describe('form validation state in chrome_read_dom', () => {
 
     expect(attrs!.invalid).toBeUndefined();
     expect(attrs!.valid).toBeUndefined();
+  });
+
+  it('surfaces native label text without duplicating the field value', () => {
+    const el = indexedOf(
+      '<label for="employee">Employee code</label><input id="employee" value="ABC">',
+      (item) => item.attributes?.id === 'employee',
+    );
+
+    expect(el?.text).toBe('Employee code');
+    expect(el?.text).not.toBe(el?.value);
+  });
+
+  it('resolves aria-errormessage only for aria-invalid fields and includes visible descriptions', () => {
+    const el = indexedOf(
+      [
+        '<input id="work" aria-invalid="true" aria-errormessage="work-error"',
+        ' aria-describedby="work-hint hidden-hint">',
+        '<p id="work-error">Use your company email address.</p>',
+        '<p id="work-hint">Used for account notices.</p>',
+        '<div hidden><p id="hidden-hint">Unrelated hidden text.</p></div>',
+      ].join(''),
+      (item) => item.attributes?.id === 'work',
+    );
+
+    expect(el?.attributes.invalid).toBe('true');
+    expect(el?.attributes.errormessage).toBe('Use your company email address.');
+    expect(el?.attributes.description).toBe('Used for account notices.');
+    expect(el?.attributes.description).not.toContain('Unrelated hidden text');
+  });
+
+  it('does not resolve aria-errormessage unless aria-invalid is true', () => {
+    const attrs = attrsOf(
+      [
+        '<input id="work" aria-invalid="false" aria-errormessage="work-error">',
+        '<p id="work-error">Use your company email address.</p>',
+      ].join(''),
+      (el) => el.attributes?.id === 'work',
+    );
+
+    expect(attrs!.errormessage).toBeUndefined();
+  });
+
+  it('truncates associated descriptions to 120 characters', () => {
+    const longText = `Visible description ${'x'.repeat(160)}<span hidden>HIDDEN</span>`;
+    const attrs = attrsOf(
+      ['<input id="work" aria-describedby="work-hint">', `<p id="work-hint">${longText}</p>`].join(
+        '',
+      ),
+      (el) => el.attributes?.id === 'work',
+    );
+
+    expect(attrs!.description).toHaveLength(120);
+    expect(attrs!.description).not.toContain('HIDDEN');
+  });
+
+  it('resolves aria references from the field shadow root instead of a document duplicate id', () => {
+    const restore = withStubbedGeometry();
+    try {
+      document.body.innerHTML = `
+        <p id="work-error">Wrong document error.</p>
+        <div id="field-host"></div>
+      `;
+      const shadow = document.getElementById('field-host')!.attachShadow({ mode: 'open' });
+      shadow.innerHTML = `
+        <input id="work" aria-invalid="true" aria-errormessage="work-error">
+        <p id="work-error">Wrong shadow error.</p>
+      `;
+
+      const res = inPageDOMPruner();
+      const indexed = res.indexedElements?.find((el) => el.attributes.id === 'work');
+
+      expect(indexed?.inShadowDom).toBe(true);
+      expect(indexed?.attributes.errormessage).toBe('Wrong shadow error.');
+    } finally {
+      restore();
+      document.body.innerHTML = '';
+    }
   });
 });

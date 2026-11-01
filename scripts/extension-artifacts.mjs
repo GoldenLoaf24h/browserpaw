@@ -55,7 +55,7 @@ export function calculateExtensionSourceFingerprint(root = repoRoot) {
   const sharedDir = resolve(root, 'packages/shared/src');
   const scriptFile = resolve(root, 'scripts/extension-artifacts.mjs');
 
-  const excludes = new Set(['node_modules', '.output', '.wxt', 'dist', '.git', 'tests']);
+  const excludes = new Set(['node_modules', '.output', '.wxt', '.omc', 'dist', '.git', 'tests']);
   const files = [];
 
   if (existsSync(extensionDir)) {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // The dsh plugin lives outside the pnpm workspace (plugins/* is not a workspace package),
@@ -548,15 +549,15 @@ describe('dsh-browserpaw manifest and loader compliance', () => {
     assert.notEqual(note.trim(), '', 'a tool-naming note must be prepended');
     assert.match(note, /mcp__browserpaw__/, 'the note must name the real server prefix');
     assert.doesNotMatch(note, /<serverName>/, 'the note must interpolate the server name');
-    // The note must not offer `chrome_tool_docs` as a way to widen the tool set. That path is
-    // dead in DSH: the native host never declares the `tools.listChanged` capability, so the
-    // in-box client installs no list-changed handler and its tool table never refreshes after
-    // an `activateForSession` call. Only a host restart with a wider CHROME_MCP_TOOL_PROFILE
-    // changes what is callable, and the plugin cannot reach that from its own process.
-    assert.doesNotMatch(
+    assert.match(
       note,
       /activateForSession/,
-      'the note must not advertise a tool-unlock path that the host never observes',
+      'the note must explain the standard tool-list refresh path',
+    );
+    assert.match(
+      note,
+      /CHROME_MCP_TOOL_PROFILE=full/,
+      'the note must retain the full-profile fallback for clients without refresh handling',
     );
   });
 
@@ -582,7 +583,7 @@ describe('dsh-browserpaw manifest and loader compliance', () => {
     // the package, so the loader patch, the entry module and the skill tree must all be listed.
     const files = manifest.files;
     assert.ok(Array.isArray(files), 'package.json must pin an explicit files list');
-    for (const entry of ['index.js', 'cordis.patch.yml', 'skills', 'LICENSE']) {
+    for (const entry of ['index.js', 'cordis.patch.yml', 'skills', 'README.md', 'LICENSE']) {
       assert.ok(files.includes(entry), `files must include ${entry}`);
     }
     // AGENTS.md files are notes for agents working in the repo, not user documentation. The
@@ -592,5 +593,27 @@ describe('dsh-browserpaw manifest and loader compliance', () => {
       'files must exclude the internal AGENTS.md notes from the published skill tree',
     );
     assert.ok(existsSync(join(pluginDir, 'LICENSE')), 'the published package needs its LICENSE');
+  });
+
+  it('packs the documented runtime files without repository-only notes', () => {
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+      cwd: pluginDir,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    });
+    assert.equal(packed.status, 0, packed.stderr || packed.stdout);
+    const files = JSON.parse(packed.stdout)[0].files.map((entry) => entry.path);
+    for (const required of ['index.js', 'cordis.patch.yml', 'README.md', 'LICENSE']) {
+      assert.ok(files.includes(required), `npm package must include ${required}`);
+    }
+    assert.ok(
+      files.some((file) => file.startsWith('skills/browserpaw/')),
+      'npm package must include the BrowserPaw skill',
+    );
+    assert.ok(
+      !files.some((file) => /(^|\/)(AGENTS\.md|tests?|__pycache__)(\/|$)/.test(file)),
+      'npm package must exclude repository-only agent and test files',
+    );
   });
 });

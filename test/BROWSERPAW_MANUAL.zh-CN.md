@@ -149,7 +149,7 @@ BrowserPaw 暴露 50 个规范 MCP 工具，组织为 8 个功能类别：
 ### 3.1 剪枝后的 1 起始 DOM 索引（`chrome_read_dom`）
 
 - 提取紧凑的编号树（`[1]`、`[2]`、`[14]`），剔除装饰性包装和不可见元素。
-- 直接把 `treeString` 返回给提示上下文，相比原始 HTML 削减 85%+ 的 Token 用量。
+- 直接把 `treeString` 返回给提示上下文，并明确标记省略项和预算；实际 Token 用量应按页面和任务分别测量。
 - 保留可访问性元数据：`role`、`aria-label`、`placeholder`、`disabled` 和 `href`。
 
 ### 3.2 动作增量搭车（`includeDelta: true`）

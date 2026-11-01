@@ -2,12 +2,38 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { scrubUrl } from '@/utils/url-sanitizer';
+import { tabGroupManager } from './tab-group-manager';
+import { getBrowserInstanceId } from '@/utils/browser-identity';
+import { downloadsWatchdog } from '../../watchdogs/downloads-watchdog';
 
 class WindowTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS;
   async execute(): Promise<ToolResult> {
     try {
+      await tabGroupManager.ensureStorageLoaded();
+      let sourceDownloads = false;
+      try {
+        await downloadsWatchdog.ensureReady();
+        sourceDownloads = downloadsWatchdog.sourceTrackingAvailable;
+      } catch {
+        // Inventory remains usable; source-scoped download calls must fail closed.
+      }
       const windows = await chrome.windows.getAll({ populate: true });
+      const browserInstanceId = await getBrowserInstanceId();
+      const documentIds = new Map<number, string>();
+      await Promise.all(
+        windows.flatMap((window) =>
+          (window.tabs || []).map(async (tab) => {
+            if (typeof tab.id !== 'number') return;
+            try {
+              const frame = await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 });
+              if (frame?.documentId) documentIds.set(tab.id, frame.documentId);
+            } catch {
+              // Restricted or closing pages have no verifiable document identity.
+            }
+          }),
+        ),
+      );
       let tabCount = 0;
 
       const structuredWindows = windows.map((window) => {
@@ -16,7 +42,10 @@ class WindowTool extends BaseBrowserToolExecutor {
             tabCount++;
             return {
               tabId: tab.id || 0,
+              documentId: documentIds.get(tab.id || 0),
+              openerTabId: tab.openerTabId,
               url: scrubUrl(tab.url || ''),
+              pendingUrl: tab.pendingUrl ? scrubUrl(tab.pendingUrl) : null,
               title: tab.title || '',
               active: tab.active || false,
               // 'unloaded'/'loading'/'complete' distinguishes blank placeholders
@@ -25,6 +54,9 @@ class WindowTool extends BaseBrowserToolExecutor {
               // discardable = tab dropped from memory; a strong hint that the
               // renderer is not live and CDP input will not be acked.
               discarded: tab.discarded ?? false,
+              downloads: sourceDownloads ? downloadsWatchdog.getPageDownloads(tab.id || 0) : [],
+              isAgentManaged:
+                typeof tab.id === 'number' ? tabGroupManager.isAgentTab(tab.id) : false,
             };
           }) || [];
 
@@ -45,6 +77,8 @@ class WindowTool extends BaseBrowserToolExecutor {
       });
 
       const result = {
+        browserInstanceId,
+        capabilities: { sourceDownloads },
         windowCount: windows.length,
         tabCount: tabCount,
         windows: structuredWindows,

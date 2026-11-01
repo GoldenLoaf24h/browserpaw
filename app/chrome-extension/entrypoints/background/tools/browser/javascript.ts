@@ -17,7 +17,11 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
-import { assertTabInjectable } from '@/utils/restricted-url';
+import {
+  assertTabInjectable,
+  isRestrictedChromeUrl,
+  restrictedUrlErrorMessage,
+} from '@/utils/restricted-url';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   sanitizeAndLimitOutput,
@@ -40,16 +44,6 @@ const CLEANUP_TIMEOUT_MS = 1_000;
 // binding is declared here so `MCP_INPAGE_HELPERS` stays self-contained.
 export const MCP_INPAGE_HELPERS = `let __browserpawRefAttr = '';
 const mcp = (() => {
-  const getMap = () => (
-    (typeof globalThis !== 'undefined' && (
-      globalThis[Symbol.for('__browser_use_isolated_index_map__')] ||
-      globalThis[Symbol.for('BROWSERPAW_ISOLATED_INDEX_MAP')] ||
-      globalThis[Symbol.for('BROWSERCLAW_ISOLATED_INDEX_MAP')] ||
-      globalThis.__MCP_INDEX_MAP__
-    )) || new Map()
-  );
-  const deref = (e) => (e && typeof e.deref === 'function' ? e.deref() : e);
-
   // Snapshot indexes live in the extension's isolated world, which page-world code
   // cannot read. While an evaluation runs, the background stamps the elements behind
   // the indexes the code mentions with an attribute private to that evaluation and
@@ -63,7 +57,40 @@ const mcp = (() => {
     } catch {
       return undefined;
     }
-    return el && el.isConnected !== false ? el : undefined;
+    if (el && el.isConnected !== false) return el;
+    try {
+      const searchShadow = (root) => {
+        const walker = document.createTreeWalker(root, 1 /* NodeFilter.SHOW_ELEMENT */);
+        let curr = walker.nextNode();
+        while (curr) {
+          if (curr.shadowRoot) {
+            try {
+              const found = curr.shadowRoot.querySelector('[' + __browserpawRefAttr + '="' + id + '"]');
+              if (found && found.isConnected !== false) return found;
+            } catch {}
+            const deeper = searchShadow(curr.shadowRoot);
+            if (deeper) return deeper;
+          }
+          curr = walker.nextNode();
+        }
+        return null;
+      };
+      const foundInShadow = searchShadow(document);
+      if (foundInShadow) return foundInShadow;
+    } catch {}
+    return undefined;
+  };
+
+  const parseTargetIndex = (val) => {
+    if (typeof val === 'number') return Number.isSafeInteger(val) && val > 0 ? val : null;
+    if (typeof val === 'string') {
+      const m = val.trim().match(/^(?:ref_|e)?(\\d+)$/i);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        return Number.isSafeInteger(n) && n > 0 ? n : null;
+      }
+    }
+    return null;
   };
 
   // Robust :has-text evaluator supporting:
@@ -350,87 +377,17 @@ const mcp = (() => {
   installHasTextPolyfill();
 
   const resolve = (t) => {
+    const targetIdx = parseTargetIndex(t);
+    if (targetIdx !== null) {
+      return fromRefAttr(targetIdx) || null;
+    }
     if (typeof t === 'number') {
-      const fromRef = fromRefAttr(t);
-      if (fromRef) return fromRef;
-
-      const fromMap = deref(getMap().get(t));
-      if (fromMap && fromMap.isConnected !== false) return fromMap;
-      const fpMap =
-        typeof globalThis !== 'undefined' &&
-        globalThis[Symbol.for('__browser_use_index_fingerprint_map__')];
-      if (fpMap && fpMap.has(t)) {
-        const fp = fpMap.get(t);
-        if (fp?.id) {
-          const byId = document.getElementById(fp.id);
-          if (byId) return byId;
-        }
-        if (fp?.testId) {
-          const byTest = document.querySelector('[data-testid="' + fp.testId + '"]');
-          if (byTest) return byTest;
-        }
-        if (fp?.ariaLabel) {
-          const byAria = document.querySelector(
-            (fp.tag || '') + '[aria-label="' + fp.ariaLabel + '"]',
-          );
-          if (byAria) return byAria;
-        }
-        if (fp?.name) {
-          const byName = document.querySelector((fp.tag || '') + '[name="' + fp.name + '"]');
-          if (byName) return byName;
-        }
-        if (fp?.placeholder) {
-          const byPl = document.querySelector(
-            (fp.tag || '') + '[placeholder="' + fp.placeholder + '"]',
-          );
-          if (byPl) return byPl;
-        }
-      }
-      return document.querySelector(\`[data-mcp-idx="\${t}"]\`);
+      return null;
     }
     if (typeof t === 'string') {
       const trimmed = t.trim();
-      // Only treat as numeric index / ref if it is purely digits or ref_digits
-      if (/^(?:ref_)?\\d+$/.test(trimmed)) {
-        const p = parseInt(trimmed.replace(/^ref_/, ''), 10);
-        if (!isNaN(p)) {
-          const fromRef = fromRefAttr(p);
-          if (fromRef) return fromRef;
-          const fromMap = deref(getMap().get(p));
-          if (fromMap && fromMap.isConnected !== false) return fromMap;
-          const fpMap =
-            typeof globalThis !== 'undefined' &&
-            globalThis[Symbol.for('__browser_use_index_fingerprint_map__')];
-          if (fpMap && fpMap.has(p)) {
-            const fp = fpMap.get(p);
-            if (fp?.id) {
-              const byId = document.getElementById(fp.id);
-              if (byId) return byId;
-            }
-            if (fp?.testId) {
-              const byTest = document.querySelector('[data-testid="' + fp.testId + '"]');
-              if (byTest) return byTest;
-            }
-            if (fp?.ariaLabel) {
-              const byAria = document.querySelector(
-                (fp.tag || '') + '[aria-label="' + fp.ariaLabel + '"]',
-              );
-              if (byAria) return byAria;
-            }
-            if (fp?.name) {
-              const byName = document.querySelector((fp.tag || '') + '[name="' + fp.name + '"]');
-              if (byName) return byName;
-            }
-            if (fp?.placeholder) {
-              const byPl = document.querySelector(
-                (fp.tag || '') + '[placeholder="' + fp.placeholder + '"]',
-              );
-              if (byPl) return byPl;
-            }
-          }
-          const fromAttr = document.querySelector(\`[data-mcp-idx="\${p}"]\`);
-          if (fromAttr) return fromAttr;
-        }
+      if (/^(?:ref_|e)?\\d+$/i.test(trimmed)) {
+        return null;
       }
       if (trimmed.startsWith('#')) {
         const byId = document.getElementById(trimmed.slice(1));
@@ -741,6 +698,7 @@ interface JavaScriptToolParams {
   code?: string;
   script?: string;
   tabId?: number;
+  frameId?: number;
   contextId?: number;
   timeoutMs?: number;
   maxOutputBytes?: number;
@@ -764,6 +722,9 @@ interface JavaScriptToolResult {
   success: boolean;
   tabId: number;
   engine: ExecutionEngine;
+  status?: 'unknown';
+  outcome?: 'unknown';
+  retry?: false;
   result?: string;
   truncated?: boolean;
   redacted?: boolean;
@@ -790,9 +751,28 @@ type ExecutionFailure = {
   ok: false;
   engine: ExecutionEngine;
   error: ExecutionError;
+  status?: 'unknown';
+  outcome?: 'unknown';
+  retry?: false;
 };
 
 type ExecutionResult = ExecutionSuccess | ExecutionFailure;
+
+function markOutcomeUnknown(result: ExecutionFailure): ExecutionFailure {
+  const message = result.error.message;
+  return {
+    ...result,
+    status: 'unknown',
+    outcome: 'unknown',
+    retry: false,
+    error: {
+      ...result.error,
+      message: /outcome unknown/i.test(message)
+        ? message
+        : `JavaScript outcome unknown; do not replay: ${message}`,
+    },
+  };
+}
 
 // ============================================================================
 // Timeout Error
@@ -1005,13 +985,118 @@ function parseExceptionDetails(details: CDPExceptionDetails): ExecutionError {
   };
 }
 
+async function executeInFrameMainWorld(
+  tabId: number,
+  frameId: number,
+  expression: string,
+  deadline: number,
+  execution: { dispatched: boolean },
+): Promise<CDPEvaluateResult> {
+  const frame = await chrome.webNavigation.getFrame({ tabId, frameId });
+  if (!frame?.documentId) throw new Error(`Frame ${frameId} has no active document`);
+  if (isRestrictedChromeUrl(frame.url)) throw new Error(restrictedUrlErrorMessage(frame.url));
+  const target = { tabId, documentIds: [frame.documentId] };
+  const marker = 'data-bp-evaluate-' + crypto.randomUUID();
+  const cleanup = () =>
+    withTimeout(
+      chrome.scripting.executeScript({
+        target,
+        func: (attr: string) => document.documentElement.removeAttribute(attr),
+        args: [marker],
+      }),
+      CLEANUP_TIMEOUT_MS,
+    ).catch(() => {});
+  let finished = false;
+  let remote: { sessionId?: string; objectId: string } | undefined;
+  try {
+    const stamp = chrome.scripting.executeScript({
+      target,
+      func: (attr: string) => document.documentElement.setAttribute(attr, '1'),
+      args: [marker],
+    });
+    void stamp
+      .then(() => {
+        if (finished) void cleanup();
+      })
+      .catch(() => {});
+    await withTimeout(stamp, Math.max(1, deadline - performance.now()));
+    const children = await cdpSessionManager.ensureFrameSessions(tabId);
+    for (const sid of [undefined, ...children.map((child) => child.sessionId)]) {
+      await cdpSessionManager.sendFrameCommand(tabId, sid, 'DOM.getDocument', {
+        depth: 0,
+        pierce: true,
+      });
+      const search = await cdpSessionManager.sendFrameCommand(tabId, sid, 'DOM.performSearch', {
+        query: `[${marker}="1"]`,
+      });
+      try {
+        if (!search.resultCount) continue;
+        if (search.resultCount !== 1 || remote)
+          throw new Error('Ambiguous frame document identity');
+        const found = await cdpSessionManager.sendFrameCommand(tabId, sid, 'DOM.getSearchResults', {
+          searchId: search.searchId,
+          fromIndex: 0,
+          toIndex: 1,
+        });
+        const resolved = await cdpSessionManager.sendFrameCommand(tabId, sid, 'DOM.resolveNode', {
+          nodeId: found.nodeIds?.[0],
+        });
+        if (!resolved.object?.objectId) throw new Error('Frame document is no longer attached');
+        remote = { sessionId: sid, objectId: resolved.object.objectId };
+      } finally {
+        await cdpSessionManager.sendFrameCommand(tabId, sid, 'DOM.discardSearchResults', {
+          searchId: search.searchId,
+        });
+      }
+    }
+    if (!remote) throw new Error(`Frame ${frameId} is not in this tab's confirmed sessions`);
+    const active = await chrome.webNavigation.getFrame({ tabId, frameId });
+    if (active?.documentId !== frame.documentId)
+      throw new Error('Frame navigated before JavaScript execution');
+    if (performance.now() >= deadline) throw new TimeoutError(0);
+    // ResolveNode's default realm belongs to this document, preserving page globals in MAIN.
+    execution.dispatched = true;
+    const response = await cdpSessionManager.sendFrameCommand<CDPEvaluateResult>(
+      tabId,
+      remote.sessionId,
+      'Runtime.callFunctionOn',
+      {
+        objectId: remote.objectId,
+        functionDeclaration: `function(){ return ${expression}; }`,
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      Math.max(1, deadline - performance.now()),
+    );
+    if (!response?.result && !response?.exceptionDetails)
+      throw new Error('Frame JavaScript outcome unknown: missing result; do not replay code');
+    return response;
+  } finally {
+    finished = true;
+    if (remote)
+      await cdpSessionManager
+        .sendFrameCommand(
+          tabId,
+          remote.sessionId,
+          'Runtime.releaseObject',
+          { objectId: remote.objectId },
+          CLEANUP_TIMEOUT_MS,
+        )
+        .catch(() => {});
+    await cleanup();
+  }
+}
+
 async function executeViaCdp(
   tabId: number,
   code: string,
   options: ExecutionOptions,
   contextId?: number,
   refAttr = '',
+  frameId?: number,
 ): Promise<ExecutionResult> {
+  const execution = { dispatched: false };
+  const deadline = performance.now() + options.timeoutMs;
   try {
     // Restricted pages (chrome://, web store, cloud metadata) are just as
     // reachable through Runtime.evaluate as through the scripting fallback,
@@ -1022,6 +1107,8 @@ async function executeViaCdp(
 
     const response = await withTimeout(
       cdpSessionManager.withSession(tabId, CDP_SESSION_KEY, async () => {
+        if (frameId !== undefined)
+          return executeInFrameMainWorld(tabId, frameId, expression, deadline, execution);
         const evalParams: Record<string, any> = {
           expression,
           returnByValue: true,
@@ -1033,6 +1120,7 @@ async function executeViaCdp(
         if (typeof contextId === 'number') {
           evalParams.contextId = contextId;
         }
+        execution.dispatched = true;
         return (await cdpSessionManager.sendCommand(
           tabId,
           'Runtime.evaluate',
@@ -1042,6 +1130,10 @@ async function executeViaCdp(
       // Outer timeout slightly longer to give CDP margin for timeout response
       options.timeoutMs + 1000,
     );
+
+    if (!response?.result && !response?.exceptionDetails) {
+      throw new Error('JavaScript outcome unknown: missing result; do not replay code');
+    }
 
     // Check for exception
     if (response?.exceptionDetails) {
@@ -1065,14 +1157,18 @@ async function executeViaCdp(
     };
   } catch (error) {
     if (isTimeoutError(error)) {
-      return {
+      const failure: ExecutionFailure = {
         ok: false,
         engine: 'cdp',
-        error: { kind: 'timeout', message: error.message },
+        error: {
+          kind: 'timeout',
+          message: error.message,
+        },
       };
+      return execution.dispatched ? markOutcomeUnknown(failure) : failure;
     }
 
-    if (isDebuggerConflictError(error)) {
+    if (!execution.dispatched && isDebuggerConflictError(error)) {
       const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
       return {
         ok: false,
@@ -1082,11 +1178,12 @@ async function executeViaCdp(
     }
 
     const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
-    return {
+    const failure: ExecutionFailure = {
       ok: false,
       engine: 'cdp',
       error: { kind: 'cdp_error', message },
     };
+    return execution.dispatched ? markOutcomeUnknown(failure) : failure;
   }
 }
 
@@ -1109,11 +1206,16 @@ async function executeViaScripting(
   code: string,
   options: ExecutionOptions,
   refAttr = '',
+  frameId?: number,
 ): Promise<ExecutionResult> {
+  const execution = { dispatched: false };
   const innerExecute = async (): Promise<ExecutionResult> => {
     await assertTabInjectable(tabId);
+    execution.dispatched = true;
+    const target: chrome.scripting.InjectionTarget =
+      typeof frameId === 'number' && frameId > 0 ? { tabId, frameIds: [frameId] } : { tabId };
     const results = await chrome.scripting.executeScript({
-      target: { tabId },
+      target,
       world: 'MAIN',
       func: async (
         userCode: string,
@@ -1192,11 +1294,11 @@ async function executeViaScripting(
     const result = (firstFrame as { result?: ScriptingExecutionResult })?.result;
 
     if (!result || typeof result !== 'object') {
-      return {
+      return markOutcomeUnknown({
         ok: false,
         engine: 'scripting',
         error: { kind: 'scripting_error', message: 'No result returned from executeScript' },
-      };
+      });
     }
 
     if (!result.ok) {
@@ -1234,19 +1336,21 @@ async function executeViaScripting(
     return await withTimeout(innerExecute(), options.timeoutMs);
   } catch (error) {
     if (isTimeoutError(error)) {
-      return {
+      const failure: ExecutionFailure = {
         ok: false,
         engine: 'scripting',
         error: { kind: 'timeout', message: error.message },
       };
+      return execution.dispatched ? markOutcomeUnknown(failure) : failure;
     }
 
     const message = sanitizeText(error instanceof Error ? error.message : String(error)).text;
-    return {
+    const failure: ExecutionFailure = {
       ok: false,
       engine: 'scripting',
       error: { kind: 'scripting_error', message },
     };
+    return execution.dispatched ? markOutcomeUnknown(failure) : failure;
   }
 }
 
@@ -1277,12 +1381,17 @@ async function bridgeSnapshotIndexes(
   tabId: number,
   code: string,
   deadline: number,
+  frameId?: number,
 ): Promise<{ refAttr: string; cleanup: () => Promise<void> }> {
   const noBridge = async () => {};
+  if (!/\bmcp\b/.test(code)) return { refAttr: '', cleanup: noBridge };
   const indexes = [...new Set((code.match(/\d+/g) ?? []).map((raw) => Number.parseInt(raw, 10)))]
-    .filter((n) => n >= 1)
+    .filter((n) => Number.isSafeInteger(n) && n > 0)
     .slice(0, REF_BRIDGE_MAX);
   if (indexes.length === 0) return { refAttr: '', cleanup: noBridge };
+
+  const target: chrome.scripting.InjectionTarget =
+    typeof frameId === 'number' && frameId > 0 ? { tabId, frameIds: [frameId] } : { tabId };
 
   const attr = 'data-browserpaw-ref-' + Math.random().toString(36).slice(2, 10);
   const cleanup = async () => {
@@ -1291,7 +1400,7 @@ async function bridgeSnapshotIndexes(
     try {
       await withTimeout(
         chrome.scripting.executeScript({
-          target: { tabId },
+          target,
           func: (a: string) => {
             // The stamping pass keeps the exact elements it marked (some may sit in
             // closed shadow roots a query could never reach); remove those. A page
@@ -1305,6 +1414,19 @@ async function bridgeSnapshotIndexes(
               stamps.delete(a);
             } else {
               for (const el of document.querySelectorAll('[' + a + ']')) el.removeAttribute(a);
+              try {
+                const walker = document.createTreeWalker(document, 1 /* NodeFilter.SHOW_ELEMENT */);
+                let curr = walker.nextNode();
+                while (curr) {
+                  const shadowRoot = (curr as Element).shadowRoot;
+                  if (shadowRoot) {
+                    for (const el of shadowRoot.querySelectorAll('[' + a + ']')) {
+                      el.removeAttribute(a);
+                    }
+                  }
+                  curr = walker.nextNode();
+                }
+              } catch {}
             }
           },
           args: [attr],
@@ -1317,19 +1439,17 @@ async function bridgeSnapshotIndexes(
   try {
     await withTimeout(
       chrome.scripting.executeScript({
-        target: { tabId },
+        target,
         func: (a: string, ids: number[]) => {
           // Isolated world: the snapshot maps are reachable here, not from the page.
           const g = globalThis as any;
-          const fast = g.__pawFast || g.__clawFast;
-          const isFast = g[Symbol.for('__browser_use_last_snapshot_type__')] === 'fast';
-          const fastMap = fast && fast.actionElements;
           const isoMap = g[Symbol.for('__browser_use_isolated_index_map__')];
           const deref = (e: any) => (e && typeof e.deref === 'function' ? e.deref() : e);
           const marked: Element[] = [];
           for (const id of ids) {
-            const el = (isFast ? deref(fastMap?.get(id)) : null) || deref(isoMap?.get(id));
-            if (el instanceof Element && el.isConnected) {
+            const raw = isoMap?.get(id);
+            const el = deref(raw);
+            if (el instanceof Element && el.isConnected && el.ownerDocument === document) {
               el.setAttribute(a, String(id));
               marked.push(el);
             }
@@ -1373,6 +1493,13 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
         return createErrorResponse('Parameter [code] is required');
       }
 
+      if (args.frameId !== undefined && (!Number.isSafeInteger(args.frameId) || args.frameId < 0)) {
+        return createErrorResponse('frameId must be a non-negative safe integer');
+      }
+      if (args.frameId !== undefined && args.contextId !== undefined) {
+        return createErrorResponse('Specify frameId or contextId, not both');
+      }
+
       // Resolve target tab
       const tab = await this.resolveTargetTab(args.tabId);
       if (!tab) {
@@ -1395,6 +1522,9 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
       // `timeoutMs` bounds the call even when the renderer blocks one of the steps.
       const deadline = performance.now() + options.timeoutMs;
 
+      const targetFrameId =
+        typeof args.frameId === 'number' && args.frameId > 0 ? args.frameId : undefined;
+
       const warnings: string[] = [];
 
       // The helper runs in the page world, so snapshot refs need a DOM bridge for
@@ -1403,6 +1533,7 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
         tabId,
         code,
         deadline,
+        targetFrameId,
       );
       const remainingOptions = (): ExecutionOptions => ({
         ...options,
@@ -1416,6 +1547,7 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
           remainingOptions(),
           args.contextId,
           refAttr,
+          targetFrameId,
         );
 
         if (cdpResult.ok) {
@@ -1432,7 +1564,13 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
           'Debugger is busy (DevTools or another extension attached). Falling back to chrome.scripting.executeScript (runs in MAIN world).',
         );
 
-        const scriptingResult = await executeViaScripting(tabId, code, remainingOptions(), refAttr);
+        const scriptingResult = await executeViaScripting(
+          tabId,
+          code,
+          remainingOptions(),
+          refAttr,
+          targetFrameId,
+        );
 
         if (scriptingResult.ok) {
           return this.buildSuccessResponse(tabId, scriptingResult, startTime, warnings);
@@ -1494,6 +1632,9 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
       success: false,
       tabId,
       engine: result.engine,
+      status: result.status,
+      outcome: result.outcome,
+      retry: result.retry,
       error: result.error,
       warnings: warnings?.length ? warnings : undefined,
       metrics: { elapsedMs: Math.round(performance.now() - startTime) },

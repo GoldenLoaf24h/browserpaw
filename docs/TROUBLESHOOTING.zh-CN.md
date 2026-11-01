@@ -18,16 +18,16 @@ BrowserPaw 由三个本地协同层级组成：
 
 ```bash
 # 通过 doctor 脚本或 CLI 运行只读健康检查
-node skill/config/doctor.mjs
+node skills/browserpaw/scripts/doctor.mjs
 # 或通过 CLI 入口：
 node bin/browserpaw.cjs doctor
 # （若已全局安装：npx browserpaw doctor）
 
 # 运行自动诊断与自愈（重建 Token、修复注册表、同步构建产物）
-node skill/config/doctor.mjs --fix
+node skills/browserpaw/scripts/doctor.mjs --fix
 ```
 
-Windows 用户还可以双击 [`skill/config/repair.bat`](../skill/config/repair.bat) 或执行 [`skill/config/repair.ps1`](../skill/config/repair.ps1)。
+Windows 用户还可以双击 [`skills/browserpaw/scripts/repair.bat`](../skills/browserpaw/scripts/repair.bat) 或执行 [`skills/browserpaw/scripts/repair.ps1`](../skills/browserpaw/scripts/repair.ps1)。
 
 ---
 
@@ -73,7 +73,7 @@ Agent 客户端报告：`fetch failed: ECONNREFUSED 127.0.0.1:12306` 或 `connec
 1. **未注册的原生消息传递宿主**：
    Chrome 无法在操作系统注册表中找到原生消息传递清单。运行：
    ```bash
-   node skill/config/doctor.mjs --fix
+   node skills/browserpaw/scripts/doctor.mjs --fix
    # 或手动注册：
    node app/native-server/dist/scripts/register.js
    ```
@@ -127,7 +127,7 @@ MCP 客户端请求失败，报 `HTTP 401 Unauthorized: Missing or invalid token
    }
    ```
 3. **自动生成缺失的 Token**：
-   如果文件不存在，运行 `node skill/config/doctor.mjs --fix` 生成新的加密 Token。
+   如果文件不存在，运行 `node skills/browserpaw/scripts/doctor.mjs --fix` 生成新的加密 Token。
 
 ---
 
@@ -242,7 +242,7 @@ CDP 工具执行返回：`Target closed / not attached / timeout-guard detached`
 
 ### 使用场景
 
-在受限配置档（`core` 14 个工具或 `crawl` 12 个工具）下运行时，Agent 可以在不重启服务器进程的情况下动态请求高级工具（例如 `manage`、`diagnose`、`network`）。
+在受限配置档（`core` 16 个工具或 `crawl` 12 个工具）下运行时，Agent 可以在不重启服务器进程的情况下动态请求高级工具（例如 `manage`、`diagnose`、`network`）。
 
 ### 方法
 
@@ -287,14 +287,14 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
           isolate_modal: false
   ```
 
-### 2. 工具可用性：50+ 标准工具 vs 16 个插件包装器
+### 2. 工具可用性：标准 MCP 工具面 vs Hermes 插件包装器
 
 - **症状**：
   Agent 在 Hermes 插件模式下请求高级工具（如 `chrome_click_coordinate`、`chrome_debugger` 或 `chrome_performance_start`），收到工具不存在的错误。
 - **根因**：
-  可选的 Hermes 插件提供 16 个精选高频自动化工具（`browserpaw_*`）。这 16 个之外的任何工具都**在 Hermes 插件中不可用；请使用标准 MCP**。
+  可选的 Hermes 插件只暴露其声明的精选 `browserpaw_*` 包装器。该声明之外的任何工具都**在 Hermes 插件中不可用；请使用标准 MCP**。
 - **解决**：
-  在 Hermes 中把 BrowserPaw 配置为标准 MCP 服务器（`mcp_servers.browserpaw`），使用默认 stdio。标准 stdio 默认使用 `core` 配置档，可通过 `chrome_tool_docs({ activateForSession: true })` 动态解锁；要在启动时就静态暴露完整 50 工具集，配置 `env: { CHROME_MCP_TOOL_PROFILE: "full" }`。
+  在 Hermes 中把 BrowserPaw 配置为标准 MCP 服务器（`mcp_servers.browserpaw`），使用默认 stdio。标准 stdio 默认使用 `core` 配置档，可通过 `chrome_tool_docs({ activateForSession: true })` 动态解锁；请用 `chrome_tool_docs` 获取当前工具列表。要在启动时就静态暴露完整工具集，配置 `env: { CHROME_MCP_TOOL_PROFILE: "full" }`。
 
 ### 3. 插件零 Token / 零凭据要求
 
@@ -317,7 +317,7 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
 | `CDP_DISPATCH_TIMEOUT`                                     | 后台标签页执行在系统重度节流下超时。                | 重试动作或短暂把标签页切到前台。                                           |
 | `Security check failed: Domain changed`                    | 截图捕获与坐标动作之间发生了导航。                  | 调用 `chrome_read_dom` 或 `chrome_take_screenshot` 重新对齐状态。          |
 | `Tool X is not exposed under the ... profile`              | 工具在当前配置档（`core`/`crawl`）下被隐藏。        | 调用 `chrome_tool_docs({ category: "<cat>", activateForSession: true })`。 |
-| `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                              | 查阅 `tools/list`（50 个规范工具可用）。                                   |
+| `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                              | 查阅 `tools/list` 或 `chrome_tool_docs` 获取当前工具面。                   |
 | `captureScreenshot returned empty data for background tab` | 后台标签页被关闭或被 Chrome 内存节省器丢弃。        | 重新打开或导航到目标 URL。                                                 |
 | `Failed to ... index [X] in cross-origin frame`            | 子 iframe 已卸载或被 sandbox 权限限制。             | 用 `chrome_read_dom({ filter: "interactive" })` 检查 frame 状态。          |
 | `Message sender rejected / unauthenticated content script` | 安全守卫拦截了未授权的消息发送方（`_sender.tab`）。 | 确保请求来自真实的原生桥接通道。                                           |
@@ -365,5 +365,5 @@ pnpm build
 | :------------------ | :----------------------------- | :------------------------------------------------------- |
 | **Chrome MV3 扩展** | `app/chrome-extension/`        | `app/chrome-extension/.output/chrome-mv3`                |
 | **原生桥接服务器**  | `app/native-server/`           | `127.0.0.1:12306`（Token：`~/.chrome-mcp/bridge-token`） |
-| **共享工具 Schema** | `packages/shared/src/tools.ts` | 50 个规范 MCP 工具定义                                   |
-| **诊断与修复**      | `skill/config/`                | `doctor.mjs`、`mcp-config.json`、`repair.bat`            |
+| **共享工具 Schema** | `packages/shared/src/tools.ts` | 规范 MCP 工具定义                                        |
+| **诊断与修复**      | `skills/browserpaw/scripts/`   | `doctor.mjs`、`repair.bat`、`repair.ps1`                 |

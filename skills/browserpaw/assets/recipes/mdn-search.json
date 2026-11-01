@@ -1,0 +1,174 @@
+{
+  "id": "mdn-search",
+  "name": "MDN documentation search",
+  "description": "Search MDN's public documentation API and return source-linked documentation results.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://developer.mozilla.org/en-US/search?q=fetch",
+      "https://developer.mozilla.org/api/v1/search?q=fetch&locale=en-US"
+    ]
+  },
+  "domains": ["developer.mozilla.org"],
+  "keywords": ["mdn", "documentation", "web api", "search"],
+  "startUrl": "https://developer.mozilla.org/en-US/search?q={{query}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 5
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "query": {
+        "type": "string",
+        "minLength": 1
+      },
+      "documents": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://developer\\.mozilla\\.org/[a-z]{2}(?:-[A-Z]{2})?/docs/"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": ["title", "url", "summary"],
+          "additionalProperties": false
+        }
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "type": "string",
+            "pattern": "^https://developer\\.mozilla\\.org/api/v1/search"
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://developer\\.mozilla\\.org/"
+          }
+        },
+        "required": ["api", "page"],
+        "additionalProperties": false
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": ["success", "status", "query", "documents", "sources", "total"],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst endpoint = new URL('/api/v1/search', location.origin);\nendpoint.searchParams.set('q', query);\nendpoint.searchParams.set('locale', 'en-US');\nconst response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\nif (!response.ok) return { success: false, status: 'http_error', query, httpStatus: response.status, source: response.url };\nconst data = await response.json();\nconst documents = (Array.isArray(data.documents) ? data.documents : [])\n  .filter(item => item && typeof item.mdn_url === 'string' && item.mdn_url.startsWith('/'))\n  .slice(0, limit)\n  .map(item => ({\n    title: String(item.title || '').replace(/<[^>]*>/g, ''),\n    url: new URL(item.mdn_url, location.origin).href,\n    summary: String(item.summary || '').replace(/<[^>]*>/g, '')\n  }));\nif (!documents.length) return { success: false, status: 'empty', query, source: endpoint.href };\nreturn {\n  success: true,\n  status: 'ok',\n  query,\n  documents,\n  sources: { api: response.url, page: location.href },\n  total: Number(data.metadata && data.metadata.total && data.metadata.total.value || documents.length)\n};"
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "body",
+      "activeViewportOnly": false,
+      "limit": 90,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "query": "fetch",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "query": {
+            "const": "fetch"
+          },
+          "documents": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": ["api", "page"]
+          }
+        },
+        "required": ["success", "query", "documents", "sources"]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "Fetch API"
+      }
+    },
+    {
+      "inputs": {
+        "query": "AbortController",
+        "limit": 2
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "query": {
+            "const": "AbortController"
+          },
+          "documents": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": ["api", "page"]
+          }
+        },
+        "required": ["success", "query", "documents", "sources"]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "AbortController"
+      }
+    }
+  ]
+}

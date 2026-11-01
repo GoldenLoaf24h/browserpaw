@@ -81,26 +81,24 @@ export class UndoLastActionTool extends BaseBrowserToolExecutor {
           );
         }
         const revertResult = await this.safeExecuteScript(tabId, {
-          target: { tabId },
+          target: lastAction.frameId ? { tabId, frameIds: [lastAction.frameId] } : { tabId },
           func: (targetIdx?: number, targetSelector?: string, restoreValue?: string) => {
             try {
               let el: Element | null = null;
               if (typeof targetIdx === 'number') {
-                const isolatedMap =
-                  (window as any)[Symbol.for('__browser_use_isolated_index_map__')] ||
-                  (window as any)[Symbol.for('BROWSERPAW_ISOLATED_INDEX_MAP')] ||
-                  (window as any)[Symbol.for('BROWSERCLAW_ISOLATED_INDEX_MAP')] ||
-                  (window as any).__MCP_INDEX_MAP__;
+                const isolatedMap = (globalThis as any)[
+                  Symbol.for('__browser_use_isolated_index_map__')
+                ];
                 const raw = isolatedMap?.get(targetIdx);
-                el = raw?.deref ? (raw.deref() ?? null) : raw || null;
-                if (el && (el as any).isConnected === false) el = null;
-                if (!el) {
-                  try {
-                    el = document.querySelector(`[data-mcp-idx="${targetIdx}"]`);
-                  } catch {}
+                const candidate = raw && typeof raw.deref === 'function' ? raw.deref() : raw;
+                if (
+                  candidate instanceof Element &&
+                  candidate.isConnected &&
+                  candidate.ownerDocument === document
+                ) {
+                  el = candidate;
                 }
-              }
-              if (!el && targetSelector) {
+              } else if (targetSelector) {
                 try {
                   el = document.querySelector(targetSelector);
                 } catch {}

@@ -55,7 +55,7 @@ describe('GrepTool (chrome_grep)', () => {
               interactiveCount: 1,
               indexedElements: [
                 {
-                  index: 1,
+                  index: 4201,
                   tagName: 'button',
                   role: 'button',
                   text: '',
@@ -63,13 +63,10 @@ describe('GrepTool (chrome_grep)', () => {
                   attributes: { 'aria-label': 'Submit payment' },
                 },
               ],
-              indexMap: { 1: { selector: '#pay', tagName: 'button' } },
+              indexMap: { 4201: { selector: '#pay', tagName: 'button' } },
             },
           },
         ] as any;
-      }
-      if (fnName === 'inPageReindexFrame') {
-        return [{ frameId: target.frameIds[0], result: true }] as any;
       }
       return [] as any;
     });
@@ -78,15 +75,9 @@ describe('GrepTool (chrome_grep)', () => {
     expect(res.isError).toBe(false);
     const parsed = JSON.parse(res.content[0].text);
     expect(parsed.totalMatches).toBe(1);
-    // Subframe element should be reindexed from 1 to 2
-    expect(parsed.matches[0].index).toBe(2);
+    // Subframe element index is preserved from the subframe namespace
+    expect(parsed.matches[0].index).toBe(4201);
     expect(parsed.matches[0].tagName).toBe('button');
-
-    // Verify inPageReindexFrame was called to synchronize subframe index map
-    const reindexCall = spy.mock.calls.find((c) => c[1] === 'inPageReindexFrame');
-    expect(reindexCall).toBeDefined();
-    expect(reindexCall?.[0]).toEqual({ tabId: 123, frameIds: [42] });
-    expect(reindexCall?.[2]).toEqual([1, false]);
 
     spy.mockRestore();
   });

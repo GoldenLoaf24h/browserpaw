@@ -1,11 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { keyboardTool } from '../entrypoints/background/tools/browser/keyboard';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
 
-describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () => {
+describe('MOTION-04: Keyboard helper messages and direct CDP routing', () => {
   let messageListener: any = null;
+  let sendMessageSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -34,6 +35,22 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
     return new Promise<any>((resolve) => {
       messageListener({ action: 'simulateKeyboard', keys }, {}, resolve);
     });
+  };
+
+  const captureKeyboardEvents = () => {
+    const events: KeyboardEvent[] = [];
+    const capture = (event: KeyboardEvent) => events.push(event);
+    document.addEventListener('keydown', capture, true);
+    document.addEventListener('keypress', capture, true);
+    document.addEventListener('keyup', capture, true);
+    return {
+      events,
+      stop: () => {
+        document.removeEventListener('keydown', capture, true);
+        document.removeEventListener('keypress', capture, true);
+        document.removeEventListener('keyup', capture, true);
+      },
+    };
   };
 
   describe('In-page keyboard-helper message handler verification', () => {
@@ -93,10 +110,46 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(resp.results).toHaveLength(1);
       expect(resp.results[0].keyCombination).toBe('Control');
     });
+
+    it('prevalidates the full sequence before dispatching any keyboard event', async () => {
+      const capture = captureKeyboardEvents();
+      try {
+        const resp = await sendHelperMessage('Enter,Bogus');
+        expect(resp).toMatchObject({
+          success: false,
+          status: 'blocked',
+          retry: true,
+          dispatched: false,
+        });
+        expect(capture.events).toHaveLength(0);
+      } finally {
+        capture.stop();
+      }
+    });
+
+    it('rejects unsupported shifted punctuation before dispatching', async () => {
+      const capture = captureKeyboardEvents();
+      try {
+        const resp = await sendHelperMessage('Shift+!');
+        expect(resp).toMatchObject({
+          success: false,
+          status: 'blocked',
+          retry: true,
+          dispatched: false,
+        });
+        expect(capture.events).toHaveLength(0);
+      } finally {
+        capture.stop();
+      }
+    });
   });
 
-  describe('KeyboardTool CDP fallback path verification', () => {
-    const setupCdpFallbackHarness = () => {
+  describe('KeyboardTool direct CDP path verification', () => {
+    afterEach(() => {
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+
+    const setupCdpDispatchHarness = () => {
       const dispatchedEvents: any[] = [];
       (globalThis as any).chrome = {
         tabs: {
@@ -107,10 +160,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
         },
       };
 
-      // Mock sendMessageToTab to simulate helper failure/fallback trigger
-      (keyboardTool as any).sendMessageToTab = vi.fn().mockResolvedValue({
-        error: 'simulateKeyboard failed',
-      });
+      sendMessageSpy = vi.fn().mockResolvedValue({ success: true });
+      (keyboardTool as any).sendMessageToTab = sendMessageSpy;
       (keyboardTool as any).resolveAffinityTab = vi.fn().mockResolvedValue({
         id: 99,
         url: 'https://example.com',
@@ -137,8 +188,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       return dispatchedEvents;
     };
 
-    it('executes CDP fallback dispatch for "Ctrl++" with modifier mask', async () => {
-      const dispatchedEvents = setupCdpFallbackHarness();
+    it('dispatches "Ctrl++" directly through CDP with modifier mask', async () => {
+      const dispatchedEvents = setupCdpDispatchHarness();
 
       const result = await keyboardTool.execute({
         tabId: 99,
@@ -155,8 +206,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(dispatchedEvents[1].modifiers).toBe(2);
     });
 
-    it('executes CDP fallback dispatch for "Ctrl+," with modifier mask', async () => {
-      const dispatchedEvents = setupCdpFallbackHarness();
+    it('dispatches "Ctrl+," directly through CDP with modifier mask', async () => {
+      const dispatchedEvents = setupCdpDispatchHarness();
 
       const result = await keyboardTool.execute({
         tabId: 99,
@@ -173,8 +224,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(dispatchedEvents[1].modifiers).toBe(2);
     });
 
-    it('executes CDP fallback dispatch for standalone "Control"', async () => {
-      const dispatchedEvents = setupCdpFallbackHarness();
+    it('dispatches standalone "Control" directly through CDP', async () => {
+      const dispatchedEvents = setupCdpDispatchHarness();
 
       const result = await keyboardTool.execute({
         tabId: 99,
@@ -187,15 +238,15 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(dispatchedEvents[0].windowsVirtualKeyCode).toBe(17);
     });
 
-    it('executes CDP fallback dispatch for standalone "+" and "," without modifiers', async () => {
-      const plusEvents = setupCdpFallbackHarness();
+    it('dispatches standalone "+" and "," directly through CDP without modifiers', async () => {
+      const plusEvents = setupCdpDispatchHarness();
       const plusRes = await keyboardTool.execute({ tabId: 99, keys: '+' });
       expect(plusRes.isError).toBe(false);
       expect(plusEvents).toHaveLength(2);
       expect(plusEvents[0].key).toBe('+');
       expect(plusEvents[0].windowsVirtualKeyCode).toBe(187);
 
-      const commaEvents = setupCdpFallbackHarness();
+      const commaEvents = setupCdpDispatchHarness();
       const commaRes = await keyboardTool.execute({ tabId: 99, keys: ',' });
       expect(commaRes.isError).toBe(false);
       expect(commaEvents).toHaveLength(2);
@@ -203,8 +254,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(commaEvents[0].windowsVirtualKeyCode).toBe(188);
     });
 
-    it('preserves CDP fallback dispatch for two-word key "Page Down"', async () => {
-      const dispatchedEvents = setupCdpFallbackHarness();
+    it('dispatches two-word key "Page Down" directly through CDP', async () => {
+      const dispatchedEvents = setupCdpDispatchHarness();
 
       const result = await keyboardTool.execute({
         tabId: 99,
@@ -218,8 +269,8 @@ describe('MOTION-04: Keyboard helper message handler & CDP fallback tests', () =
       expect(dispatchedEvents[0].windowsVirtualKeyCode).toBe(34);
     });
 
-    it('preserves CDP fallback dispatch for space-separated sequence "ArrowDown ArrowDown Enter"', async () => {
-      const dispatchedEvents = setupCdpFallbackHarness();
+    it('dispatches "ArrowDown ArrowDown Enter" directly through CDP', async () => {
+      const dispatchedEvents = setupCdpDispatchHarness();
 
       const result = await keyboardTool.execute({
         tabId: 99,

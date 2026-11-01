@@ -17,6 +17,7 @@ import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-inde
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
 import * as nativeHost from '../entrypoints/background/native-host';
+import * as frameCoordinates from '../utils/frame-coordinates';
 
 describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & Physical Fill', () => {
   beforeEach(() => {
@@ -35,7 +36,9 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
     it('preserves hyphens in English terms and words without premature truncation', () => {
       // Must NOT truncate at hyphens within words
       expect(cleanPageTitle('COVID-19 Dashboard')).toBe('COVID-19 Dashboard');
-      expect(cleanPageTitle('Top 10 E-Commerce Platforms - Forbes')).toBe('Top 10 E-Commerce Platforms');
+      expect(cleanPageTitle('Top 10 E-Commerce Platforms - Forbes')).toBe(
+        'Top 10 E-Commerce Platforms',
+      );
       expect(cleanPageTitle('Wi-Fi 6 vs Wi-Fi 6E | TechRadar')).toBe('Wi-Fi 6 vs Wi-Fi 6E');
       expect(cleanPageTitle('Pre-orders now live - GameSpot')).toBe('Pre-orders now live');
     });
@@ -76,24 +79,30 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
     it('derives smart group titles dynamically with fallback hierarchy', () => {
       // Step 1: Meaningful title
       expect(
-        deriveSmartGroupTitle({ title: 'React 19 Release Notes - React Blog', url: 'https://react.dev' }),
+        deriveSmartGroupTitle({
+          title: 'React 19 Release Notes - React Blog',
+          url: 'https://react.dev',
+        }),
       ).toBe('React 19 Release Notes');
 
       // Step 2: URL hostname brand when title is raw URL or blank
       expect(
-        deriveSmartGroupTitle({ title: 'https://github.com/microsoft/typescript', url: 'https://github.com/microsoft/typescript' }),
+        deriveSmartGroupTitle({
+          title: 'https://github.com/microsoft/typescript',
+          url: 'https://github.com/microsoft/typescript',
+        }),
       ).toBe('Github');
 
       // Step 3: Default title when no informative title or domain
-      expect(
-        deriveSmartGroupTitle({ title: 'about:blank', url: 'about:blank' }),
-      ).toBe(TabGroupManager.DEFAULT_TITLE);
+      expect(deriveSmartGroupTitle({ title: 'about:blank', url: 'about:blank' })).toBe(
+        TabGroupManager.DEFAULT_TITLE,
+      );
     });
 
     it('rehydrates managed groups from chrome.storage.session in MV3 service worker', async () => {
       const mockStorageData = {
-        'tab_group_manager_managed_groups': [42, 99],
-        'tab_group_manager_explicit_titles': [
+        tab_group_manager_managed_groups: [42, 99],
+        tab_group_manager_explicit_titles: [
           [42, 'Taobao Search'],
           [99, 'Github PRs'],
         ],
@@ -107,7 +116,11 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
           },
         },
         tabGroups: {
-          get: vi.fn().mockImplementation(async (gid: number) => ({ id: gid, title: gid === 42 ? 'Taobao Search' : 'Github PRs', windowId: 1 })),
+          get: vi.fn().mockImplementation(async (gid: number) => ({
+            id: gid,
+            title: gid === 42 ? 'Taobao Search' : 'Github PRs',
+            windowId: 1,
+          })),
         },
       };
 
@@ -181,9 +194,7 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
     });
 
     it('does not falsely match unrelated candidates in Tier 1 literal matcher', async () => {
-      const candidates = [
-        { id: 'electricity', text: 'Electricity Billing Details' },
-      ];
+      const candidates = [{ id: 'electricity', text: 'Electricity Billing Details' }];
 
       // Query "city" should NOT match Electricity Billing Details
       const res = await matchSemantically('field', 'city', candidates);
@@ -196,8 +207,12 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
   // =========================================================================
   describe('3. Physical Fill & Auto-Submit Subframe Target Passing', () => {
     it('passes targetFrameId to subframe execution in performPhysicalFill', async () => {
-      const executeInPageSpy = vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
-        async (target: any, fnName: string, args: any[]) => {
+      const projection = vi
+        .spyOn(frameCoordinates, 'projectFramePoint')
+        .mockResolvedValue({ x: 220, y: 170 });
+      const executeInPageSpy = vi
+        .spyOn(inPageEngine, 'executeInPage')
+        .mockImplementation(async (target: any, fnName: string, args: any[]) => {
           if (fnName === 'inPageGetElementCoordinates') {
             if (target.allFrames) {
               return [
@@ -209,20 +224,19 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
                     y: 150,
                     tagName: 'input',
                     inputType: 'text',
-                    frameOffsetX: 20,
-                    frameOffsetY: 20,
                   },
                 },
               ];
             }
             return [{ frameId: 0, result: { success: false } }];
           }
-          if (fnName === 'inPageDeepResetElement' || fnName === 'inPageVerifyInputCommitment') {
-            return [{ frameId: target.frameIds?.[0] || 0, result: { success: true, committed: true } }];
+          if (fnName === 'inPageVerifyInputCommitment') {
+            return [
+              { frameId: target.frameIds?.[0] || 0, result: { success: true, committed: true } },
+            ];
           }
           return [{ frameId: 0, result: { success: true } }];
-        },
-      );
+        });
 
       (globalThis as any).chrome = {
         scripting: {
@@ -233,7 +247,9 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
         },
       };
 
-      vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _tag, fn) => fn());
+      vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _tag, fn) =>
+        fn(),
+      );
       vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({});
 
       const res = await fillCore.performPhysicalFill({
@@ -245,8 +261,9 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
 
       expect(res.success).toBe(true);
       expect(res.committed).toBe(true);
+      expect(projection).toHaveBeenCalledWith(50, 105, { x: 200, y: 150 });
 
-      // Verify that inPageDeepResetElement or inPageVerifyInputCommitment received frameIds: [105]
+      // Verify that inPageVerifyInputCommitment received frameIds: [105]
       const subframeCalls = executeInPageSpy.mock.calls.filter(
         (c) => c[0].frameIds && c[0].frameIds.includes(105),
       );

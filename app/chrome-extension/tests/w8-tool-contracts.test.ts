@@ -332,7 +332,13 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
       vi.spyOn(inspectMediaTool as any, 'resolveAffinityTab').mockResolvedValue({ id: 10 });
       vi.spyOn(inspectMediaTool as any, 'tryGetTab').mockResolvedValue({ id: 10 });
       vi.spyOn(inspectMediaTool as any, 'safeExecuteScript').mockResolvedValue([
-        { result: { found: false } },
+        {
+          result: {
+            found: true,
+            method: 'requires-crop',
+            rect: { x: 0, y: 0, width: 100, height: 50 },
+          },
+        },
       ]);
 
       const executeSpy = vi.spyOn(screenshotTool, 'execute').mockResolvedValue({

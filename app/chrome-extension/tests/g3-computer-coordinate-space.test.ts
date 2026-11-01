@@ -3,20 +3,53 @@ import { computerTool } from '../entrypoints/background/tools/browser/computer';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import { screenshotContextManager } from '../utils/screenshot-context';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
+import * as frameCoordinates from '../utils/frame-coordinates';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
+import {
+  clearScreenshotValidity,
+  createScreenshotCapture,
+  inPageReadScreenshotState,
+} from '../utils/screenshot-validity';
 
 describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
   const testTabId = 9988;
   let dispatchedEvents: Array<{ method: string; params: any }> = [];
   let currentScrollX = 0;
   let currentScrollY = 0;
+  let probeWidth = 1000;
+  let probeHeight = 800;
+  let probeDpr = 1;
+  let currentCaptureId: string | undefined;
+
+  function runComputer(args: any) {
+    return computerTool.execute({
+      ...args,
+      ...(args.coordinateSpace === 'screenshot' && !args.captureId && currentCaptureId
+        ? { captureId: currentCaptureId }
+        : {}),
+    } as any);
+  }
+
+  function runInteract(args: any) {
+    return interactIndexTool.execute({
+      ...args,
+      ...(args.coordinateSpace === 'screenshot' && !args.captureId && currentCaptureId
+        ? { captureId: currentCaptureId }
+        : {}),
+    } as any);
+  }
 
   beforeEach(() => {
     screenshotContextManager.clear(testTabId);
+    clearScreenshotValidity(testTabId);
     vi.restoreAllMocks();
     dispatchedEvents = [];
     currentScrollX = 0;
     currentScrollY = 0;
+    probeWidth = 1000;
+    probeHeight = 800;
+    probeDpr = 1;
+    currentCaptureId = undefined;
 
     (globalThis as any).chrome = {
       tabs: {
@@ -30,7 +63,57 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
           { id: testTabId, windowId: 1, url: 'https://example.com/page', active: true },
         ]),
       },
+      scripting: {
+        executeScript: vi.fn(async ({ func }: any) => {
+          if (typeof func !== 'function') return [{ result: undefined }];
+          const actual = func();
+          return [
+            {
+              result: {
+                ...actual,
+                documentId: 'doc-g3',
+                documentURL: 'https://example.com/page',
+                width: probeWidth,
+                height: probeHeight,
+                dpr: probeDpr,
+                scrollX: currentScrollX,
+                scrollY: currentScrollY,
+                domRevision: 7,
+              },
+            },
+          ];
+        }),
+      },
     };
+
+    const setContext = screenshotContextManager.setContext.bind(screenshotContextManager);
+    vi.spyOn(screenshotContextManager, 'setContext').mockImplementation((tabId, context) => {
+      setContext(tabId, context);
+      if (tabId !== testTabId) return;
+      const actual = inPageReadScreenshotState();
+      probeWidth = context.viewportWidth;
+      probeHeight = context.viewportHeight;
+      probeDpr = context.devicePixelRatio ?? 1;
+      const state = {
+        ...actual,
+        documentId: context.documentId ?? 'doc-g3',
+        documentURL: context.url ?? 'https://example.com/page',
+        width: context.viewportWidth,
+        height: context.viewportHeight,
+        dpr: probeDpr,
+        scrollX: context.scrollX ?? currentScrollX,
+        scrollY: context.scrollY ?? currentScrollY,
+        domRevision: 7,
+      };
+      const stored = screenshotContextManager.getContext(tabId)!;
+      currentCaptureId = createScreenshotCapture({
+        tabId,
+        state,
+        contextTimestamp: stored.timestamp,
+        domRevision: state.domRevision,
+        coordinateValidationSupported: true,
+      }).captureId;
+    });
 
     vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
       async (_tabId: number, method: string, params: any) => {
@@ -79,8 +162,70 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     );
   });
 
+  it('never resizes the shared browser window when the page viewport operation fails', async () => {
+    const updateWindow = vi.fn(async () => ({}));
+    (chrome as any).windows = { update: updateWindow };
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(new Error('CDP unavailable'));
+
+    const result = await runComputer({
+      action: 'resize_page',
+      tabId: testTabId,
+      width: 1440,
+      height: 900,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(updateWindow).not.toHaveBeenCalled();
+    expect(cdpSessionManager.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a viewport dispatch timeout as unknown without a window fallback', async () => {
+    const updateWindow = vi.fn(async () => ({}));
+    (chrome as any).windows = { update: updateWindow };
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      new Error('CDP_SEND_TIMEOUT: Emulation.setDeviceMetricsOverride no ack within 20000ms'),
+    );
+
+    const result = await runComputer({
+      action: 'resize_page',
+      tabId: testTabId,
+      width: 1440,
+      height: 900,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text as string)).toMatchObject({
+      status: 'unknown',
+      retry: false,
+    });
+    expect(updateWindow).not.toHaveBeenCalled();
+  });
+
+  it('reports the integer viewport actually requested and rejects dimensions that round to zero', async () => {
+    const resized = await runComputer({
+      action: 'resize_page',
+      tabId: testTabId,
+      width: 1440.2,
+      height: 900.8,
+    });
+    expect(JSON.parse(resized.content[0].text as string)).toMatchObject({
+      width: 1440,
+      height: 901,
+    });
+    vi.mocked(cdpSessionManager.sendCommand).mockClear();
+
+    const invalid = await runComputer({
+      action: 'resize_page',
+      tabId: testTabId,
+      width: 0.1,
+      height: 900,
+    });
+    expect(invalid.isError).toBe(true);
+    expect(cdpSessionManager.sendCommand).not.toHaveBeenCalled();
+  });
+
   it('fails closed when coordinateSpace is screenshot but screenshot context is missing or expired', async () => {
-    const result = await computerTool.execute({
+    const result = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
       coordinates: { x: 250, y: 875 },
@@ -88,13 +233,13 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     } as any);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/screenshot context.*(expired|not found|missing)/i);
+    expect(result.content[0].text).toMatch(/captureId|fresh screenshot/i);
   });
 
-  it('accurately projects fullpage screenshot coordinates to document space and brings into viewport via scrolling', async () => {
+  it('accurately projects fullpage screenshot coordinates to document space within the viewport', async () => {
     // SC07 scenario: fullPage capture at 500x1250, document dimensions 1000x2500
-    // Point (250, 875) in screenshot space -> (500, 1750) in document space.
-    // Viewport is 1000x800. Initial scroll is at (0, 0).
+    // Point (250, 200) in screenshot space -> (500, 400) in document space.
+    // Viewport is 1000x800, so no post-capture scroll is needed.
     screenshotContextManager.setContext(testTabId, {
       screenshotWidth: 500,
       screenshotHeight: 1250,
@@ -106,16 +251,15 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       hostname: 'example.com',
     });
 
-    const result = await computerTool.execute({
+    const result = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
-      coordinates: { x: 250, y: 875 },
+      coordinates: { x: 250, y: 200 },
       tabId: testTabId,
     } as any);
 
     expect(result.isError).toBe(false);
-    // Target docY = 1750. Centering in 800vh -> scrollY = 1750 - 400 = 1350.
-    // Dispatched click Y = 1750 - 1350 = 400. Dispatched X = 500.
+    // Target docY = 400 with zero capture-time scroll. Dispatched X = 500, Y = 400.
     const mousePress = dispatchedEvents.find(
       (e) => e.method === 'Input.dispatchMouseEvent' && e.params?.type === 'mousePressed',
     );
@@ -137,7 +281,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       hostname: 'example.com',
     });
 
-    const result = await computerTool.execute({
+    const result = await runComputer({
       action: 'left_click',
       coordinates: { x: 300, y: 200 },
       tabId: testTabId,
@@ -164,21 +308,21 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     });
 
     // Array point [x, y] in screenshot space
-    const pointResult = await computerTool.execute({
+    const pointResult = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
-      coordinates: [250, 875],
+      coordinates: [250, 200],
       tabId: testTabId,
     } as any);
     expect(pointResult.isError).toBe(false);
 
     // Bounding box [ymin, xmin, ymax, xmax] in screenshot space
-    // Center: ((870+880)/2, (240+260)/2) = (875, 250) -> x=250, y=875
+    // Center: ((190+210)/2, (240+260)/2) = (200, 250) -> x=250, y=200
     dispatchedEvents = [];
-    const boxResult = await computerTool.execute({
+    const boxResult = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
-      coordinates: [870, 240, 880, 260],
+      coordinates: [190, 240, 210, 260],
       tabId: testTabId,
     } as any);
     expect(boxResult.isError).toBe(false);
@@ -205,7 +349,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     });
 
     // Center of crop image (200, 150) -> viewport position should be 200 + 200 = 400, 150 + 150 = 300
-    const result = await computerTool.execute({
+    const result = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
       coordinates: { x: 200, y: 150 },
@@ -233,17 +377,17 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     });
 
     // Valid drag within viewport distance
-    const dragRes = await computerTool.execute({
+    const dragRes = await runComputer({
       action: 'left_click_drag',
       coordinateSpace: 'screenshot',
-      startCoordinates: { x: 250, y: 800 }, // doc (500, 1600)
-      coordinates: { x: 250, y: 900 }, // doc (500, 1800) -> dy = 200, fits in 800 vh
+      startCoordinates: { x: 250, y: 200 }, // doc (500, 400)
+      coordinates: { x: 250, y: 300 }, // doc (500, 600) -> dy = 200, fits in 800 vh
       tabId: testTabId,
     } as any);
     expect(dragRes.isError).toBe(false);
 
     // Excessive drag exceeding viewport bounds -> fail closed
-    const excessiveDragRes = await computerTool.execute({
+    const excessiveDragRes = await runComputer({
       action: 'left_click_drag',
       coordinateSpace: 'screenshot',
       startCoordinates: { x: 250, y: 100 }, // doc (500, 200)
@@ -264,7 +408,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       hostname: 'malicious.com',
     });
 
-    const result = await computerTool.execute({
+    const result = await runComputer({
       action: 'left_click',
       coordinateSpace: 'screenshot',
       coordinates: { x: 250, y: 300 },
@@ -306,7 +450,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
 
     it('fails closed when coordinateSpace is screenshot but screenshot context is missing or expired', async () => {
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: { x: 500, y: 400 },
@@ -315,7 +459,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toMatch(/screenshot context expired or not found/i);
+      expect(result.content[0].text).toMatch(/captureId|fresh screenshot/i);
       expect(dispatchedEvents.some((e) => e.params?.type === 'mousePressed')).toBe(false);
     });
 
@@ -330,7 +474,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: { x: 1136, y: 400 },
@@ -359,7 +503,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
 
       // Point array [1136, 400]
       dispatchedEvents = [];
-      const arrayResult = await interactIndexTool.execute({
+      const arrayResult = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: [1136, 400],
@@ -375,7 +519,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
 
       // Bounding box [ymin, xmin, ymax, xmax] -> center (1136, 400)
       dispatchedEvents = [];
-      const bboxResult = await interactIndexTool.execute({
+      const bboxResult = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: [390, 1130, 410, 1142],
@@ -401,7 +545,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: { x: 0.5, y: 0.5 },
@@ -429,7 +573,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'click',
         // default coordinateSpace (viewport)
         coordinate: { x: 0.5, y: 0.5 },
@@ -491,7 +635,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
           docHeight: 2500,
           hostname: 'example.com',
         });
-        const result = await interactIndexTool.execute({
+        const result = await runInteract({
           action: 'click',
           coordinate,
           coordinateSpace,
@@ -519,7 +663,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'viewport',
         coordinate: { x: 100, y: 100 },
@@ -542,7 +686,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       expect(release?.params.y).toBe(400);
     });
 
-    it('S05-drag-6: compensates for scroll shift when viewport screenshot space drag runs after page scrolled', async () => {
+    it('S05-drag-6: fails closed when the page scrolled after a viewport screenshot capture', async () => {
       currentScrollX = 0;
       currentScrollY = 300;
       screenshotContextManager.setContext(testTabId, {
@@ -557,7 +701,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'screenshot',
         coordinate: { x: 200, y: 200 },
@@ -567,22 +711,12 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
         steps: 2,
       });
 
-      expect(result.isError).toBe(false);
-      const press = dispatchedEvents.find(
-        (e) => e.method === 'Input.dispatchMouseEvent' && e.params?.type === 'mousePressed',
-      );
-      const release = dispatchedEvents.find(
-        (e) => e.method === 'Input.dispatchMouseEvent' && e.params?.type === 'mouseReleased',
-      );
-      expect(press).toBeDefined();
-      expect(release).toBeDefined();
-      expect(press!.params.y + currentScrollY).toBe(300);
-      expect(release!.params.y + currentScrollY).toBe(500);
-      expect(press?.params.y).toBe(0);
-      expect(release?.params.y).toBe(200);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/scroll changed/i);
+      expect(dispatchedEvents.some((e) => e.params?.type === 'mousePressed')).toBe(false);
     });
 
-    it('S05-drag-7: resolves end.index in current viewport scroll without applying capture-time scroll', async () => {
+    it('S05-drag-7: revalidates scroll after resolving end.index and fails before dispatch', async () => {
       currentScrollX = 0;
       currentScrollY = 400;
       screenshotContextManager.setContext(testTabId, {
@@ -592,7 +726,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
         viewportHeight: 900,
         captureMode: 'viewport',
         scrollX: 0,
-        scrollY: 100,
+        scrollY: 400,
         hostname: 'example.com',
       });
 
@@ -608,7 +742,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       );
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'screenshot',
         coordinate: { x: 200, y: 350 },
@@ -618,20 +752,15 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
         steps: 2,
       });
 
-      expect(result.isError).toBe(false);
-      const press = dispatchedEvents.find(
-        (e) => e.method === 'Input.dispatchMouseEvent' && e.params?.type === 'mousePressed',
-      );
-      const release = dispatchedEvents.find(
-        (e) => e.method === 'Input.dispatchMouseEvent' && e.params?.type === 'mouseReleased',
-      );
-      expect(press).toBeDefined();
-      expect(release).toBeDefined();
-      expect(press!.params.y + currentScrollY).toBe(450);
-      expect(release!.params.y + currentScrollY).toBe(750);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/scroll changed/i);
+      expect(dispatchedEvents.some((e) => e.params?.type === 'mousePressed')).toBe(false);
     });
 
     it('S05-drag-8: compensates subframe offset for indexed drag start before joint scroll alignment without double offset', async () => {
+      vi.spyOn(frameCoordinates, 'projectFramePoint').mockImplementation(
+        async (_tab, _frame, point) => ({ x: point.x + 100, y: point.y + 200 }),
+      );
       currentScrollX = 0;
       currentScrollY = 0;
 
@@ -658,7 +787,10 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
               { result: { success: true, scrollX: currentScrollX, scrollY: currentScrollY } },
             ] as any;
           }
-          if (method === 'inPageGetElementCoordinates' && args?.[0] === 12) {
+          if (
+            (method === 'inPageGetElementCoordinates' || method === 'inPageWaitForActionable') &&
+            args?.[0] === 12
+          ) {
             if (target.allFrames) {
               return [
                 { frameId: 101, result: { success: true, x: 30, y: 40, tagName: 'div' } },
@@ -679,7 +811,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       };
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         index: 12,
         end: { coordinate: { x: 300, y: 350 } },
@@ -743,7 +875,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
         );
 
         dispatchedEvents = [];
-        const result = await interactIndexTool.execute({
+        const result = await runInteract({
           action: 'drag',
           coordinateSpace: 'screenshot',
           coordinate: { x: 250, y: 800 },
@@ -773,7 +905,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'viewport',
         coordinate: { x: 100, y: 100 },
@@ -796,7 +928,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       expect(release?.params.y).toBe(400);
     });
 
-    it('S05-drag-3: aligns screenshot-space fullpage drag with unified scroll before mousePressed', async () => {
+    it('S05-drag-3: projects an in-viewport fullpage screenshot drag before mousePressed', async () => {
       currentScrollY = 0;
       screenshotContextManager.setContext(testTabId, {
         screenshotWidth: 500,
@@ -810,11 +942,11 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'screenshot',
-        coordinate: { x: 250, y: 800 },
-        end: { coordinate: { x: 250, y: 900 } },
+        coordinate: { x: 250, y: 200 },
+        end: { coordinate: { x: 250, y: 300 } },
         tabId: testTabId,
         autoSnap: false,
         steps: 2,
@@ -830,13 +962,13 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       expect(press).toBeDefined();
       expect(release).toBeDefined();
       expect(press?.params.x).toBe(500);
-      expect(press?.params.y).toBe(350);
+      expect(press?.params.y).toBe(400);
       expect(release?.params.x).toBe(500);
-      expect(release?.params.y).toBe(550);
+      expect(release?.params.y).toBe(600);
       expect(press!.params.x + currentScrollX).toBe(500);
-      expect(press!.params.y + currentScrollY).toBe(1600);
+      expect(press!.params.y + currentScrollY).toBe(400);
       expect(release!.params.x + currentScrollX).toBe(500);
-      expect(release!.params.y + currentScrollY).toBe(1800);
+      expect(release!.params.y + currentScrollY).toBe(600);
     });
 
     it('S05-drag-4: fails closed when drag span cannot fit simultaneously within viewport', async () => {
@@ -852,7 +984,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'screenshot',
         coordinate: { x: 250, y: 100 },
@@ -877,7 +1009,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'drag',
         coordinateSpace: 'screenshot',
         path: [
@@ -913,7 +1045,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
       });
 
       dispatchedEvents = [];
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         action: 'click',
         coordinateSpace: 'screenshot',
         coordinate: { x: 500, y: 400 },
@@ -935,7 +1067,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
             return [{ result: { snapped: true, x: 115, y: 115 } }] as any;
           return execute(target, method, args);
         });
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         tabId: testTabId,
         action: 'drag',
         coordinate: { x: 100, y: 100 },
@@ -978,7 +1110,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
           return {} as any;
         },
       );
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         tabId: testTabId,
         action: 'drag',
         coordinate: { x: 200, y: 200 },
@@ -1007,7 +1139,7 @@ describe('G3 Computer Coordinate Space & FullPage Alignment', () => {
     });
 
     it('rejects click-sequence points combined with action drag before dispatching input', async () => {
-      const result = await interactIndexTool.execute({
+      const result = await runInteract({
         tabId: testTabId,
         action: 'drag',
         points: [

@@ -59,7 +59,10 @@ export function parseUnifiedCoordinate(
       const parsed = JSON.parse(trimmed);
       return parseUnifiedCoordinate(parsed, options);
     } catch {
-      const parts = trimmed.split(/[\s,]+/).map((s) => parseFloat(s)).filter((n) => !isNaN(n));
+      const parts = trimmed
+        .split(/[\s,]+/)
+        .map((s) => parseFloat(s))
+        .filter((n) => !isNaN(n));
       if (parts.length === 2 || parts.length === 4) {
         return parseUnifiedCoordinate(parts as any, options);
       }
@@ -67,14 +70,29 @@ export function parseUnifiedCoordinate(
     }
   }
 
-  const vw = (typeof options?.viewportWidth === 'number' && options.viewportWidth > 0) ? options.viewportWidth : 1280;
-  const vh = (typeof options?.viewportHeight === 'number' && options.viewportHeight > 0) ? options.viewportHeight : 800;
+  const vw =
+    typeof options?.viewportWidth === 'number' && options.viewportWidth > 0
+      ? options.viewportWidth
+      : 1280;
+  const vh =
+    typeof options?.viewportHeight === 'number' && options.viewportHeight > 0
+      ? options.viewportHeight
+      : 800;
   const ox = options?.originX || 0;
   const oy = options?.originY || 0;
-  const isCropped = Boolean(options?.originX || options?.originY || options?.cropWidth || options?.cropHeight);
-  const targetW = options?.cropWidth ?? (isCropped ? (options?.cropWidth ?? options?.screenshotWidth ?? vw) : vw);
-  const targetH = options?.cropHeight ?? (isCropped ? (options?.cropHeight ?? options?.screenshotHeight ?? vh) : vh);
+  const isCropped = Boolean(
+    options?.originX || options?.originY || options?.cropWidth || options?.cropHeight,
+  );
+  const targetW =
+    options?.cropWidth ?? (isCropped ? (options?.cropWidth ?? options?.screenshotWidth ?? vw) : vw);
+  const targetH =
+    options?.cropHeight ??
+    (isCropped ? (options?.cropHeight ?? options?.screenshotHeight ?? vh) : vh);
   const pointFormat = options?.pointFormat || 'auto';
+  const roundedPoint = (x: number, y: number): ParsedCoordinate | null => {
+    const point = { x: Math.round(x + ox), y: Math.round(y + oy) };
+    return Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null;
+  };
 
   // Handle nested wrapper objects
   if (typeof raw === 'object' && !Array.isArray(raw)) {
@@ -128,13 +146,23 @@ export function parseUnifiedCoordinate(
               ? Number(raw.top)
               : undefined;
 
-    if (typeof rawX === 'number' && !isNaN(rawX) && typeof rawY === 'number' && !isNaN(rawY)) {
+    if (
+      typeof rawX === 'number' &&
+      Number.isFinite(rawX) &&
+      typeof rawY === 'number' &&
+      Number.isFinite(rawY)
+    ) {
       let finalX = rawX;
       let finalY = rawY;
 
       if (
         options?.scale === 'fraction' ||
-        (options?.scale !== 'pixel' && options?.scale !== '1000' && rawX <= 1.0 && rawY <= 1.0 && (rawX > 0 || rawY > 0) && targetW > 1)
+        (options?.scale !== 'pixel' &&
+          options?.scale !== '1000' &&
+          rawX <= 1.0 &&
+          rawY <= 1.0 &&
+          (rawX > 0 || rawY > 0) &&
+          targetW > 1)
       ) {
         finalX = rawX * targetW;
         finalY = rawY * targetH;
@@ -149,18 +177,23 @@ export function parseUnifiedCoordinate(
         finalX = (rawX / 1000) * targetW;
         finalY = (rawY / 1000) * targetH;
       } else {
-        if (options?.screenshotWidth && options.screenshotWidth > 0 && options.screenshotWidth !== targetW) {
+        if (
+          options?.screenshotWidth &&
+          options.screenshotWidth > 0 &&
+          options.screenshotWidth !== targetW
+        ) {
           finalX = (rawX / options.screenshotWidth) * targetW;
         }
-        if (options?.screenshotHeight && options.screenshotHeight > 0 && options.screenshotHeight !== targetH) {
+        if (
+          options?.screenshotHeight &&
+          options.screenshotHeight > 0 &&
+          options.screenshotHeight !== targetH
+        ) {
           finalY = (rawY / options.screenshotHeight) * targetH;
         }
       }
 
-      return {
-        x: Math.round(finalX + ox),
-        y: Math.round(finalY + oy),
-      };
+      return roundedPoint(finalX, finalY);
     }
 
     return null;
@@ -169,7 +202,7 @@ export function parseUnifiedCoordinate(
   // Handle 4-number Bounding Box [ymin, xmin, ymax, xmax] or [xmin, ymin, xmax, ymax]
   if (Array.isArray(raw) && raw.length === 4) {
     const [a, b, c, d] = raw.map((n) => Number(n));
-    if (isNaN(a) || isNaN(b) || isNaN(c) || isNaN(d)) return null;
+    if (![a, b, c, d].every(Number.isFinite)) return null;
 
     // Detect orientation: Row-first [ymin, xmin, ymax, xmax] vs Cartesian [xmin, ymin, xmax, ymax]
     let isYminFirst = true;
@@ -178,9 +211,9 @@ export function parseUnifiedCoordinate(
     } else if (pointFormat === 'gemini' || pointFormat === 'yx') {
       isYminFirst = true;
     } else {
-      if ((a > vh || c > vh) && (a <= vw && c <= vw)) {
+      if ((a > vh || c > vh) && a <= vw && c <= vw) {
         isYminFirst = false; // [xmin, ymin, xmax, ymax]
-      } else if ((b > vh || d > vh) && (b <= vw && d <= vw)) {
+      } else if ((b > vh || d > vh) && b <= vw && d <= vw) {
         isYminFirst = true; // [ymin, xmin, ymax, xmax]
       }
     }
@@ -197,41 +230,50 @@ export function parseUnifiedCoordinate(
     let finalX = cx;
     let finalY = cy;
 
-    if (options?.scale === 'fraction' || (options?.scale !== 'pixel' && options?.scale !== '1000' && maxVal <= 1.0 && maxVal > 0)) {
+    if (
+      options?.scale === 'fraction' ||
+      (options?.scale !== 'pixel' && options?.scale !== '1000' && maxVal <= 1.0 && maxVal > 0)
+    ) {
       // 0~1.0 normalized
       finalX = cx * targetW;
       finalY = cy * targetH;
     } else if (
       options?.scale === '1000' ||
-      (options?.scale !== 'pixel' && (pointFormat === 'gemini' || (maxVal <= 1000 && (ymax > targetH || xmax > targetW))))
+      (options?.scale !== 'pixel' &&
+        (pointFormat === 'gemini' || (maxVal <= 1000 && (ymax > targetH || xmax > targetW))))
     ) {
       // 0~1000 per-mille
       finalX = (cx / 1000) * targetW;
       finalY = (cy / 1000) * targetH;
     } else {
       // Absolute pixels
-      if (options?.screenshotWidth && options.screenshotWidth > 0 && options.screenshotWidth !== targetW) {
+      if (
+        options?.screenshotWidth &&
+        options.screenshotWidth > 0 &&
+        options.screenshotWidth !== targetW
+      ) {
         finalX = (cx / options.screenshotWidth) * targetW;
       } else {
         finalX = cx;
       }
-      if (options?.screenshotHeight && options.screenshotHeight > 0 && options.screenshotHeight !== targetH) {
+      if (
+        options?.screenshotHeight &&
+        options.screenshotHeight > 0 &&
+        options.screenshotHeight !== targetH
+      ) {
         finalY = (cy / options.screenshotHeight) * targetH;
       } else {
         finalY = cy;
       }
     }
 
-    return {
-      x: Math.round(finalX + ox),
-      y: Math.round(finalY + oy),
-    };
+    return roundedPoint(finalX, finalY);
   }
 
   // Handle 2-number Point [x, y] or [y, x]
   if (Array.isArray(raw) && raw.length === 2) {
     const [a, b] = raw.map((n) => Number(n));
-    if (isNaN(a) || isNaN(b)) return null;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
 
     let rawX = a;
     let rawY = b;
@@ -271,7 +313,14 @@ export function parseUnifiedCoordinate(
     let finalX = rawX;
     let finalY = rawY;
 
-    if (options?.scale === 'fraction' || (options?.scale !== 'pixel' && options?.scale !== '1000' && rawX <= 1.0 && rawY <= 1.0 && (rawX > 0 || rawY > 0))) {
+    if (
+      options?.scale === 'fraction' ||
+      (options?.scale !== 'pixel' &&
+        options?.scale !== '1000' &&
+        rawX <= 1.0 &&
+        rawY <= 1.0 &&
+        (rawX > 0 || rawY > 0))
+    ) {
       finalX = rawX * targetW;
       finalY = rawY * targetH;
     } else if (
@@ -285,18 +334,23 @@ export function parseUnifiedCoordinate(
       finalX = (rawX / 1000) * targetW;
       finalY = (rawY / 1000) * targetH;
     } else {
-      if (options?.screenshotWidth && options.screenshotWidth > 0 && options.screenshotWidth !== targetW) {
+      if (
+        options?.screenshotWidth &&
+        options.screenshotWidth > 0 &&
+        options.screenshotWidth !== targetW
+      ) {
         finalX = (rawX / options.screenshotWidth) * targetW;
       }
-      if (options?.screenshotHeight && options.screenshotHeight > 0 && options.screenshotHeight !== targetH) {
+      if (
+        options?.screenshotHeight &&
+        options.screenshotHeight > 0 &&
+        options.screenshotHeight !== targetH
+      ) {
         finalY = (rawY / options.screenshotHeight) * targetH;
       }
     }
 
-    return {
-      x: Math.round(finalX + ox),
-      y: Math.round(finalY + oy),
-    };
+    return roundedPoint(finalX, finalY);
   }
 
   return null;

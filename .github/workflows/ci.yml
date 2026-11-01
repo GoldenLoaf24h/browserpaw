@@ -41,6 +41,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check generated skill mirrors
+        run: node scripts/sync-skills.mjs --check
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:

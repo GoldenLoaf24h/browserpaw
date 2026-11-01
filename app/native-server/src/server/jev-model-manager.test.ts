@@ -188,6 +188,40 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
     expect(ensureSpy).toHaveBeenCalled();
   });
 
+  test('production idle callback unloads without corrupting Native stdout', async () => {
+    const environment = ['NODE_ENV', 'JEST_WORKER_ID', 'VITEST'] as const;
+    const previousEnv = environment.map((key) => process.env[key]);
+    const previousActivity = (jevModelManager as any).lastActivityTime;
+    jest.useFakeTimers();
+    const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const unload = jest
+      .spyOn(jevModelManager, 'unloadLocalModel')
+      .mockResolvedValue({ success: true, message: 'test unload' });
+    global.fetch = jest.fn<typeof fetch>().mockResolvedValue({ ok: true } as Response);
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.JEST_WORKER_ID;
+      delete process.env.VITEST;
+      jevModelManager.touchActivity();
+      await jest.advanceTimersByTimeAsync(JevModelManager.IDLE_TIMEOUT_MS - 1);
+      expect(unload).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(unload).toHaveBeenCalledTimes(1);
+      expect(stdout).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('idle for 10 minutes'));
+    } finally {
+      clearTimeout((jevModelManager as any).idleTimer);
+      (jevModelManager as any).idleTimer = null;
+      (jevModelManager as any).lastActivityTime = previousActivity;
+      environment.forEach((key, index) => {
+        if (previousEnv[index] === undefined) delete process.env[key];
+        else process.env[key] = previousEnv[index];
+      });
+      jest.useRealTimers();
+    }
+  });
+
   test('12. unloadLocalModel sends unload signal and cleans state safely', async () => {
     global.fetch = jest.fn().mockImplementation((url: any) => {
       if (String(url).includes('/unload')) {
@@ -406,5 +440,186 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
       else delete process.env.NODE_ENV;
       rmSync(tmpRoot, { recursive: true, force: true });
     }
+  });
+
+  describe('P0 Mode Management & UI Sync Contracts (§19-§25)', () => {
+    test('19. getModeState returns authoritative activeMode, revision, disabledReason, changedAt', () => {
+      const state = (jevModelManager as any).getModeState();
+      expect(state).toHaveProperty('activeMode');
+      expect(state).toHaveProperty('revision');
+      expect(state).toHaveProperty('disabledReason');
+      expect(state).toHaveProperty('changedAt');
+      expect(typeof state.revision).toBe('number');
+      expect(typeof state.changedAt).toBe('number');
+      expect(state.activeMode).toBe(jevModelManager.getActiveMode());
+    });
+
+    test('20. captureModeToken returns token with revision matching current state without leaking sensitive info', () => {
+      const token = (jevModelManager as any).captureModeToken();
+      expect(token).toBeDefined();
+      expect(typeof token.revision).toBe('number');
+      expect(token.revision).toBe((jevModelManager as any).getModeState().revision);
+      // Leaking keys is strictly prohibited
+      expect(JSON.stringify(token)).not.toContain('apiKey');
+      expect(JSON.stringify(token)).not.toContain('TYPESAFE');
+    });
+
+    test('21. disableIfCurrent disables matching revision, increments revision, and sets disabledReason', () => {
+      // Ensure remote mode with dummy key is set up
+      jevModelManager.setRemoteConfig({ apiKey: 'sk-test-valid-key-for-test' });
+      jevModelManager.setActiveMode('remote');
+
+      const token = (jevModelManager as any).captureModeToken();
+      const prevRevision = token.revision;
+
+      const disabled = (jevModelManager as any).disableIfCurrent(token, 'invalid_key');
+      expect(disabled).toBe(true);
+
+      const newState = (jevModelManager as any).getModeState();
+      expect(newState.activeMode).toBe('off');
+      expect(newState.disabledReason).toBe('invalid_key');
+      expect(newState.revision).toBeGreaterThan(prevRevision);
+    });
+
+    test('22. disableIfCurrent ignores stale token and preserves newer configuration state', () => {
+      // Capture token at old configuration
+      jevModelManager.setRemoteConfig({ apiKey: 'sk-old-key' });
+      jevModelManager.setActiveMode('remote');
+      const staleToken = (jevModelManager as any).captureModeToken();
+
+      // User updates config or mode (incrementing revision)
+      jevModelManager.setRemoteConfig({ apiKey: 'sk-new-valid-key' });
+      const currentRevision = (jevModelManager as any).getModeState().revision;
+      expect(currentRevision).toBeGreaterThan(staleToken.revision);
+
+      // Delayed failure from old request must NOT disable the new configuration
+      const disabled = (jevModelManager as any).disableIfCurrent(staleToken, 'stale_network_error');
+      expect(disabled).toBe(false);
+
+      const currentState = (jevModelManager as any).getModeState();
+      expect(currentState.activeMode).toBe('remote');
+      expect(currentState.revision).toBe(currentRevision);
+    });
+
+    test('23. onModeStateChanged notifies subscribers on mode transition and supports unsubscribe', () => {
+      const notifications: any[] = [];
+      const unsubscribe = (jevModelManager as any).onModeStateChanged((state: any) => {
+        notifications.push(state);
+      });
+
+      jevModelManager.setActiveMode('off', 'user_turned_off');
+      expect(notifications.length).toBeGreaterThan(0);
+      const lastNotif = notifications[notifications.length - 1];
+      expect(lastNotif.activeMode).toBe('off');
+      expect(lastNotif.disabledReason).toBe('user_turned_off');
+
+      const countBeforeUnsub = notifications.length;
+      unsubscribe();
+
+      jevModelManager.setActiveMode('off', 'another_event');
+      expect(notifications.length).toBe(countBeforeUnsub);
+    });
+
+    test('24. setActiveMode automatically falls back to off when required configuration is missing', () => {
+      // Remove any API keys
+      const origEnv = process.env.TYPESAFE_API_KEY;
+      const origJevEnv = process.env.JEV_API_KEY;
+      delete process.env.TYPESAFE_API_KEY;
+      delete process.env.JEV_API_KEY;
+      jevModelManager.setRemoteConfig({ apiKey: '' });
+
+      try {
+        // Setting remote without key must auto-fallback to off with remote_key_missing
+        jevModelManager.setActiveMode('remote', undefined, { validate: true });
+        const remoteState = (jevModelManager as any).getModeState();
+        expect(remoteState.activeMode).toBe('off');
+        expect(remoteState.disabledReason).toBe('remote_key_missing');
+
+        // Local without weights must auto-fallback to off with local_model_missing
+        const isDownloadedSpy = jest
+          .spyOn(jevModelManager, 'isModelDownloaded')
+          .mockReturnValue(false);
+        jevModelManager.setActiveMode('local', undefined, { validate: true });
+        const localState = (jevModelManager as any).getModeState();
+        expect(localState.activeMode).toBe('off');
+        expect(localState.disabledReason).toBe('local_model_missing');
+        isDownloadedSpy.mockRestore();
+      } finally {
+        if (origEnv !== undefined) process.env.TYPESAFE_API_KEY = origEnv;
+        if (origJevEnv !== undefined) process.env.JEV_API_KEY = origJevEnv;
+      }
+    });
+
+    test('25. changing configuration identity increments revision', () => {
+      const revBefore = (jevModelManager as any).getModeState().revision;
+      jevModelManager.setRemoteConfig({ baseUrl: 'https://new-custom-endpoint.example.com' });
+      const revAfterBaseUrl = (jevModelManager as any).getModeState().revision;
+      expect(revAfterBaseUrl).toBeGreaterThan(revBefore);
+
+      jevModelManager.setActiveModel('decider-custom-weights');
+      const revAfterModel = (jevModelManager as any).getModeState().revision;
+      expect(revAfterModel).toBeGreaterThan(revAfterBaseUrl);
+    });
+
+    test('26. touchActivity and onToolInvocation strictly early-return on off mode and never wake model', () => {
+      jevModelManager.setActiveMode('off', 'user_turned_off');
+      const fetchSpy = jest.fn<typeof fetch>().mockResolvedValue({ ok: true } as Response);
+      global.fetch = fetchSpy;
+      const isOnlineSpy = jest.spyOn(jevModelManager, 'isLocalServiceOnline');
+      const ensureSpy = jest.spyOn(jevModelManager, 'ensureLocalServiceRunning');
+
+      jevModelManager.touchActivity();
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      jevModelManager.onToolInvocation();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(isOnlineSpy).not.toHaveBeenCalled();
+      expect(ensureSpy).not.toHaveBeenCalled();
+
+      isOnlineSpy.mockRestore();
+      ensureSpy.mockRestore();
+    });
+
+    test('27. persisted off mode is strictly preserved over JEV_ACTIVE_MODE environment variable', async () => {
+      const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const originalHome = process.env.BROWSERPAW_HOME;
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalJevMode = process.env.JEV_ACTIVE_MODE;
+      const tmpRoot = mkdtempSync(join(tmpdir(), 'jev-persisted-off-'));
+      const bpHome = join(tmpRoot, 'bp-home');
+      const configFile = join(bpHome, 'jev-remote.json');
+
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(bpHome, { recursive: true });
+      writeFileSync(
+        configFile,
+        JSON.stringify({ activeMode: 'off', revision: 5, disabledReason: 'user_turned_off' }),
+        'utf8',
+      );
+
+      process.env.BROWSERPAW_HOME = bpHome;
+      process.env.NODE_ENV = 'production';
+      process.env.JEV_ACTIVE_MODE = 'local';
+
+      try {
+        let isolatedMod: any;
+        jest.isolateModules(() => {
+          isolatedMod = require('./jev-model-manager');
+        });
+        expect(isolatedMod.jevModelManager.getActiveMode()).toBe('off');
+        expect(isolatedMod.jevModelManager.getModeState().disabledReason).toBe('user_turned_off');
+      } finally {
+        if (originalHome !== undefined) process.env.BROWSERPAW_HOME = originalHome;
+        else delete process.env.BROWSERPAW_HOME;
+        if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+        else delete process.env.NODE_ENV;
+        if (originalJevMode !== undefined) process.env.JEV_ACTIVE_MODE = originalJevMode;
+        else delete process.env.JEV_ACTIVE_MODE;
+        rmSync(tmpRoot, { recursive: true, force: true });
+      }
+    });
   });
 });

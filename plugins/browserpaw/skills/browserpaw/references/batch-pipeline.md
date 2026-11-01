@@ -1,14 +1,12 @@
-> **Tool Availability Notice**: Standard BrowserPaw MCP exposes the full 50 toolset (under full profile; stdio defaults to core). The optional Hermes plugin exposes 16 curated wrapper tools (`browserpaw_*`). Other tools are not available in the Hermes plugin; use standard MCP.
+# Pipelined Automation Reference (`chrome_batch_actions` & `chrome_form_pipeline`)
 
-# Pipelined Automation Reference (`browserpaw_batch_actions` & `browserpaw_form_pipeline`)
-
-This reference documents BrowserPaw's pipelined execution engines for multi-step workflows, atomic assertions, and zero-RTT form filling.
+This reference documents BrowserPaw's pipelined execution engines for multi-step workflows and mid-pipeline assertions. One tool call reduces round trips; it does not eliminate model or browser execution time.
 
 ---
 
-## 1. `browserpaw_batch_actions`
+## 1. `chrome_batch_actions`
 
-Executes sequential browser interactions atomically inside a single MCP turn, eliminating multi-turn network latency.
+Executes sequential browser interactions inside one MCP call. It stops on failed or unknown outcomes instead of replaying a mutation.
 
 ### Action Types Reference
 
@@ -26,7 +24,7 @@ Executes sequential browser interactions atomically inside a single MCP turn, el
 | `assert`       | `selector` or `index` + `condition`   | `expectedText`, `timeoutMs`, `abortOnFailure`     | Validates DOM state mid-pipeline                      |
 | `extract`      | `selector` or `index` + `property`    | `variableName`, `attributeName`                   | Extracts data directly to response payload            |
 
-> **Note**: `fill_form` and `scroll` are batch sub-actions only. There are no top-level `browserpaw_fill_form`, `browserpaw_scroll`, or `browserpaw_scroll_to_text` tools — use `browserpaw_form_pipeline`, `browserpaw_smart_scroll`, or `browserpaw_grep` instead.
+> **Note**: `fill_form` and `scroll` are batch sub-actions only. There are no top-level `chrome_fill_form`, `chrome_scroll`, or `chrome_scroll_to_text` tools — use `chrome_form_pipeline`, `chrome_smart_scroll`, or `chrome_grep` instead.
 
 ### Complete Example Pipeline
 
@@ -90,7 +88,7 @@ Returns matching request headers, response headers, HTTP status, and parsed JSON
 
 ---
 
-## 2. `browserpaw_form_pipeline`
+## 2. `chrome_form_pipeline`
 
 Dedicated autonomous form filler for multi-step onboarding, surveys, checkout forms, and user profile updates.
 

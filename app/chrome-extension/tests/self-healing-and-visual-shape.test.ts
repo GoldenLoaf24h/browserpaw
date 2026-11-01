@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   findIndexedElement,
   getIsolatedIndexMap,
-  getIndexFingerprintMap,
   renderCompactElementLine,
   inPageDOMPruner,
   inPageFillIndex,
@@ -12,7 +11,6 @@ import {
 describe('DOM Self-Healing & Visual Shape Decoding', () => {
   beforeEach(() => {
     getIsolatedIndexMap().clear();
-    getIndexFingerprintMap().clear();
     document.body.innerHTML = '';
   });
 
@@ -63,12 +61,24 @@ describe('DOM Self-Healing & Visual Shape Decoding', () => {
       newBtn.innerText = 'Submit (Updated)';
       document.body.appendChild(newBtn);
 
-      // 3. Old element in isolatedMap is disconnected (oldBtn.isConnected === false)
-      // findIndexedElement must detect disconnection and self-heal to newBtn!
-      const healed = findIndexedElement(targetIndex);
-      expect(healed).not.toBeNull();
-      expect(healed).toBe(newBtn);
-      expect(healed?.innerText).toBe('Submit (Updated)');
+      // 3. Old element in isolatedMap is disconnected: stale index is invalidated
+      const stale = findIndexedElement(targetIndex);
+      expect(stale).toBeNull();
+
+      // 4. Must re-observe DOM to acquire new index for the updated node
+      inPageDOMPruner();
+      let newTargetIndex = 0;
+      for (const [idx, ref] of isolatedMap.entries()) {
+        const el = ref?.deref ? ref.deref() : ref;
+        if (el?.id === 'submit-btn') {
+          newTargetIndex = idx;
+          break;
+        }
+      }
+      expect(newTargetIndex).toBeGreaterThan(0);
+      const updated = findIndexedElement(newTargetIndex);
+      expect(updated).toBe(newBtn);
+      expect(updated?.innerText).toBe('Submit (Updated)');
     } finally {
       Element.prototype.getBoundingClientRect = prevRect;
     }
@@ -154,8 +164,23 @@ describe('DOM Self-Healing & Visual Shape Decoding', () => {
       newIconBtn.setAttribute('aria-label', 'Close Dialog');
       document.body.appendChild(newIconBtn);
 
-      const healed = findIndexedElement(targetIndex);
-      expect(healed).toBe(newIconBtn);
+      // 3. Stale index is invalidated
+      const stale = findIndexedElement(targetIndex);
+      expect(stale).toBeNull();
+
+      // 4. Must re-observe DOM to acquire new index
+      inPageDOMPruner();
+      let newTargetIndex = 0;
+      for (const [idx, ref] of isolatedMap.entries()) {
+        const el = ref?.deref ? ref.deref() : ref;
+        if (el?.getAttribute('aria-label') === 'Close Dialog') {
+          newTargetIndex = idx;
+          break;
+        }
+      }
+      expect(newTargetIndex).toBeGreaterThan(0);
+      const updated = findIndexedElement(newTargetIndex);
+      expect(updated).toBe(newIconBtn);
     } finally {
       Element.prototype.getBoundingClientRect = prevRect;
     }

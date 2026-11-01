@@ -76,24 +76,32 @@ export function inPageWaitForDOMSettle(
 
     // 1. Check for Combobox autocomplete candidate options (browser.py:46-65 pattern)
     let field: Element | null = null;
-    if (action?.node !== undefined) {
-      const g = globalThis as any;
-      const isolatedMap = g[Symbol.for('__browser_use_isolated_index_map__')];
-      const targetId =
-        typeof action.node === 'string' && action.node.startsWith('e')
-          ? parseInt(action.node.slice(1), 10)
-          : action.node;
-      const pawFast = g.__pawFast || g.__clawFast;
-      field =
-        pawFast?.actionElements?.get(action.node) ||
-        pawFast?.actionElements?.get(targetId) ||
-        pawFast?.nodes?.get(action.node) ||
-        pawFast?.nodes?.get(targetId) ||
-        isolatedMap?.get(targetId) ||
-        isolatedMap?.get(action.node) ||
-        (document.querySelector(`[data-mcp-idx="${action.node}"]`) as Element) ||
-        (document.querySelector(`[data-mcp-idx="${targetId}"]`) as Element) ||
-        null;
+    if (action?.node !== undefined && action?.node !== null) {
+      let numericIndex: number | null = null;
+      if (typeof action.node === 'number') {
+        if (Number.isSafeInteger(action.node) && action.node > 0) {
+          numericIndex = action.node;
+        }
+      } else if (typeof action.node === 'string') {
+        const trimmed = action.node.trim();
+        const match = trimmed.match(/^(?:e|ref_)?(\d+)$/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (Number.isSafeInteger(num) && num > 0) {
+            numericIndex = num;
+          }
+        }
+      }
+
+      if (numericIndex !== null) {
+        const g = globalThis as any;
+        const isolatedMap = g[Symbol.for('__browser_use_isolated_index_map__')];
+        const entry = isolatedMap?.get(numericIndex);
+        const el = entry && typeof entry.deref === 'function' ? entry.deref() : entry;
+        if (el && el instanceof Element && el.isConnected && el.ownerDocument === document) {
+          field = el;
+        }
+      }
     }
 
     const isCombobox =

@@ -54,6 +54,54 @@ class DoctorTool extends BaseBrowserToolExecutor {
         serverStatus = 'offline';
       }
 
+      let jev: Record<string, unknown> = { confirmed: false };
+      if (args?.verbose && serverStatus === 'connected') {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1200);
+        try {
+          const response = await fetch(`http://127.0.0.1:${serverPort}/jev/mode-state`, {
+            signal: controller.signal,
+          });
+          const state = response.ok ? await response.json() : undefined;
+          if (
+            state &&
+            ['off', 'local', 'remote'].includes(state.activeMode) &&
+            Number.isInteger(state.revision) &&
+            state.revision >= 0
+          ) {
+            const mirror = (await chrome.storage.local.get('jevModeState'))?.jevModeState;
+            jev = {
+              confirmed: true,
+              activeMode: state.activeMode,
+              requestedMode: ['off', 'local', 'remote'].includes(state.requestedMode)
+                ? state.requestedMode
+                : state.activeMode,
+              retryAfter: typeof state.retryAfter === 'number' ? state.retryAfter : null,
+              backend:
+                state.activeMode === 'remote'
+                  ? 'TypeSafe Jev'
+                  : state.activeMode === 'local'
+                    ? 'Local decider'
+                    : 'off',
+              revision: state.revision,
+              disabledReason:
+                typeof state.disabledReason === 'string' ? state.disabledReason : null,
+              changedAt: state.changedAt,
+              mirrorMatches:
+                mirror?.revision === state.revision &&
+                mirror?.activeMode === state.activeMode &&
+                (mirror?.requestedMode ?? mirror?.activeMode) ===
+                  (state.requestedMode ?? state.activeMode) &&
+                (mirror?.retryAfter ?? null) === (state.retryAfter ?? null),
+            };
+          }
+        } catch {
+          // Cached extension settings cannot confirm the Native mode.
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
       // Query active tabs and windows
       const tabs = await chrome.tabs.query({});
       const allWindows = await chrome.windows.getAll().catch(() => []);
@@ -109,6 +157,7 @@ class DoctorTool extends BaseBrowserToolExecutor {
                       extensionId: chrome.runtime.id,
                       manifestVersion: chrome.runtime.getManifest().version,
                       buildId,
+                      jev,
                     }
                   : {}),
               },

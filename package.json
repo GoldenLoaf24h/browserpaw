@@ -1,6 +1,6 @@
 {
   "name": "browserpaw",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
   "private": true,
   "author": "hangye",
@@ -69,7 +69,6 @@
   },
   "license": "AGPL-3.0-or-later",
   "bin": {
-    "browserpaw": "./bin/browserpaw.cjs",
-    "browserclaw": "./bin/browserpaw.cjs"
+    "browserpaw": "./bin/browserpaw.cjs"
   }
 }

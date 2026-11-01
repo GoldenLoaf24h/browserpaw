@@ -1,10 +1,11 @@
 /**
- * Semantic Field & Choice Matcher for Form Pipeline
+ * Semantic Field & Choice Matcher for Form Pipeline & Unified Locator Plan B
  *
- * Provides hybrid semantic matching with three cascading tiers:
- * 1. TypeSafe Jev System One Choice inference (via Native Host bridge)
- * 2. Deterministic Semantic Heuristic Engine (synonyms dictionary, token overlap, CJK bigrams)
- * 3. Literal string / substring fallback
+ * Implements strict non-heuristic semantic matching contract for locator:
+ * 1. Exact / whole-token literal matching with anti-ambiguity (never picks first on duplicates)
+ * 2. Native Jev System One matching (status: matched | none | ambiguous | unavailable | cancelled)
+ * 3. Strict candidate hard cap (<= 32)
+ * 4. Zero upload of user values or sensitive inputs
  */
 
 import { sendJevMatchToNative } from '../entrypoints/background/native-host';
@@ -16,29 +17,104 @@ export interface MatchCandidate {
 }
 
 export interface MatchResult {
+  cacheHit?: boolean;
   matchedId: string | number;
   confidence: number;
   engine: 'jev' | 'heuristic' | 'literal';
+  backend?: 'off' | 'local' | 'remote';
+  model?: string;
+  latencyMs?: number;
+  usage?: { inputTokens: number | null; outputTokens: number | null };
+  attempts?: number;
 }
 
+export interface JevSemanticCandidate {
+  id: string | number;
+  text: string;
+}
+
+export interface JevSemanticMatchPayload {
+  taskId?: string;
+  pageIdentity?: string;
+  context?: string;
+  candidates: JevSemanticCandidate[];
+  query: string;
+  operation?: string;
+  type?: string;
+  deadlineAt?: number;
+}
+
+export type SemanticMatchStatus = 'matched' | 'none' | 'ambiguous' | 'unavailable' | 'cancelled';
+
+export interface JevSemanticMatchResponse {
+  cacheHit?: boolean;
+  success: boolean;
+  status: SemanticMatchStatus;
+  matchedId?: string | number;
+  confidence?: number;
+  probabilities?: Record<string, number>;
+  model?: string;
+  engine?: string;
+  error?: string;
+  backend?: 'off' | 'local' | 'remote';
+  latencyMs?: number;
+  usage?: { inputTokens: number | null; outputTokens: number | null };
+  attempts?: number;
+}
+
+export const MAX_SEMANTIC_CANDIDATES = 32;
+
 const FIELD_SYNONYMS: Record<string, string[]> = {
-  phone: ['phone', 'mobile', 'tel', 'telephone', 'cell', '手机', '手机号', '电话', '联系方式', '联系电话'],
+  phone: [
+    'phone',
+    'mobile',
+    'tel',
+    'telephone',
+    'cell',
+    '手机',
+    '手机号',
+    '电话',
+    '联系方式',
+    '联系电话',
+  ],
   email: ['email', 'e-mail', 'mail', '邮箱', '电子邮箱', '邮件'],
-  name: ['name', 'username', 'user', 'realname', 'fullname', '姓名', '用户名', '名称', '姓名/称呼', '昵称'],
+  name: [
+    'name',
+    'username',
+    'user',
+    'realname',
+    'fullname',
+    '姓名',
+    '用户名',
+    '名字',
+    '姓名/称呼',
+    '昵称',
+  ],
   firstname: ['firstname', 'first-name', 'givenname', '名'],
   lastname: ['lastname', 'last-name', 'surname', 'familyname', '姓'],
   gender: ['gender', 'sex', '性别'],
-  company: ['company', 'organization', 'org', 'enterprise', 'employer', '公司', '企业', '单位', '组织', '机构'],
+  company: [
+    'company',
+    'organization',
+    'org',
+    'enterprise',
+    'employer',
+    '公司',
+    '企业',
+    '单位',
+    '组织',
+    '机构',
+  ],
   address: ['address', 'addr', 'location', 'street', '地址', '住址', '所在地', '街道'],
   city: ['city', '城市', '市'],
   country: ['country', 'nation', 'region', '国家', '地区'],
   password: ['password', 'passwd', 'pwd', '密码'],
   age: ['age', '年龄'],
-  title: ['title', 'job', 'position', 'role', '职位', '头衔', '职务', '岗位'],
+  title: ['title', 'job', 'position', 'role', '职位', '头衔', '职称', '岗位'],
   search: ['search', 'query', 'find', '搜索', '查询', '查找'],
   female: ['female', 'woman', 'girl', 'ms', 'mrs', 'lady', '女', '女士', '女性'],
   male: ['male', 'man', 'boy', 'mr', 'gentleman', '男', '男士', '男性'],
-  yes: ['yes', 'true', 'ok', 'agree', 'accept', '是', '确认', '同意', '接受', '正确'],
+  yes: ['yes', 'true', 'ok', 'agree', 'accept', '是', '确认', '同意', '好的', '正确'],
   no: ['no', 'false', 'cancel', 'reject', 'deny', '否', '取消', '拒绝', '不同意', '错误'],
   submit: ['submit', 'send', 'done', 'finish', 'complete', '提交', '发送', '完成', '确认提交'],
   next: ['next', 'continue', 'proceed', 'forward', '下一步', '继续'],
@@ -72,9 +148,6 @@ export function tokenizeText(text: string): string[] {
   return tokens.length > 0 ? tokens : rawWords;
 }
 
-/**
- * Identifies the semantic synonym category for a given term
- */
 function findSynonymCategory(term: string): string | null {
   const norm = term.toLowerCase().trim();
   const tokens = tokenizeText(norm);
@@ -92,7 +165,7 @@ function findSynonymCategory(term: string): string | null {
 }
 
 /**
- * Deterministic heuristic scoring between a query and a candidate
+ * Score candidate text overlap for local evaluation
  */
 export function scoreCandidate(query: string, candidateText: string): number {
   if (!query || !candidateText) return 0;
@@ -102,7 +175,7 @@ export function scoreCandidate(query: string, candidateText: string): number {
   // 1. Exact match
   if (normQuery === normCand) return 1.0;
 
-  // 2. Exact token / whole-word match (avoids raw substring bleed like "no" in "number", "city" in "electricity", "male" in "female")
+  // 2. Exact token / whole-word match
   const queryTokens = tokenizeText(normQuery);
   const candTokens = tokenizeText(normCand);
   if (candTokens.includes(normQuery) || queryTokens.includes(normCand)) {
@@ -116,7 +189,7 @@ export function scoreCandidate(query: string, candidateText: string): number {
     return 0.9;
   }
 
-  // 4. Token & CJK bigram overlap with symmetric Jaccard similarity
+  // 4. Token & CJK bigram overlap
   if (queryTokens.length > 0 && candTokens.length > 0) {
     let intersection = 0;
     for (const qt of queryTokens) {
@@ -168,9 +241,149 @@ export function heuristicSemanticMatch(
 }
 
 /**
- * Hybrid Semantic Matcher
- * Calls Jev System One via Native Host when connected; falls back gracefully to
- * Heuristic semantic matching, and finally to literal string matching.
+ * Executes a semantic match request specifically for locator with strict <= 32 candidate constraint,
+ * deadlineAt support, signal cancellation, and no value leakage.
+ */
+export async function executeLocatorSemanticMatch(options: {
+  taskId?: string;
+  pageIdentity?: string;
+  context?: string;
+  query: string;
+  candidates: JevSemanticCandidate[];
+  type?: string;
+  operation?: string;
+  deadlineAt?: number;
+  signal?: AbortSignal;
+  sendJevMatch?:
+    | typeof sendJevMatchToNative
+    | ((payload: any, timeoutMs?: number, options?: any) => Promise<any>);
+}): Promise<JevSemanticMatchResponse> {
+  const {
+    query,
+    candidates,
+    type = 'locator',
+    operation = 'locator',
+    deadlineAt,
+    signal,
+    sendJevMatch = sendJevMatchToNative,
+  } = options;
+
+  if (candidates.length > MAX_SEMANTIC_CANDIDATES) {
+    return {
+      success: false,
+      status: 'none',
+      error: `Semantic match coverage limit exceeded: found ${candidates.length} candidates (maximum ${MAX_SEMANTIC_CANDIDATES} allowed). Refine locator query or specify frameId/selector.`,
+    };
+  }
+
+  if (candidates.length === 0) {
+    return {
+      success: false,
+      status: 'none',
+    };
+  }
+
+  if (signal?.aborted) {
+    return {
+      success: false,
+      status: 'cancelled',
+      error: 'Locator semantic matching aborted',
+    };
+  }
+
+  const effectiveDeadlineAt = Math.min(deadlineAt ?? Infinity, Date.now() + 1500);
+  const remainingMs = effectiveDeadlineAt - Date.now();
+  if (remainingMs <= 0) {
+    return {
+      success: false,
+      status: 'cancelled',
+      error: 'Locator semantic matching deadline reached',
+    };
+  }
+
+  const payload: JevSemanticMatchPayload = {
+    taskId: options.taskId,
+    pageIdentity: options.pageIdentity,
+    context: options.context,
+    candidates,
+    query,
+    type,
+    operation,
+    deadlineAt: effectiveDeadlineAt,
+  };
+
+  try {
+    const rawRes = await (sendJevMatch as any)(payload, Math.max(1, remainingMs), {
+      signal,
+      deadlineAt: effectiveDeadlineAt,
+    });
+
+    if (!rawRes) {
+      return {
+        success: false,
+        status: 'unavailable',
+      };
+    }
+
+    const baseDiagnostics = {
+      ...(rawRes.backend ? { backend: rawRes.backend } : {}),
+      ...(typeof rawRes.latencyMs === 'number' ? { latencyMs: rawRes.latencyMs } : {}),
+      ...(rawRes.usage !== undefined ? { usage: rawRes.usage } : {}),
+      ...(typeof rawRes.attempts === 'number' ? { attempts: rawRes.attempts } : {}),
+    };
+
+    const status: SemanticMatchStatus = rawRes.status;
+    if (!['matched', 'none', 'ambiguous', 'unavailable', 'cancelled'].includes(status)) {
+      return { success: false, status: 'unavailable', ...baseDiagnostics };
+    }
+    if (
+      status === 'matched' &&
+      (typeof rawRes.confidence !== 'number' ||
+        !Number.isFinite(rawRes.confidence) ||
+        rawRes.confidence < 0.85 ||
+        rawRes.confidence > 1 ||
+        !candidates.some((candidate) => String(candidate.id) === String(rawRes.matchedId)))
+    )
+      return {
+        success: false,
+        status: 'unavailable',
+        model: rawRes.model,
+        engine: rawRes.engine || 'jev',
+        ...baseDiagnostics,
+      };
+
+    return {
+      success: rawRes.success === true && status === 'matched',
+      status,
+      matchedId: rawRes.matchedId,
+      confidence: rawRes.confidence,
+      probabilities: rawRes.probabilities,
+      model: rawRes.model,
+      engine: rawRes.engine || 'jev',
+      cacheHit: rawRes.cacheHit,
+      ...baseDiagnostics,
+    };
+  } catch (err: any) {
+    if (signal?.aborted || err?.name === 'AbortError' || String(err).includes('abort')) {
+      return {
+        success: false,
+        status: 'cancelled',
+        error: 'Locator semantic matching aborted',
+      };
+    }
+    return {
+      success: false,
+      status: 'unavailable',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Unified Semantic Matcher for Form Pipeline
+ * 1. Strict exact check: Multiple exact matches are ambiguous, never picking the first match.
+ * 2. Jev Native System One: Uses status and clean confidence, never uploads input value.
+ * 3. An unavailable model never authorizes a guessed target.
  */
 export async function matchSemantically(
   type: 'field' | 'choice' | 'input',
@@ -178,62 +391,98 @@ export async function matchSemantically(
   candidates: MatchCandidate[],
   value?: string,
   context?: string,
+  options?: {
+    signal?: AbortSignal;
+    deadlineAt?: number;
+    inferenceBudget?: { remaining: number };
+    taskId?: string;
+    pageIdentity?: string;
+    onDecision?: (decision: JevSemanticMatchResponse) => void;
+  },
 ): Promise<MatchResult | null> {
   if (candidates.length === 0) return null;
+  if (
+    options?.signal?.aborted ||
+    (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt)
+  )
+    return null;
 
-  // Tier 1: Try literal exact match first (instant, 0 RTT, zero false positives)
   const normQuery = (type === 'choice' && value ? value : query).toLowerCase().trim();
   if (normQuery) {
-    // 1a. Prioritize exact string match across all candidates
-    const exactMatch = candidates.find(
+    const exactMatches = candidates.filter(
       (c) => (c.text || '').toLowerCase().trim() === normQuery,
     );
-    if (exactMatch) {
+    if (exactMatches.length === 1) {
       return {
-        matchedId: exactMatch.id,
+        matchedId: exactMatches[0].id,
         confidence: 1.0,
         engine: 'literal',
       };
     }
+    if (exactMatches.length > 1) {
+      return null;
+    }
 
-    // 1b. Check exact whole-token match across candidates (e.g. query "phone" matching candidate "Mobile Phone")
-    const wholeTokenMatch = candidates.find((c) => {
+    const wholeTokenMatches = candidates.filter((c) => {
       const tokens = tokenizeText(c.text || '');
       return tokens.includes(normQuery);
     });
-    if (wholeTokenMatch) {
+    if (wholeTokenMatches.length === 1) {
       return {
-        matchedId: wholeTokenMatch.id,
+        matchedId: wholeTokenMatches[0].id,
         confidence: 0.95,
         engine: 'literal',
       };
     }
+    if (wholeTokenMatches.length > 1) {
+      return null;
+    }
   }
 
-  // Tier 2: Try Jev System One through Native Host
+  // Unobserved choice answers can be secrets; only literal choices stay local.
+  if (type === 'choice') return null;
+  if (
+    candidates.length > MAX_SEMANTIC_CANDIDATES ||
+    (options?.inferenceBudget && options.inferenceBudget.remaining <= 0)
+  )
+    return null;
+  if (options?.inferenceBudget) options.inferenceBudget.remaining--;
   try {
-    const jevRes = await sendJevMatchToNative({
+    const result = await executeLocatorSemanticMatch({
       type,
+      operation: 'fill',
+      taskId: options?.taskId,
+      pageIdentity: options?.pageIdentity,
       query,
-      value,
       context,
-      candidates,
+      candidates: candidates.map((candidate) => ({ id: candidate.id, text: candidate.text })),
+      signal: options?.signal,
+      deadlineAt: options?.deadlineAt,
     });
-    if (jevRes && jevRes.success && jevRes.matchedId !== undefined && (jevRes.confidence ?? 0) >= 0.3) {
+    options?.onDecision?.(result);
+    if (
+      result?.success &&
+      result.status === 'matched' &&
+      typeof result.confidence === 'number' &&
+      Number.isFinite(result.confidence) &&
+      result.confidence >= 0.85 &&
+      result.confidence <= 1 &&
+      candidates.some((candidate) => String(candidate.id) === String(result.matchedId))
+    ) {
       return {
-        matchedId: jevRes.matchedId,
-        confidence: jevRes.confidence || 0.85,
+        matchedId: result.matchedId!,
+        confidence: result.confidence,
         engine: 'jev',
+        ...(result.cacheHit !== undefined ? { cacheHit: result.cacheHit } : {}),
+        ...(result.backend ? { backend: result.backend } : {}),
+        ...(result.model ? { model: result.model } : {}),
+        ...(typeof result.latencyMs === 'number' ? { latencyMs: result.latencyMs } : {}),
+        ...(result.usage !== undefined ? { usage: result.usage } : {}),
+        ...(typeof result.attempts === 'number' ? { attempts: result.attempts } : {}),
       };
     }
-  } catch (err) {
-    console.warn('[FormSemanticMatcher] Jev native query failed, falling back to heuristic:', err);
-  }
-
-  // Tier 3: Heuristic semantic matching with synonyms & CJK tokenization
-  const heuristic = heuristicSemanticMatch(normQuery, candidates);
-  if (heuristic) {
-    return heuristic;
+  } catch {
+    // A transport failure never authorizes another target.
   }
 
   return null;

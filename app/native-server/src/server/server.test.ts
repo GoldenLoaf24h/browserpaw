@@ -13,6 +13,7 @@ import fileHandler, {
   MAX_DOWNLOAD_SIZE,
 } from '../file-handler';
 import { getBridgeToken } from './token';
+import { jevModelManager } from './jev-model-manager';
 import { checkIsAdmin } from '../scripts/utils';
 import {
   getAllowedExtensionIds,
@@ -22,6 +23,7 @@ import {
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { NativeMessageType } from 'chrome-mcp-shared';
 
 jest.mock('node:os', () => {
   const actual = jest.requireActual('node:os') as typeof os;
@@ -222,7 +224,7 @@ describe('Fastify MCP Native Server Integration Tests', () => {
     expect(transport.sessionId).toBeDefined();
 
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(14); // Core profile exposes exactly 14 primary tools
+    expect(tools.tools.length).toBe(16); // Core profile exposes exactly 16 primary tools
 
     // Call tool when extension is disconnected -> returns isError: true immediately without blocking
     const t0 = Date.now();
@@ -606,6 +608,54 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         nativeMessagingHostInstance.isConnected = false;
       }
     });
+
+    test('an aborted request sends one matching cancel_tool message without replaying the request', async () => {
+      nativeMessagingHostInstance.isConnected = true;
+      const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation((() => true) as any);
+      const controller = new AbortController();
+      try {
+        const sendPromise = nativeMessagingHostInstance.sendRequestToExtensionAndWait(
+          { name: 'chrome_batch_actions' },
+          NativeMessageType.CALL_TOOL,
+          2000,
+          controller.signal,
+        );
+        const messages = stdoutSpy.mock.calls.map(([buffer]) => {
+          const bytes = buffer as Buffer;
+          const length = bytes.readUInt32LE(0);
+          return JSON.parse(bytes.subarray(4, 4 + length).toString('utf8'));
+        });
+        const request = messages.find((message) => message.type === NativeMessageType.CALL_TOOL);
+        expect(request?.requestId).toEqual(expect.any(String));
+
+        controller.abort();
+        const afterAbort = stdoutSpy.mock.calls.map(([buffer]) => {
+          const bytes = buffer as Buffer;
+          const length = bytes.readUInt32LE(0);
+          return JSON.parse(bytes.subarray(4, 4 + length).toString('utf8'));
+        });
+        expect(
+          afterAbort.filter((message) => message.type === NativeMessageType.CANCEL_TOOL),
+        ).toEqual([
+          {
+            type: NativeMessageType.CANCEL_TOOL,
+            payload: { requestId: request.requestId },
+          },
+        ]);
+        expect(
+          afterAbort.filter((message) => message.type === NativeMessageType.CALL_TOOL),
+        ).toHaveLength(1);
+
+        await (nativeMessagingHostInstance as any).handleMessage({
+          responseToRequestId: request.requestId,
+          error: 'cancelled at an action boundary',
+        });
+        await expect(sendPromise).rejects.toThrow('cancelled at an action boundary');
+      } finally {
+        stdoutSpy.mockRestore();
+        nativeMessagingHostInstance.isConnected = false;
+      }
+    });
   });
 
   describe('Jev Model Management & 3-Tier Routing Endpoints', () => {
@@ -623,12 +673,26 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       expect(res.body).toHaveProperty('percent');
     });
 
-    test('POST /jev/set-mode requires valid token and updates active mode in memory', async () => {
+    test('GET /jev/mode-state returns authoritative mode state without auth requirement', async () => {
+      const res = await supertest(Server.getInstance().server).get('/jev/mode-state');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('activeMode');
+      expect(res.body).toHaveProperty('revision');
+      expect(res.body).toHaveProperty('disabledReason');
+      expect(res.body).toHaveProperty('changedAt');
+    });
+
+    test('POST /jev/set-mode requires valid token, validates configuration, and updates active mode', async () => {
       // Anonymous negative assertion (W1 hardening)
       const anonRes = await supertest(Server.getInstance().server)
         .post('/jev/set-mode')
         .send({ mode: 'local' });
       expect(anonRes.status).toBe(401);
+
+      // Mock downloaded weights so local mode validation passes
+      const isDownloadedSpy = jest
+        .spyOn(jevModelManager as any, 'isModelDownloaded')
+        .mockReturnValue(true);
 
       // Authenticated positive assertion
       const res = await supertest(Server.getInstance().server)
@@ -636,7 +700,21 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         .set('Authorization', `Bearer ${getBridgeToken()}`)
         .send({ mode: 'local' });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true, mode: 'local' });
+      expect(res.body.success).toBe(true);
+      expect(res.body.mode).toBe('local');
+      expect(res.body.modeState.activeMode).toBe('local');
+
+      // Test automatic fallback to off when required configuration is missing
+      isDownloadedSpy.mockReturnValue(false);
+      const autoOffRes = await supertest(Server.getInstance().server)
+        .post('/jev/set-mode')
+        .set('Authorization', `Bearer ${getBridgeToken()}`)
+        .send({ mode: 'local' });
+      expect(autoOffRes.status).toBe(200);
+      expect(autoOffRes.body.mode).toBe('off');
+      expect(autoOffRes.body.modeState.disabledReason).toBe('local_model_missing');
+
+      isDownloadedSpy.mockRestore();
 
       // Reject invalid mode even when authenticated
       const invalidRes = await supertest(Server.getInstance().server)
@@ -645,11 +723,11 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         .send({ mode: 'invalid' });
       expect(invalidRes.status).toBe(400);
 
-      // Restore to remote with token
+      // Restore to off with token
       await supertest(Server.getInstance().server)
         .post('/jev/set-mode')
         .set('Authorization', `Bearer ${getBridgeToken()}`)
-        .send({ mode: 'remote' });
+        .send({ mode: 'off' });
     });
 
     test('GET /jev/models and POST /jev/select-model reject anonymous and succeed with token', async () => {

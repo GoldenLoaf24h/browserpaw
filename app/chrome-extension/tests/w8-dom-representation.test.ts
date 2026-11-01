@@ -10,6 +10,10 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     snapshotCacheManager.clear();
+    chrome.webNavigation = {
+      ...chrome.webNavigation,
+      getAllFrames: vi.fn().mockResolvedValue([{ frameId: 0 }]),
+    } as any;
   });
 
   describe('FUNC-04: Fast DOM Snapshot Action Labels & Rect Dimensions', () => {
@@ -146,8 +150,8 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
     });
   });
 
-  describe('FUNC-05: Grep Subframe Reindex Synchronization', () => {
-    it('synchronizes subframe index map via inPageReindexFrame for cross-frame matches', async () => {
+  describe('FUNC-05: Grep Subframe Namespace Preservation', () => {
+    it('preserves subframe index from namespace for cross-frame matches', async () => {
       const tabId = 102;
       vi.spyOn(grepTool as any, 'resolveAffinityTab').mockResolvedValue({
         id: tabId,
@@ -183,20 +187,17 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
                   interactiveCount: 1,
                   indexedElements: [
                     {
-                      index: 1,
+                      index: 4201,
                       tagName: 'button',
                       role: 'button',
                       text: 'Pay with Card',
                       isInteractive: true,
                     },
                   ],
-                  indexMap: { 1: { selector: '#pay', tagName: 'button' } },
+                  indexMap: { 4201: { selector: '#pay', tagName: 'button' } },
                 },
               },
             ] as any;
-          }
-          if (fnName === 'inPageReindexFrame') {
-            return [{ frameId: target.frameIds?.[0], result: true }] as any;
           }
           return [] as any;
         });
@@ -206,13 +207,7 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
 
       const payload = JSON.parse(res.content[0].text);
       expect(payload.totalMatches).toBe(1);
-      expect(payload.matches[0].index).toBe(2);
-
-      // Must invoke inPageReindexFrame on the subframe with frameOffset=1
-      const reindexCalls = executeSpy.mock.calls.filter((c) => c[1] === 'inPageReindexFrame');
-      expect(reindexCalls.length).toBe(1);
-      expect(reindexCalls[0][0]).toEqual({ tabId, frameIds: [42] });
-      expect(reindexCalls[0][2]).toEqual([1, false]);
+      expect(payload.matches[0].index).toBe(4201);
     });
   });
 
@@ -245,17 +240,19 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
                 result: {
                   elementCount: 1,
                   interactiveCount: 1,
-                  treeString: '[1] button "Subframe Button"',
+                  treeString: '[1001] button "Subframe Button"',
                   indexedElements: [
-                    { index: 1, tagName: 'button', text: 'Subframe Button', isInteractive: true },
+                    {
+                      index: 1001,
+                      tagName: 'button',
+                      text: 'Subframe Button',
+                      isInteractive: true,
+                    },
                   ],
-                  indexMap: { 1: { selector: 'button#s', tagName: 'button' } },
+                  indexMap: { 1001: { selector: 'button#s', tagName: 'button' } },
                 },
               },
             ] as any;
-          }
-          if (fnName === 'inPageReindexFrame') {
-            return [{ frameId: 10, result: true }] as any;
           }
           return [] as any;
         },
@@ -344,7 +341,7 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
       const deltaPayload = JSON.parse(standardDeltaRes.content[0].text);
       // Because representation switched from fast to standard, it must NOT return a spurious delta diff
       // Instead, it must fall back to full baseline payload!
-      expect(deltaPayload.isDelta).toBeUndefined(); // Standard non-delta payload returned
+      expect(deltaPayload.isDelta).toBe(false); // Explicit full baseline after representation reset
       expect(deltaPayload.treeString).toBeDefined();
       expect(deltaPayload.treeString).toContain('[1] button "Pay Now"');
 
@@ -356,6 +353,7 @@ describe('W8 DOM Representation & Robustness (FUNC04 - FUNC07)', () => {
     it('ensures delta-helper default standard behavior safely rejects fast baseline', async () => {
       const tabId = 105;
       (globalThis as any).chrome = {
+        webNavigation: { getAllFrames: vi.fn().mockResolvedValue([{ frameId: 0 }]) },
         tabs: {
           get: vi.fn().mockResolvedValue({ id: tabId, url: 'https://example.com/cart' }),
         },

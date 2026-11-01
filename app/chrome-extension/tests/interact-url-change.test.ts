@@ -24,10 +24,13 @@ describe('Interaction URL Change Detection', () => {
 
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
       if (fnName === 'inPageGetElementCoordinates') {
-        return [{ result: { x: 100, y: 200, tagName: 'input' } }] as any;
+        return [{ result: { success: true, x: 100, y: 200, tagName: 'input' } }] as any;
       }
       if (fnName === 'inPageFillIndex') {
         return [{ result: { success: true, index: 5, value: 'Hello world' } }] as any;
+      }
+      if (fnName === 'inPageVerifyInputCommitment') {
+        return [{ result: { committed: true, currentValue: 'Hello world' } }] as any;
       }
       return [{ result: { success: true } }] as any;
     });
@@ -62,10 +65,13 @@ describe('Interaction URL Change Detection', () => {
 
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
       if (fnName === 'inPageGetElementCoordinates') {
-        return [{ result: { x: 50, y: 60, tagName: 'input' } }] as any;
+        return [{ result: { success: true, x: 50, y: 60, tagName: 'input' } }] as any;
       }
       if (fnName === 'inPageFillIndex') {
         return [{ result: { success: true, index: 1, value: 'text' } }] as any;
+      }
+      if (fnName === 'inPageVerifyInputCommitment') {
+        return [{ result: { committed: true, currentValue: 'text' } }] as any;
       }
       return [{ result: { success: true } }] as any;
     });

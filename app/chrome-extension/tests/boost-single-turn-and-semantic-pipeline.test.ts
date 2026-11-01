@@ -14,6 +14,7 @@ import {
 import * as nativeHost from '../entrypoints/background/native-host';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
 import { inPageQueryChoiceCandidates } from '../entrypoints/background/tools/browser/dom-indexer';
+import * as engine from '../entrypoints/background/tools/browser/in-page-engine';
 
 describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
   beforeEach(() => {
@@ -21,6 +22,12 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
     injectedTabs.clear();
     (globalThis as any).chrome = {
       ...(globalThis as any).chrome,
+      storage: {
+        local: {
+          get: vi.fn().mockResolvedValue({}),
+          set: vi.fn().mockResolvedValue(undefined),
+        },
+      },
       tabs: {
         ...((globalThis as any).chrome?.tabs || {}),
         get: vi.fn().mockResolvedValue({ id: 101, url: 'https://example.com' }),
@@ -35,31 +42,158 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
 
   describe('1. executeInPage Single-Turn Evaluation & Resiliency', () => {
     it('detects navigation and context destruction errors accurately', () => {
-      expect(isNavigationOrContextDestroyedError(new Error('Execution context was destroyed'))).toBe(true);
+      expect(
+        isNavigationOrContextDestroyedError(new Error('Execution context was destroyed')),
+      ).toBe(true);
       expect(isNavigationOrContextDestroyedError(new Error('Frame was removed'))).toBe(true);
-      expect(isNavigationOrContextDestroyedError(new Error('Could not establish connection. Receiving end does not exist.'))).toBe(true);
+      expect(
+        isNavigationOrContextDestroyedError(
+          new Error('Could not establish connection. Receiving end does not exist.'),
+        ),
+      ).toBe(true);
       expect(isNavigationOrContextDestroyedError(new Error('No tab with id 123'))).toBe(true);
-      expect(isNavigationOrContextDestroyedError(new Error('Cannot access contents of the page'))).toBe(true);
-      expect(isNavigationOrContextDestroyedError(new Error('SyntaxError: Unexpected token'))).toBe(false);
+      expect(
+        isNavigationOrContextDestroyedError(new Error('Cannot access contents of the page')),
+      ).toBe(true);
+      expect(isNavigationOrContextDestroyedError(new Error('SyntaxError: Unexpected token'))).toBe(
+        false,
+      );
       expect(isNavigationOrContextDestroyedError(null)).toBe(false);
     });
 
     it('evaluates synchronous entrypoints in a single turn without poll or retrieve', async () => {
       let executeScriptCallCount = 0;
       const scriptCalls: any[] = [];
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 101, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        executeScriptCallCount++;
-        scriptCalls.push(opts);
-        // First injection is the engine file if not already injected
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 101, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          executeScriptCallCount++;
+          scriptCalls.push(opts);
+          // First injection is the engine file if not already injected
+          if (opts.files) {
+            return [{ frameId: 0, documentId: 'doc-101', result: undefined }];
+          }
+          // Setup index namespace
+          if (opts.target?.documentIds) {
+            return [{ frameId: 0, documentId: opts.target.documentIds[0], result: true }];
+          }
+          // Slot cleanup call in single-turn path
+          if (
+            opts.func &&
+            opts.args &&
+            opts.args.length === 1 &&
+            String(opts.args[0]).startsWith('__mcp_slot_')
+          ) {
+            return [{ result: undefined }];
+          }
+          // Then eval-or-start call: simulate synchronous function execution in page
+          return [
+            {
+              frameId: 0,
+              result: {
+                engineType: 'object',
+                fnType: 'function',
+                singleTurn: true,
+                status: 'success',
+                value: { success: true, coords: { x: 120, y: 340 } },
+              },
+            },
+          ];
+        });
+
+      const res = await executeInPage<{ success: boolean; coords: { x: number; y: number } }>(
+        { tabId: 101 },
+        'inPageGetElementCoordinates',
+        [5],
+      );
+
+      // 1 file injection + 1 namespace setup + 1 single-turn eval = exactly 3 calls
+      expect(executeScriptCallCount).toBe(3);
+      expect(res[0].result.success).toBe(true);
+      expect(res[0].result.coords.x).toBe(120);
+
+      // On subsequent call with tab already cached in injectedTabs:
+      executeScriptCallCount = 0;
+      const res2 = await executeInPage({ tabId: 101 }, 'inPageGetElementCoordinates', [5]);
+      // Only 1 single-turn call, 0 file injections, 0 poll calls, 0 retrieve calls
+      expect(executeScriptCallCount).toBe(1);
+      expect(res2[0].result.coords.y).toBe(340);
+    });
+
+    it('cleans up stashed slots across frames when allFrames synchronous evaluation completes', async () => {
+      let cleanupCalled = false;
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 102, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          if (opts.files) {
+            return [
+              { frameId: 0, documentId: 'doc-102-0', result: undefined },
+              { frameId: 1, documentId: 'doc-102-1', result: undefined },
+            ];
+          }
+          if (opts.target?.documentIds) {
+            return [
+              {
+                frameId: opts.target.documentIds[0].endsWith('0') ? 0 : 1,
+                documentId: opts.target.documentIds[0],
+                result: true,
+              },
+            ];
+          }
+          if (opts.func && opts.args && opts.args.length === 1) {
+            cleanupCalled = true;
+            return [{ result: undefined }];
+          }
+          return [
+            {
+              frameId: 0,
+              result: {
+                engineType: 'object',
+                fnType: 'function',
+                singleTurn: true,
+                status: 'success',
+                value: { x: 10 },
+              },
+            },
+            {
+              frameId: 1,
+              result: {
+                engineType: 'object',
+                fnType: 'function',
+                singleTurn: true,
+                status: 'success',
+                value: { x: 20 },
+              },
+            },
+          ];
+        });
+
+      const res = await executeInPage(
+        { tabId: 102, allFrames: true },
+        'inPageGetElementCoordinates',
+        [5],
+      );
+      expect(res).toHaveLength(2);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cleanupCalled).toBe(true);
+    });
+
+    it('rejects incomplete frame resolution instead of hiding an unavailable subframe', async () => {
+      (globalThis.chrome.scripting as any).executeScript = vi.fn(async (opts: any) => {
         if (opts.files) {
-          return [{ result: undefined }];
+          return [
+            { frameId: 0, documentId: 'main' },
+            { frameId: 1, documentId: 'child' },
+          ];
         }
-        // Slot cleanup call in single-turn path
-        if (opts.func && opts.args && opts.args.length === 1 && String(opts.args[0]).startsWith('__mcp_slot_')) {
-          return [{ result: undefined }];
-        }
-        // Then eval-or-start call: simulate synchronous function execution in page
+        if (opts.target.documentIds) return [{ result: true }];
+        if (opts.args.length === 1) return [];
         return [
           {
             frameId: 0,
@@ -68,54 +202,19 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
               fnType: 'function',
               singleTurn: true,
               status: 'success',
-              value: { success: true, coords: { x: 120, y: 340 } },
+              value: { success: true, x: 100, y: 100 },
             },
+          },
+          {
+            frameId: 1,
+            result: { engineType: 'undefined', fnType: 'undefined', status: 'unavailable' },
           },
         ];
       });
-
-      const res = await executeInPage<{ success: boolean; coords: { x: number; y: number } }>(
-        { tabId: 101 },
-        'inPageGetElementCoordinates',
-        [5],
-      );
-
-      // 1 file injection + 1 single-turn eval = exactly 2 calls (zero poll, zero retrieve, zero extra cleanup for single target sync)
-      expect(executeScriptCallCount).toBe(2);
-      expect(res[0].result.success).toBe(true);
-      expect(res[0].result.coords.x).toBe(120);
-
-      // On subsequent call with tab already cached in injectedTabs:
-      executeScriptCallCount = 0;
-      const res2 = await executeInPage(
-        { tabId: 101 },
-        'inPageGetElementCoordinates',
-        [5],
-      );
-      // Only 1 single-turn call, 0 file injections, 0 poll calls, 0 retrieve calls
-      expect(executeScriptCallCount).toBe(1);
-      expect(res2[0].result.coords.y).toBe(340);
-    });
-
-    it('cleans up stashed slots across frames when allFrames synchronous evaluation completes', async () => {
-      let cleanupCalled = false;
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 102, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        if (opts.files) return [{ result: undefined }];
-        if (opts.func && opts.args && opts.args.length === 1) {
-          cleanupCalled = true;
-          return [{ result: undefined }];
-        }
-        return [
-          { frameId: 0, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 10 } } },
-          { frameId: 1, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 20 } } },
-        ];
-      });
-
-      const res = await executeInPage({ tabId: 102, allFrames: true }, 'inPageGetElementCoordinates', [5]);
-      expect(res).toHaveLength(2);
-      await new Promise((r) => setTimeout(r, 20));
-      expect(cleanupCalled).toBe(true);
+      await expect(
+        executeInPage({ tabId: 104, allFrames: true }, 'inPageLocateBySelector', ['button']),
+      ).rejects.toThrow('unavailable in one or more frames');
+      expect(injectedTabs.has(104)).toBe(false);
     });
 
     it('cleans up its slot on eval-or-start timeout and late resolution without deleting other slots', async () => {
@@ -126,22 +225,38 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
         lateResolveStart = resolve;
       });
 
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 103, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        if (opts.files) return [{ result: undefined }];
-        if (opts.func && opts.args && opts.args.length === 1) {
-          cleanedSlots.push(opts.args[0]);
-          delete g[opts.args[0]];
-          return [{ result: undefined }];
-        }
-        // Stash another slot belonging to someone else in the page
-        g['other_user_slot'] = { value: 'keep_me' };
-        // Simulate late start execution that hangs across timeout
-        await delayedStartPromise;
-        return [
-          { frameId: 0, result: { engineType: 'object', fnType: 'function', singleTurn: true, status: 'success', value: { x: 99 } } },
-        ];
-      });
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 103, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          if (opts.files) return [{ frameId: 0, documentId: 'doc-103', result: undefined }];
+          if (opts.target?.documentIds) {
+            return [{ frameId: 0, documentId: opts.target.documentIds[0], result: true }];
+          }
+          if (opts.func && opts.args && opts.args.length === 1) {
+            cleanedSlots.push(opts.args[0]);
+            delete g[opts.args[0]];
+            return [{ result: undefined }];
+          }
+          // Stash another slot belonging to someone else in the page
+          g['other_user_slot'] = { value: 'keep_me' };
+          // Simulate late start execution that hangs across timeout
+          await delayedStartPromise;
+          return [
+            {
+              frameId: 0,
+              result: {
+                engineType: 'object',
+                fnType: 'function',
+                singleTurn: true,
+                status: 'success',
+                value: { x: 99 },
+              },
+            },
+          ];
+        });
 
       // Run executeInPage with very small timeout (20ms) so eval-or-start times out
       const pending = executeInPage({ tabId: 103 }, 'inPageGetElementCoordinates', [5], 20);
@@ -162,40 +277,44 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       let executeScriptCallCount = 0;
       injectedTabs.add(202);
 
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 202, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        executeScriptCallCount++;
-        if (executeScriptCallCount === 1) {
-          // eval-or-start returns singleTurn: false (async function)
-          return [
-            {
-              frameId: 0,
-              result: {
-                engineType: 'object',
-                fnType: 'function',
-                singleTurn: false,
-                promiseType: 'object',
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 202, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          executeScriptCallCount++;
+          if (executeScriptCallCount === 1) {
+            // eval-or-start returns singleTurn: false (async function)
+            return [
+              {
+                frameId: 0,
+                result: {
+                  engineType: 'object',
+                  fnType: 'function',
+                  singleTurn: false,
+                  promiseType: 'object',
+                },
               },
-            },
-          ];
-        } else if (executeScriptCallCount === 2) {
-          // poll call: indicates promise is settled
-          return [
-            {
-              frameId: 0,
-              result: { done: true },
-            },
-          ];
-        } else if (executeScriptCallCount === 3) {
-          // retrieve call: returns resolved value
-          return [
-            {
-              frameId: 0,
-              result: { settled: true, durationMs: 15 },
-            },
-          ];
-        }
-      });
+            ];
+          } else if (executeScriptCallCount === 2) {
+            // poll call: indicates promise is settled
+            return [
+              {
+                frameId: 0,
+                result: { done: true },
+              },
+            ];
+          } else if (executeScriptCallCount === 3) {
+            // retrieve call: returns resolved value
+            return [
+              {
+                frameId: 0,
+                result: { settled: true, durationMs: 15 },
+              },
+            ];
+          }
+        });
 
       const res = await executeInPage({ tabId: 202 }, 'inPageWaitForDOMSettle', []);
       expect(executeScriptCallCount).toBe(3); // eval-or-start -> poll -> retrieve
@@ -204,10 +323,12 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
 
     it('purges tab from injectedTabs when context is destroyed during navigation', async () => {
       injectedTabs.add(303);
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 303, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockRejectedValue(
-        new Error('Execution context was destroyed.'),
-      );
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 303, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockRejectedValue(new Error('Execution context was destroyed.'));
 
       await expect(
         executeInPage({ tabId: 303 }, 'inPageGetElementCoordinates', [1]),
@@ -253,44 +374,57 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
     it('invokes native Jev System One matching when available and returns typed result', async () => {
       vi.spyOn(nativeHost, 'sendJevMatchToNative').mockResolvedValue({
         success: true,
+        status: 'matched',
         matchedId: 2,
         confidence: 0.95,
         engine: 'jev',
       });
 
-      const res = await matchSemantically(
-        'field',
-        'Your contact telephone',
-        [
-          { id: 1, text: 'User Name' },
-          { id: 2, text: 'Mobile' },
-        ],
-      );
+      const res = await matchSemantically('field', 'Your contact telephone', [
+        { id: 1, text: 'User Name' },
+        { id: 2, text: 'Mobile' },
+      ]);
 
       expect(res?.matchedId).toBe(2);
       expect(res?.engine).toBe('jev');
       expect(res?.confidence).toBe(0.95);
     });
 
-    it('falls back to heuristic when Jev native host call fails', async () => {
-      vi.spyOn(nativeHost, 'sendJevMatchToNative').mockRejectedValue(new Error('Native host disconnected'));
-
-      const res = await matchSemantically(
-        'field',
-        '手机号',
-        [
-          { id: 1, text: 'Home Address' },
-          { id: 2, text: 'Telephone' },
-        ],
+    it('does not choose another target when the Native host call fails', async () => {
+      vi.spyOn(nativeHost, 'sendJevMatchToNative').mockRejectedValue(
+        new Error('Native host disconnected'),
       );
 
-      expect(res?.matchedId).toBe(2);
-      expect(res?.engine).toBe('heuristic');
+      const res = await matchSemantically('field', '手机号', [
+        { id: 1, text: 'Home Address' },
+        { id: 2, text: 'Telephone' },
+      ]);
+
+      expect(res).toBeNull();
     });
+
+    it.each([undefined, 0, NaN])(
+      'rejects missing or invalid confidence %s without guessing',
+      async (confidence) => {
+        vi.spyOn(nativeHost, 'sendJevMatchToNative').mockResolvedValue({
+          success: true,
+          status: 'matched',
+          matchedId: 2,
+          confidence,
+          engine: 'jev',
+        });
+        expect(
+          await matchSemantically('field', 'Your contact telephone', [
+            { id: 1, text: 'Name' },
+            { id: 2, text: 'Mobile' },
+          ]),
+        ).toBeNull();
+      },
+    );
   });
 
   describe('3. Autonomous Form Pipeline with Jev Semantic Intelligence', () => {
-    it('semantically matches fields when question phrasing differs from query', async () => {
+    it('matches the requested field to the observed input when question phrasing differs', async () => {
       (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({
         id: 400,
         url: 'https://example.com/survey',
@@ -302,83 +436,96 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       });
 
       vi.spyOn(nativeHost, 'sendJevMatchToNative').mockImplementation(async (params: any) => {
-        if (params.query.includes('contact number') || params.query.includes('联系方式')) {
-          return { success: true, matchedId: 0, confidence: 0.95 };
+        if (
+          params.query === 'phone_input' &&
+          params.candidates.some((c: any) => c.id === 0 && c.text === '手机号')
+        ) {
+          return {
+            success: true,
+            status: 'matched',
+            engine: 'jev',
+            matchedId: 0,
+            confidence: 0.95,
+          };
         }
         return null as any;
       });
 
       let step = 1;
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        return [
-          {
-            frameId: 0,
-            result: {
-              engineType: 'object',
-              fnType: 'function',
-              singleTurn: true,
-              status: 'success',
-              value: { success: true },
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          return [
+            {
+              frameId: 0,
+              result: {
+                engineType: 'object',
+                fnType: 'function',
+                singleTurn: true,
+                status: 'success',
+                value: { success: true },
+              },
             },
-          },
-        ];
-      });
+          ];
+        });
 
       // Mock executeInPage for pipeline steps
       const inPageEngine = await import('../entrypoints/background/tools/browser/in-page-engine');
-      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target: any, fnName: string, args: any[]) => {
-        if (fnName === 'inPageCheckCaptcha') {
-          return [{ result: { detected: false } }] as any;
-        }
-        if (fnName === 'inPageDetectPerceptiveSignature') {
-          if (step === 1) {
-            return [
-              {
-                result: {
-                  question: 'Please enter your primary contact number',
-                  progress: '1 / 1',
-                  activeInputs: [{ index: 1, name: 'phone_input', tagName: 'input' }],
-                  alerts: [],
-                },
-              },
-            ] as any;
-          } else {
-            return [
-              {
-                result: {
-                  question: 'Survey completed!',
-                  progress: '1 / 1',
-                  activeInputs: [],
-                  alerts: [],
-                },
-              },
-            ] as any;
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (_target: any, fnName: string, args: any[]) => {
+          if (fnName === 'inPageCheckCaptcha') {
+            return [{ result: { detected: false } }] as any;
           }
-        }
-        if (fnName === 'inPageGetElementCoordinates') {
-          return [{ result: { success: true, x: 200, y: 200, tagName: 'input' } }] as any;
-        }
-        if (fnName === 'inPageVerifyInputCommitment') {
-          step++;
-          return [{ result: { success: true, committed: true } }] as any;
-        }
-        if (fnName === 'inPageFillIndex') {
-          step++;
-          return [{ result: { success: true, committed: true } }] as any;
-        }
-        if (fnName === 'inPageLocateByText') {
-          return [{ result: { success: true, index: 88, tagName: 'button' } }] as any;
-        }
-        if (fnName === 'inPageWaitForDOMSettle') {
-          return [{ result: { settled: true, durationMs: 0 } }] as any;
-        }
-        return [{ result: { success: true } }] as any;
-      });
+          if (fnName === 'inPageDetectPerceptiveSignature') {
+            if (step === 1) {
+              return [
+                {
+                  result: {
+                    question: 'Please enter your primary contact number',
+                    progress: '1 / 1',
+                    activeInputs: [{ index: 1, name: 'phone_input', tagName: 'input' }],
+                    alerts: [],
+                  },
+                  documentId: 'survey-doc',
+                },
+              ] as any;
+            } else {
+              return [
+                {
+                  result: {
+                    question: 'Survey completed!',
+                    progress: '1 / 1',
+                    activeInputs: [],
+                    alerts: [],
+                  },
+                  documentId: 'survey-doc',
+                },
+              ] as any;
+            }
+          }
+          if (fnName === 'inPageGetElementCoordinates') {
+            return [{ result: { success: true, x: 200, y: 200, tagName: 'input' } }] as any;
+          }
+          if (fnName === 'inPageVerifyInputCommitment') {
+            step++;
+            return [{ result: { success: true, committed: true } }] as any;
+          }
+          if (fnName === 'inPageFillIndex') {
+            step++;
+            return [{ result: { success: true, committed: true } }] as any;
+          }
+          if (fnName === 'inPageLocateByText') {
+            return [{ result: { success: true, index: 88, tagName: 'button' } }] as any;
+          }
+          if (fnName === 'inPageWaitForDOMSettle') {
+            return [{ result: { settled: true, durationMs: 0 } }] as any;
+          }
+          return [{ result: { success: true } }] as any;
+        },
+      );
 
       const res = await formPipelineTool.execute({
-        fields: [
-          { query: '手机号', value: '13800138000' },
-        ],
+        fields: [{ query: '手机号', value: '13800138000' }],
         tabId: 400,
         maxSteps: 3,
       });
@@ -402,53 +549,55 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       });
 
       let clickedIndex: number | undefined;
-      vi.spyOn(formPipelineTool as any, 'dispatchNativeClick').mockImplementation(async (_tabId: number, index: number) => {
-        clickedIndex = index;
-        return true;
-      });
+      vi.spyOn(formPipelineTool as any, 'dispatchNativeClick').mockImplementation(
+        async (_tabId: number, index: number) => {
+          clickedIndex = index;
+          return true;
+        },
+      );
 
       const inPageEngine = await import('../entrypoints/background/tools/browser/in-page-engine');
-      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
-        if (fnName === 'inPageCheckCaptcha') {
-          return [{ result: { detected: false } }] as any;
-        }
-        if (fnName === 'inPageDetectPerceptiveSignature') {
-          return [
-            {
-              result: {
-                question: 'What is your gender identity?',
-                progress: '1 / 1',
-                activeInputs: [],
-                alerts: [],
+      vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(
+        async (_target: any, fnName: string) => {
+          if (fnName === 'inPageCheckCaptcha') {
+            return [{ result: { detected: false } }] as any;
+          }
+          if (fnName === 'inPageDetectPerceptiveSignature') {
+            return [
+              {
+                result: {
+                  question: 'What is your gender identity?',
+                  progress: '1 / 1',
+                  activeInputs: [],
+                  alerts: [],
+                },
               },
-            },
-          ] as any;
-        }
-        if (fnName === 'inPageLocateByText') {
-          // Direct text match fails (e.g. text is slightly different or wrapped in custom widget)
-          return [{ result: { success: false } }] as any;
-        }
-        if (fnName === 'inPageQueryChoiceCandidates') {
-          return [
-            {
-              result: [
-                { index: 11, tagName: 'button', text: 'Female / Woman' },
-                { index: 12, tagName: 'button', text: 'Male / Man' },
-                { index: 13, tagName: 'button', text: 'Prefer not to say' },
-              ],
-            },
-          ] as any;
-        }
-        if (fnName === 'inPageWaitForDOMSettle') {
-          return [{ result: { settled: true, durationMs: 0 } }] as any;
-        }
-        return [{ result: { success: true } }] as any;
-      });
+            ] as any;
+          }
+          if (fnName === 'inPageLocateByText') {
+            // Direct text match fails (e.g. text is slightly different or wrapped in custom widget)
+            return [{ result: { success: false } }] as any;
+          }
+          if (fnName === 'inPageQueryChoiceCandidates') {
+            return [
+              {
+                result: [
+                  { index: 11, tagName: 'button', text: 'Female / Woman' },
+                  { index: 12, tagName: 'button', text: 'Male / Man' },
+                  { index: 13, tagName: 'button', text: 'Prefer not to say' },
+                ],
+              },
+            ] as any;
+          }
+          if (fnName === 'inPageWaitForDOMSettle') {
+            return [{ result: { settled: true, durationMs: 0 } }] as any;
+          }
+          return [{ result: { success: true } }] as any;
+        },
+      );
 
       const res = await formPipelineTool.execute({
-        fields: [
-          { query: 'gender', value: 'woman', type: 'choice' },
-        ],
+        fields: [{ query: 'gender', value: 'woman', type: 'choice' }],
         tabId: 401,
         maxSteps: 1,
       });
@@ -480,68 +629,107 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       injectedTabs.add(501);
       let callCount = 0;
 
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 501, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        if (opts.files) {
-          return [{ result: undefined }];
-        }
-        callCount++;
-        if (callCount === 1) {
-          // eval-or-start: Frame 0 settled synchronously, Frame 1 returned a Promise
-          return [
-            {
-              frameId: 0,
-              result: {
-                engineType: 'object',
-                fnType: 'function',
-                singleTurn: true,
-                status: 'success',
-                value: { frame: 0, syncVal: 42 },
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 501, url: 'https://example.com' });
+      (globalThis.chrome.scripting as any).executeScript = vi
+        .fn()
+        .mockImplementation(async (opts: any) => {
+          if (opts.files) {
+            return [
+              { frameId: 0, documentId: 'doc-501-0', result: undefined },
+              { frameId: 1, documentId: 'doc-501-1', result: undefined },
+            ];
+          }
+          if (opts.target?.documentIds) {
+            return [
+              {
+                frameId: opts.target.documentIds[0].endsWith('0') ? 0 : 1,
+                documentId: opts.target.documentIds[0],
+                result: true,
               },
-            },
-            {
-              frameId: 1,
-              result: {
-                engineType: 'object',
-                fnType: 'function',
-                singleTurn: false,
-                promiseType: 'object',
+            ];
+          }
+          callCount++;
+          if (callCount === 1) {
+            // eval-or-start: Frame 0 settled synchronously, Frame 1 returned a Promise
+            return [
+              {
+                frameId: 0,
+                result: {
+                  engineType: 'object',
+                  fnType: 'function',
+                  singleTurn: true,
+                  status: 'success',
+                  value: { frame: 0, syncVal: 42 },
+                },
               },
-            },
-          ];
-        } else if (callCount === 2) {
-          // poll: both frames done
-          return [
-            { frameId: 0, result: { done: true } },
-            { frameId: 1, result: { done: true } },
-          ];
-        } else if (callCount === 3) {
-          // retrieve: returns values from both frames
-          return [
-            { frameId: 0, result: { frame: 0, syncVal: 42 } },
-            { frameId: 1, result: { frame: 1, asyncVal: 99 } },
-          ];
-        }
-      });
+              {
+                frameId: 1,
+                result: {
+                  engineType: 'object',
+                  fnType: 'function',
+                  singleTurn: false,
+                  promiseType: 'object',
+                },
+              },
+            ];
+          } else if (callCount === 2) {
+            // poll: both frames done
+            return [
+              { frameId: 0, result: { done: true } },
+              { frameId: 1, result: { done: true } },
+            ];
+          } else if (callCount === 3) {
+            // retrieve: returns values from both frames
+            return [
+              { frameId: 0, result: { frame: 0, syncVal: 42 } },
+              { frameId: 1, result: { frame: 1, asyncVal: 99 } },
+            ];
+          }
+        });
 
-      const res = await executeInPage({ tabId: 501, allFrames: true }, 'inPageReindexFrame', []);
+      const res = await executeInPage({ tabId: 501, allFrames: true }, 'inPageDOMPruner', []);
       expect(res.length).toBe(2);
       expect(res[0].result).toEqual({ frame: 0, syncVal: 42 });
       expect(res[1].result).toEqual({ frame: 1, asyncVal: 99 });
     });
 
-    it('falls back to synthetic in-page selector script when CDP is unavailable for selector target', async () => {
+    it('allows synthetic fill after unique selector resolution when CDP is unavailable before editing', async () => {
       // Mock CDP withSession to reject (simulating debugger unavailable / detached)
       const cdpMod = await import('../utils/cdp-session-manager');
       vi.spyOn(cdpMod.cdpSessionManager, 'withSession').mockRejectedValue(
         new Error('Debugger is not attached to this tab'),
       );
 
-      (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 601, url: 'https://example.com' });
-      (globalThis.chrome.scripting as any).executeScript = vi.fn().mockImplementation(async (opts: any) => {
-        // Fallback selector execution in page
-        return [{ result: { success: true, filledText: 'test@example.com' } }];
-      });
+      (globalThis.chrome.tabs as any).get = vi
+        .fn()
+        .mockResolvedValue({ id: 601, url: 'https://example.com' });
+      const inPage = vi
+        .spyOn(engine, 'executeInPage')
+        .mockImplementation(async (_target, fnName) => {
+          if (fnName === 'inPageLocateBySelector') {
+            return [
+              {
+                frameId: 0,
+                result: {
+                  success: true,
+                  index: 1,
+                  x: 100,
+                  y: 100,
+                  tagName: 'input',
+                  inputType: 'text',
+                },
+              },
+            ] as any;
+          }
+          if (fnName === 'inPageVerifyInputCommitment') {
+            return [{ result: { committed: true, currentValue: 'test@example.com' } }] as any;
+          }
+          return [
+            { result: { success: true, x: 100, y: 100, filledText: 'test@example.com' } },
+          ] as any;
+        });
 
       const fillRes = await performPhysicalFill({
         tabId: 601,
@@ -552,6 +740,7 @@ describe('Boost 6: Single-Turn Evaluation & Jev-Powered Form Pipeline', () => {
       expect(fillRes.success).toBe(true);
       expect(fillRes.method).toBe('synthetic_inpage');
       expect(fillRes.filledText).toBe('test@example.com');
+      expect(inPage.mock.calls.filter(([, name]) => name === 'inPageFillIndex')).toHaveLength(1);
     });
   });
 });

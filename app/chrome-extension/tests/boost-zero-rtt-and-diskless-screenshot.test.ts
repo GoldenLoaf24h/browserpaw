@@ -132,8 +132,8 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
     });
   });
 
-  describe('2. chrome_read_dom pipelineHint', () => {
-    it('provides pipelineHint in payload to advertise 1-turn execution', async () => {
+  describe('2. chrome_read_dom observation payload', () => {
+    it('preserves observed refs without repeating tool usage instructions', async () => {
       const mod = await import('../entrypoints/background/tools/browser/read-dom');
       const engine = await import('../entrypoints/background/tools/browser/in-page-engine');
       const spy = vi.spyOn(engine, 'executeInPage');
@@ -165,10 +165,9 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
 
       expect(res.isError).toBe(false);
       const parsed = JSON.parse(res.content[0].text as string);
-      expect(parsed.pipelineHint).toBeDefined();
-      expect(parsed.pipelineHint).toContain('1-Turn Optimal Paradigm');
-      expect(parsed.pipelineHint).toMatch(/(browserpaw|browserclaw|chrome)_batch_actions/);
-      expect(parsed.pipelineHint).toContain('pressEnter: true');
+      expect(parsed).not.toHaveProperty('pipelineHint');
+      expect(parsed.treeString).toContain('[15]');
+      expect(parsed.treeString).toContain('[18]');
     });
   });
 

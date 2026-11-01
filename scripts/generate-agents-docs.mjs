@@ -7,9 +7,9 @@ const GENERATED_DATE = new Date().toLocaleDateString('en-CA');
 // Only committed files are documented; local scratch output (logs, zips, ignored config) must not
 // leak into the generated Key Files tables.
 const trackedFiles = new Set(
-  execSync('git ls-files', { encoding: 'utf-8' })
-    .trim()
-    .split(/\r?\n/)
+  execSync('git ls-files -z --cached --others --exclude-standard')
+    .toString('utf8')
+    .split('\0')
     .filter(Boolean)
     .map((f) => f.replace(/\\/g, '/')),
 );
@@ -18,7 +18,7 @@ const trackedFiles = new Set(
 const METADATA = {
   '.': {
     title: 'browserpaw',
-    purpose: 'Root of BrowserPaw — a high-efficiency Chrome browser automation MCP server and AI agent skill monorepo. It enables AI agents (Claude, Cursor, Windsurf, Codex) to operate an everyday Chrome browser with existing logins, cookies, and extensions in background tabs without stealing focus.',
+    purpose: 'Root of BrowserPaw, a Chrome browser automation MCP server and Agent Skill monorepo. It connects agents to an existing Chrome session through an extension and local Native bridge. See PROJECT.md for responsibilities and docs/development/DEVELOPMENT.md for current work and limitations.',
     keyFiles: [
       { name: 'package.json', desc: 'Monorepo root scripts, dependencies, workspaces, and metadata' },
       { name: 'pnpm-workspace.yaml', desc: 'PNPM workspace definition configuring packages and apps' },
@@ -36,7 +36,8 @@ const METADATA = {
       { name: 'docs/DOCUMENTATION.md', desc: 'Documentation governance: active vs archived, ownership, translations, and release templates' },
       { name: 'commitlint.config.cjs', desc: 'Conventional commits enforcement rules for git commit messages' },
       { name: 'eslint.config.js', desc: 'Global ESLint 9 flat configuration across TypeScript and Vue files' },
-      { name: 'marketplace.json', desc: 'MCP and plugin catalog registry metadata for plugin discovery' },
+      { name: '.agents/plugins/marketplace.json', desc: 'Portable Agent Plugins marketplace entry for ChatGPT and Codex' },
+      { name: '.claude-plugin/marketplace.json', desc: 'Claude Code marketplace entry for the BrowserPaw plugin' },
       { name: 'pnpm-lock.yaml', desc: 'Pinned dependency tree lockfile' }
     ],
     instructions: [
@@ -560,10 +561,10 @@ const METADATA = {
 
   'app/native-server/src/jev': {
     title: 'jev',
-    purpose: 'Dual-brain Jev fast decision engine and heuristic evaluator powering autonomous goal pursuit (chrome_act_toward_goal).',
+    purpose: 'Bounded semantic micro-loop, Jev evaluator, and heuristic fallback powering chrome_act_toward_goal.',
     keyFiles: [
       { name: 'index.ts', desc: 'Module export for Jev decision engines' },
-      { name: 'fast-decision-engine.ts', desc: 'In-process rule engine resolving interactive steps in 200-400ms without LLM calls' },
+      { name: 'fast-decision-engine.ts', desc: 'Bounded in-process rule engine for supported micro-steps' },
       { name: 'fast-decision-engine.test.ts', desc: 'Unit tests for fast decision engine' },
       { name: 'heuristic-engine.ts', desc: 'Heuristic candidate scorer for DOM elements' },
       { name: 'heuristic-engine.test.ts', desc: 'Unit tests for heuristic scoring' },
@@ -572,7 +573,7 @@ const METADATA = {
       { name: 'types.ts', desc: 'Type definitions for Jev state, goals, and actions' }
     ],
     instructions: [
-      'fast-decision-engine.ts executes rapid in-process heuristics (200-400ms) to resolve interactive steps without LLM roundtrips.',
+      'fast-decision-engine.ts executes bounded in-process heuristics for supported interactive steps without an additional planner turn.',
       'jev-client.ts connects to external JEV evaluators when configured.'
     ],
     testing: 'Run jest tests: `pnpm test fast-decision-engine`.',
@@ -904,7 +905,7 @@ const METADATA = {
 
   'packages/shared/src': {
     title: 'src',
-    purpose: 'Source files for canonical 50 tool schemas (49 extension + 1 native), profile definitions (Core 14, Crawl 12, Full 50), coordinate types, error formatting, and version constants.',
+    purpose: 'Source files for canonical tool schemas, profile definitions, coordinate types, error formatting, and version constants.',
     keyFiles: [
       { name: 'constants.ts', desc: 'Shared operational constants and magic numbers' },
       { name: 'coordinate.ts', desc: 'Coordinate model normalization supporting [x,y] and {x,y}' },
@@ -917,7 +918,7 @@ const METADATA = {
       { name: 'version.ts', desc: 'Single source of truth version constant' }
     ],
     instructions: [
-      'tools.ts contains all 50 canonical tool schemas — any tool argument change must begin here.',
+      'tools.ts contains the canonical tool schemas; any tool argument change must begin here.',
       'tool-profiles.ts defines the tool subsets for core, crawl, and full profiles.',
       'error-format.ts provides standardized error reporting with stack control.'
     ],
@@ -929,15 +930,15 @@ const METADATA = {
 
   'plugins': {
     title: 'plugins',
-    purpose: 'Container directory for platform-specific plugin integrations such as Codex, Hermes, DeepSeek Harness, and Claude Code.',
+    purpose: 'Client-specific BrowserPaw distributions for ChatGPT/Codex, Hermes, Claude Code, and DeepSeek Harness.',
     keyFiles: [],
     instructions: [
-      'Maintain compatibility with plugin manifest standards (plugin.yaml, .codex-plugin/plugin.json, .claude-plugin/plugin.json).',
-      'Python bridge scripts must remain compatible with Python 3.9+.'
+      'Keep each client package in its documented native layout; do not mix client-specific instructions into skills/browserpaw.',
+      'Edit only skills/browserpaw, then run node scripts/sync-skills.mjs.'
     ],
-    testing: 'Run python tests in plugins/browserpaw/tests/ if Python is available.',
-    patterns: 'Plugin manifest wrapping local MCP server connections.',
-    internalDeps: ['skill'],
+    testing: 'Run root script tests and `pytest plugins/browserpaw-hermes/tests`.',
+    patterns: 'Portable Agent Plugins, Hermes native plugins, Claude Code plugins, and DSH Cordis bundles.',
+    internalDeps: ['skills/browserpaw'],
     externalDeps: ['Python 3.9+ (optional test environment)']
   },
 
@@ -949,32 +950,30 @@ const METADATA = {
     ],
     instructions: [
       'Manifest lives at .claude-plugin/plugin.json; its name must match the catalog entry name in .claude-plugin/marketplace.json.',
-      'Skills are mirrored verbatim from skill/ by scripts/sync-skills.mjs and must keep canonical chrome_* tool names.',
+      'Skills are mirrored verbatim from skills/browserpaw/ by scripts/sync-skills.mjs and must keep canonical chrome_* tool names.',
       'Plugin contract coverage lives in scripts/browserpaw-claude-plugin.test.mjs.'
     ],
-    testing: '`node --test scripts/browserpaw-claude-plugin.test.mjs` and `claude plugin validate plugins/browserpaw-claude --strict`.',
+    testing: '`node --test scripts/browserpaw-claude-plugin.test.mjs`; when Claude Code is installed, also run `claude plugin validate plugins/browserpaw-claude --strict`.',
     patterns: 'Claude Code plugin manifest, marketplace catalog entry, and stdio .mcp.json server declaration.',
-    internalDeps: ['skill'],
-    externalDeps: ['Claude Code 2.1.299+', 'mcp-chrome-stdio on PATH']
+    internalDeps: ['skills/browserpaw'],
+    externalDeps: ['Claude Code 2.1.309+', 'mcp-chrome-stdio on PATH']
   },
 
   'plugins/browserpaw': {
     title: 'browserpaw',
-    purpose: 'Plugin package integrating BrowserPaw with Codex and Hermes AI coding assistants.',
+    purpose: 'Portable Agent Plugins package for ChatGPT/Codex, backed by the shared BrowserPaw MCP server.',
     keyFiles: [
-      { name: 'plugin.yaml', desc: 'Plugin configuration manifest for agent platforms' },
-      { name: 'core_schemas.json', desc: 'JSON schema definitions for plugin tool interfaces' },
-      { name: 'README.md', desc: 'Plugin installation and usage documentation' },
-      { name: '__init__.py', desc: 'Python package initialization module' }
+      { name: 'plugin.json', desc: 'Portable Agent Plugins v1 manifest and OpenAI presentation metadata' },
+      { name: 'mcp.json', desc: 'Standard stdio MCP server declaration' }
     ],
     instructions: [
-      'Encapsulates plugin manifests and Python test suites.',
-      'Synchronized with root skill updates via scripts/sync-skills.mjs.'
+      'Keep skills/browserpaw synchronized with the canonical skill.',
+      'Do not recreate .codex-plugin/ or mcp-skills/ compatibility copies.'
     ],
-    testing: 'Run Python test suites in tests/ if Python is configured.',
-    patterns: 'Plugin manifest packaging wrapping local MCP server.',
-    internalDeps: ['skill'],
-    externalDeps: ['Python 3.9+']
+    testing: '`node --test scripts/browserpaw-portable-plugin.test.mjs`',
+    patterns: 'Portable Agent Plugins v1 plugin.json plus mcp.json.',
+    internalDeps: ['skills/browserpaw'],
+    externalDeps: []
   },
 
   'plugins/browserpaw/skills': {
@@ -984,87 +983,131 @@ const METADATA = {
     instructions: ['Holds the browserpaw plugin skill package.'],
     testing: 'Verify file synchronization.',
     patterns: 'Container directory.',
-    internalDeps: ['skill'],
+    internalDeps: ['skills/browserpaw'],
     externalDeps: []
   },
 
   'plugins/browserpaw/skills/browserpaw': {
     title: 'browserpaw',
-    purpose: 'Plugin-adapted BrowserPaw skill package with browserpaw_ tool prefixes for Codex/Hermes compatibility.',
+    purpose: 'Verbatim portable mirror of the client-neutral BrowserPaw Agent Skill.',
     keyFiles: [
-      { name: 'SKILL.md', desc: 'Plugin-specific skill definition with browserpaw_ tool prefixes' }
+      { name: 'SKILL.md', desc: 'Client-neutral skill entry point' }
     ],
     instructions: [
-      'Mirrored automatically by scripts/sync-skills.mjs.',
-      'Replaces chrome_ prefixes with browserpaw_ prefixes for plugin environments.'
+      'Mirrored automatically by scripts/sync-skills.mjs; edit only skills/browserpaw.'
     ],
     testing: 'Verify sync script output.',
-    patterns: 'Prefix-adapted skill documentation.',
-    internalDeps: ['skill'],
+    patterns: 'Progressive disclosure through references, scripts, and assets.',
+    internalDeps: ['skills/browserpaw'],
     externalDeps: []
   },
 
-  'plugins/browserpaw/skills/browserpaw/config': {
-    title: 'config',
-    purpose: 'Plugin configuration templates, doctor script, and repair utilities.',
+  'plugins/browserpaw/skills/browserpaw/scripts': {
+    title: 'scripts',
+    purpose: 'Client-neutral diagnostic and repair utilities.',
     keyFiles: [
       { name: 'doctor.mjs', desc: 'Automated diagnostic connectivity test script' },
-      { name: 'mcp-config.json', desc: 'Sample MCP client configuration template' },
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
-      { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
-      { name: 'TROUBLESHOOTING.md', desc: 'Plugin troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
+      { name: 'repair.ps1', desc: 'PowerShell automated repair script' }
     ],
-    instructions: ['Mirrored from skill/config.'],
+    instructions: ['Mirrored from skills/browserpaw/scripts.'],
     testing: 'Verify file parity.',
-    patterns: 'Configuration templates.',
-    internalDeps: ['skill/config'],
+    patterns: 'Standalone diagnostic utilities.',
+    internalDeps: ['skills/browserpaw/scripts'],
     externalDeps: []
   },
 
-  'plugins/browserpaw/skills/browserpaw/recipes': {
+  'plugins/browserpaw/skills/browserpaw/assets/recipes': {
     title: 'recipes',
-    purpose: 'Automation recipes and task templates for plugin users.',
+    purpose: 'Bundled static site recipes copied into the Native runtime.',
     keyFiles: [
-      { name: 'README.md', desc: 'Recipe catalog and index' },
-      { name: 'template.md', desc: 'Workflow template for creating new recipes' }
+      { name: 'developer.mozilla.org.md', desc: 'MDN site-specific operating notes' }
     ],
-    instructions: ['Mirrored from skill/recipes.'],
+    instructions: ['Mirrored from skills/browserpaw/assets/recipes and copied to dist/recipes.'],
     testing: 'Verify file parity.',
-    patterns: 'Recipe markdown templates.',
-    internalDeps: ['skill/recipes'],
+    patterns: 'Static site recipes.',
+    internalDeps: ['skills/browserpaw/assets/recipes'],
     externalDeps: []
   },
 
   'plugins/browserpaw/skills/browserpaw/references': {
     title: 'references',
-    purpose: 'Reference documentation on batch pipelines, JEV dual-brain, tool cheat sheets, and visual fallback for plugin environments.',
+    purpose: 'Reference documentation on batch pipelines, the interactive Jev micro-loop, tool cheat sheets, and visual fallback.',
     keyFiles: [
       { name: 'batch-pipeline.md', desc: 'Guide to batch action pipelines for zero-roundtrip execution' },
-      { name: 'dual-brain-jev.md', desc: 'Architecture guide for high-speed local decision loops' },
+      { name: 'dual-brain-jev.md', desc: 'Architecture guide for the bounded interactive micro-loop' },
       { name: 'tool-cheatsheet.md', desc: 'Quick reference cheatsheet of tools and usage patterns' },
       { name: 'visual-fallback.md', desc: 'Playbook for visual screenshot and coordinate fallbacks' }
     ],
-    instructions: ['Mirrored from skill/references.'],
+    instructions: ['Mirrored from skills/browserpaw/references.'],
     testing: 'Verify file parity.',
     patterns: 'Technical references.',
-    internalDeps: ['skill/references'],
+    internalDeps: ['skills/browserpaw/references'],
     externalDeps: []
   },
 
-  'plugins/browserpaw/tests': {
+  'plugins/browserpaw-hermes': {
+    title: 'browserpaw-hermes',
+    purpose: 'Native Hermes plugin exposing the curated browserpaw_* wrapper surface.',
+    keyFiles: [
+      { name: 'plugin.yaml', desc: 'Hermes manifest and provided wrapper list' },
+      { name: 'core_schemas.json', desc: 'Hermes wrapper JSON schemas' },
+      { name: '__init__.py', desc: 'Hermes plugin implementation' }
+    ],
+    instructions: [
+      'Keep the declared wrapper list identical across plugin.yaml and __init__.py; the count is derived from that list.',
+      'Keep Hermes-specific source text inside skill-template/; scripts/sync-skills.mjs owns the generated skills/browserpaw mirror.'
+    ],
+    testing: '`pytest plugins/browserpaw-hermes/tests`',
+    patterns: 'Hermes native Python plugin and wrapper skill.',
+    internalDeps: ['skills/browserpaw'],
+    externalDeps: ['Python 3.9+', 'Hermes >=0.21.5']
+  },
+
+  'plugins/browserpaw-hermes/tests': {
     title: 'tests',
-    purpose: 'Python integration tests verifying bridge tokens, display integration, and MCP session management for the plugin.',
+    purpose: 'Python integration tests for bridge tokens, display integration, and MCP sessions.',
     keyFiles: [
       { name: 'test_bridge_token.py', desc: 'Verifies token generation and bearer token authentication' },
       { name: 'test_display_integration.py', desc: 'Tests visual overlay and display output compatibility' },
       { name: 'test_mcp_session.py', desc: 'Tests MCP session lifecycle and request forwarding' }
     ],
     instructions: ['Run with pytest in a Python 3.9+ environment.'],
-    testing: '`pytest plugins/browserpaw/tests/`',
+    testing: '`pytest plugins/browserpaw-hermes/tests/`',
     patterns: 'Pytest test cases testing MCP client connections.',
-    internalDeps: ['plugins/browserpaw'],
+    internalDeps: ['plugins/browserpaw-hermes'],
     externalDeps: ['pytest', 'requests']
+  },
+
+  'plugins/browserpaw-dsh': {
+    title: 'browserpaw-dsh',
+    purpose: 'DeepSeek Harness Cordis plugin distribution for the canonical BrowserPaw MCP service.',
+    keyFiles: [
+      { name: 'package.json', desc: 'DSH adapter package metadata and Cordis bundle patch declaration' },
+      { name: 'index.js', desc: 'DSH plugin entry point and BrowserPaw MCP runtime adapter' },
+      { name: 'cordis.patch.yml', desc: 'Cordis profile patch installed by DeepSeek Harness' }
+    ],
+    instructions: [
+      'Keep the adapter version distinct from the BrowserPaw product version and the MCP tools/listChanged handling.',
+      'Store only the generated canonical skill mirror in skills/browserpaw.'
+    ],
+    testing: '`node --test scripts/browserpaw-dsh-plugin.test.mjs` and `npm pack --dry-run --json`.',
+    patterns: 'Cordis plugin bundle with runtime MCP configuration and canonical skill injection.',
+    internalDeps: ['skills/browserpaw', 'packages/shared'],
+    externalDeps: ['DeepSeek Harness', 'Node.js 22+']
+  },
+
+  'plugins/browserpaw-dsh/skills/browserpaw': {
+    title: 'browserpaw',
+    purpose: 'Generated DSH mirror of the client-neutral BrowserPaw Agent Skill.',
+    keyFiles: [
+      { name: 'SKILL.md', desc: 'Canonical skill entry point' }
+    ],
+    instructions: ['Edit skills/browserpaw and run scripts/sync-skills.mjs; never edit this mirror directly.'],
+    testing: '`node --test scripts/sync-skills.test.mjs`',
+    patterns: 'Progressive disclosure through references, scripts, and assets.',
+    internalDeps: ['skills/browserpaw'],
+    externalDeps: []
   },
 
   'prompt': {
@@ -1138,62 +1181,69 @@ const METADATA = {
       { name: 'clean.js', desc: 'Cross-platform directory cleaner for dist, build, and node_modules' },
       { name: 'gen-tools-doc.mjs', desc: 'Generator extracting parameter documentation from tools.ts into docs/TOOLS.md' },
       { name: 'generate-agents-docs.mjs', desc: 'Hierarchical AGENTS.md documentation generator for deepinit' },
-      { name: 'sync-skills.mjs', desc: 'Synchronizes canonical skill/SKILL.md across all skill mirrors and plugin directories' },
+      { name: 'sync-skills.mjs', desc: 'Synchronizes canonical skills/browserpaw across the portable, Claude, DSH, Native, and Hermes skill distributions' },
       { name: 'validate-agents-docs.mjs', desc: 'Validator verifying hierarchical AGENTS.md parent links and required sections' }
     ],
     instructions: [
-      'Whenever skill/SKILL.md or package tool schemas are updated, run `node scripts/sync-skills.mjs` and `node scripts/gen-tools-doc.mjs`.',
+      'Whenever skills/browserpaw/SKILL.md or package tool schemas are updated, run `node scripts/sync-skills.mjs` and `node scripts/gen-tools-doc.mjs`.',
       'Use pure Node.js APIs (node:fs, node:path) to preserve cross-platform compatibility on Windows and POSIX.'
     ],
     testing: 'Test script execution: `node scripts/sync-skills.mjs` and `node scripts/gen-tools-doc.mjs`.',
     patterns: 'ES Modules with `node:` prefix; AST and source extraction for automated docs.',
-    internalDeps: ['packages/shared/src/tools.ts', 'skill/SKILL.md'],
+    internalDeps: ['packages/shared/src/tools.ts', 'skills/browserpaw/SKILL.md'],
     externalDeps: ['node:fs', 'node:path', 'node:crypto']
   },
 
-  'skill': {
-    title: 'skill',
+  'skills': {
+    title: 'skills',
+    purpose: 'Canonical agent skills; BrowserPaw lives in skills/browserpaw.',
+    keyFiles: [],
+    instructions: ['Edit skills/browserpaw and run node scripts/sync-skills.mjs.'],
+    testing: 'Run node scripts/sync-skills.mjs --check.',
+    patterns: 'Canonical source with client-specific generated plugin bundles.',
+    internalDeps: ['scripts/sync-skills.mjs'],
+    externalDeps: []
+  },
+
+  'skills/browserpaw': {
+    title: 'browserpaw',
     purpose: 'Canonical AI Agent Skill package for BrowserPaw. Encodes execution ladders, prompt recipes, troubleshooting tools, and reference documentation for AI agents.',
     keyFiles: [
       { name: 'SKILL.md', desc: 'Canonical skill definition containing tool escalation ladders and decision trees' }
     ],
     instructions: [
-      'This directory is the Single Source of Truth for skills. Never edit skills/browserpaw directly without syncing from here.',
+      'This directory is the Single Source of Truth for skills. Edit this canonical directory; plugin bundles are generated from it.',
       'After modifying SKILL.md, run `node scripts/sync-skills.mjs` to propagate changes to all mirrors.'
     ],
     testing: 'Verify schema names and tool arguments against packages/shared/src/tools.ts.',
     patterns: 'Tiered execution ladder: Tier 1 Micro-Loop -> Tier 0 Primitives -> Tier 2 Scripting -> Tier 3 Visual -> Tier 4 Human; anti-bot escalation.',
     internalDeps: ['scripts/sync-skills.mjs'],
-    externalDeps: ['Claude Code / Agent Skill protocol']
+    externalDeps: ['Agent Skills protocol']
   },
 
-  'skill/config': {
-    title: 'config',
-    purpose: 'Configuration templates, diagnostic doctor script, and repair batch/PowerShell scripts for the BrowserPaw skill.',
+  'skills/browserpaw/scripts': {
+    title: 'scripts',
+    purpose: 'Client-neutral diagnostic doctor and repair scripts for the BrowserPaw skill.',
     keyFiles: [
       { name: 'doctor.mjs', desc: 'Automated diagnostic connectivity test script' },
-      { name: 'mcp-config.json', desc: 'Sample MCP client configuration template' },
       { name: 'repair.bat', desc: 'Windows automated repair batch script' },
-      { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
-      { name: 'TROUBLESHOOTING.md', desc: 'Skill troubleshooting guide' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
+      { name: 'repair.ps1', desc: 'PowerShell automated repair script' }
     ],
     instructions: [
       'doctor.mjs performs automated connectivity checks for MCP and native host.',
       'repair.bat / repair.ps1 restore registry entries and clean stale locks.'
     ],
-    testing: 'Run `node skill/config/doctor.mjs`.',
+    testing: 'Run `node skills/browserpaw/scripts/doctor.mjs`.',
     patterns: 'Cross-platform diagnostic and repair scripts.',
     internalDeps: [],
     externalDeps: ['node:fs', 'node:child_process']
   },
 
-  'skill/recipes': {
+  'skills/browserpaw/assets/recipes': {
     title: 'recipes',
-    purpose: 'Pre-engineered workflow recipes providing end-to-end multi-step prompt patterns for common automation goals.',
+    purpose: 'Static site-specific operating notes copied into the Native runtime.',
     keyFiles: [
-      { name: 'README.md', desc: 'Catalog of automation recipes' },
-      { name: 'template.md', desc: 'Template for constructing new task recipes' }
+      { name: 'developer.mozilla.org.md', desc: 'MDN operating notes' }
     ],
     instructions: [
       'Recipes instruct agents on optimal tool sequencing for tasks like web extraction, login handling, and search.'
@@ -1204,100 +1254,22 @@ const METADATA = {
     externalDeps: []
   },
 
-  'skill/references': {
+  'skills/browserpaw/references': {
     title: 'references',
-    purpose: 'Deep architectural references covering batch pipelines, dual-brain JEV architecture, tool cheatsheets, and visual fallback strategies.',
+    purpose: 'Deep architectural references covering batch pipelines, the bounded interactive JEV micro-loop, tool cheatsheets, and visual fallback strategies.',
     keyFiles: [
       { name: 'batch-pipeline.md', desc: 'Comprehensive guide to chrome_batch_actions zero-roundtrip pipeline' },
-      { name: 'dual-brain-jev.md', desc: 'Guide to dual-brain local decision loops and Jev heuristics' },
-      { name: 'tool-cheatsheet.md', desc: 'Quick-reference guide for all 50 tools with sample calls' },
+      { name: 'dual-brain-jev.md', desc: 'Guide to the bounded interactive micro-loop and Jev heuristics' },
+      { name: 'tool-cheatsheet.md', desc: 'Quick-reference guide to canonical tools with sample calls' },
       { name: 'visual-fallback.md', desc: 'Guide for visual screenshot and coordinate fallbacks' }
     ],
     instructions: [
       'Consult batch-pipeline.md for constructing zero-roundtrip multi-action arrays.',
-      'Consult dual-brain-jev.md for high-speed local decision loops.'
+      'Consult dual-brain-jev.md for the bounded interactive micro-loop.'
     ],
     testing: 'Documentation integrity checks.',
     patterns: 'Detailed reference specifications.',
     internalDeps: [],
-    externalDeps: []
-  },
-
-  'skills': {
-    title: 'skills',
-    purpose: 'Mirror directory housing agent-compatible skill packages structured for external agent tooling and CLI skill discovery.',
-    keyFiles: [],
-    instructions: [
-      'Files here are mirrored from skill/ by scripts/sync-skills.mjs.',
-      'Do not make direct manual edits here; modify skill/ and run `pnpm sync-skills` or `node scripts/sync-skills.mjs`.'
-    ],
-    testing: 'Run `node scripts/sync-skills.mjs` to ensure synchronization.',
-    patterns: 'Automated synchronization from canonical source.',
-    internalDeps: ['skill'],
-    externalDeps: []
-  },
-
-  'skills/browserpaw': {
-    title: 'browserpaw',
-    purpose: 'Mirrored skill directory structured for global user skill installations (~/.omc/skills/ or ~/.claude/skills/).',
-    keyFiles: [
-      { name: 'SKILL.md', desc: 'Mirrored skill definition file' }
-    ],
-    instructions: [
-      'Mirrored automatically from skill/ by scripts/sync-skills.mjs.',
-      'Do not edit manually.'
-    ],
-    testing: 'Run `node scripts/sync-skills.mjs`.',
-    patterns: 'Mirrored skill package.',
-    internalDeps: ['skill'],
-    externalDeps: []
-  },
-
-  'skills/browserpaw/config': {
-    title: 'config',
-    purpose: 'Mirrored configuration utilities and doctor scripts for global skill installations.',
-    keyFiles: [
-      { name: 'doctor.mjs', desc: 'Automated diagnostic connectivity test script' },
-      { name: 'mcp-config.json', desc: 'Sample MCP client configuration template' },
-      { name: 'repair.bat', desc: 'Windows automated repair batch script' },
-      { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
-      { name: 'TROUBLESHOOTING.md', desc: 'Troubleshooting documentation' },
-      { name: 'TROUBLESHOOTING.zh-CN.md', desc: 'Simplified Chinese translation of the troubleshooting guide' }
-    ],
-    instructions: ['Mirrored from skill/config.'],
-    testing: 'Verify sync script output.',
-    patterns: 'Configuration scripts.',
-    internalDeps: ['skill/config'],
-    externalDeps: []
-  },
-
-  'skills/browserpaw/recipes': {
-    title: 'recipes',
-    purpose: 'Mirrored automation recipes for global skill installations.',
-    keyFiles: [
-      { name: 'README.md', desc: 'Recipe index' },
-      { name: 'template.md', desc: 'Recipe authoring template' }
-    ],
-    instructions: ['Mirrored from skill/recipes.'],
-    testing: 'Verify sync script output.',
-    patterns: 'Task recipes.',
-    internalDeps: ['skill/recipes'],
-    externalDeps: []
-  },
-
-  'skills/browserpaw/references': {
-    title: 'references',
-    purpose: 'Mirrored technical references for global skill installations.',
-    keyFiles: [
-      { name: 'batch-pipeline.md', desc: 'Batch action pipeline reference' },
-      { name: 'dual-brain-jev.md', desc: 'Dual-brain JEV architecture reference' },
-      { name: 'tool-cheatsheet.md', desc: 'Tool quick reference cheatsheet' },
-      { name: 'visual-fallback.md', desc: 'Visual fallback reference' }
-    ],
-    instructions: ['Mirrored from skill/references.'],
-    testing: 'Verify sync script output.',
-    patterns: 'Reference documentation.',
-    internalDeps: ['skill/references'],
     externalDeps: []
   },
 
@@ -1307,19 +1279,13 @@ const METADATA = {
     keyFiles: [
       { name: 'BROWSERPAW_MANUAL.md', desc: 'Manual testing checklist and verification guide' },
       { name: 'BROWSERPAW_MANUAL.zh-CN.md', desc: 'Simplified Chinese translation of the integration and control manual' },
-      { name: 'GAUNTLET_PLAYBOOK.md', desc: 'Adversarial edge-case testing gauntlet instructions' },
       { name: 'boost-features.test.ts', desc: 'Integration test suite for boost features and optimizations' },
       { name: 'boost-phase1-phase4.test.ts', desc: 'Phased regression verification tests' },
       { name: 'p0-p1-hardening.test.ts', desc: 'Hardening test suite for critical P0/P1 capabilities' },
       { name: 'visual-drift-optimization.test.ts', desc: 'Visual cursor drift and coordinate alignment tests' },
       { name: 'mcp-client.mjs', desc: 'Stand-alone MCP test client utility' },
       { name: 'mcp-runner.mjs', desc: 'MCP test execution runner' },
-      { name: 'run-test.mjs', desc: 'Ad-hoc test runner' },
-      { name: 'inspect-shadow.mjs', desc: 'Shadow DOM inspector test script' },
-      { name: 'p09-canvas-hit.mjs', desc: 'Canvas element hit-testing script' },
       { name: 'rd.mjs', desc: 'DOM read utility test script' },
-      { name: 'test-shadow-by-index.mjs', desc: 'Tests Shadow DOM element selection by index' },
-      { name: 'verify-debrief.mjs', desc: 'Debrief verification tester' }
     ],
     instructions: [
       'Do not rely on live Chrome instances for automated CI tests; use mocks provided in test/e2e/mocks/.',
@@ -1329,155 +1295,6 @@ const METADATA = {
     patterns: 'Mock MCP server and CDP event emitter mocks; oracle evaluators verifying action outcomes against ground truth.',
     internalDeps: ['packages/shared', 'app/native-server'],
     externalDeps: ['Node.js test runner / TypeScript strip-types']
-  },
-
-  'test/complex-html-testing': {
-    title: 'complex-html-testing',
-    purpose: 'Stand-alone Vite + React application providing 12 interactive DOM challenge pages (Shadow DOM, dynamic iframes, canvas, modals, drag-and-drop, virtualization) for manual and automated agent testing.',
-    keyFiles: [
-      { name: 'package.json', desc: 'Challenge testbed dependencies and scripts' },
-      { name: 'vite.config.ts', desc: 'Vite build configuration for testbed' },
-      { name: 'tsconfig.json', desc: 'TypeScript configuration for testbed' },
-      { name: 'index.html', desc: 'HTML entry point for React application' },
-      { name: 'serve.mjs', desc: 'Static challenge server runner' }
-    ],
-    instructions: [
-      'Run `pnpm dev` inside this directory to start the challenge server on localhost:5173.',
-      'Use this app to verify tool perception and action accuracy on complex modern web UIs.'
-    ],
-    testing: 'Interactive verification via browser.',
-    patterns: 'React 18 interactive challenge components with scoreboards.',
-    internalDeps: [],
-    externalDeps: ['vite', 'react', 'react-dom']
-  },
-
-  'test/complex-html-testing/public': {
-    title: 'public',
-    purpose: 'Static assets for the complex HTML testbed application.',
-    keyFiles: [],
-    instructions: ['Static image assets.'],
-    testing: 'Asset presence check.',
-    patterns: 'Static web assets.',
-    internalDeps: [],
-    externalDeps: []
-  },
-
-  'test/complex-html-testing/public/images': {
-    title: 'images',
-    purpose: 'Challenge images (animals, buildings, vehicles) used in visual matching and canvas challenges.',
-    keyFiles: [
-      { name: 'hero.jpg', desc: 'Hero background image' },
-      { name: 'q-bldg.jpg', desc: 'Building challenge sample image' },
-      { name: 'q-car1.jpg', desc: 'Car 1 challenge sample image' },
-      { name: 'q-car2.jpg', desc: 'Car 2 challenge sample image' },
-      { name: 'q-cat1.jpg', desc: 'Cat 1 challenge sample image' },
-      { name: 'q-cat2.jpg', desc: 'Cat 2 challenge sample image' },
-      { name: 'q-dog1.jpg', desc: 'Dog 1 challenge sample image' }
-    ],
-    instructions: ['Images used for visual verification tasks.'],
-    testing: 'Visual inspection.',
-    patterns: 'JPEG images.',
-    internalDeps: [],
-    externalDeps: []
-  },
-
-  'test/complex-html-testing/src': {
-    title: 'src',
-    purpose: 'Source code for the React testbed app including router, state store, and challenge containers.',
-    keyFiles: [
-      { name: 'App.tsx', desc: 'Root component with challenge layout, navigation, and live score' },
-      { name: 'main.tsx', desc: 'React entrypoint rendering App into the DOM' },
-      { name: 'index.css', desc: 'Global stylesheet with Tailwind utility classes' }
-    ],
-    instructions: ['Main entry point and challenge view routing.'],
-    testing: 'Vite build verification.',
-    patterns: 'React components and custom routing.',
-    internalDeps: [],
-    externalDeps: ['react']
-  },
-
-  'test/complex-html-testing/src/challenges': {
-    title: 'challenges',
-    purpose: '12 distinct challenge modules testing clicks, shadow DOM, forms, timing, scroll, keyboard, drag, modals, visual layout, state updates, CSS grid, and omega integration.',
-    keyFiles: [
-      { name: 'C01Click.tsx', desc: 'Challenge 01: Click accuracy and event listeners' },
-      { name: 'C02Shadow.tsx', desc: 'Challenge 02: Open and closed Shadow DOM traversal' },
-      { name: 'C03Form.tsx', desc: 'Challenge 03: Complex form inputs, selects, and textareas' },
-      { name: 'C04Timing.tsx', desc: 'Challenge 04: Dynamic timing, debounce, and delayed elements' },
-      { name: 'C05Scroll.tsx', desc: 'Challenge 05: Infinite scroll and virtualized feeds' },
-      { name: 'C06Keyboard.tsx', desc: 'Challenge 06: Keyboard shortcuts and hotkey combos' },
-      { name: 'C07Drag.tsx', desc: 'Challenge 07: HTML5 drag-and-drop actions' },
-      { name: 'C08Modal.tsx', desc: 'Challenge 08: Modal dialogs and backdrop traps' },
-      { name: 'C09Visual.tsx', desc: 'Challenge 09: Canvas rendering and visual element location' },
-      { name: 'C10State.tsx', desc: 'Challenge 10: Asynchronous state updates' },
-      { name: 'C11Grid.tsx', desc: 'Challenge 11: Complex CSS Grid and Flexbox alignment' },
-      { name: 'C12Omega.tsx', desc: 'Challenge 12: Omega multi-step combined challenge' },
-      { name: 'index.ts', desc: 'Barrel export for all 12 challenge components' }
-    ],
-    instructions: [
-      'Each challenge tests a specific browser automation difficulty.'
-    ],
-    testing: 'Interactive browser verification.',
-    patterns: 'Self-scoring React challenge components.',
-    internalDeps: [],
-    externalDeps: ['react']
-  },
-
-  'test/complex-html-testing/src/components': {
-    title: 'components',
-    purpose: 'Reusable UI primitives (buttons, inputs, cards, shells) for the challenge application.',
-    keyFiles: [
-      { name: 'Shell.tsx', desc: 'Layout shell providing sidebar and top navigation' },
-      { name: 'ui.tsx', desc: 'Button, card, badge, and input UI primitives' }
-    ],
-    instructions: ['Shared UI building blocks.'],
-    testing: 'React rendering.',
-    patterns: 'Component library primitives.',
-    internalDeps: [],
-    externalDeps: ['react']
-  },
-
-  'test/complex-html-testing/src/lib': {
-    title: 'lib',
-    purpose: 'Challenge protocol hooks, router utilities, and testbed session stores.',
-    keyFiles: [
-      { name: 'router.ts', desc: 'Lightweight hash-based routing utility' },
-      { name: 'session.ts', desc: 'Session manager tracking challenge completions' },
-      { name: 'store.tsx', desc: 'React context store holding overall score and challenge state' },
-      { name: 'useProtocol.ts', desc: 'Hook recording automated agent interaction events' }
-    ],
-    instructions: ['Protocol tracking for automation test runs.'],
-    testing: 'Typecheck and component tests.',
-    patterns: 'Custom React hooks and lightweight state store.',
-    internalDeps: [],
-    externalDeps: []
-  },
-
-  'test/complex-html-testing/src/pages': {
-    title: 'pages',
-    purpose: 'Challenge home page and debrief results dashboard.',
-    keyFiles: [
-      { name: 'Home.tsx', desc: 'Landing page listing all 12 challenges and difficulty rankings' },
-      { name: 'Debrief.tsx', desc: 'Results debrief page showing detailed score summary and logs' }
-    ],
-    instructions: ['Home overview and debrief evaluation pages.'],
-    testing: 'Vite app navigation.',
-    patterns: 'Page-level React components.',
-    internalDeps: [],
-    externalDeps: []
-  },
-
-  'test/complex-html-testing/src/utils': {
-    title: 'utils',
-    purpose: 'Utility functions such as clsx / tailwind-merge class helpers for the challenge app.',
-    keyFiles: [
-      { name: 'cn.ts', desc: 'Class name merger combining clsx and tailwind-merge' }
-    ],
-    instructions: ['CSS class concatenation helpers.'],
-    testing: 'Verified via build.',
-    patterns: 'Utility functions.',
-    internalDeps: [],
-    externalDeps: []
   },
 
   'test/e2e': {
@@ -1664,13 +1481,23 @@ function scanDirectories(baseDir) {
 
     const fullPath = path.join(baseDir, entry.name);
     const relPath = path.relative('.', fullPath).replace(/\\/g, '/');
+    if (relPath === 'test/complex-html-testing') continue;
+    // Installable plugin roots are shipped as-is; keep development notes outside them.
+    if (/^plugins\/browserpaw(?:-[^/]+)?(?:\/|$)/.test(relPath)) continue;
+    if (
+      /^skills\/browserpaw(?:\/|$)/.test(relPath) ||
+      /^plugins\/[^/]+\/(?:skills|mcp-skills)(?:\/|$)/.test(relPath) ||
+      /^plugins\/browserpaw-hermes\/skill-template(?:\/|$)/.test(relPath)
+    ) {
+      continue;
+    }
     dirs.push(relPath);
     dirs.push(...scanDirectories(fullPath));
   }
   return dirs;
 }
 
-const allDirs = ['.', ...scanDirectories('.').sort()];
+const allDirs = ['.', ...scanDirectories('.').filter((dir) => Object.hasOwn(METADATA, dir)).sort()];
 console.log(`Discovered ${allDirs.length} clean directories for AGENTS.md generation.`);
 
 function generateAgentsMd(dirPath) {
@@ -1814,7 +1641,11 @@ console.log(`Generating AGENTS.md across ${writeDirs.length} directories in hier
 let writtenCount = 0;
 for (const dir of writeDirs) {
   const targetPath = path.join(dir, 'AGENTS.md');
-  const markdown = generateAgentsMd(dir);
+  let markdown = generateAgentsMd(dir);
+  if (fs.existsSync(targetPath)) {
+    const manual = fs.readFileSync(targetPath, 'utf-8').match(/^## Manual Notes\r?\n([\s\S]*)$/m);
+    if (manual) markdown = markdown.replace(/(## Manual Notes\n)[\s\S]*$/, (_, heading) => heading + manual[1]);
+  }
   fs.writeFileSync(targetPath, markdown, 'utf-8');
   writtenCount++;
 }

@@ -3,10 +3,12 @@ import { BACKGROUND_MESSAGE_TYPES } from '@/common/message-types';
 import { NATIVE_HOST, STORAGE_KEYS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '@/common/constants';
 import { handleCallTool } from './tools';
 import { acquireKeepalive } from './keepalive-manager';
+import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 
 const LOG_PREFIX = '[NativeHost]';
 
 let nativePort: chrome.runtime.Port | null = null;
+const activeToolCalls = new Map<string, AbortController>();
 export const HOST_NAME = NATIVE_HOST.NAME;
 
 // ==================== Reconnect Configuration ====================
@@ -390,50 +392,96 @@ export function cancelFileOperation(requestId: string): void {
   fileOperationCallbacks.delete(requestId);
 }
 
-/**
- * Sends a Jev semantic matching request to Native Server with timeout and fallback.
- */
+let lastSeenModeRevision = -1;
+interface MirroredJevMode {
+  activeMode?: string;
+  requestedMode?: string;
+  retryAfter?: number | null;
+}
+let confirmedJevState: MirroredJevMode | undefined;
+
+function canUseJev(state?: MirroredJevMode): boolean {
+  return (
+    state?.activeMode === 'local' ||
+    state?.activeMode === 'remote' ||
+    Boolean(
+      state?.activeMode === 'off' &&
+      ['local', 'remote'].includes(state.requestedMode || '') &&
+      typeof state.retryAfter === 'number' &&
+      Number.isFinite(state.retryAfter) &&
+      Date.now() >= state.retryAfter,
+    )
+  );
+}
+
+export function isJevSemanticEnabled(): boolean {
+  return canUseJev(confirmedJevState);
+}
+
+/** Sends one bounded semantic request; cancellation never replays an action. */
 export async function sendJevMatchToNative(
   payload: any,
   timeoutMs = 1500,
+  options: { signal?: AbortSignal; deadlineAt?: number } = {},
 ): Promise<{
   success: boolean;
+  status?: 'matched' | 'none' | 'ambiguous' | 'unavailable' | 'cancelled';
   matchedId?: string | number;
   confidence?: number;
+  probabilities?: Record<string, number>;
+  model?: string;
   engine?: string;
+  reason?: string;
 } | null> {
-  if (!nativePort) {
-    const connected = await ensureNativeConnected('jev_match').catch(() => false);
-    if (!connected || !nativePort) return null;
+  const deadlineAt = Math.min(
+    options.deadlineAt ?? Infinity,
+    payload?.deadlineAt ?? Infinity,
+    Date.now() + timeoutMs,
+  );
+  if (options.signal?.aborted || Date.now() >= deadlineAt)
+    return { success: false, status: 'cancelled' };
+  // Deterministic callers must not open a connection just to discover that Jev is off.
+  const stored = await chrome.storage.local.get(['jevModeState', 'jevEngineMode']);
+  if (!canUseJev(stored.jevModeState || { activeMode: stored.jevEngineMode })) {
+    return { success: false, status: 'unavailable', reason: 'jev_disabled' };
   }
+  if (!nativePort || Date.now() >= deadlineAt) return { success: false, status: 'unavailable' };
   const requestId = `jev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      fileOperationCallbacks.delete(requestId);
-      resolve(null);
-    }, timeoutMs);
-
-    const ok = sendFileOperationToNative(
-      {
-        type: 'jev_semantic_match',
-        requestId,
-        payload,
-      },
-      (response: any) => {
-        clearTimeout(timer);
-        if (response?.payload?.success) {
-          resolve(response.payload);
-        } else {
-          resolve(null);
-        }
-      },
-    );
-
-    if (!ok) {
+    let settled = false;
+    const finish = (result: any) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       fileOperationCallbacks.delete(requestId);
-      resolve(null);
+      options.signal?.removeEventListener('abort', abort);
+      resolve(result);
+    };
+    const abort = () => {
+      sendFileOperationToNative({ type: 'cancel_jev_semantic_match', requestId, payload: {} });
+      finish({ success: false, status: 'cancelled' });
+    };
+    const timer = setTimeout(
+      () => {
+        sendFileOperationToNative({
+          type: 'cancel_jev_semantic_match',
+          requestId,
+          payload: { reason: 'timeout' },
+        });
+        finish({ success: false, status: 'unavailable', reason: 'deadline_exceeded' });
+      },
+      Math.max(0, deadlineAt - Date.now()),
+    );
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) {
+      abort();
+      return;
     }
+    const ok = sendFileOperationToNative(
+      { type: 'jev_semantic_match', requestId, payload: { ...payload, deadlineAt } },
+      (response: any) => finish(response?.payload ?? { success: false, status: 'unavailable' }),
+    );
+    if (!ok) finish({ success: false, status: 'unavailable' });
   });
 }
 
@@ -469,10 +517,23 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
               data: requestPayload,
             },
           });
+        } else if (message.type === NativeMessageType.CANCEL_TOOL) {
+          const targetRequestId = message.payload?.requestId;
+          if (typeof targetRequestId === 'string') {
+            activeToolCalls.get(targetRequestId)?.abort();
+          }
         } else if (message.type === NativeMessageType.CALL_TOOL && message.requestId) {
           const requestId = message.requestId;
+          const controller = new AbortController();
+          activeToolCalls.set(requestId, controller);
           try {
-            const result = await handleCallTool(message.payload);
+            const result = await handleCallTool(message.payload, {
+              signal: controller.signal,
+              taskId:
+                typeof message.payload?.args?._taskId === 'string'
+                  ? message.payload.args._taskId
+                  : undefined,
+            });
             safePostMessage(
               nativePort,
               {
@@ -494,7 +555,35 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
                 error: formatErrorForAgent(error),
               },
             });
+          } finally {
+            activeToolCalls.delete(requestId);
           }
+        } else if (message.type === NativeMessageType.TASK_PAGE_CONTROL && message.requestId) {
+          try {
+            const { handleTaskPageControl } = await import('@/utils/task-page-control');
+            const data = await handleTaskPageControl(message.payload);
+            safePostMessage(nativePort, {
+              responseToRequestId: message.requestId,
+              payload:
+                data.success === false
+                  ? { status: 'error', error: data.error }
+                  : { status: 'success', data },
+            });
+          } catch (error) {
+            safePostMessage(nativePort, {
+              responseToRequestId: message.requestId,
+              payload: { status: 'error', error: formatErrorForAgent(error) },
+            });
+          }
+        } else if (message.type === NativeMessageType.RELEASE_SESSION_AFFINITY) {
+          const sessionId = message.payload?.sessionId;
+          if (typeof sessionId === 'string' && sessionId)
+            sessionTabAffinity.removeAffinity(sessionId);
+          if (message.requestId)
+            safePostMessage(nativePort, {
+              responseToRequestId: message.requestId,
+              payload: { status: 'success' },
+            });
         } else if (message.type === 'set_agent_control') {
           const raw = message.payload?.enabled;
           const enabled = raw === true || raw === 'true' || raw === 1 || raw === '1';
@@ -538,6 +627,11 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
           broadcastServerStatusChange(currentServerStatus);
           // Server is confirmed running - now we can reset reconnect state
           resetReconnectState();
+          void import('./tools/browser/file-upload')
+            .then(({ fileBackingLeaseManager }) => fileBackingLeaseManager.reconcile())
+            .catch((error) =>
+              console.warn('Upload lease reconciliation after reconnect failed:', error),
+            );
           console.log(`${SUCCESS_MESSAGES.SERVER_STARTED} on port ${port}`);
         } else if (message.type === 'server_info_response') {
           if (message.payload) {
@@ -593,6 +687,21 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
               }
             });
           }
+        } else if (message.type === 'jev_mode_state') {
+          const state = message.payload;
+          if (
+            state &&
+            ['off', 'local', 'remote'].includes(state.activeMode) &&
+            Number.isFinite(state.revision) &&
+            state.revision >= lastSeenModeRevision
+          ) {
+            lastSeenModeRevision = state.revision;
+            confirmedJevState = state;
+            await chrome.storage.local.set({
+              jevModeState: state,
+              jevEngineMode: state.activeMode,
+            });
+          }
         } else if (message.type === 'file_operation_response') {
           const reqId = message.responseToRequestId;
           if (reqId && fileOperationCallbacks.has(reqId)) {
@@ -622,6 +731,8 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
     });
 
     nativePort.onDisconnect.addListener(() => {
+      confirmedJevState = undefined;
+      lastSeenModeRevision = -1;
       clearHandshakeTimer();
       console.warn(ERROR_MESSAGES.NATIVE_DISCONNECTED, chrome.runtime.lastError);
       nativePort = null;

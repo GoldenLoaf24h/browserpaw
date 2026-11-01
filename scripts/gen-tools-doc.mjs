@@ -6,7 +6,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const shared = await import(
   pathToFileURL(path.join(here, '../packages/shared/dist/index.mjs')).href
 );
-const { TOOL_SCHEMAS, TOOL_CATEGORIES, CORE_TOOL_NAMES, CRAWL_TOOL_NAMES } = shared;
+const { TOOL_SCHEMAS, TOOL_CATEGORIES, CORE_TOOL_NAMES, CRAWL_TOOL_NAMES, TOOL_NAMES } = shared;
+const nativeToolNames = new Set(Object.values(TOOL_NAMES.NATIVE));
+const nativeTools = TOOL_SCHEMAS.filter((tool) => nativeToolNames.has(tool.name));
 
 const groups = [
   ['navigate', 'Navigation & Tabs'],
@@ -14,6 +16,7 @@ const groups = [
   ['act', 'Interaction & Form Automation'],
   ['observe', 'Observation & Scrolling'],
   ['manage', 'Data & Tab Management'],
+  ['workflow', 'Durable Tasks & Verified Skills'],
   ['diagnose', 'Diagnostics & Debugging'],
   ['network', 'Network Interception & Capture'],
 ];
@@ -34,7 +37,7 @@ const toolDoc = (t) => {
     const en = v.enum ? ':' + v.enum.join('|') : '';
     const rq = req.includes(k) ? ' (required)' : '';
     const desc = sanitizeDesc(v.description);
-    return '- `' + k + en + '`' + rq + ' — ' + desc;
+    return '- `' + k + en + '`' + rq + (desc ? ' — ' + desc : '');
   });
   const desc = sanitizeDesc(t.description);
   return '### `' + t.name + '`\n\n' + desc + '\n\n' + params.join('\n') + '\n';
@@ -48,8 +51,7 @@ out += `| :--- | :---: | :---: | :--- |\n`;
 out += `| **core** (default) | ${CORE_TOOL_NAMES.size} | ~${footprint(TOOL_SCHEMAS.filter((t) => CORE_TOOL_NAMES.has(t.name)))} | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep |\n`;
 out += `| **full** | ${TOOL_SCHEMAS.length} | ~${footprint(TOOL_SCHEMAS)} | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |\n`;
 out += `| **crawl** | ${CRAWL_TOOL_NAMES.size} | ~${footprint(TOOL_SCHEMAS.filter((t) => CRAWL_TOOL_NAMES.has(t.name)))} | High-throughput web extraction, markdown summarization, and media inspection |\n\n`;
-out +=
-  `Canonical surface: ${TOOL_SCHEMAS.length} tools = ${TOOL_SCHEMAS.length - 1} extension-executed tools + 1 native-server tool (\`chrome_act_toward_goal\`, served by the local Jev engine). Profile counts are Core ${CORE_TOOL_NAMES.size} / Crawl ${CRAWL_TOOL_NAMES.size} / Full ${TOOL_SCHEMAS.length}. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.\n\n`;
+out += `Canonical surface: ${TOOL_SCHEMAS.length} tools = ${TOOL_SCHEMAS.length - nativeTools.length} extension-executed tools + ${nativeTools.length} native-server tools (${nativeTools.map((tool) => '`' + tool.name + '`').join(', ')}). Profile counts are Core ${CORE_TOOL_NAMES.size} / Crawl ${CRAWL_TOOL_NAMES.size} / Full ${TOOL_SCHEMAS.length}. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.\n\n`;
 out +=
   'Tools hidden under the active profile can be inspected and dynamically activated for the session via `chrome_tool_docs` without restarting the server.\n\n';
 
@@ -74,3 +76,14 @@ if (remaining.length > 0) {
 out = out.split('0~~1.0').join('0~1.0').split('0~~1000').join('0~1000');
 fs.writeFileSync(path.join(here, '../docs/TOOLS.md'), out.trimEnd() + '\n');
 console.log('docs/TOOLS.md regenerated:', TOOL_SCHEMAS.length, 'tools');
+
+const snapshotPath = path.join(here, '../plugins/browserpaw-hermes/core_schemas.json');
+const snapshotNames = Object.keys(JSON.parse(fs.readFileSync(snapshotPath, 'utf8')));
+const snapshot = Object.fromEntries(
+  snapshotNames.map((name) => {
+    const tool = byName.get(name);
+    if (!tool) throw new Error(`Packaged schema is absent from shared tools: ${name}`);
+    return [name, { description: tool.description, inputSchema: tool.inputSchema }];
+  }),
+);
+fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2) + '\n');

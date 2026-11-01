@@ -51,15 +51,6 @@ if exist "%SCRIPT_DIR%\browserpaw-server.exe" (
     endlocal
     exit /B !EXIT_CODE!
 )
-if exist "%SCRIPT_DIR%\browserclaw-server.exe" (
-    echo [Priority -1] Found standalone binary: %SCRIPT_DIR%\browserclaw-server.exe >> "%WRAPPER_LOG%"
-    call "%SCRIPT_DIR%\browserclaw-server.exe" %* 2>> "%STDERR_LOG%"
-    set "EXIT_CODE=%ERRORLEVEL%"
-    echo Exit code: !EXIT_CODE! >> "%WRAPPER_LOG%"
-    endlocal
-    exit /B !EXIT_CODE!
-)
-
 REM Priority 0: CHROME_MCP_NODE_PATH environment variable override
 echo [Priority 0] Checking CHROME_MCP_NODE_PATH override >> "%WRAPPER_LOG%"
 if defined CHROME_MCP_NODE_PATH (

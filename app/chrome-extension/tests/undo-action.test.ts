@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ActionHistoryManager } from '../utils/action-history-manager';
 import { UndoLastActionTool } from '../entrypoints/background/tools/browser/undo-action';
+import {
+  getIsolatedIndexMap,
+  indexElement,
+} from '../entrypoints/background/tools/browser/dom-indexer';
 
 describe('UndoAction (History Manager & Rollback Execution)', () => {
   let historyManager: ActionHistoryManager;
@@ -231,6 +235,7 @@ describe('A-07: undo restores controlled inputs through the native value setter'
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    getIsolatedIndexMap().clear();
     historyManager = ActionHistoryManager.getInstance();
     historyManager.clear();
     tool = new UndoLastActionTool();
@@ -253,9 +258,9 @@ describe('A-07: undo restores controlled inputs through the native value setter'
 
   it('bypasses the tracker and dispatches bubbling input/change with the restored value', async () => {
     const input = document.createElement('input');
-    input.setAttribute('data-mcp-idx', '3');
     input.value = 'user-typed';
     document.body.appendChild(input);
+    const targetIndex = indexElement(input);
     const tracker = installValueTracker(input);
 
     const events: string[] = [];
@@ -268,7 +273,7 @@ describe('A-07: undo restores controlled inputs through the native value setter'
 
     historyManager.pushAction(1, {
       type: 'fill',
-      index: 3,
+      index: targetIndex,
       prevValue: 'restored-value',
       timestamp: Date.now(),
     });
@@ -286,9 +291,9 @@ describe('A-07: undo restores controlled inputs through the native value setter'
 
   it('restores textarea values through the matching prototype setter', async () => {
     const textarea = document.createElement('textarea');
-    textarea.setAttribute('data-mcp-idx', '4');
     textarea.value = 'typed';
     document.body.appendChild(textarea);
+    const targetIndex = indexElement(textarea);
     const tracker = installValueTracker(textarea);
 
     const events: string[] = [];
@@ -298,7 +303,7 @@ describe('A-07: undo restores controlled inputs through the native value setter'
 
     historyManager.pushAction(1, {
       type: 'fill',
-      index: 4,
+      index: targetIndex,
       prevValue: 'restored-textarea',
       timestamp: Date.now(),
     });

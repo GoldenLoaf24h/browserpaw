@@ -5,8 +5,13 @@ export interface ToolResult extends CallToolResult {
   isError: boolean;
 }
 
+export interface ToolCallContext {
+  taskId?: string;
+  signal?: AbortSignal;
+}
+
 export interface ToolExecutor {
-  execute(args: any): Promise<ToolResult>;
+  execute(args: any, context?: ToolCallContext): Promise<ToolResult>;
 }
 
 export const createErrorResponse = (

@@ -19,13 +19,9 @@ export interface JevState {
   page: JevPageState;
   elements: string[];
   history: JevHistoryItem[];
-  /**
-   * Visible page text from the same fast snapshot that produced `elements`. Without it the
-   * model sees the controls but not their result, so a task whose outcome is rendered as page
-   * text reads as unachieved and the run keeps hunting for another action to take.
-   */
   page_text?: string;
   pending_modal?: string;
+  context?: string;
 }
 
 export type JevActionType =
@@ -33,8 +29,14 @@ export type JevActionType =
 
 export interface JevUsage {
   calls: number;
+  attempts?: number;
+  successfulRequests?: number;
   inputTokens: number;
-  estCostUsd: number;
+  outputTokens?: number | null;
+  estCostUsd: number | null;
+  backend?: 'remote' | 'local';
+  model?: string;
+  usageIncomplete?: boolean;
   visionCalls?: number;
   textLatencyMs?: number;
   visionLatencyMs?: number;
@@ -67,7 +69,32 @@ export interface StepRecord {
 export type DecisionEngineType = 'jev' | 'heuristic';
 
 export type ActTowardGoalStatus =
-  'done' | 'escalate' | 'stuck' | 'blocked' | 'max_steps' | 'timeout' | 'paused';
+  | 'done'
+  | 'escalate'
+  | 'stuck'
+  | 'blocked'
+  | 'max_steps'
+  | 'timeout'
+  | 'paused'
+  | 'cancelled'
+  | 'unknown';
+
+export type VerificationTool = 'chrome_read_dom' | 'chrome_network_request';
+
+export interface VerificationSpec {
+  tool: VerificationTool;
+  args?: Record<string, any>;
+  resultPath?: string;
+  expect: Record<string, any>;
+}
+
+export interface VerificationResult {
+  tool: VerificationTool;
+  pass: boolean;
+  error?: string;
+  observed?: any;
+  receipt?: any;
+}
 
 export interface PausedBeforeAction {
   action: string;
@@ -81,9 +108,11 @@ export type FallbackReason =
   | 'quota_exhausted'
   | 'rate_limited'
   | 'network_error'
+  | 'invalid_response'
   | 'jev_disabled'
   | 'local_service_offline'
   | 'vision_model_unsupported'
+  | 'mode_mismatch'
   | null;
 
 export interface ActTowardGoalParams {
@@ -98,10 +127,16 @@ export interface ActTowardGoalParams {
   sessionContext?: string;
   pressEnter?: boolean;
   mode?: 'off' | 'local' | 'remote';
+  deadline?: number;
+  verification?: VerificationSpec[];
   _meta?: {
     progressToken?: string | number;
     [key: string]: any;
   };
+}
+
+export interface FastDecisionRunOptions {
+  signal?: AbortSignal;
 }
 
 export interface ActTowardGoalResult {
@@ -110,9 +145,14 @@ export interface ActTowardGoalResult {
   engineSwitched: boolean;
   fallbackReason: FallbackReason;
   reason?: string;
+  success?: boolean;
+  retry?: boolean;
+  requestDispatched?: boolean;
   pausedBeforeAction?: PausedBeforeAction;
   steps: StepRecord[];
   finalPage: JevPageState;
   currentElements?: string[];
   jevUsage?: JevUsage;
+  verification?: VerificationResult[];
+  lastReceipt?: any;
 }

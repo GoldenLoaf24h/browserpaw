@@ -63,9 +63,8 @@ export class TabGroupCreateTool extends BaseBrowserToolExecutor {
       }
 
       await tabGroupManager.registerManagedGroup(groupId, args.title);
-      for (const tid of args.tabIds) {
-        tabGroupManager.registerAgentTab(tid);
-      }
+      // Explicit group operation manages tab grouping but MUST NOT automatically confer ownership!
+      // User tabs grouped together remain unmanaged so cleanup will safely ungroup instead of closing them.
 
       const group = await chrome.tabGroups.get(groupId);
 
@@ -214,6 +213,9 @@ export class TabGroupUngroupTool extends BaseBrowserToolExecutor {
 
     try {
       await chrome.tabs.ungroup(args.tabIds);
+      for (const tabId of args.tabIds) {
+        await tabGroupManager.releaseAgentTab(tabId);
+      }
       await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
       setTimeout(() => {
         tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});

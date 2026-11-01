@@ -1,6 +1,6 @@
 > **Archival Notice**: Test execution descriptions between the English and Chinese testing notes in this directory contain historical discrepancies (e.g., Task T3 container execution descriptions). These historical records are retained as-is for archival tracking and must not be treated as verified current system behavior.
 
-## 37. BrowserClaw × Jev 分层双脑与语义微循环集成实战复盘 (v2.8.0)
+## 37. BrowserPaw × Jev 分层双脑与语义微循环集成实战复盘 (v2.8.0)
 
 ### 1. 架构目标与工程约束落地
 
@@ -237,7 +237,7 @@
   2. Chromium 标签栏对原生已存在的 `<link rel="icon">` 的 `href` 修改存在强缓存，仅修改属性不会触发标签栏图标重绘。
 - **通用修复**：
   1. 纠正为合规的 `data:image/svg+xml,${encodeURIComponent(...)}`；
-  2. 在页内注入新 `<link rel="icon" type="image/svg+xml" data-browserclaw-injected="true">`，并将原图标临时降级为 `alternate icon`，迫使 Chromium 标签栏即刻卸载旧图标并渲染全新的 Agent 矢量图标；
+  2. 在页内注入新 `<link rel="icon" type="image/svg+xml" data-browserpaw-injected="true">`，并将原图标临时降级为 `alternate icon`，迫使 Chromium 标签栏即刻卸载旧图标并渲染全新的 Agent 矢量图标；
   3. 将 `tabFaviconManager.markTabActive(tabId)` 全面接入 `read_dom`、`computer`、`interaction`、`keyboard`、`batch_actions`、`fill_index` 与 `interact_index`，只要 Agent 正在感知或操控目标标签页，其图标即刻进入活跃指示状态。
 
 ### 2. Chrome MV3 CSP 拦截 `new AsyncFunction` 导致单行表达式返回 `undefined` 根治
@@ -452,7 +452,7 @@
 ### 1. 战报概览与验证指标
 
 - **当前实测得分**：`176 / 1320`（通过 **Qualification 资格赛**、**01 PHANTOM CLICKS**、**02 SHADOW LABYRINTH**，全部点亮绿色通关指示灯）。
-- **执行准则**：零代码预判、零题目特化，纯粹依靠 BrowserClaw 原生暴露的高阶 MCP 工具闭环解决复杂的动态 Canvas 干扰、半透明模态遮挡、CSS 视觉欺骗与 closed ShadowRoot 穿透。
+- **执行准则**：零代码预判、零题目特化，纯粹依靠 BrowserPaw 原生暴露的高阶 MCP 工具闭环解决复杂的动态 Canvas 干扰、半透明模态遮挡、CSS 视觉欺骗与 closed ShadowRoot 穿透。
 - **自动化测试回归**：
   - `vue-tsc --noEmit`：0 错误。
   - 单测套件：32 个测试套件，170 / 170 测试全量通过（含新增的 `self-healing-and-visual-shape.test.ts`）。
@@ -535,7 +535,7 @@
 ### 2. 测试与验证基线
 
 - **单元与集成测试**：全量 32 个测试套件，**170 / 170 测试 100% 通过**。
-- **构建输出**：全量构建成功，产物已同步至 `D:/workspace/browserclaw`。
+- **构建输出**：全量构建成功，产物已同步至 `D:/workspace/browserpaw`。
 
 ---
 
@@ -564,7 +564,7 @@
 #### 1.3 Native Host 单二进制启动优先通道 (`run_host.bat`)
 
 - **定位**：`app/native-server/src/scripts/run_host.bat:30-40`
-- **治理**：增加 `Priority -1` 检测，优先查找当前目录下的独立单可执行文件（`browserclaw-server.exe`）。若存在则直接免 Node 运行，若不存在则无缝平滑走已有的 7 级 Node 自动发现链。
+- **治理**：增加 `Priority -1` 检测，优先查找当前目录下的独立单可执行文件（`browserpaw-server.exe`）。若存在则直接免 Node 运行，若不存在则无缝平滑走已有的 7 级 Node 自动发现链。
 
 ---
 
@@ -573,7 +573,7 @@
 - **单元与集成测试**：全量 32 个测试套件，**172 / 172 测试 100% 通过**（新增 2 项）。
 - **静态类型检查**：`pnpm typecheck` **0 错误**。
 - **真机 MCP 连通性测试**：`chrome_navigate`（带自拟标题与紫色） $\to$ `chrome_tab_group_list`（验证创建） $\to$ `chrome_close_tabs`（验证销毁）全链路实操通过。
-- **产物同步**：最新构建已同步至 `D:/workspace/browserclaw`。
+- **产物同步**：最新构建已同步至 `D:/workspace/browserpaw`。
 
 ---
 
@@ -664,7 +664,7 @@
 ### 1. 战报概览与验证指标
 
 - **当前实测得分**：`176 / 1320`（通过 **Qualification 资格赛**、**01 PHANTOM CLICKS**、**02 SHADOW LABYRINTH**，全部点亮绿色通关指示灯）。
-- **执行准则**：零代码预判、零题目特化，纯粹依靠 BrowserClaw 原生暴露的高阶 MCP 工具闭环解决复杂的动态 Canvas 干扰、半透明模态遮挡、CSS 视觉欺骗与 closed ShadowRoot 穿透。
+- **执行准则**：零代码预判、零题目特化，纯粹依靠 BrowserPaw 原生暴露的高阶 MCP 工具闭环解决复杂的动态 Canvas 干扰、半透明模态遮挡、CSS 视觉欺骗与 closed ShadowRoot 穿透。
 - **自动化测试回归**：
   - `vue-tsc --noEmit`：0 错误。
   - 单测套件：32 个测试套件，170 / 170 测试全量通过（含新增的 `self-healing-and-visual-shape.test.ts`）。
@@ -747,7 +747,7 @@
 ### 2. 测试与验证基线
 
 - **单元与集成测试**：全量 32 个测试套件，**170 / 170 测试 100% 通过**。
-- **构建输出**：全量构建成功，产物已同步至 `D:/workspace/browserclaw`。
+- **构建输出**：全量构建成功，产物已同步至 `D:/workspace/browserpaw`。
 
 ---
 
@@ -776,7 +776,7 @@
 #### 1.3 Native Host 单二进制启动优先通道 (`run_host.bat`)
 
 - **定位**：`app/native-server/src/scripts/run_host.bat:30-40`
-- **治理**：增加 `Priority -1` 检测，优先查找当前目录下的独立单可执行文件（`browserclaw-server.exe`）。若存在则直接免 Node 运行，若不存在则无缝平滑走已有的 7 级 Node 自动发现链。
+- **治理**：增加 `Priority -1` 检测，优先查找当前目录下的独立单可执行文件（`browserpaw-server.exe`）。若存在则直接免 Node 运行，若不存在则无缝平滑走已有的 7 级 Node 自动发现链。
 
 ---
 
@@ -785,7 +785,7 @@
 - **单元与集成测试**：全量 32 个测试套件，**172 / 172 测试 100% 通过**（新增 2 项）。
 - **静态类型检查**：`pnpm typecheck` **0 错误**。
 - **真机 MCP 连通性测试**：`chrome_navigate`（带自拟标题与紫色） $\to$ `chrome_tab_group_list`（验证创建） $\to$ `chrome_close_tabs`（验证销毁）全链路实操通过。
-- **产物同步**：最新构建已同步至 `D:/workspace/browserclaw`。
+- **产物同步**：最新构建已同步至 `D:/workspace/browserpaw`。
 
 ---
 
@@ -913,7 +913,7 @@
 
 - **单元与集成测试**：全量 32 个测试套件，**182 / 182 测试 100% 通过**（`app/chrome-extension`），native-server **31 / 31 100% 通过**，E2E 业务工作流测试 **153 / 153 100% 通过**，**总计 366 / 366 测试全量通过（0 失败，0 告警）**。
 - **静态类型检查**：`pnpm typecheck` **0 错误（全工作区通过）**。
-- **全量构建打包**：`pnpm build` **0 错误**，全包产物（`packages/shared`、`app/native-server`、`app/chrome-extension`）打包就绪，并已完整同步至 `D:/workspace/browserclaw` 解压扩展目录。
+- **全量构建打包**：`pnpm build` **0 错误**，全包产物（`packages/shared`、`app/native-server`、`app/chrome-extension`）打包就绪，并已完整同步至 `D:/workspace/browserpaw` 解压扩展目录。
 
 ---
 
@@ -960,7 +960,7 @@
 
 - **单元与集成测试**：扩展端 34 个测试套件，186 / 186 测试 100% 通过；新增 vom-coverage.test.ts 与 window-mode-routing.test.ts。
 - **静态类型检查**：pnpm typecheck 0 错误。
-- **构建打包输出**：全包构建成功，产物已同步至 D:/workspace/browserclaw。
+- **构建打包输出**：全包构建成功，产物已同步至 D:/workspace/browserpaw。
 
 ---
 
@@ -980,10 +980,10 @@
 - **定位**：app/chrome-extension/entrypoints/background/tools/browser/doctor.ts & packages/shared/src/tools.ts
 - **治理**：新增 chrome_doctor 工具并纳入 diagnose 分类，一键诊断 Native Server 12306 端口连通性与延迟、Agent 自动化总开关、虚拟光标模式、Window 独立隔离窗口模式与标签页纳管健康度。
 
-#### 1.3 极简终端命令行垫片 (bin/browserclaw.cjs)
+#### 1.3 极简终端命令行垫片 (bin/browserpaw.cjs)
 
-- **定位**：bin/browserclaw.cjs & package.json bin 字段
-- **治理**：~150 行零额外守护进程脚本，直接读取 ~/.chrome-mcp/bridge-token 转发调用，支持 browserclaw nav / dom / click / fill / doctor 命令行即席交互。
+- **定位**：bin/browserpaw.cjs & package.json bin 字段
+- **治理**：~150 行零额外守护进程脚本，直接读取 ~/.chrome-mcp/bridge-token 转发调用，支持 browserpaw nav / dom / click / fill / doctor 命令行即席交互。
 
 #### 1.4 大模型参数智能类型宽松矫正 (Smart Argument Coercion)
 
@@ -1006,7 +1006,7 @@
 
 - **单元与集成测试**：扩展端 34 个测试套件，186 / 186 测试 100% 通过；Node 端核心硬化测试 21 / 21 通过。
 - **静态类型检查**：pnpm typecheck 0 错误。
-- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserclaw。
+- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserpaw。
 
 ---
 
@@ -1035,7 +1035,7 @@
 
 - **全量自动化测试**：扩展端 34 个测试套件，186 / 186 测试 100% 通过；Node 端硬化测试 21 / 21 通过。
 - **静态类型检查**：pnpm typecheck 0 错误。
-- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserclaw。
+- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserpaw。
 
 ---
 
@@ -1070,7 +1070,7 @@
 
 - **单元与集成测试**：扩展端 34 个测试套件，185 / 185 测试 100% 通过；Node 端硬化测试 21 / 21 通过。
 - **静态类型检查**：pnpm typecheck 0 错误。
-- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserclaw。
+- **全量构建打包**：pnpm build 成功，产物已同步至 D:/workspace/browserpaw。
 
 ---
 
@@ -1096,13 +1096,13 @@
 
 #### 1.3 视口裁剪与参数人体工程学容错增强
 
-- **定位**：`read-dom.ts` & `smart-scroll.ts` & `common.ts` & `doctor.ts` & `browserclaw.cjs`
+- **定位**：`read-dom.ts` & `smart-scroll.ts` & `common.ts` & `doctor.ts` & `browserpaw.cjs`
 - **治理**：
   - `chrome_read_dom`：彻底打通 `viewportOnly: args.viewportOnly` 至 `inPageDOMPruner`，激活 150px 视口裁剪逻辑；
   - `chrome_smart_scroll`：支持 `args.index` 作为 `args.ref` 的等价别名；
   - `chrome_close_tabs`：支持单数 `tabId: number` 自动转换为 `tabIds: number[]`；
   - `chrome_doctor`：准确调用 `chrome.windows.getAll()` 汇报真实窗口数，修复多窗口判断伪阳性；
-  - `browserclaw.cjs`：补全 `notifications/initialized` 握手通知，并增加非 SSE 流式直接 JSON 响应的解析兜底。
+  - `browserpaw.cjs`：补全 `notifications/initialized` 握手通知，并增加非 SSE 流式直接 JSON 响应的解析兜底。
 
 #### 1.4 文档全量对齐 45 规范工具架构
 
@@ -1165,7 +1165,7 @@
 - **架构硬化测试 (P0-P1)**：21 / 21 测试 100% 通过。
 - **架构升级与历史能力全量测试 (Boost Features)**：80 / 80 测试 100% 通过。
 - **静态类型检查**：`pnpm typecheck` 0 错误。
-- **全量构建打包**：`pnpm run build` 成功，构建产物无缝同步至 `D:\workspace\browserclaw`。
+- **全量构建打包**：`pnpm run build` 成功，构建产物无缝同步至 `D:\workspace\browserpaw`。
 
 ---
 
@@ -1231,9 +1231,9 @@
   - `tests/delta-hardening.test.ts` (10/10 通过)：覆盖标准及中文复合倒计时降噪、广告过滤、compact 属性裁剪、25 项变更截断、首次 baseline 防爆炸以及 `readDOMTool` delta 截断元数据透传；
   - `tests/inpage-agent-helpers.test.ts` (19/19 通过)：覆盖 `mcp.run`、非终结 `:has-text(...)`、逗号分隔多选择器、正则 `/.../` 文本匹配、最内层精准定位、数字前缀选择器防误判、`mcp.waitFor` 选项传参、`const res = await mcp.run(...)` 自动返回值与端到端购物车清理闭环。
 - **Tier 1-4 E2E 测试**：153 / 153 测试 100% 通过。
-- **静态类型检查**：`pnpm -r --filter="!browserclaw" exec tsc --noEmit` 0 错误。
+- **静态类型检查**：`pnpm -r --filter="!browserpaw" exec tsc --noEmit` 0 错误。
 - **全量构建打包**：`pnpm build`（`packages/shared`, `app/native-server`, `app/chrome-extension`）全部成功编译。
-- **Skill 规则严格校验**：`tests/skill-doc-params.test.ts` 11/11 全绿，已完成同步至用户端 `browserclaw` 及 `mcp-chrome` skill 目录并重新计算 SHA256 签名。
+- **Skill 规则严格校验**：`tests/skill-doc-params.test.ts` 11/11 全绿，已完成同步至用户端 `browserpaw` 及 `mcp-chrome` skill 目录并重新计算 SHA256 签名。
 
 ---
 
@@ -1283,8 +1283,8 @@
   - `tests/spa-edge-cases-hardening.test.ts` (16/16 全部通过)：全面覆盖 `[composer]` 语义识别与定位权重、搜索框误填预警、透明遮罩与 `elementsFromPoint` 穿透、会话串行化与静默看门狗、二次确认弹窗识别以及吸顶元素安全边距滚动补偿；
 - **Tier 1-4 E2E 完整套件**：4 个 Tier，153 / 153 测试 100% 通过（总耗时 10128ms）；
 - **静态类型检查**：`pnpm typecheck` 0 错误（TypeScript 全库无缝通过）；
-- **全量构建打包**：`pnpm build`（`packages/shared`, `app/native-server`, `app/chrome-extension`）成功，构建产物完整同步到生产环境 `D:\workspace\browserclaw`；
-- **Skill 规则与双向签名**：`tests/skill-doc-params.test.ts` 11/11 全绿，已完成同步至用户端 `browserclaw` 及 `mcp-chrome` skill 目录并重新计算 SHA256 签名。
+- **全量构建打包**：`pnpm build`（`packages/shared`, `app/native-server`, `app/chrome-extension`）成功，构建产物完整同步到生产环境 `D:\workspace\browserpaw`；
+- **Skill 规则与双向签名**：`tests/skill-doc-params.test.ts` 11/11 全绿，已完成同步至用户端 `browserpaw` 及 `mcp-chrome` skill 目录并重新计算 SHA256 签名。
 
 ## 54. 2026-09-19 ???????????????????????????? (v2.8.0)
 
@@ -1308,8 +1308,8 @@
 #### 2.1 `INSTALL.md` ??????????
 
 - **[????] Stdio ????????**?Cursor?Claude Desktop ? Windsurf ????????? `cli.js --stdio`???????`cli.js` ???? `--stdio` ????? Stdio ????? `app/native-server/dist/mcp/mcp-server-stdio.js`??????? `mcp-server-stdio.js`?
-- **[??] Release ?????????**?????? `browserclaw-extension-latest.zip`?? GitHub Actions ????????? `browserclaw-extension-v*.zip`???????
-- **[????] Hermes ????????**???? `hermes plugins install ... --subdir plugins/browserclaw` ?? `unrecognized arguments: --subdir`??? Hermes ?????????? Git Fragment?`hermes plugins install GoldenLoaf24h/browserclaw#plugins/browserclaw`???? `hermes mcp add` ??????? `--url ... --auth header` ?????
+- **[??] Release ?????????**?????? `browserpaw-extension-latest.zip`?? GitHub Actions ????????? `browserpaw-extension-v*.zip`???????
+- **[????] Hermes ????????**???? `hermes plugins install ... --subdir plugins/browserpaw` ?? `unrecognized arguments: --subdir`??? Hermes ?????????? Git Fragment?`hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw`???? `hermes mcp add` ??????? `--url ... --auth header` ?????
 - **[??] Doctor ????????**??? `doctor.mjs` ??? 7 ????????????????? bridge ?????????????
 
 #### 2.2 `PRIVACY.md` Chrome ????????????
@@ -1349,15 +1349,15 @@
 ### 3. ?????????????
 
 - **???????**?`pnpm --filter chrome-mcp-server test tests/skill-doc-params.test.ts` **11 / 11 PASS**?
-- **Hermes ??????**?`hermes plugins validate plugins/browserclaw` **12 / 12 PASS**?
+- **Hermes ??????**?`hermes plugins validate plugins/browserpaw` **12 / 12 PASS**?
 - **???????**?`pnpm typecheck` **0 Error**?
 - **????????**?`pnpm build` **??????**?
 - **???????**?????? Skill ??? 100% ?????????
   - `D:\workspace\mcp-chrome-master\mcp-chrome-master\skill\`
-  - `D:\workspace\mcp-chrome-master\mcp-chrome-master\plugins\browserclaw\skills\browserclaw\`
-  - `D:\workspace\mcp-chrome-master\mcp-chrome-master\skills\browserclaw\`
-  - `D:\workspace\browserclaw\`
-  - `C:\Users\Lenovo\.gemini\config\skills\browserclaw\` (SHA256: `d80013c0...`)
+  - `D:\workspace\mcp-chrome-master\mcp-chrome-master\plugins\browserpaw\skills\browserpaw\`
+  - `D:\workspace\mcp-chrome-master\mcp-chrome-master\skills\browserpaw\`
+  - `D:\workspace\browserpaw\`
+  - `C:\Users\Lenovo\.gemini\config\skills\browserpaw\` (SHA256: `d80013c0...`)
   - `C:\Users\Lenovo\.gemini\config\skills\mcp-chrome\` (SHA256: `bc25b282...`)
 
 ---
@@ -1395,7 +1395,7 @@
 - **文档全景更新**：
   - `README.md` & `README.zh-CN.md`：更新工具数量至 48 项，完善 7 大分类目录与双脑分层架构图。
   - `docs/TOOLS.md`：重新生成 48 项工具参数与 Schema 字典。
-  - `docs/MAP.md`、`docs/mcp-cli-config.md`、`docs/TROUBLESHOOTING.zh-CN.md`、`PROJECT.md`、`PROJECT.zh-CN.md`、`app/chrome-extension/README.md`、`plugins/browserclaw/README.md` 全量同步为 48 项工具。
+  - `docs/MAP.md`、`docs/mcp-cli-config.md`、`docs/TROUBLESHOOTING.zh-CN.md`、`PROJECT.md`、`PROJECT.zh-CN.md`、`app/chrome-extension/README.md`、`plugins/browserpaw/README.md` 全量同步为 48 项工具。
 - **Skill 6 目录绝对对齐**：通过 `scripts/sync-skills.mjs` 实现 6 处 Skill 目录 SHA-256 逐字节一致校验。
 
 ### 3. 全量测试与质量门记录 (v2.9.0)

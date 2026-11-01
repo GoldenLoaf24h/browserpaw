@@ -13,6 +13,8 @@ type MessageListener = (
   sendResponse: (response: any) => void,
 ) => unknown;
 
+let nativeHost: typeof import('../entrypoints/background/native-host');
+
 function makePort(overrides: Record<string, any> = {}) {
   return {
     postMessage: vi.fn(),
@@ -24,19 +26,14 @@ function makePort(overrides: Record<string, any> = {}) {
 }
 
 async function loadListener(port: any, connect: boolean): Promise<MessageListener> {
-  vi.resetModules();
   const runtime = chrome.runtime as any;
   runtime.connectNative = vi.fn().mockReturnValue(port);
-  // The shared vitest setup does not stub these lifecycle events.
-  runtime.onStartup ??= { addListener: vi.fn(), removeListener: vi.fn() };
-  runtime.onInstalled ??= { addListener: vi.fn(), removeListener: vi.fn() };
-  const mod = await import('../entrypoints/background/native-host');
   if (connect) {
-    mod.connectNativeHost(12345);
+    nativeHost.connectNativeHost(12345);
     port.postMessage.mockClear(); // Drop the START handshake sent on connect
   }
   (chrome.runtime.onMessage.addListener as any).mockClear();
-  mod.initNativeHostListener();
+  nativeHost.initNativeHostListener();
   const calls = (chrome.runtime.onMessage.addListener as any).mock.calls;
   return calls[calls.length - 1][0] as MessageListener;
 }
@@ -45,11 +42,20 @@ async function loadListener(port: any, connect: boolean): Promise<MessageListene
 const trustedSender = () => ({ id: chrome.runtime.id });
 
 describe('E-14: forward_to_native reports the real delivery outcome', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
+    vi.useFakeTimers();
+    vi.resetModules();
+    const runtime = chrome.runtime as any;
+    runtime.onStartup ??= { addListener: vi.fn(), removeListener: vi.fn() };
+    runtime.onInstalled ??= { addListener: vi.fn(), removeListener: vi.fn() };
+    // Background graph loading is setup; delivery assertions below are synchronous.
+    nativeHost = await import('../entrypoints/background/native-host');
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -67,6 +73,91 @@ describe('E-14: forward_to_native reports the real delivery outcome', () => {
     expect(returned).toBe(true);
     expect(port.postMessage).toHaveBeenCalledTimes(1);
     expect(sendResponse).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('does not dispatch a semantic request when the mirrored mode is off', async () => {
+    const port = makePort();
+    await loadListener(port, true);
+    vi.spyOn(chrome.storage.local, 'get').mockResolvedValue({ jevEngineMode: 'off' });
+    const result = await nativeHost.sendJevMatchToNative({ query: 'Email', candidates: [] });
+    expect(result).toMatchObject({ success: false, reason: 'jev_disabled' });
+    expect(port.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('mirrors an authoritative automatic-off notification into extension storage', async () => {
+    const port = makePort();
+    await loadListener(port, true);
+    const set = vi.spyOn(chrome.storage.local, 'set').mockResolvedValue();
+    const listener = port.onMessage.addListener.mock.calls[0][0];
+    const state = {
+      activeMode: 'off',
+      revision: 8,
+      disabledReason: 'network_error',
+      changedAt: 100,
+    };
+    await listener({ type: 'jev_mode_state', payload: state });
+    expect(set).toHaveBeenCalledWith({ jevModeState: state, jevEngineMode: 'off' });
+  });
+
+  it('allows a new semantic request after cooldown but never overrides manual off', async () => {
+    vi.setSystemTime(1000);
+    const port = makePort();
+    await loadListener(port, true);
+    const listener = port.onMessage.addListener.mock.calls[0][0];
+    const state = { activeMode: 'off', requestedMode: 'remote', retryAfter: 1100, revision: 8 };
+    vi.spyOn(chrome.storage.local, 'get').mockResolvedValue({ jevModeState: state });
+    await listener({ type: 'jev_mode_state', payload: state });
+    expect(nativeHost.isJevSemanticEnabled()).toBe(false);
+    vi.advanceTimersByTime(100);
+    expect(nativeHost.isJevSemanticEnabled()).toBe(true);
+    const controller = new AbortController();
+    const pending = nativeHost.sendJevMatchToNative(
+      { query: 'Email', candidates: [{ id: 'a', text: 'Email' }] },
+      1500,
+      { signal: controller.signal },
+    );
+    await Promise.resolve();
+    expect(port.postMessage.mock.calls.some(([m]: any[]) => m.type === 'jev_semantic_match')).toBe(
+      true,
+    );
+    controller.abort();
+    await pending;
+    await listener({
+      type: 'jev_mode_state',
+      payload: { ...state, requestedMode: 'off', revision: 9 },
+    });
+    expect(nativeHost.isJevSemanticEnabled()).toBe(false);
+  });
+
+  it('cancels a semantic request once and ignores its late successful reply', async () => {
+    const port = makePort();
+    await loadListener(port, true);
+    vi.spyOn(chrome.storage.local, 'get').mockResolvedValue({ jevEngineMode: 'remote' });
+    const controller = new AbortController();
+    const pending = nativeHost.sendJevMatchToNative(
+      { query: 'Email', candidates: [{ id: 'a', text: 'Email' }] },
+      1500,
+      { signal: controller.signal },
+    );
+    await Promise.resolve();
+    const request = port.postMessage.mock.calls.find(
+      ([msg]: any[]) => msg.type === 'jev_semantic_match',
+    )?.[0];
+    expect(request).toBeTruthy();
+    controller.abort();
+    expect(await pending).toMatchObject({ status: 'cancelled', success: false });
+    vi.spyOn(chrome.runtime, 'sendMessage').mockResolvedValue(undefined);
+    const listener = port.onMessage.addListener.mock.calls[0][0];
+    await listener({
+      type: 'file_operation_response',
+      responseToRequestId: request.requestId,
+      payload: { success: true, matchedId: 'a' },
+    });
+    expect(
+      port.postMessage.mock.calls.filter(
+        ([msg]: any[]) => msg.type === 'cancel_jev_semantic_match',
+      ),
+    ).toHaveLength(1);
   });
 
   it('reports success: false when the port is disconnected (postMessage throws)', async () => {

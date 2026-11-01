@@ -1,68 +1,43 @@
-# BrowserPaw Project Specifications & Notes
+# BrowserPaw Engineering Overview
 
 [Chinese Version (zh-CN)](./PROJECT.zh-CN.md)
 
-## Positioning & Core Philosophy
+BrowserPaw connects agents to an existing Chrome session through a Native Messaging extension and a local MCP bridge. Browser state remains in Chrome; task and learned-skill state belong to Native. Supported JS methods are a defined subset, not full Playwright compatibility.
 
-BrowserPaw is a high-performance Model Context Protocol (MCP) server engineered for AI agents to control the user's real Chrome browser. Unlike headless automation runtimes (Playwright, Puppeteer, Selenium), BrowserPaw operates directly within the user's everyday Google Chrome instance—preserving existing login sessions, cookies, and extension ecosystems. It exposes browser capabilities as 50 schema-validated canonical MCP tools (49 extension/browser tools + 1 native loop tool) via Chrome Native Messaging and the Chrome DevTools Protocol (CDP).
+## Start development
 
-## Monorepo Architecture (pnpm)
+Read [development boundaries and current release work](./docs/development/DEVELOPMENT.md), then inspect the affected callers. [QUALITY.md](./docs/QUALITY.md) owns verification and [DOCUMENTATION.md](./docs/DOCUMENTATION.md) owns documentation. The [documentation hub](./docs/README.md) links detailed references.
 
-1. **`packages/shared`** (`chrome-mcp-shared`):
-   - **Single Source of Truth**: Houses all 50 canonical MCP tool schemas (`TOOL_SCHEMAS`), tool profiles (`core`: 14, `crawl`: 12, `full`: 50), the `UnifiedLocatorOptions` coordinate contract, and standardized error formatters.
-2. **`app/native-server`** (`mcp-chrome-bridge`):
-   - **Fastify Native Host**: Manages dual MCP transports (Stdio and HTTP/SSE on `127.0.0.1:12306`), `McpSessionManager` (isolated per-session server instances with 10-minute idle eviction), `bridge-token` authentication, autonomous semantic micro-loop execution (`chrome_act_toward_goal`), and Chromium performance trace analyzers.
-3. **`app/chrome-extension`** (`chrome-mcp-server`):
-   - **WXT + Vue 3 Manifest V3 Extension**: Background Service Worker housing 49 browser tool executors and CDP session management. Features a 1:1 spring-kinematics virtual cursor overlay, automatic colored tab grouping with zero-residue cleanup, and tab favicon illumination. The `inpage-engine` executes isolated-world 1-based DOM pruning and indexing.
+## Responsibility map
 
-## Key Architectural Principles
+| Component              | Owns                                                                                      | Boundary                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `packages/shared`      | Tool schemas, profiles, common types and product version                                  | Canonical contract; client aliases do not create different semantics                            |
+| `app/chrome-extension` | Page observation, locators, native input, CDP sessions and browser events                 | Explicit page/frame/document identity; guard before dispatch; uncertain writes are not replayed |
+| `app/native-server`    | Authenticated MCP transports, tasks, learned skills, file leases, CLI and persistent REPL | A connection is not a task; persistence does not prove a browser document is still valid        |
+| `skills/browserpaw`    | Client-neutral static instructions, references, scripts and recipe assets                 | Source for portable skill installation and plugin mirrors                                       |
+| `plugins`              | Portable, Hermes, Claude Code and DSH host integration                                    | Official host layouts and runtime adaptation stay client-specific                               |
+| `scripts` and `test`   | Generation, verification, packaging and integration fixtures                              | Test evidence identifies its build and distinguishes simulated from real execution              |
 
-- **Tool Surface Strict Parity**: The runtime `toolsMap` is strictly derived from `TOOL_SCHEMAS`. Internal helper executors cannot be invoked directly without explicit schema declaration (guaranteed by tool surface parity test suites).
-- **Profile Layering & Dynamic Discovery**: Features 3 primary profiles (`core`: 14, `crawl`: 12, `full`: 50) across 8 tool categories (`navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, `crawl`). Hidden tools can be inspected via `chrome_tool_docs` and dynamically activated on-demand (`activateForSession: true`) across both HTTP and Stdio without process restarts.
-- **Autonomous DOM Diff Piggybacking**: Interactive tools (`chrome_interact_index`, `chrome_fill_index`, `chrome_batch_actions`) support `includeDelta: true`, returning local element mutations directly in the action response to eliminate 50% of round-trip inspection overhead.
-- **Targeted Grep Optimization**: `chrome_grep` supports multi-frame hierarchical remapping and matches against text, `placeholder`, `aria-label`, and `value`. It provides three distinct search modes (interactive elements, full DOM, and plain text), eliminating wasteful multi-thousand-token full DOM dumps.
-- **Closed-Loop Action Pipelines**: `chrome_batch_actions` chains discrete clicks, fills, waits, assertions (`assert`), and field extractions (`extract`) within a single network round-trip, supporting cross-origin iframe coordinate translation.
-- **Human-in-the-Loop & Undo Safety**: Combines raw CDP penetration (`chrome_cdp_execute`) with safe native DOM frosted-glass takeover banners (`chrome_request_human_intervention`, completely immune to DOM XSS) and a 5-step circular stack undo mechanism (`chrome_undo_last_action`).
-- **MV3 Session State Persistence**: `SessionTabAffinityManager`, `TabGroupManager`, and `TabFaviconManager` persist state in `chrome.storage.session` to withstand 30-second Chrome Service Worker idle termination and restarts.
-- **CDP Domain Reference Counting**: `CDPSessionManager` tracks domain-level references (`enableDomain` / `disableDomain`), keeping core domains active while low-level timeout guards trigger physical detachment (`chrome.debugger.detach`) to prevent deadlocks.
-- **Security & Privilege Boundaries**: `chrome.runtime.onMessage` strictly rejects messages originating from webpage content scripts (`_sender.tab`) or external extensions, blocking unauthorized tool dispatch.
-- **Diskless Visual Pipeline**: Screenshot data remains entirely in-memory. Inactive background tabs strictly dispatch offscreen CDP `Page.captureScreenshot(fromSurface: true)`, preventing foreground screen leaks and `requestAnimationFrame` freezing deadlocks.
-- **Human Kinematics & Platform Alignment**: Dispatches native CDP `Input` events (`isTrusted: true`), configurable `dwellMs` press duration, macOS Command key alignment (`mod = 4`), and explicit confirmation protection (`confirm: true`) for `chrome_close_tabs`.
+## Main execution flow
 
-- **W3C Semantic Perception & Card Flattening**: `chrome_read_dom` natively supports W3C composite card flattening (`flattenCards: true`), folding complex `article`, `[role="article"]`, `[role="listitem"]` containers into atomic entities while stripping PUA Unicode icon glyphs (`[\uE000-\uF8FF]`) to prevent terminal encoding crashes.
-- **Token-Boundary Form Semantic Matcher**: Form fields are resolved using discrete two-phase exact and token-boundary semantic analysis, eliminating false-positive substring bleeding (e.g. `phone` vs `no`, `male` vs `female`).
-- **Universal Zero-Drift Tab Grouping**: Domain-agnostic title cleansing preserves English hyphenated words (`COVID-19`, `Wi-Fi`) via lookaround regex while properly organizing tabs without domain dictionaries.
+Agent → MCP or persistent JS facade → Native task/skill orchestration → extension executor → shared locator/action checks → browser dispatch → receipt and business verification.
 
-- **Atomic Fast DOM Snapshot & Perception Pipeline**: `chrome_read_dom` natively supports ultrafast atomic snapshots (`fast: true`), single-pass `TreeWalker` traversal with native `checkVisibility` and `window.__pawFast` WeakMap caching. Payload budget is bounded to ≤ 250 actions and ≤ 6000 characters, cutting scan latency to 10~30ms.
-- **Controlled Component Native Value Setter**: Bypasses React 16–19 and Vue 3 controlled input interception by invoking prototype descriptors directly followed by standard synthetic `input` and `change` event sequences.
-- **Pre-CDP 1ms Occlusion Circuit Breaker**: Pre-validates click targeting via in-page microtask hit testing with up to 3 layers of `pointer-events: none` piercing, failing fast with `{ "error": "target_occluded", "retry": true }`.
-- **rAF & ARIA Combobox Smart Micro-Wait**: Eliminates blind sleeps with 2-frame `requestAnimationFrame` (≈ 32ms) convergence and dedicated option-discovery watchdogs for autocomplete comboboxes (≤ 200ms).
-- **HTML5 DataTransfer Upload Fallback**: Gracefully falls back to browser-native `DataTransfer` file synthesis across Shadow DOM boundaries when CDP debugger attachment is unavailable.
+Reuse those layers for new entrypoints. Raw CDP is an explicit low-level escape hatch, not a way around task isolation. Autonomous Jev execution depends on user configuration; it is not required for deterministic tools.
 
-- **3-Tier Jev Autonomous Architecture & Smart Gating**:
-  - **Tier 1 (Off)**: Autonomous semantic loop is disabled in extension popup. `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions. If an agent attempts to invoke it directly, the request is intercepted with an explicit authorization prompt requiring user confirmation.
-  - **Tier 2 (Local)**: Zero-cloud-latency, privacy-first local decider service running on port 8009 (supporting CUDA RTX GPU acceleration and CPU fallback). Features automatic hot-loading, persistent background residency, and weight management (`~/.browserpaw/models`).
-  - **Tier 3 (Remote)**: Cloud-powered TypeSafe Jev System One model with custom `Base URL` and `modelId` support, disk persistence (`~/.browserpaw/jev-remote.json`), and intelligent error diagnostics (diagnostics + remediation feedback rather than silent heuristic fallback).
-  - **Real-Time MCP Reactivity**: Mode and config switches in the popup immediately trigger `mcpSessionManager.broadcastToolListChanged()` across all active SSE and stdio sessions.
+Observation uses document-bound references and bounded standard/fast snapshots. Cache reuse is conditional on validity, partial frame coverage stays explicit, and visual coordinates require a valid capture context. Native editing is preferred; reported synthetic behavior must retain its different semantics.
 
-## Quality Gates & Verification Matrix
+## Skill storage
 
-> **Authoritative Quality Contract:**
-> All engineering verification, quality gates, and delivery standards are canonically governed by [**`docs/QUALITY.md`**](docs/QUALITY.md).
-> The official static verification suite is `pnpm verify`. Deployment is performed via `pnpm build:deploy` and validated via `pnpm verify:delivery`.
+- Static distribution: `skills/browserpaw`, with on-demand `references/`, diagnostic `scripts/` and bundled `assets/recipes/`.
+- Native package: `dist/skill/browserpaw` and `dist/recipes`, generated by the build.
+- Learned skills: `$BROWSERPAW_HOME/skills`, default `~/.browserpaw/skills`; shared by clients connected to that Native service, never copied into plugin directories.
+- Ordinary Agent Skills installation: `browserpaw skill install`, default `~/.agents/skills/browserpaw`.
 
-- **Chrome Extension Vitest**: All tests in `app/chrome-extension/tests/`, including DOM snapshots, input, screenshots, console capture, and undo.
-- **Native Server Jest**: All unit and integration suites in `app/native-server`, including Jev decisions, client resilience, protocol handling, and session managers.
-- **Simulated End-to-End Suite**: Four tiers executed after building (`pnpm test:e2e`). These tests do not establish live Chrome acceptance.
-- **Plugin Integration**: Pytest cases in `plugins/browserpaw/tests/`; only the optional Hermes host integration may skip when the host is unavailable.
-- **TypeScript Checking**: All monorepo packages (`pnpm typecheck`).
+See [plugin compatibility](./docs/development/PLUGIN_COMPATIBILITY.md) and the [task/skill lifecycle](./skills/browserpaw/references/task-skill-lifecycle.md).
 
-The latest `pnpm verify` report at `.artifacts/verification/latest.json` records the measured test counts, skips, and pass/fail status for that source fingerprint.
+## Evidence and release status
 
-### Key Technical Invariants & Operational Semantics
+4.1.0 is locally prepared, not published. The unresolved long-session Native restart is tracked in [current release work](./docs/development/DEVELOPMENT.md). Repository tests and page smoke results do not establish uninterrupted long-session stability.
 
-- **Keyboard Chords**: `chrome_keyboard` supports compound chords and normalized key names including `plus` (`+`), `comma` (`,`), and sequential aliases.
-- **DOM Perception & Mutation Boundary**: `chrome_read_dom` is strictly read-only by default (`dismissOverlays: false`). Passing `dismissOverlays: true` initiates active modal clicks and is a mutating side effect.
-- **Port Resolution Precedence**: The native daemon, thin CLI (`bin/browserpaw.cjs`), DSH plugin, and HTTP-only clients all evaluate `CHROME_MCP_PORT` > `MCP_HTTP_PORT` > default `12306` (1-65535). An explicit extension `START` message port still wins for the daemon.
-- **Extension Auto-Sync**: Setting `BROWSERPAW_EXTENSION_SYNC_DIR` copies unpacked extension builds to the target browser profile during build.
-- **Browser Compatibility**: Production target is Google Chrome and compatible Chromium browsers. Edge and Brave are not independently tested.
+The large M7 comparison is stopped. Historical results are retained; overall success-rate, latency and token-reduction targets remain unproven. Tool counts, test totals, versions and supported parameters come from runtime help, generated [TOOLS.md](./docs/TOOLS.md), manifests and verification reports rather than manually maintained claims.

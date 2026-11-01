@@ -18,6 +18,7 @@ import { resolveToolName } from 'chrome-mcp-shared';
  */
 
 import { isRestrictedChromeUrl, restrictedUrlErrorMessage } from '../../../../utils/restricted-url';
+import { reserveIndexNamespaces } from './index-namespace';
 
 const INPAGE_NAMESPACE = '__MCP_INPAGE__';
 const EXECUTE_TIMEOUT_MS = 4_000;
@@ -29,14 +30,18 @@ let callSequence = 0;
  * (coordinate resolution, occlusion probe, delivery probe) add 4-6 seconds of latency.
  */
 export const injectedTabs = new Set<number>();
+export const tabDocumentNamespaces = new Map<number, Set<string>>();
+
 if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading') {
       injectedTabs.delete(tabId);
+      tabDocumentNamespaces.delete(tabId);
     }
   });
   chrome.tabs.onRemoved?.addListener((tabId) => {
     injectedTabs.delete(tabId);
+    tabDocumentNamespaces.delete(tabId);
   });
 }
 
@@ -57,6 +62,7 @@ export function isNavigationOrContextDestroyedError(error: unknown): boolean {
   return (
     msg.includes('frame was removed') ||
     msg.includes('frame with id') ||
+    msg.includes('no document with id') ||
     msg.includes('context was destroyed') ||
     msg.includes('execution context was destroyed') ||
     msg.includes('receiving end does not exist') ||
@@ -100,6 +106,44 @@ export async function executeInPage<R = any>(
   args: unknown[],
   timeoutMs = EXECUTE_TIMEOUT_MS,
 ): Promise<chrome.scripting.InjectionResult<R>[]> {
+  const observing = ['inPageDOMPruner', 'inPageFastSnapshot'].includes(fnName);
+  // Observe documents independently: one stalled child renderer must not discard readable frames.
+  if (target.allFrames && observing) {
+    let frames: chrome.webNavigation.GetAllFrameResultDetails[] | null = null;
+    try {
+      frames = await chrome.webNavigation.getAllFrames({ tabId: target.tabId });
+    } catch {
+      // The original broadcast still reports failures; coverage cannot be verified without inventory.
+    }
+    if (frames?.length && frames.every((frame) => frame.documentId)) {
+      const observed = await Promise.all(
+        frames.map(async (frame) => {
+          try {
+            const results = await executeInPage<R>(
+              { tabId: target.tabId, documentIds: [frame.documentId] },
+              fnName,
+              args,
+              timeoutMs,
+            );
+            return results.map((result) =>
+              (result.result as any)?.isErrorPage
+                ? { ...result, frameId: frame.frameId, documentId: frame.documentId }
+                : result,
+            );
+          } catch (error) {
+            return [
+              {
+                frameId: frame.frameId,
+                documentId: frame.documentId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            ];
+          }
+        }),
+      );
+      return observed.flat();
+    }
+  }
   // Reject browser internal / web store pages up front so read_dom,
   // interact_index, batch_actions, etc. return a friendly error instead of the
   // raw "Cannot access a chrome:// URL" exception.
@@ -111,34 +155,91 @@ export async function executeInPage<R = any>(
   }
 
   const isAlreadyInjected =
-    typeof target.tabId === 'number' && !target.allFrames && injectedTabs.has(target.tabId);
+    typeof target.tabId === 'number' &&
+    !target.allFrames &&
+    (!target.frameIds || target.frameIds.every((id) => id === 0)) &&
+    !target.documentIds &&
+    injectedTabs.has(target.tabId);
   if (!isAlreadyInjected) {
-    try {
-      await raceInjection(
-        chrome.scripting.executeScript({ target, files: ['inpage-engine.js'] }),
-        'injection',
-      );
-      if (typeof target.tabId === 'number') {
-        injectedTabs.add(target.tabId);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const frames = await raceInjection(
+          chrome.scripting.executeScript({
+            target,
+            files: ['inpage-engine.js'],
+            injectImmediately: observing,
+          }),
+          'injection',
+        );
+        if (!frames.length || frames.some((frame) => !frame.documentId)) {
+          throw new Error('Cannot identify document for DOM index namespace');
+        }
+        let knownDocs = tabDocumentNamespaces.get(target.tabId);
+        if (!knownDocs) {
+          knownDocs = new Set<string>();
+          tabDocumentNamespaces.set(target.tabId, knownDocs);
+        }
+
+        const uninitializedFrames = frames.filter((frame) => !knownDocs!.has(frame.documentId!));
+        if (uninitializedFrames.length > 0) {
+          const bases = await reserveIndexNamespaces(uninitializedFrames.length);
+          const initialized = await Promise.all(
+            uninitializedFrames.map((frame, i) =>
+              raceInjection(
+                chrome.scripting.executeScript({
+                  target: { tabId: target.tabId, documentIds: [frame.documentId] },
+                  injectImmediately: observing,
+                  func: (base: number) => {
+                    const engine = (globalThis as any).__MCP_INPAGE__;
+                    return engine?.inPageSetIndexNamespace(base) === true;
+                  },
+                  args: [bases[i]],
+                }),
+                'index namespace',
+              ),
+            ),
+          );
+          if (
+            initialized.some((results) => !results.length || results.some((r) => r.result !== true))
+          ) {
+            throw new Error('Cannot initialize document DOM index namespace');
+          }
+          for (const frame of uninitializedFrames) {
+            knownDocs.add(frame.documentId!);
+          }
+        }
+
+        if (frames.some((frame) => frame.frameId === 0)) {
+          injectedTabs.add(target.tabId);
+        }
+        break;
+      } catch (err) {
+        if (typeof target.tabId === 'number' && isNavigationOrContextDestroyedError(err)) {
+          injectedTabs.delete(target.tabId);
+          tabDocumentNamespaces.delete(target.tabId);
+        }
+        if (isShowingErrorPageError(err)) {
+          return [
+            {
+              documentId: '',
+              frameId: 0,
+              result: {
+                error: err instanceof Error ? err.message : String(err),
+                isErrorPage: true,
+                success: false,
+              } as unknown as R,
+            },
+          ];
+        }
+        if (
+          attempt === 0 &&
+          typeof target.tabId === 'number' &&
+          isNavigationOrContextDestroyedError(err)
+        ) {
+          continue;
+        }
+        throw err;
       }
-    } catch (err) {
-      if (typeof target.tabId === 'number' && isNavigationOrContextDestroyedError(err)) {
-        injectedTabs.delete(target.tabId);
-      }
-      if (isShowingErrorPageError(err)) {
-        return [
-          {
-            documentId: '',
-            frameId: 0,
-            result: {
-              error: err instanceof Error ? err.message : String(err),
-              isErrorPage: true,
-              success: false,
-            } as unknown as R,
-          },
-        ];
-      }
-      throw err;
     }
   }
 
@@ -162,6 +263,7 @@ export async function executeInPage<R = any>(
       chrome.scripting
         .executeScript({
           target: tgt || (typeof effectiveTarget !== 'undefined' ? effectiveTarget : target),
+          injectImmediately: observing,
           func: (k: string) => {
             const g = globalThis as any;
             if (g && g[k]) {
@@ -178,6 +280,7 @@ export async function executeInPage<R = any>(
   let abandoned = false;
   const startPromise = chrome.scripting.executeScript({
     target,
+    injectImmediately: observing,
     func: (ns: string, name: string, fnArgs: unknown[], slotKey: string, stashSync?: boolean) => {
       const g = globalThis as any;
       const engine = g[ns];
@@ -295,11 +398,12 @@ export async function executeInPage<R = any>(
     .map((r) => r.frameId);
 
   if (target.allFrames) {
-    if (validFrames.length === 0) {
+    if (validFrames.length === 0 || validFrames.length !== startResults.length) {
       if (typeof target.tabId === 'number') {
         injectedTabs.delete(target.tabId);
       }
-      throw new Error(`In-page engine ${fnName} unavailable in any frame`);
+      cleanupSlot(slot, target);
+      throw new Error(`In-page engine ${fnName} unavailable in one or more frames`);
     }
   } else {
     for (const r of startResults ?? []) {
@@ -358,6 +462,7 @@ export async function executeInPage<R = any>(
       const pollResults = (await raceInjection(
         chrome.scripting.executeScript({
           target: effectiveTarget,
+          injectImmediately: observing,
           func: (slotKey: string) => {
             const box = (globalThis as any)[slotKey];
             if (!box) return { done: true, missing: true };
@@ -399,6 +504,7 @@ export async function executeInPage<R = any>(
     const results = (await raceInjection(
       chrome.scripting.executeScript({
         target: effectiveTarget,
+        injectImmediately: observing,
         func: (slotKey: string, timeoutMs: number) => {
           const g = globalThis as any;
           const box = g[slotKey];

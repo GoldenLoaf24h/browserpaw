@@ -30,6 +30,8 @@ if (args.length === 0 || args[0] === '--help' || args[0] === '-h' || args[0] ===
   console.log(`BrowserPaw CLI
 Usage:
   browserpaw <tool_name> [json_args_or_key_val...]
+  browserpaw repl
+  browserpaw skill install [--target <skills-root>] [--force]
   browserpaw doctor
   browserpaw nav <url>
   browserpaw click <index>
@@ -48,6 +50,26 @@ Examples:
 
 const command = args[0];
 const rest = args.slice(1);
+
+if (command === 'repl' || command === 'skill') {
+  const { spawn } = require('child_process');
+  const nativeCli = path.resolve(__dirname, '..', 'app', 'native-server', 'dist', 'cli.js');
+  if (!fs.existsSync(nativeCli)) {
+    console.error(`BrowserPaw native CLI not found at ${nativeCli}. Please build the project first.`);
+    process.exit(1);
+  }
+  const child = spawn(process.execPath, [nativeCli, command, ...rest], {
+    stdio: 'inherit',
+    env: process.env,
+  });
+  child.on('exit', (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+    }
+    process.exit(code ?? 0);
+  });
+  return;
+}
 
 let toolName = command;
 let toolArgs = {};

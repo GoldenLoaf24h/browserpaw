@@ -330,7 +330,6 @@ function initAgentCursor() {
   const host = document.createElement('div');
   host.id = OVERLAY_ROOT_ID;
   host.dataset.browserpawAgentOverlayRoot = 'true';
-  host.dataset.browserclawAgentOverlayRoot = 'true';
   document.documentElement.appendChild(host);
 
   const shadow = host.attachShadow({ mode: 'closed' });
@@ -355,6 +354,7 @@ function initAgentCursor() {
   const overlay = document.createElement('div');
   overlay.className = 'codex-agent-overlay';
   overlay.setAttribute('aria-hidden', 'true');
+  (globalThis as any)[Symbol.for('__browserpaw_agent_overlay__')] = overlay;
 
   const cursorContainer = document.createElement('div');
   cursorContainer.style.position = 'absolute';

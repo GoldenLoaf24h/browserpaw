@@ -15,7 +15,6 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     expect(resolveToolName('read_dom')).toBe('browserpaw_read_dom');
     expect(resolveToolName('chrome_read_dom')).toBe('browserpaw_read_dom');
     expect(resolveToolName('browserpaw_read_dom')).toBe('browserpaw_read_dom');
-    expect(resolveToolName('browserclaw_read_dom')).toBe('browserpaw_read_dom');
     expect(resolveToolName('read_dom', 'chrome')).toBe('chrome_read_dom');
     expect(resolveToolName('batch_actions', 'chrome_')).toBe('chrome_batch_actions');
     expect(resolveToolName('read_dom', 'browserpaw')).toBe('browserpaw_read_dom');
@@ -31,10 +30,6 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
       canonicalBackendName: 'chrome_read_dom',
       prefix: 'browserpaw_',
     });
-    expect(normalizeIncomingToolName('browserclaw_read_dom')).toEqual({
-      canonicalBackendName: 'chrome_read_dom',
-      prefix: 'browserclaw_',
-    });
     expect(normalizeIncomingToolName('chrome_read_dom')).toEqual({
       canonicalBackendName: 'chrome_read_dom',
       prefix: 'chrome_',
@@ -42,10 +37,6 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     expect(normalizeIncomingToolName('browserpaw_get_windows_and_tabs')).toEqual({
       canonicalBackendName: 'get_windows_and_tabs',
       prefix: 'browserpaw_',
-    });
-    expect(normalizeIncomingToolName('browserclaw_get_windows_and_tabs')).toEqual({
-      canonicalBackendName: 'get_windows_and_tabs',
-      prefix: 'browserclaw_',
     });
     expect(normalizeIncomingToolName('get_windows_and_tabs')).toEqual({
       canonicalBackendName: 'get_windows_and_tabs',
@@ -69,7 +60,39 @@ describe('Root Cause Fix 1: Universal Tool Name Resolver & Namespace Dynamic Ali
     });
   });
 
-  it('aligns legacy tool references in prompts, hints, and errors to requested target prefix', () => {
+  it('rejects unsupported prefixes without changing the active namespace', () => {
+    const prefix = getActiveToolPrefix();
+    expect(() => setActiveToolPrefix('obsolete')).toThrow('Unsupported tool prefix');
+    expect(getActiveToolPrefix()).toBe(prefix);
+    expect(() => resolveToolName('read_dom', 'obsolete')).toThrow('Unsupported tool prefix');
+    expect(() => alignToolReferences('chrome_read_dom', 'obsolete')).toThrow(
+      'Unsupported tool prefix',
+    );
+    expect(normalizeIncomingToolName('obsolete_read_dom')).toEqual({
+      canonicalBackendName: 'chrome_obsolete_read_dom',
+      prefix: '',
+    });
+  });
+
+  it.each(['BROWSERPAW_TOOL_PREFIX', 'CHROME_MCP_TOOL_PREFIX'])(
+    'rejects an unsupported %s at module initialization',
+    async (key) => {
+      vi.resetModules();
+      vi.stubEnv('BROWSERPAW_TOOL_PREFIX', undefined);
+      vi.stubEnv('CHROME_MCP_TOOL_PREFIX', undefined);
+      vi.stubEnv(key, 'obsolete');
+      try {
+        await expect(import('../../../packages/shared/src/tools')).rejects.toThrow(
+          'Unsupported tool prefix',
+        );
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    },
+  );
+
+  it('aligns tool references in prompts, hints, and errors to requested target prefix', () => {
     const rawHint =
       'Delta truncated: showing 0/0 added, 25/143 modified, 1/1 removed. Call chrome_read_dom for full DOM tree. Prefer chrome_batch_actions over chrome_interact_index. Also check get_windows_and_tabs.';
     const aligned = alignToolReferences(rawHint, 'browserpaw');
@@ -158,6 +181,15 @@ describe('Root Cause Fix 3: Pre-Interaction Baseline Capture & Popup Delta Reten
 
   beforeEach(() => {
     snapshotCacheManager.clear(testTabId);
+    (globalThis as any).chrome = {
+      ...(globalThis as any).chrome,
+      storage: {
+        local: {
+          get: vi.fn().mockResolvedValue({}),
+          set: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    };
   });
 
   it('pre-captures baseline before interaction so newly opened popups/dropdowns are not swallowed', async () => {
@@ -182,7 +214,10 @@ describe('Root Cause Fix 3: Pre-Interaction Baseline Capture & Popup Delta Reten
     (globalThis as any).chrome.scripting = {
       executeScript: vi.fn(async (opts: any) => {
         if (opts?.files) {
-          return [{ result: undefined }];
+          return [{ frameId: 0, documentId: 'doc-root-cause', result: undefined }];
+        }
+        if (opts?.target?.documentIds) {
+          return [{ frameId: 0, documentId: opts.target.documentIds[0], result: true }];
         }
         prunerCallCount++;
         const currentElements = prunerCallCount === 1 ? preClickDom : postClickDom;
@@ -201,6 +236,10 @@ describe('Root Cause Fix 3: Pre-Interaction Baseline Capture & Popup Delta Reten
           },
         ];
       }),
+    };
+    (globalThis as any).chrome.webNavigation = {
+      ...(globalThis as any).chrome.webNavigation,
+      getAllFrames: vi.fn().mockResolvedValue([{ frameId: 0 }]),
     };
 
     (chrome.tabs.get as any) = vi.fn(async (id: number) => ({

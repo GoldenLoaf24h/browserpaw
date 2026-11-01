@@ -2,10 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // research/ holds third-party checkouts and scratch notes; skill bundle mirrors are copies of
-// skill/ (see scripts/sync-skills.mjs) rather than part of the generated AGENTS tree, so their
+// skills/browserpaw/ (see scripts/sync-skills.mjs) rather than part of the generated AGENTS tree, so their
 // relative Parent context cannot resolve.
-const SKIP_DIRS = ['node_modules', '.git', 'dist', '.output', '__pycache__', '.wxt', 'research'];
+const SKIP_DIRS = [
+  'node_modules',
+  '.git',
+  '.claude',
+  'dist',
+  '.output',
+  '__pycache__',
+  '.wxt',
+  'research',
+];
 const SKILL_MIRROR_DIR = /^plugins[\\/][^\\/]+[\\/](?:skills|mcp-skills)[\\/]/;
+const PACKAGED_PLUGIN_DIR = /^plugins[\\/]browserpaw(?:-[^\\/]+)?(?:[\\/]|$)/;
 
 function findAgentsFiles(dir) {
   const results = [];
@@ -14,6 +24,7 @@ function findAgentsFiles(dir) {
     if (SKIP_DIRS.includes(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      if (PACKAGED_PLUGIN_DIR.test(path.relative('.', fullPath))) continue;
       if (SKILL_MIRROR_DIR.test(path.relative('.', fullPath) + path.sep)) continue;
       results.push(...findAgentsFiles(fullPath));
     } else if (entry.name === 'AGENTS.md') {

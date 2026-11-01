@@ -1,10 +1,10 @@
 # browserpaw
 
-**Generated:** 2026-10-15 · **Updated:** 2026-10-15
+**Generated:** 2026-10-31 · **Updated:** 2026-10-31
 
 ## Purpose
 
-Root of BrowserPaw — a high-efficiency Chrome browser automation MCP server and AI agent skill monorepo. It enables AI agents (Claude, Cursor, Windsurf, Codex) to operate an everyday Chrome browser with existing logins, cookies, and extensions in background tabs without stealing focus.
+Root of BrowserPaw, a Chrome browser automation MCP server and Agent Skill monorepo. It connects agents to an existing Chrome session through an extension and local Native bridge. See PROJECT.md for responsibilities and docs/development/DEVELOPMENT.md for current work and limitations.
 
 ## Key Files
 
@@ -25,7 +25,6 @@ Root of BrowserPaw — a high-efficiency Chrome browser automation MCP server an
 | `TEST_INFRA.md`               | Comprehensive E2E test infrastructure specification and test matrix         |
 | `commitlint.config.cjs`       | Conventional commits enforcement rules for git commit messages              |
 | `eslint.config.js`            | Global ESLint 9 flat configuration across TypeScript and Vue files          |
-| `marketplace.json`            | MCP and plugin catalog registry metadata for plugin discovery               |
 | `package.json`                | Monorepo root scripts, dependencies, workspaces, and metadata               |
 | `pnpm-lock.yaml`              | Pinned dependency tree lockfile                                             |
 | `pnpm-workspace.yaml`         | PNPM workspace definition configuring packages and apps                     |
@@ -38,13 +37,13 @@ Root of BrowserPaw — a high-efficiency Chrome browser automation MCP server an
 | `bin/`      | Executable binary entry points for running BrowserPaw directly from the command line or gl... |
 | `docs/`     | Documentation vault containing technical architecture specifications, tool references, nav... |
 | `packages/` | Container directory for shared libraries and common packages across the BrowserPaw monorep... |
-| `plugins/`  | Container directory for platform-specific plugin integrations such as Codex and Hermes....    |
+| `plugins/`  | Client-specific BrowserPaw distributions for ChatGPT/Codex, Hermes, Claude Code, and DeepS... |
 | `prompt/`   | Specialized prompt templates, LLM system instructions, and task prompts used for content a... |
 | `releases/` | Distribution archive directory holding prebuilt zip files for the Chrome extension and ski... |
 | `research/` | Module directory (see `research/AGENTS.md`)                                                   |
+| `samples/`  | Module directory (see `samples/AGENTS.md`)                                                    |
 | `scripts/`  | Repository lifecycle, build automation, and documentation generation scripts....              |
-| `skill/`    | Canonical AI Agent Skill package for BrowserPaw. Encodes execution ladders, prompt recipes... |
-| `skills/`   | Mirror directory housing agent-compatible skill packages structured for external agent too... |
+| `skills/`   | Canonical agent skills; BrowserPaw lives in skills/browserpaw....                             |
 | `test/`     | Root directory for integration and end-to-end testing suites, mock servers, stress tests, ... |
 
 ## For AI Agents
@@ -81,3 +80,16 @@ Monorepo workspace coordination; SSOT schema synchronization; layered profile fi
 ## Manual Notes
 
 Notes under this heading are written by humans and preserved on regeneration.
+
+### Development boundaries
+
+- Communicate in Simplified Chinese. Verify facts, callers and acceptance criteria before making the smallest complete change. Use pwsh 7 and prefer `rg`.
+- Start with [development boundaries/current work](docs/development/DEVELOPMENT.md) and [PROJECT](PROJECT.md). Generated directory indexes aid navigation; rules belong here, QUALITY and DOCUMENTATION.
+- Preserve existing dirty/untracked source, user configuration, login state, learned skills and evidence. Do not commit, tag, push, publish or alter production registration without task authorization.
+- Shared schemas own tool contracts. Inspect atomic tools, batch/form paths, task/page, skills and clients before changing a common executor; avoid parallel implementations.
+- Never replay uncertain dispatch. Preserve original errors and receipts. Distinguish task-owned, borrowed and user pages. Cancellation is not rollback; reconnect is not session continuity.
+- Edit static skill sources or the Hermes-specific template, then synchronize. Keep client configuration in its adapter. Do not hand-edit installation caches or clean learned skills as static data.
+- Use focused checks during iteration and complete `pnpm verify` before release. Documentation edits also invalidate prior source fingerprints.
+- Deploy only when authorized. Prepare all artifacts before requesting a necessary manual reload, then verify the Native path and loaded buildId.
+- Clean only confirmed unused caches and scratch output. Worktrees, research, frozen builds and failure evidence are not bulk cleanup targets. Never bypass a policy-rejected deletion.
+- Read local paths, PIDs, counts and current versions from actual records. M7 sampling is stopped by user decision. Verify loaded-runtime identity and session continuity separately from source, build and deployment checks.

@@ -12,7 +12,7 @@ const pluginDir = resolve(repoRoot, 'plugins/browserpaw-claude');
 const manifestPath = join(pluginDir, '.claude-plugin/plugin.json');
 const catalogPath = join(repoRoot, '.claude-plugin/marketplace.json');
 const mcpPath = join(pluginDir, '.mcp.json');
-const canonicalSkillDir = join(repoRoot, 'skill');
+const canonicalSkillDir = join(repoRoot, 'skills', 'browserpaw');
 const mirrorSkillDir = join(pluginDir, 'skills/browserpaw');
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
@@ -60,9 +60,8 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
     assert.ok(server, '.mcp.json must declare the browserpaw server');
     assert.equal(server.type, 'stdio');
     assert.equal(server.command, 'mcp-chrome-stdio');
-    // The skill documents all 50 tools, and the low-level server does not advertise
-    // tools.listChanged, so clients never refresh a core-only list. The bundled server
-    // must therefore start on the full profile.
+    // The bundled Claude Code plugin starts with the complete canonical tool surface.
+    // Runtime tool discovery remains available through chrome_tool_docs.
     assert.deepEqual(server.env, { CHROME_MCP_TOOL_PROFILE: 'full' });
   });
 
@@ -89,7 +88,6 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
 
     for (const src of walk(canonicalSkillDir)) {
       const rel = relative(canonicalSkillDir, src);
-      if (rel === 'HERMES_PLUGIN_SKILL.md') continue;
       const dest = join(mirrorSkillDir, rel);
       assert.ok(existsSync(dest), `mirror is missing ${rel}`);
       // Verbatim: Claude Code speaks canonical chrome_* over stdio, so no
@@ -101,7 +99,6 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
     // the mirror, which a source-only walk would miss.
     const canonicalFiles = walk(canonicalSkillDir)
       .map((file) => relative(canonicalSkillDir, file))
-      .filter((rel) => rel !== 'HERMES_PLUGIN_SKILL.md')
       .sort();
     const mirrorFiles = walk(mirrorSkillDir)
       .map((file) => relative(mirrorSkillDir, file))
@@ -112,10 +109,6 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
       'mirror must contain exactly the canonical files',
     );
 
-    assert.ok(
-      !existsSync(join(mirrorSkillDir, 'HERMES_PLUGIN_SKILL.md')),
-      'the Hermes-only skill must never be mirrored',
-    );
     const skillText = readFileSync(join(mirrorSkillDir, 'SKILL.md'), 'utf8');
     assert.ok(skillText.includes('chrome_'), 'the mirror must keep canonical tool names');
     assert.ok(

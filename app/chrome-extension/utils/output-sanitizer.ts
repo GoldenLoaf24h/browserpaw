@@ -120,7 +120,12 @@ export function sanitizeText(text: string): { text: string; redacted: boolean } 
   // Query-string blocking stays length-capped: long payloads (HTML snippets,
   // JSON with class="a=b&c=d", URLs) would be falsely blocked wholesale, so
   // they fall through to token-level replacement below.
-  if (out.length <= 256 && out.includes('=') && out.includes('&')) {
+  if (
+    out.length <= 256 &&
+    out.includes('=') &&
+    out.includes('&') &&
+    !isCompleteHttpUrlWithoutUserinfo(out)
+  ) {
     if (looksLikeQueryString(out)) {
       return { text: '[BLOCKED: Cookie/query string data]', redacted: true };
     }
@@ -258,6 +263,17 @@ function looksLikeQueryString(text: string): boolean {
   return pairs >= 2;
 }
 
+function isCompleteHttpUrlWithoutUserinfo(text: string): boolean {
+  if (!/^https?:\/\/\S+$/i.test(text)) return false;
+  try {
+    const url = new URL(text);
+    // Keep userinfo on the existing whole-string fail-closed path.
+    return !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 export function sanitizeValue(
   value: unknown,
   limits: OutputSanitizerOptions = {},
@@ -272,11 +288,11 @@ export function sanitizeValue(
   const ancestors = new Set<object>();
   let redacted = false;
 
-  const walk = (v: unknown, depth: number): unknown => {
+  const walk = (v: unknown, depth: number, publicRepositoryPath = false): unknown => {
     if (depth < 0) return '[MaxDepth]';
 
     if (typeof v === 'string') {
-      const sanitized = sanitizeText(v);
+      const sanitized = publicRepositoryPath ? { text: v, redacted: false } : sanitizeText(v);
       if (sanitized.redacted) redacted = true;
       let s = sanitized.text;
       if (s.length > maxStringLength) {
@@ -318,6 +334,27 @@ export function sanitizeValue(
 
     const out: Record<string, unknown> = {};
     ancestors.add(obj);
+    let publicRepository: string | undefined;
+    if (
+      typeof obj.repository === 'string' &&
+      /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(obj.repository)
+    ) {
+      const page = (obj.sources as Record<string, unknown> | undefined)?.page;
+      try {
+        const source = new URL(typeof page === 'string' ? page : '');
+        const prefix = `/${obj.repository}`;
+        if (
+          source.origin === 'https://github.com' &&
+          !source.username &&
+          !source.password &&
+          (source.pathname === prefix || source.pathname.startsWith(`${prefix}/`))
+        ) {
+          // Its canonical public URL proves this value is a repository path.
+          if (!sanitizeText(`https://github.com/${obj.repository}`).redacted)
+            publicRepository = obj.repository;
+        }
+      } catch {}
+    }
     const keys = Object.keys(obj);
     const len = Math.min(keys.length, maxObjectKeys);
     for (let i = 0; i < len; i++) {
@@ -327,7 +364,7 @@ export function sanitizeValue(
         redacted = true;
         continue;
       }
-      out[key] = walk(obj[key], depth - 1);
+      out[key] = walk(obj[key], depth - 1, key === 'repository' && publicRepository !== undefined);
     }
     if (keys.length > maxObjectKeys) out.__truncated__ = true;
     ancestors.delete(obj);

@@ -4,12 +4,12 @@ import { setupTools } from './register-tools';
 export function createMcpServerInstance(sessionId?: string): Server {
   const server = new Server(
     {
-      name: 'ChromeMcpServer',
+      name: 'BrowserPaw',
       version: '1.0.0',
     },
     {
       capabilities: {
-        tools: {},
+        tools: { listChanged: true },
         resources: {},
         prompts: {},
       },

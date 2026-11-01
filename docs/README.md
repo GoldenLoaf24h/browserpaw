@@ -1,8 +1,10 @@
 # BrowserPaw Documentation Hub 📚
 
-Welcome to the comprehensive documentation repository for **BrowserPaw** — the high-efficiency, zero-teleportation Chrome browser automation MCP server and AI agent skill monorepo.
+BrowserPaw connects agents to an existing Chrome session through a local MCP bridge.
 
 This hub serves as the definitive reference guide for AI Agents (Claude Code, Cursor, Windsurf, Codex) and human engineers.
+
+For development, start with [PROJECT.md](../PROJECT.md) and [development boundaries/current work](./development/DEVELOPMENT.md). Acceptance belongs to [QUALITY.md](./QUALITY.md); document ownership belongs to [DOCUMENTATION.md](./DOCUMENTATION.md). Version 4.1.0 remains a release candidate with an unresolved long-session Native restart; historical milestone tables are not current acceptance claims.
 
 ---
 
@@ -39,14 +41,14 @@ graph TD
 
 ### 1. Architectural & Engineering References
 
-| Document                                                               | Purpose                                         | Key Content                                                                                                                                                                                                        |
-| :--------------------------------------------------------------------- | :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**`QUALITY.md`**](./QUALITY.md)                                       | **Engineering Quality & Verification Contract** | Single canonical contract for acceptance: pnpm verify, build:deploy, verify:delivery, and runtime identity evidence standards.                                                                                     |
-| [**`DOCUMENTATION.md`**](./DOCUMENTATION.md)                           | **Documentation Governance & Architecture**     | Single source of truth for doc ownership, active vs. archived partitions, English/Chinese translation policy, and release templates.                                                                               |
-| [**`PLUGIN_COMPATIBILITY.md`**](./development/PLUGIN_COMPATIBILITY.md) | **Host Plugin Contracts**                       | Pinned Hermes and DeepSeek Harness sources, credential boundaries, registration contracts, verification limits, and PR review safeguards.                                                                          |
-| [**`ARCHITECTURE.md`**](./ARCHITECTURE.md)                             | **Technical Architecture Specification**        | Dual-Brain architecture (System 2 Planner + System 1 Jev), CDP hardware event dispatch (`isTrusted=true`), 60fps spring kinetic cursor, lockstep lifecycle synchronization, and multi-tier memory/VRAM management. |
-| [**`TOOLS.md`**](./TOOLS.md)                                           | **Canonical Tool Matrix & API Contracts**       | Complete parameter schemas, profiles, and input commitment contracts across all 50 MCP tools (DOM-first perception, batch pipeline, form automation, media inspection, and computer actions).                      |
-| [**`MAP.md`**](./MAP.md)                                               | **Codebase Map & Dataflows**                    | Monorepo symbol indexes, inter-package dependencies, IPC Native Messaging framing protocols, and background service worker lifecycle maps.                                                                         |
+| Document                                                               | Purpose                                         | Key Content                                                                                                                                                                                          |
+| :--------------------------------------------------------------------- | :---------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**`QUALITY.md`**](./QUALITY.md)                                       | **Engineering Quality & Verification Contract** | Single canonical contract for acceptance: pnpm verify, build:deploy, verify:delivery, and runtime identity evidence standards.                                                                       |
+| [**`DOCUMENTATION.md`**](./DOCUMENTATION.md)                           | **Documentation Governance & Architecture**     | Single source of truth for doc ownership, active vs. archived partitions, English/Chinese translation policy, and release templates.                                                                 |
+| [**`PLUGIN_COMPATIBILITY.md`**](./development/PLUGIN_COMPATIBILITY.md) | **Host Plugin Contracts**                       | Canonical skill, portable ChatGPT/Codex plugin, native Hermes plugin, Claude Code plugin, DSH Cordis bundle, official-source verification and remaining runtime limits.                              |
+| [**`ARCHITECTURE.md`**](./ARCHITECTURE.md)                             | **Technical Architecture Specification**        | Architecture baseline and historical design decisions; current ownership and acceptance boundaries live in PROJECT and development work.                                                             |
+| [**`TOOLS.md`**](./TOOLS.md)                                           | **Canonical Tool Matrix & API Contracts**       | Complete parameter schemas, profiles, and input commitment contracts across the canonical MCP tools (DOM-first perception, batch pipeline, form automation, media inspection, and computer actions). |
+| [**`MAP.md`**](./MAP.md)                                               | **Codebase Map & Dataflows**                    | Monorepo symbol indexes, inter-package dependencies, IPC Native Messaging framing protocols, and background service worker lifecycle maps.                                                           |
 
 ---
 
@@ -74,7 +76,18 @@ graph TD
 
 ---
 
-### 4. 📦 Archive Directory (`docs/archive/`)
+### 4. Development, Research & Deep Dives (`docs/development/`)
+
+| Document                                                                                                         | Purpose                             | Key Content                                                                                                                                                                                                       |
+| :--------------------------------------------------------------------------------------------------------------- | :---------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**`persistent-repl.zh-CN.md`**](./development/persistent-repl.zh-CN.md)                                         | **Persistent Node REPL Guide**      | Interactive local REPL workflow preserving variables, top-level await, and MCP client reuse for low-overhead multi-turn automation. _(Chinese)_                                                                   |
+| [**`browserpaw-blueprint-implementation.zh-CN.md`**](./development/browserpaw-blueprint-implementation.zh-CN.md) | **Blueprint Implementation Ledger** | M0-M7 implementation status, verified behavior, runtime gaps, and release gates. _(Chinese)_                                                                                                                      |
+| [**`browser-task-suite.json`**](./development/browser-task-suite.json)                                           | **Fixed M7 Task Suite**             | 80 distinct inputs across four families, rotated batches, cold/reuse/recovery modes, and machine-readable measurement contracts.                                                                                  |
+| [**`three-browser-comparison-2026-10-22.zh-CN.md`**](./development/three-browser-comparison-2026-10-22.zh-CN.md) | **Three-Browser Capability Matrix** | Current Ego, Aside, and BrowserPaw capability matrix separating source regressions, live-build evidence, historical state, and closed-source unknowns, including M0-M6 status and M7 acceptance gaps. _(Chinese)_ |
+
+---
+
+### 5. 📦 Archive Directory (`docs/archive/`)
 
 Historical records, phased handoffs, and audit logs are preserved in [`docs/archive/`](./archive/) to keep the active documentation clean and decluttered:
 

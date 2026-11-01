@@ -27,6 +27,66 @@ const transitionEnabled = ref(false);
 
 // Jev Engine state
 const jevMode = ref<'off' | 'local' | 'remote'>('remote');
+const jevRequestedMode = ref<'off' | 'local' | 'remote'>('remote');
+const jevRetryAfter = ref<number | null>(null);
+const jevDisabledReason = ref<string | null>(null);
+const jevModeConfirmed = ref(false);
+const isTemporarilyPaused = computed(
+  () => jevMode.value === 'off' && jevRequestedMode.value !== 'off' && jevRetryAfter.value !== null,
+);
+
+const jevOffReasonText = computed(() => {
+  if (jevMode.value !== 'off') return '';
+  if (isTemporarilyPaused.value) return 'Temporarily paused; retries automatically on next use';
+  switch (jevDisabledReason.value) {
+    case 'remote_key_missing':
+      return 'Remote API Key is missing';
+    case 'local_model_missing':
+      return 'Local model weights not installed';
+    case 'invalid_key':
+      return 'Remote API Key is invalid';
+    case 'quota_exhausted':
+      return 'API quota exhausted';
+    case 'rate_limited':
+      return 'Decision service rate limit reached';
+    case 'network_error':
+      return 'Decision service connection failed';
+    case 'invalid_response':
+      return 'Decision service returned an invalid response';
+    case 'local_service_offline':
+      return 'Local decider service is offline';
+    case 'user_turned_off':
+      return '';
+    default:
+      return jevDisabledReason.value ? `Disabled: ${jevDisabledReason.value}` : '';
+  }
+});
+
+const applyConfirmedModeState = (
+  mode: 'off' | 'local' | 'remote',
+  reason: string | null = null,
+  requestedMode: 'off' | 'local' | 'remote' = mode,
+  retryAfter: number | null = null,
+) => {
+  jevModeConfirmed.value = true;
+  jevMode.value = mode;
+  jevRequestedMode.value = requestedMode;
+  jevRetryAfter.value =
+    typeof retryAfter === 'number' && Number.isFinite(retryAfter) ? retryAfter : null;
+  jevDisabledReason.value = reason;
+  if (requestedMode === 'off') {
+    showManageBtn.value = false;
+    isManaging.value = false;
+    isExpanded.value = false;
+  } else {
+    showManageBtn.value = true;
+    if (requestedMode === 'local' && !modelDownloaded.value && !isDownloading.value) {
+      isExpanded.value = true;
+    } else {
+      isExpanded.value = false;
+    }
+  }
+};
 const modelDownloaded = ref(false);
 const isExpanded = ref(false);
 const isCollapsing = ref(false);
@@ -101,6 +161,15 @@ const jevBadgeClass = computed(() => {
 });
 
 const headerPillState = computed(() => {
+  if (!jevModeConfirmed.value) {
+    return {
+      text: 'Unconfirmed',
+      key: 'unconfirmed',
+      class: 'badge-jev off',
+      interactive: false,
+      title: 'Connect to Native to confirm the active mode',
+    };
+  }
   if (isManaging.value) {
     return {
       text: 'Return',
@@ -112,11 +181,15 @@ const headerPillState = computed(() => {
   }
   if (jevMode.value === 'off') {
     return {
-      text: 'Off',
+      text: isTemporarilyPaused.value
+        ? 'Paused'
+        : jevRequestedMode.value !== 'off'
+          ? 'Configure'
+          : 'Off',
       key: 'off',
       class: 'badge-jev off',
-      interactive: false,
-      title: '',
+      interactive: jevRequestedMode.value !== 'off',
+      title: jevOffReasonText.value,
     };
   }
   if (showManageBtn.value && (jevMode.value === 'local' || jevMode.value === 'remote')) {
@@ -321,9 +394,9 @@ const toggleManaging = () => {
   isDeleteWiping.value = false;
   if (isManaging.value) {
     isExpanded.value = false;
-    if (jevMode.value === 'local') {
+    if (jevRequestedMode.value === 'local') {
       fetchLocalModels();
-    } else if (jevMode.value === 'remote') {
+    } else if (jevRequestedMode.value === 'remote') {
       fetchRemoteConfig();
     }
   }
@@ -602,51 +675,31 @@ const setJevMode = async (mode: 'off' | 'local' | 'remote') => {
   if (isCollapsing.value) return;
   transitionEnabled.value = true;
   isHydrated.value = true;
-  if (mode === jevMode.value && !isExpanded.value) {
-    if (mode === 'local' && !modelDownloaded.value && !isDownloading.value) {
-      isExpanded.value = true;
-    }
-    return;
-  }
 
-  const prevMode = jevMode.value;
-  jevMode.value = mode;
-
-  if (mode === 'local') {
-    if (!modelDownloaded.value || localModels.value.length === 0) {
-      await checkJevModelStatus();
-      await fetchLocalModels();
-    }
-    if (!modelDownloaded.value && !isDownloading.value) {
-      isExpanded.value = true;
-    } else {
-      isExpanded.value = false;
-    }
-  } else {
-    isExpanded.value = false;
-    isCollapsing.value = false;
-  }
-
-  if (mode === 'off') {
-    showManageBtn.value = false;
-    isManaging.value = false;
-  } else {
-    if (mode !== prevMode) {
-      triggerManageBtnMorph();
-    }
+  if (mode === 'local' && !modelDownloaded.value && !isDownloading.value) {
+    isExpanded.value = true;
   }
 
   try {
-    await chrome.storage.local.set({ jevEngineMode: mode });
+    const res = await jevFetch('/jev/set-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const confirmedMode = data.modeState?.activeMode || data.mode || 'off';
+      const confirmedReason = data.modeState?.disabledReason || null;
+      applyConfirmedModeState(
+        confirmedMode,
+        confirmedReason,
+        data.modeState?.requestedMode ?? confirmedMode,
+        data.modeState?.retryAfter ?? null,
+      );
+    }
   } catch (e) {
-    console.error('Failed to save jev mode:', e);
+    console.error('Failed to set jev mode:', e);
   }
-
-  jevFetch('/jev/set-mode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode }),
-  }).catch(() => {});
 };
 
 const cancelExpand = () => {
@@ -701,6 +754,10 @@ const toggleAgent = async () => {
   }
 };
 
+let modeStorageListener:
+  ((changes: Record<string, chrome.storage.StorageChange>, area: string) => void) | undefined;
+let popupDisposed = false;
+
 onMounted(async () => {
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('enable') === '1') {
@@ -729,6 +786,7 @@ onMounted(async () => {
         : Promise.resolve({}),
       typeof chrome !== 'undefined' && chrome.storage?.local
         ? chrome.storage.local.get([
+            'jevModeState',
             'jevEngineMode',
             'jevModelDownloaded',
             'jevLocalModels',
@@ -777,19 +835,18 @@ onMounted(async () => {
       }
     }
 
-    if (localJev?.jevEngineMode) {
-      jevMode.value = localJev.jevEngineMode;
-    } else if (modelDownloaded.value) {
-      jevMode.value = 'local';
-      try {
-        await chrome.storage.local.set({ jevEngineMode: 'local' });
-      } catch {}
-    } else {
-      jevMode.value = 'remote';
-      try {
-        await chrome.storage.local.set({ jevEngineMode: 'remote' });
-      } catch {}
+    const storedState = localJev?.jevModeState;
+    if (storedState && (storedState.activeMode || storedState.mode)) {
+      applyConfirmedModeState(
+        storedState.activeMode || storedState.mode,
+        storedState.disabledReason || storedState.reason || null,
+        storedState.requestedMode ?? storedState.activeMode ?? storedState.mode,
+        storedState.retryAfter ?? null,
+      );
+    } else if (localJev?.jevEngineMode) {
+      applyConfirmedModeState(localJev.jevEngineMode);
     }
+    jevModeConfirmed.value = false;
 
     if (jevMode.value === 'local' || jevMode.value === 'remote') {
       showManageBtn.value = true;
@@ -834,14 +891,42 @@ onMounted(async () => {
   await checkJevModelStatus();
   await checkOngoingDownload();
 
-  jevFetch('/jev/set-mode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: jevMode.value }),
-  }).catch(() => {});
+  try {
+    const stateRes = await jevFetch('/jev/mode-state');
+    if (stateRes.ok) {
+      const stateData = await stateRes.json();
+      applyConfirmedModeState(
+        stateData.activeMode || stateData.mode || 'off',
+        stateData.disabledReason || null,
+        stateData.requestedMode ?? stateData.activeMode ?? stateData.mode ?? 'off',
+        stateData.retryAfter ?? null,
+      );
+    }
+  } catch {}
+
+  modeStorageListener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area === 'local' && changes.jevModeState) {
+      const newState = changes.jevModeState.newValue;
+      if (newState) {
+        applyConfirmedModeState(
+          newState.activeMode || newState.mode || 'off',
+          newState.disabledReason || newState.reason || null,
+          newState.requestedMode ?? newState.activeMode ?? newState.mode ?? 'off',
+          newState.retryAfter ?? null,
+        );
+      }
+    }
+  };
+  if (!popupDisposed && typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+    chrome.storage.onChanged.addListener(modeStorageListener);
+  }
 });
 
 onUnmounted(() => {
+  popupDisposed = true;
+  if (modeStorageListener && typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+    chrome.storage.onChanged.removeListener(modeStorageListener);
+  }
   if (progressTimer) {
     clearInterval(progressTimer);
     progressTimer = null;
@@ -984,7 +1069,7 @@ onUnmounted(() => {
       <!-- State: Sub-panel when isManaging is true -->
       <div v-if="isManaging" class="jev-subpanel">
         <!-- Local Sub-panel (2 Inset Rows) -->
-        <div v-if="jevMode === 'local'" class="jev-local-panel">
+        <div v-if="jevRequestedMode === 'local'" class="jev-local-panel">
           <!-- Row 1: Model Switcher & Delete Action -->
           <div class="jev-model-card">
             <!-- Empty state if no models are installed -->
@@ -1099,7 +1184,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Remote Sub-panel (3 Rows) -->
-        <div v-else-if="jevMode === 'remote'" class="jev-remote-panel">
+        <div v-else-if="jevRequestedMode === 'remote'" class="jev-remote-panel">
           <div class="remote-input-group">
             <input
               type="text"
@@ -1195,11 +1280,11 @@ onUnmounted(() => {
         <!-- Normal State: 3-Step Segmented Control & Morphing Overlay -->
         <template v-else>
           <div class="segmented-control three-step">
-            <div class="segment-indicator-three" :class="jevMode"></div>
+            <div class="segment-indicator-three" :class="jevRequestedMode"></div>
             <button
               type="button"
               class="segment-btn"
-              :class="{ active: jevMode === 'off' }"
+              :class="{ active: jevRequestedMode === 'off' }"
               @click="setJevMode('off')"
             >
               Off
@@ -1207,7 +1292,7 @@ onUnmounted(() => {
             <button
               type="button"
               class="segment-btn"
-              :class="{ active: jevMode === 'local' }"
+              :class="{ active: jevRequestedMode === 'local' }"
               @click="setJevMode('local')"
             >
               Local
@@ -1215,11 +1300,15 @@ onUnmounted(() => {
             <button
               type="button"
               class="segment-btn"
-              :class="{ active: jevMode === 'remote' }"
+              :class="{ active: jevRequestedMode === 'remote' }"
               @click="setJevMode('remote')"
             >
               Remote
             </button>
+          </div>
+
+          <div v-if="jevMode === 'off' && jevOffReasonText" class="jev-off-reason">
+            {{ jevOffReasonText }}
           </div>
 
           <!-- State B: Expanded Confirm Action Bar (Overlays & Morphs from/to Local button) -->
@@ -1610,6 +1699,14 @@ onUnmounted(() => {
 }
 
 /* State B: Expanded Confirm Action Bar (Overlays & Morphs from/to Local button) */
+.jev-off-reason {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #f59e0b;
+  text-align: center;
+  line-height: 1.3;
+}
+
 .jev-expand-bar {
   position: absolute;
   top: 0;

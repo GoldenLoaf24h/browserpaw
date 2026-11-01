@@ -3,7 +3,16 @@ import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES, TOOL_SCHEMAS, TOOL_CATEGORIES } from 'chrome-mcp-shared';
 
 interface ToolDocsParams {
-  category: 'navigate' | 'perceive' | 'act' | 'observe' | 'manage' | 'crawl' | 'diagnose' | 'network';
+  category:
+    | 'navigate'
+    | 'perceive'
+    | 'act'
+    | 'observe'
+    | 'manage'
+    | 'crawl'
+    | 'diagnose'
+    | 'network'
+    | 'workflow';
   activateForSession?: boolean;
 }
 
@@ -20,10 +29,11 @@ export class ToolDocsTool extends BaseBrowserToolExecutor {
   async execute(args: ToolDocsParams): Promise<ToolResult> {
     const names = new Set((TOOL_CATEGORIES[args.category] || '').split(' ').filter(Boolean));
     if (names.size === 0) {
-      return createErrorResponse(`Unknown category '${args.category}'. Valid: ${Object.keys(TOOL_CATEGORIES).join(', ')}`);
+      return createErrorResponse(
+        `Unknown category '${args.category}'. Valid: ${Object.keys(TOOL_CATEGORIES).join(', ')}`,
+      );
     }
-    const docs = TOOL_SCHEMAS
-      .filter((t) => names.has(t.name))
+    const docs = TOOL_SCHEMAS.filter((t) => names.has(t.name))
       .map((t) => {
         const props = (t.inputSchema as any)?.properties ?? {};
         const required: string[] = (t.inputSchema as any)?.required ?? [];

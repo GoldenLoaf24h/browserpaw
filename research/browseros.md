@@ -84,7 +84,7 @@
 
 ### 1.1 项目背景与全景拓扑
 
-BrowserOS (此前曾在内部衍生出 `browserclaw` / `browseros-neo`) 是一个追求极度自主可控、全栈闭环的 Agentic 浏览器操作系统。与业界大部分基于 Puppeteer / Playwright 封装 Python/Node SDK 的项目不同，BrowserOS 认为**现有通用浏览器及其标准调试协议是 Agent 执行效率的最大瓶颈**。
+BrowserOS 是一个追求极度自主可控、全栈闭环的 Agentic 浏览器操作系统。与业界大部分基于 Puppeteer / Playwright 封装 Python/Node SDK 的项目不同，BrowserOS 认为**现有通用浏览器及其标准调试协议是 Agent 执行效率的最大瓶颈**。
 
 因此，BrowserOS 确立了如下核心哲学：
 

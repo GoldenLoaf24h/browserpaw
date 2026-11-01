@@ -1,0 +1,177 @@
+{
+  "id": "github-releases",
+  "name": "GitHub releases reader",
+  "description": "Read a repository's public release Atom feed and return source-linked release entries.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://github.com/react/react/releases",
+      "https://github.com/react/react/releases.atom",
+      "https://docs.github.com/en/repositories/releasing-projects-on-github/viewing-your-repositorys-releases-and-tags"
+    ]
+  },
+  "domains": ["github.com"],
+  "keywords": ["github", "releases", "changelog", "versions"],
+  "startUrl": "https://github.com/{{owner}}/{{repo}}/releases",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "owner": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+      },
+      "repo": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]{1,100}$"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 5
+      }
+    },
+    "required": ["owner", "repo"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "repository": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+      },
+      "releases": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/.+/releases/tag/"
+            },
+            "updated": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["title", "url", "updated"],
+          "additionalProperties": false
+        }
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "atom": {
+            "type": "string",
+            "pattern": "^https://github\\.com/.+/releases\\.atom$"
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://github\\.com/.+/releases(?:\\?.*)?$"
+          }
+        },
+        "required": ["atom", "page"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["success", "status", "repository", "releases", "sources"],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const owner = String(input.owner || '').trim();\nconst repo = String(input.repo || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst feed = new URL('/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/releases.atom', location.origin);\nconst response = await fetch(feed.href, { credentials: 'include' });\nif (!response.ok) return { success: false, status: 'http_error', repository: owner + '/' + repo, httpStatus: response.status, source: response.url };\nconst finalPath = new URL(response.url).pathname.split('/').filter(Boolean);\nconst repository = finalPath.length === 3 && finalPath[2] === 'releases.atom' ? decodeURIComponent(finalPath[0]) + '/' + decodeURIComponent(finalPath[1]) : owner + '/' + repo;\nconst xml = new DOMParser().parseFromString(await response.text(), 'application/xml');\nif (xml.querySelector('parsererror')) return { success: false, status: 'invalid_feed', repository, source: response.url };\nconst releases = Array.from(xml.querySelectorAll('entry'))\n  .slice(0, limit)\n  .map(entry => ({\n    title: String(entry.querySelector('title') && entry.querySelector('title').textContent || '').trim(),\n    url: String(entry.querySelector('link') && entry.querySelector('link').getAttribute('href') || ''),\n    updated: String(entry.querySelector('updated') && entry.querySelector('updated').textContent || '').trim()\n  }))\n  .filter(item => item.title && /^https:\\/\\/github\\.com\\/.+\\/releases\\/tag\\//.test(item.url) && item.updated);\nif (!releases.length) return { success: false, status: 'empty', repository, source: response.url };\nreturn {\n  success: true,\n  status: 'ok',\n  repository,\n  releases,\n  sources: { atom: response.url, page: new URL('/' + encodeURIComponent(repository.split('/')[0]) + '/' + encodeURIComponent(repository.split('/')[1]) + '/releases', location.origin).href }\n};"
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+        "inputs": {
+          "owner": "react",
+          "repo": "react",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "repository": {
+            "const": "react/react"
+          },
+          "releases": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": ["atom", "page"]
+          }
+        },
+        "required": ["success", "repository", "releases", "sources"]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "Releases: react/react"
+      }
+    },
+    {
+      "inputs": {
+        "owner": "microsoft",
+        "repo": "vscode",
+        "limit": 2
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "repository": {
+            "const": "microsoft/vscode"
+          },
+          "releases": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": ["atom", "page"]
+          }
+        },
+        "required": ["success", "repository", "releases", "sources"]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "Releases: microsoft/vscode"
+      }
+    }
+  ]
+}

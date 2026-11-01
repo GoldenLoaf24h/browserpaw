@@ -45,16 +45,22 @@ describe('Delta Hardening (Anti-Explosion & Noise Gating)', () => {
 
   describe('isNoiseElement', () => {
     it('identifies ad banners, carousels, and feed recommendations as noise', () => {
-      expect(isNoiseElement({ tagName: 'div', attributes: { class: 'guess-you-like' } })).toBe(true);
+      expect(isNoiseElement({ tagName: 'div', attributes: { class: 'guess-you-like' } })).toBe(
+        true,
+      );
       expect(isNoiseElement({ tagName: 'div', attributes: { id: 'jdccm-elevator' } })).toBe(true);
       expect(isNoiseElement({ tagName: 'div', attributes: { class: 'ad-banner-top' } })).toBe(true);
       expect(isNoiseElement({ tagName: 'ins', attributes: { class: 'adsbygoogle' } })).toBe(true);
-      expect(isNoiseElement({ tagName: 'div', attributes: { class: 'feed-item-wrapper' } })).toBe(true);
+      expect(isNoiseElement({ tagName: 'div', attributes: { class: 'feed-item-wrapper' } })).toBe(
+        true,
+      );
     });
 
     it('preserves user input and form elements even with noisy classes', () => {
       expect(isNoiseElement({ tagName: 'input', attributes: { class: 'feed-item' } })).toBe(false);
-      expect(isNoiseElement({ tagName: 'textarea', attributes: { id: 'recommend-feedback' } })).toBe(false);
+      expect(
+        isNoiseElement({ tagName: 'textarea', attributes: { id: 'recommend-feedback' } }),
+      ).toBe(false);
       expect(isNoiseElement({ tagName: 'select', attributes: { class: 'ad-filter' } })).toBe(false);
     });
   });
@@ -136,7 +142,9 @@ describe('Delta Hardening (Anti-Explosion & Noise Gating)', () => {
       expect(diff.truncated).toBe(true);
       expect(diff.totalAdded).toBe(60);
       expect(diff.added).toHaveLength(DEFAULT_MAX_DELTA_CHANGES);
-      expect(diff.summary).toContain(`Delta truncated: showing ${DEFAULT_MAX_DELTA_CHANGES}/60 added`);
+      expect(diff.summary).toContain(
+        `Delta truncated: showing ${DEFAULT_MAX_DELTA_CHANGES}/60 added`,
+      );
     });
 
     it('truncates initial baseline elements if diff is called on massive page without prior snapshot', () => {
@@ -180,6 +188,7 @@ describe('Delta Hardening (Anti-Explosion & Noise Gating)', () => {
 
       // Chrome tabs API mock
       (globalThis as any).chrome = {
+        webNavigation: { getAllFrames: vi.fn(async () => [{ frameId: 0 }]) },
         tabs: {
           get: vi.fn().mockResolvedValue({ url: 'https://jd.com/cart' }),
         },
@@ -198,7 +207,11 @@ describe('Delta Hardening (Anti-Explosion & Noise Gating)', () => {
     it('preserves truncation metadata in chrome_read_dom delta response', async () => {
       const { readDOMTool } = await import('../entrypoints/background/tools/browser/read-dom');
       const baseline = [{ index: 1, tagName: 'button', text: 'Checkout', isInteractive: true }];
-      snapshotCacheManager.setSnapshot(99, { url: 'https://jd.com/cart', elementCount: 1, elements: baseline });
+      snapshotCacheManager.setSnapshot(99, {
+        url: 'https://jd.com/cart',
+        elementCount: 1,
+        elements: baseline,
+      });
 
       const current = [
         { index: 1, tagName: 'button', text: 'Checkout', isInteractive: true },
@@ -241,4 +254,3 @@ describe('Delta Hardening (Anti-Explosion & Noise Gating)', () => {
     });
   });
 });
-

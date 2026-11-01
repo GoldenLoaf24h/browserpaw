@@ -214,6 +214,44 @@ program
     }
   });
 
+// Start interactive persistent REPL for BrowserPaw MCP
+program
+  .command('repl')
+  .description('Start interactive persistent REPL for BrowserPaw MCP')
+  .option('-p, --port <port>', 'Target bridge port (default: 12306 or CHROME_MCP_PORT)')
+  .action(async (options) => {
+    try {
+      const { startRepl } = await import('./repl.js');
+      await startRepl({ port: options.port });
+    } catch (error: any) {
+      console.error(colorText(`REPL failed: ${error.message}`, 'red'));
+      process.exit(1);
+    }
+  });
+
+const skillCommand = program
+  .command('skill')
+  .description('Manage the portable BrowserPaw Agent Skill');
+
+skillCommand
+  .command('install')
+  .description('Install the client-neutral BrowserPaw skill')
+  .option('--target <skills-root>', 'Skills root directory (destination is <root>/browserpaw)')
+  .option('--force', 'Replace an existing installation carrying the BrowserPaw marker')
+  .action(async (options) => {
+    try {
+      const { installSkill } = await import('./skill-install.js');
+      const result = installSkill({
+        targetRoot: options.target,
+        force: Boolean(options.force),
+      });
+      console.log(colorText(`Installed BrowserPaw skill at ${result.installedPath}`, 'green'));
+    } catch (error: any) {
+      console.error(colorText(`Skill installation failed: ${error.message}`, 'red'));
+      process.exit(1);
+    }
+  });
+
 program.parse(process.argv);
 
 // If no command provided, show help

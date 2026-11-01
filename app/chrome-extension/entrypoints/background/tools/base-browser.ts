@@ -18,6 +18,11 @@ const INJECTION_TIMEOUT_MS = 15_000;
 
 const injectedScriptsCache = new Map<number, Set<string>>();
 
+function isMissingContentScriptReceiver(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Could not establish connection|Receiving end does not exist/i.test(message);
+}
+
 if (typeof chrome !== 'undefined' && chrome.tabs) {
   chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading' || changeInfo.url) {
@@ -151,9 +156,13 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
         console.warn(`Unexpected ping response in tab ${tabId}:`, response);
       }
     } catch (error) {
-      console.error(
-        `ping content script failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // A missing receiver is the normal result before the first injection.
+      // Only surface genuinely unexpected transport failures in the error panel.
+      if (!isMissingContentScriptReceiver(error)) {
+        console.error(
+          `ping content script failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
 
     try {

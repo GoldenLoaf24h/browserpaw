@@ -8,7 +8,7 @@
     {
       "name": "browserpaw",
       "source": "./plugins/browserpaw-claude",
-      "description": "Control your own Chrome browser from Claude with 50 MCP tools for navigation, DOM perception, form filling, screenshots, and autonomous on-page micro-loops, reusing existing logins, cookies, and extensions.",
+      "description": "Control your own Chrome browser from Claude with navigation, DOM perception, form filling, screenshots, and autonomous on-page micro-loops, reusing existing logins, cookies, and extensions.",
       "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"]
     }
   ]

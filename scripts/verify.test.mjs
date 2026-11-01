@@ -251,12 +251,12 @@ describe('Verification Runner Core Contract', () => {
   });
 
   describe('6. Pytest JUnit XML parser', () => {
-    it('parses successful run with 22 passed and 1 allowed test_display_integration Hermes skip', () => {
+    it('parses successful run with 22 passed and 1 allowed Hermes package display skip', () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <testsuites>
   <testsuite name="pytest" tests="23" errors="0" failures="0" skipped="1">
     <testcase classname="test_bridge" name="test_token" time="0.01" />
-    <testcase classname="test_display" name="test_display_integration" time="0.02">
+    <testcase classname="" name="plugins.browserpaw-hermes.tests.test_display_integration" time="0.02">
       <skipped message="Hermes host not attached" type="pytest.skip" />
     </testcase>
   </testsuite>

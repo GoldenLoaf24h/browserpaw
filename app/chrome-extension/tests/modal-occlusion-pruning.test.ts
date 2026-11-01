@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   inPageGetActiveElementSummary,
   inPageDOMPruner,
+  detectActiveModalBlocker,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 
 describe('Modal & Stacking Occlusion Pruning (v3.4.0)', () => {
@@ -61,6 +62,27 @@ describe('Modal & Stacking Occlusion Pruning (v3.4.0)', () => {
     expect(summary.isInput).toBe(true);
     expect(summary.value).toBe('agent_tester');
     expect(summary.hasActiveModal).toBe(false);
+  });
+
+  it('does not isolate a full-size positioned editor shell just because it contains confirm source text', () => {
+    document.body.innerHTML =
+      '<button id="run-code">Run code</button><div id="container" style="position:absolute;z-index:1"><textarea>confirm("Press a button!")</textarea><iframe></iframe></div>';
+    const shell = document.getElementById('container')!;
+    shell.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: innerWidth,
+        bottom: innerHeight,
+        width: innerWidth,
+        height: innerHeight,
+      }) as DOMRect;
+    expect(detectActiveModalBlocker()).toBeNull();
+    const snapshot = inPageDOMPruner({ highlight: false });
+    expect(snapshot.modalIsolated).not.toBe(true);
+    expect(snapshot.treeString).toContain('Run code');
   });
 
   it('inPageGetActiveElementSummary detects open modal dialog', () => {

@@ -2,6 +2,7 @@ export type ActionRecord =
   | { type: 'navigate'; prevUrl: string; timestamp: number; documentEpoch?: number }
   | {
       type: 'fill';
+      frameId?: number;
       index?: number;
       selector?: string;
       prevValue: string;

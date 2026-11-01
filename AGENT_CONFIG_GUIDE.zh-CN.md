@@ -67,7 +67,7 @@ BrowserPaw 强制执行本地 Token 认证，防止未授权的回环访问：
 - **Token 文件位置**：`~/.chrome-mcp/bridge-token`（Windows 上为 `C:\Users\<username>\.chrome-mcp\bridge-token`）。原生服务器是唯一的生产者（以独占 `wx` 锁保留有效的 48/64 位十六进制 Token；客户端和 doctor 脚本从不写 Token；`CHROME_MCP_TOKEN` 或 `BROWSERPAW_MCP_TOKEN` 等环境变量覆盖会被忽略）。
 - **环境变量**：
   - `CHROME_MCP_PORT` / `MCP_HTTP_PORT`：原生桥接的端口覆盖（优先级：`CHROME_MCP_PORT` > `MCP_HTTP_PORT` > `12306`，校验为 1–65535 的整数范围）。
-  - `CHROME_MCP_TOOL_PROFILE`：工具暴露配置档。取值：`core`（14 个工具，默认，约 9.2k 提示字符/4）、`crawl`（12 个工具，约 6.1k）或 `full`（全部 50 个工具，约 20.3k）。数量为 Core 14 / Crawl 12 / Full 50（49 个扩展执行工具 + 1 个原生服务器工具）；体积是基于字符的估算，而非实测 BPE Token。
+  - `CHROME_MCP_TOOL_PROFILE`：工具暴露配置档。取值：`core`（日常最小配置档）、`crawl`（轻量抓取配置档）或 `full`（全部规范工具）。精确数量和 schema 体积以当前服务器或自动生成的工具参考为准，不在文档中手写复制。
   - `BROWSERPAW_TOOL_PREFIX`：工具名称的命名空间前缀（`browserpaw_` 或 `chrome_`）。
   - `BROWSERPAW_EXTENSION_SYNC_DIR`：`sync-extension-dist.mjs` 的可选目标目录（严格防护仓库根、祖先目录、驱动器根和用户主目录）。
 
@@ -239,7 +239,7 @@ Claude Code 从本仓库自带的插件市场安装 BrowserPaw，一步即可打
 
 | 工具名称                            | 关键参数                                     | 功能与描述                                               | 推荐场景                       |
 | :---------------------------------- | :------------------------------------------- | :------------------------------------------------------- | :----------------------------- |
-| `chrome_read_dom`                   | `viewportOnly: true`                         | 剪枝后的 1 起始编号可访问性树；复杂页面上剪枝 ≥85%       | **任何新页面的第一步**         |
+| `chrome_read_dom`                   | `viewportOnly: true`                         | 剪枝后的 DOM 树，使用文档级引用并明确覆盖范围            | **任何新页面的第一步**         |
 | `chrome_interact_index`             | `index` 或 `coordinate: {x,y}`               | 硬件级点击、悬停、双击或拖拽                             | 按钮点击、链接导航             |
 | `chrome_fill_index`                 | `index`、`text`、`clear: true`、`pressEnter` | 原生物理输入、值清空和回车提交                           | 单字段查询与提交               |
 | `chrome_keyboard`                   | `keys`（例如 `["Enter"]`、`["Ctrl+,"]`）     | 按键、独立修饰键（Control、Shift）、符号组合键（Ctrl+,） | 快捷键、表单导航、组合键       |

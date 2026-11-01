@@ -1,105 +1,285 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// ponytail: minimal path.relative boundary + fail-closed on any symlink/junction
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const realRepo = fs.realpathSync(repoRoot);
-const rootSkill = path.join(repoRoot, 'skill');
+const canonicalDir = 'skills/browserpaw';
+const hermesTemplateDir = 'plugins/browserpaw-hermes/skill-template';
+const targets = {
+  portable: 'plugins/browserpaw/skills/browserpaw',
+  claude: 'plugins/browserpaw-claude/skills/browserpaw',
+  dsh: 'plugins/browserpaw-dsh/skills/browserpaw',
+  hermes: 'plugins/browserpaw-hermes/skills/browserpaw',
+};
 
-const targets = [
-  { dir: path.join(repoRoot, 'skills', 'browserpaw') },
-  {
-    dir: path.join(repoRoot, 'plugins', 'browserpaw', 'skills', 'browserpaw'),
-    isPlugin: true,
-    isHermes: true,
-  },
-  { dir: path.join(repoRoot, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw') },
-  // The DSH bridge exposes the literal `chrome_*` names; do NOT set isPlugin here.
-  { dir: path.join(repoRoot, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw') },
-  // Claude Code speaks the canonical chrome_* names over stdio, so this mirror stays verbatim.
-  { dir: path.join(repoRoot, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw') },
-];
+const clientLeak = /\b(?:Hermes|Claude|Codex|ChatGPT|DSH)\b|mcp__|\.codex-plugin|mcp-skills/;
+const aliasLeak = /\bbrowserpaw_[a-z]/;
+const excludedNames = new Set(['AGENTS.md', 'HERMES_PLUGIN_SKILL.md']);
+const textExtensions = new Set([
+  '.md',
+  '.json',
+  '.mjs',
+  '.js',
+  '.cjs',
+  '.ps1',
+  '.bat',
+  '.txt',
+  '.yml',
+  '.yaml',
+]);
 
-const SCOPE_BANNER_EN =
-  '> **Tool Availability Notice**: Standard BrowserPaw MCP exposes the full 50 toolset (under full profile; stdio defaults to core). The optional Hermes plugin exposes 16 curated wrapper tools (`browserpaw_*`). Other tools are not available in the Hermes plugin; use standard MCP.\n\n';
+function normalize(root, relativePath) {
+  return path.resolve(root, relativePath);
+}
 
-const SCOPE_BANNER_ZH =
-  '> **工具可用性说明**：标准 BrowserPaw MCP 暴露完整 50 工具集（full 配置档下；stdio 默认 core）。可选的 Hermes 插件暴露 16 个精选包装工具（`browserpaw_*`）。其余工具在 Hermes 插件中不可用，请使用标准 MCP。\n\n';
+function inside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
 
-function assertSafePath(targetPath) {
-  let curr = path.resolve(targetPath);
-  let deepestExisting = null;
-  while (true) {
-    try {
-      if (fs.lstatSync(curr).isSymbolicLink()) {
-        throw new Error(`Security violation: symlink or junction forbidden: ${curr}`);
-      }
-      if (!deepestExisting) deepestExisting = curr;
-    } catch (e) {
-      if (e.code !== 'ENOENT') throw e;
+function assertNoLinks(root, target) {
+  let current = path.resolve(target);
+  while (inside(root, current)) {
+    if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(`Symlink or junction forbidden: ${current}`);
     }
-    const parent = path.dirname(curr);
-    if (parent === curr) break;
-    curr = parent;
-  }
-  const realBase = fs.realpathSync(deepestExisting || repoRoot);
-  const rel = path.relative(realRepo, realBase);
-  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
-    throw new Error(`Security violation: target outside repository: ${targetPath}`);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
 }
 
-function copyDir(src, dest, isPlugin = false, isHermes = false) {
-  assertSafePath(src);
-  assertSafePath(dest);
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === 'HERMES_PLUGIN_SKILL.md') continue;
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    assertSafePath(srcPath);
-    assertSafePath(destPath);
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath, isPlugin, isHermes);
-    } else if (isHermes && entry.name === 'SKILL.md') {
-      const hermesTemplate = path.join(rootSkill, 'HERMES_PLUGIN_SKILL.md');
-      assertSafePath(hermesTemplate);
-      const text = fs.existsSync(hermesTemplate)
-        ? fs.readFileSync(hermesTemplate, 'utf-8')
-        : fs
-            .readFileSync(srcPath, 'utf-8')
-            .replaceAll('chrome_', 'browserpaw_')
-            .replaceAll('get_windows_and_tabs', 'browserpaw_get_windows_and_tabs');
-      fs.writeFileSync(destPath, Buffer.from(text.replace(/\r\n/g, '\n'), 'utf-8'));
-    } else if (isPlugin && (entry.name.endsWith('.md') || entry.name.endsWith('.json'))) {
-      let text = fs
-        .readFileSync(srcPath, 'utf-8')
-        .replaceAll('chrome_', 'browserpaw_')
-        .replaceAll('get_windows_and_tabs', 'browserpaw_get_windows_and_tabs');
-      const relFromSkill = path.relative(rootSkill, srcPath);
-      const isReference = relFromSkill.startsWith('references' + path.sep);
-      const isTroubleshooting =
-        entry.name.startsWith('TROUBLESHOOTING') && entry.name.endsWith('.md');
-      if (isHermes && entry.name.endsWith('.md') && (isReference || isTroubleshooting)) {
-        text = (entry.name.endsWith('.zh-CN.md') ? SCOPE_BANNER_ZH : SCOPE_BANNER_EN) + text;
+function readTree(root, target, { includeExcluded = false } = {}) {
+  const absolute = normalize(root, target);
+  if (!inside(root, absolute)) throw new Error(`Path escapes repository: ${target}`);
+  assertNoLinks(root, absolute);
+  const files = new Map();
+  if (!fs.existsSync(absolute)) return files;
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (!includeExcluded && excludedNames.has(entry.name)) continue;
+      assertNoLinks(root, full);
+      const relative = path.relative(absolute, full).replaceAll(path.sep, '/');
+      if (entry.isDirectory()) {
+        files.set(relative, null);
+        walk(full);
+      } else if (entry.isFile()) {
+        files.set(relative, fs.readFileSync(full));
+      } else {
+        throw new Error(`Unsupported file type: ${full}`);
       }
-      fs.writeFileSync(destPath, Buffer.from(text.replace(/\r\n/g, '\n'), 'utf-8'));
-    } else {
-      fs.copyFileSync(srcPath, destPath);
+    }
+  };
+  walk(absolute);
+  return files;
+}
+
+function excludedFiles(root, target) {
+  const absolute = normalize(root, target);
+  if (!inside(root, absolute)) throw new Error(`Path escapes repository: ${target}`);
+  assertNoLinks(root, absolute);
+  const files = [];
+  if (!fs.existsSync(absolute)) return files;
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      assertNoLinks(root, full);
+      const relative = path.relative(absolute, full).replaceAll(path.sep, '/');
+      if (excludedNames.has(entry.name)) files.push(relative);
+      if (entry.isDirectory()) walk(full);
+    }
+  };
+  walk(absolute);
+  return files;
+}
+
+function compareTrees(expected, actual) {
+  const problems = [];
+  for (const file of actual.keys()) {
+    if (!expected.has(file)) {
+      problems.push(`Orphan: ${file}`);
+    } else if ((actual.get(file) === null) !== (expected.get(file) === null)) {
+      problems.push(`File type mismatch: ${file}`);
+    }
+  }
+  for (const [file, content] of expected) {
+    if (!actual.has(file)) {
+      problems.push(`Missing: ${file}`);
+    } else if (content !== null) {
+      const installed = actual.get(file);
+      if (!Buffer.isBuffer(installed) || !content.equals(installed)) {
+        problems.push(`Content drift: ${file}`);
+      }
+    }
+  }
+  return problems;
+}
+
+function frontmatter(text) {
+  return text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1] ?? '';
+}
+
+function assertCanonical(root) {
+  const skillPath = path.join(root, canonicalDir, 'SKILL.md');
+  if (!fs.existsSync(skillPath)) throw new Error('Canonical skills/browserpaw/SKILL.md is missing');
+  if (!/^name:\s*browserpaw\s*$/m.test(frontmatter(fs.readFileSync(skillPath, 'utf8')))) {
+    throw new Error('Canonical SKILL.md frontmatter must declare name: browserpaw');
+  }
+  for (const name of ['references', 'scripts', 'assets/recipes']) {
+    const full = path.join(root, canonicalDir, name);
+    if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) {
+      throw new Error(`Canonical directory missing: ${name}`);
+    }
+  }
+
+  const tree = readTree(root, canonicalDir);
+  const forbidden = excludedFiles(root, canonicalDir);
+  if (forbidden.length) {
+    throw new Error(`Canonical development file must be removed: ${forbidden[0]}`);
+  }
+  for (const [file, content] of tree) {
+    if (content === null) continue;
+    if (!textExtensions.has(path.extname(file).toLowerCase())) continue;
+    const text = content.toString('utf8');
+    if (clientLeak.test(text)) throw new Error(`Canonical client-specific leak: ${file}`);
+    if (aliasLeak.test(text)) throw new Error(`Canonical unavailable alias leak: ${file}`);
+  }
+
+  for (const [file, content] of tree) {
+    if (content === null || path.extname(file).toLowerCase() !== '.md') continue;
+    const base = path.join(root, canonicalDir);
+    const text = content.toString('utf8');
+    for (const match of text.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+      const link = match[1];
+      if (/^(?:https?:|mailto:|#|\/)/i.test(link)) continue;
+      const destination = path.resolve(path.dirname(path.join(base, file)), link.split('#')[0]);
+      if (!inside(base, destination) || !fs.existsSync(destination)) {
+        throw new Error(`Broken canonical reference: ${file} -> ${link}`);
+      }
     }
   }
 }
 
-assertSafePath(rootSkill);
-for (const target of targets) {
-  assertSafePath(target.dir);
-  // A copy-only sync leaves files that were renamed or deleted upstream in the mirror,
-  // so the plugin would keep distributing retired instructions. assertSafePath has
-  // already rejected symlinks/junctions and paths outside the repo, so the mirror
-  // directory itself is safe to rebuild from scratch.
-  fs.rmSync(target.dir, { recursive: true, force: true });
-  copyDir(rootSkill, target.dir, target.isPlugin, target.isHermes);
+function assertPackageIdentity(root) {
+  const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  for (const manifest of [
+    'plugins/browserpaw/plugin.json',
+    'plugins/browserpaw-claude/.claude-plugin/plugin.json',
+  ]) {
+    const actual = JSON.parse(fs.readFileSync(path.join(root, manifest), 'utf8')).version;
+    if (actual !== version)
+      throw new Error(`${manifest} version ${actual} does not match ${version}`);
+  }
+  const yaml = fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/plugin.yaml'), 'utf8');
+  const hermesVersion = yaml.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m)?.[1];
+  if (hermesVersion !== version) {
+    throw new Error(`Hermes plugin version ${hermesVersion} does not match ${version}`);
+  }
+
+  const provides = [...yaml.matchAll(/^\s*-\s*(browserpaw_[a-z0-9_]+)\s*$/gm)].map((m) => m[1]);
+  const init = fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/__init__.py'), 'utf8');
+  const definitions = [...init.matchAll(/^\s*["'](browserpaw_[a-z0-9_]+)["']\s*:/gm)].map(
+    (m) => m[1],
+  );
+  const expectedTools = [...new Set(provides)].sort();
+  const definedTools = [...new Set(definitions)].sort();
+  if (expectedTools.length === 0) {
+    throw new Error('Hermes plugin.yaml must declare at least one browserpaw_* wrapper');
+  }
+  if (JSON.stringify(expectedTools) !== JSON.stringify(definedTools)) {
+    throw new Error('Hermes provides_tools does not match browserpaw_* definitions');
+  }
+  return { version, hermesTools: expectedTools };
 }
 
-console.log('Skill synchronization completed successfully across all targets.');
+export function syncSkills(root = repoRoot, { check = false } = {}) {
+  const absoluteRoot = path.resolve(root);
+  assertCanonical(absoluteRoot);
+  const identity = assertPackageIdentity(absoluteRoot);
+  const canonicalTree = readTree(absoluteRoot, canonicalDir);
+  const hermesTree = readTree(absoluteRoot, hermesTemplateDir);
+  const hermesForbidden = excludedFiles(absoluteRoot, hermesTemplateDir);
+  if (hermesForbidden.length) {
+    throw new Error(`Hermes skill development file must be removed: ${hermesForbidden[0]}`);
+  }
+  const hermesSkill = hermesTree.get('SKILL.md');
+  if (!Buffer.isBuffer(hermesSkill)) {
+    throw new Error('Hermes skill template SKILL.md is missing');
+  }
+  for (const [file, content] of hermesTree) {
+    if (content !== null && textExtensions.has(path.extname(file).toLowerCase())) {
+      if (/chrome_/.test(content.toString('utf8'))) {
+        throw new Error(`Hermes skill must use browserpaw_* wrapper names only: ${file}`);
+      }
+    }
+  }
+  const expected = {
+    portable: canonicalTree,
+    claude: canonicalTree,
+    dsh: canonicalTree,
+    hermes: hermesTree,
+    native: canonicalTree,
+  };
+  const nativeTarget = 'app/native-server/dist/skill/browserpaw';
+  assertNoLinks(absoluteRoot, path.join(absoluteRoot, nativeTarget));
+  const activeTargets = { ...targets };
+  if (fs.existsSync(path.join(absoluteRoot, check ? nativeTarget : 'app/native-server/dist'))) {
+    activeTargets.native = nativeTarget;
+  }
+
+  const collectProblems = () =>
+    Object.entries(activeTargets).flatMap(([name, target]) =>
+      [
+        ...excludedFiles(absoluteRoot, target).map((file) => `Excluded: ${file}`),
+        ...compareTrees(expected[name], readTree(absoluteRoot, target, { includeExcluded: true })),
+      ].map((problem) => `${name}: ${problem}`),
+    );
+
+  const initialProblems = collectProblems();
+  if (check || initialProblems.length === 0) {
+    return { problems: initialProblems, identity };
+  }
+
+  for (const [name, target] of Object.entries(activeTargets)) {
+    const targetPath = normalize(absoluteRoot, target);
+    assertNoLinks(absoluteRoot, targetPath);
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    fs.mkdirSync(targetPath, { recursive: true });
+    for (const [file, content] of expected[name]) {
+      const destination = path.join(targetPath, file);
+      if (content === null) {
+        fs.mkdirSync(destination, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, content);
+      }
+    }
+  }
+  return { problems: collectProblems(), identity };
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--check')) {
+    throw new Error('Usage: node scripts/sync-skills.mjs [--check]');
+  }
+  const { problems } = syncSkills(repoRoot, { check: args[0] === '--check' });
+  if (problems.length) {
+    console.error(`${problems.join('\n')}\nRun node scripts/sync-skills.mjs to update mirrors.`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(
+    args[0] === '--check' ? 'Skill mirrors are synchronized.' : 'Skill synchronization completed.',
+  );
+}
+
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+}

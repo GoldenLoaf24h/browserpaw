@@ -5,6 +5,7 @@ import * as engine from '../entrypoints/background/tools/browser/in-page-engine'
 import { cdpSessionManager } from '../utils/cdp-session-manager';
 import { CdpDispatchTimeoutError } from '../utils/race-cdp';
 import { clickTool } from '../entrypoints/background/tools/browser/interaction';
+import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import * as unifiedLocator from '../entrypoints/background/tools/browser/unified-locator';
 import * as agentCursor from '../entrypoints/background/tools/browser/agent-cursor';
 
@@ -22,82 +23,68 @@ describe('A-02: press/release compensation on a real click path', () => {
     vi.restoreAllMocks();
   });
 
-  it('form-pipeline compensates the release and never re-dispatches a synthetic click on timeout', async () => {
-    const mouseCalls: Array<Record<string, unknown>> = [];
-    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
-      fn({} as any),
-    );
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
-      async (_tabId, method, params) => {
-        if (method === 'Input.dispatchMouseEvent') {
-          mouseCalls.push(params as Record<string, unknown>);
-          if ((params as any).type === 'mousePressed') {
-            // Press acknowledged, but the renderer then stops acking the release.
-            throw new CdpDispatchTimeoutError('Input.dispatchMouseEvent');
-          }
-        }
-        return {} as any;
-      },
-    );
-
+  it('form-pipeline delegates click to interactIndexTool with skipLock: true and halts on failure without synthetic replay', async () => {
     let fallbackClicks = 0;
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
-      if (fnName === 'inPageGetElementCoordinates') {
-        return [{ result: { success: true, x: 50, y: 60, tagName: 'button' } }] as any;
-      }
       if (fnName === 'inPageInteractIndex') {
         fallbackClicks++;
-        return [{ result: { success: true } }] as any;
       }
       return [{ result: { success: true } }] as any;
     });
 
-    const dispatched = await (formPipelineTool as any).dispatchNativeClick(400, 1).catch((e) => e);
+    const interactSpy = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+      content: [{ type: 'text', text: 'CDP_DISPATCH_TIMEOUT: Input.dispatchMouseEvent' }],
+      isError: true,
+    });
 
-    // The uncertain press must surface as an error instead of a synthetic retry.
-    expect(dispatched).toBeInstanceOf(CdpDispatchTimeoutError);
+    await expect((formPipelineTool as any).dispatchNativeClick(400, 1)).rejects.toThrow(
+      'Form click failed',
+    );
+
+    expect(interactSpy).toHaveBeenCalledWith(
+      {
+        tabId: 400,
+        index: 1,
+        action: 'click',
+        skipLock: true,
+        includeDelta: false,
+      },
+      { signal: undefined },
+    );
     expect(fallbackClicks).toBe(0);
-
-    const presses = mouseCalls.filter((c) => c.type === 'mousePressed');
-    const releases = mouseCalls.filter((c) => c.type === 'mouseReleased');
-    expect(presses).toHaveLength(1);
-    // Exactly one compensating release, with the button bitmask cleared.
-    expect(releases).toHaveLength(1);
-    expect(releases[0]).toMatchObject({ type: 'mouseReleased', buttons: 0, x: 50, y: 60 });
   });
 
-  it('form-pipeline fails closed when a click delivery outcome is unknown', async () => {
-    const outcomeUnknown = new Error(
-      'CDP Input.dispatchMouseEvent outcome unknown: connection lost after dispatch (cdp-test). The command may have executed; inspect page state before retrying.',
-    );
-    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
-      fn({} as any),
-    );
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
-      async (_tabId, method, params) => {
-        if (method === 'Input.dispatchMouseEvent' && (params as any).type === 'mousePressed') {
-          throw outcomeUnknown;
-        }
-        return {} as any;
-      },
-    );
-
+  it('form-pipeline fails closed without synthetic replay when interactIndexTool reports parsed failure', async () => {
     let fallbackClicks = 0;
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target: any, fnName: string) => {
-      if (fnName === 'inPageGetElementCoordinates') {
-        return [{ result: { success: true, x: 50, y: 60, tagName: 'button' } }] as any;
-      }
       if (fnName === 'inPageInteractIndex') {
         fallbackClicks++;
-        return [{ result: { success: true } }] as any;
       }
       return [{ result: { success: true } }] as any;
     });
 
-    const dispatched = await (formPipelineTool as any).dispatchNativeClick(400, 1).catch((e) => e);
+    vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+      content: [
+        { type: 'text', text: JSON.stringify({ success: false, error: 'target_occluded' }) },
+      ],
+      isError: false,
+    });
 
-    expect(dispatched).toBe(outcomeUnknown);
+    await expect((formPipelineTool as any).dispatchNativeClick(400, 1)).rejects.toThrow(
+      'target_occluded',
+    );
     expect(fallbackClicks).toBe(0);
+  });
+
+  it('form-pipeline returns true when delegated interactIndexTool succeeds', async () => {
+    vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+      content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
+      isError: false,
+    });
+
+    const dispatched = await (formPipelineTool as any).dispatchNativeClick(400, 1);
+
+    expect(dispatched).toBe(true);
   });
 
   it('click tool fails closed instead of falling back to a content-script click on an uncertain dispatch', async () => {

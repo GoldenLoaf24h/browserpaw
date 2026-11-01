@@ -9,6 +9,7 @@ import {
 } from '../entrypoints/background/tools/browser/tab-group-manager';
 
 const STORAGE_KEY = 'session_tab_affinity_map';
+const STORAGE_LINEAGE_KEY = 'session_tab_affinity_lineage';
 
 export interface TabHandoverInfo {
   handover: boolean;
@@ -38,41 +39,118 @@ export class SessionTabAffinityManager {
   private activeHandoverTrackers = new Set<
     (tab: chrome.tabs.Tab, activated: boolean, isCreated?: boolean) => void
   >();
+  private storageLoadedPromise: Promise<void> | null = null;
+  private storageSaveQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.initListeners();
-    void this.loadFromStorage();
+    this.storageLoadedPromise = this.loadFromStorage();
+  }
+
+  public async ensureStorageLoaded(): Promise<void> {
+    if (this.storageLoadedPromise) {
+      await this.storageLoadedPromise;
+    }
   }
 
   private async loadFromStorage(): Promise<void> {
     try {
       if (typeof chrome !== 'undefined' && chrome.storage?.session?.get) {
-        const data = await chrome.storage.session.get(STORAGE_KEY);
+        const data = await chrome.storage.session.get([STORAGE_KEY, STORAGE_LINEAGE_KEY]);
+        const affinityCandidates = new Map<string, number>();
+        const lineageCandidates = new Set<number>();
+
         if (data && data[STORAGE_KEY] && typeof data[STORAGE_KEY] === 'object') {
           for (const [k, v] of Object.entries(data[STORAGE_KEY])) {
-            if (typeof v === 'number' && !this.affinityMap.has(k)) {
-              this.affinityMap.set(k, v);
+            if (typeof v === 'number') {
+              affinityCandidates.set(k, v);
+              if (!this.affinityMap.has(k)) {
+                this.affinityMap.set(k, v);
+              }
             }
           }
         }
+        if (data && data[STORAGE_LINEAGE_KEY] && typeof data[STORAGE_LINEAGE_KEY] === 'object') {
+          for (const [k, v] of Object.entries(data[STORAGE_LINEAGE_KEY])) {
+            const tid = Number(k);
+            if (Number.isFinite(tid) && v && typeof v === 'object') {
+              lineageCandidates.add(tid);
+              if (!this.tabLineage.has(tid)) {
+                this.tabLineage.set(tid, v as TabLineageRecord);
+              }
+            }
+          }
+        }
+
+        // Live verification: prune dead tabs strictly from storage-loaded candidates.
+        // Candidate isolation guarantees concurrent registrations during recovery are not dropped.
+        if (
+          typeof chrome.tabs?.query === 'function' &&
+          (affinityCandidates.size > 0 || lineageCandidates.size > 0)
+        ) {
+          try {
+            const openTabs = await chrome.tabs.query({});
+            const openIds = new Set(
+              openTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number'),
+            );
+            let dirty = false;
+            for (const [sid, tid] of affinityCandidates.entries()) {
+              if (!openIds.has(tid)) {
+                // Concurrency guard: only delete if still pointing to the stale dead tid!
+                if (this.affinityMap.get(sid) === tid) {
+                  this.affinityMap.delete(sid);
+                  dirty = true;
+                }
+              }
+            }
+            for (const tid of lineageCandidates) {
+              if (!openIds.has(tid)) {
+                this.tabLineage.delete(tid);
+                dirty = true;
+              }
+            }
+            if (dirty) {
+              this.persistState();
+            }
+          } catch {}
+        }
       }
-    } catch {
-      // Ignored in non-extension environments (unit tests)
+    } catch (err) {
+      console.warn('[SessionTabAffinity] loadFromStorage failed:', err);
     }
   }
 
-  private async saveToStorage(): Promise<void> {
-    try {
-      if (typeof chrome !== 'undefined' && chrome.storage?.session?.set) {
-        const obj: Record<string, number> = {};
-        for (const [k, v] of this.affinityMap.entries()) {
-          obj[k] = v;
+  private persistState(): void {
+    this.saveToStorage().catch((err) => {
+      console.error('[SessionTabAffinity] Background storage sync failed:', err);
+    });
+  }
+
+  public async saveToStorage(): Promise<void> {
+    const run = async () => {
+      try {
+        if (typeof chrome !== 'undefined' && chrome.storage?.session?.set) {
+          const obj: Record<string, number> = {};
+          for (const [k, v] of this.affinityMap.entries()) {
+            obj[k] = v;
+          }
+          const lineageObj: Record<string, TabLineageRecord> = {};
+          for (const [k, v] of this.tabLineage.entries()) {
+            lineageObj[String(k)] = v;
+          }
+          await chrome.storage.session.set({
+            [STORAGE_KEY]: obj,
+            [STORAGE_LINEAGE_KEY]: lineageObj,
+          });
         }
-        await chrome.storage.session.set({ [STORAGE_KEY]: obj });
+      } catch (err) {
+        console.error('[SessionTabAffinity] saveToStorage failed:', err);
+        throw err;
       }
-    } catch {
-      // Ignored in non-extension environments
-    }
+    };
+    // Mutex queue: prior failure must not permanently block the queue
+    this.storageSaveQueue = this.storageSaveQueue.catch(() => {}).then(run);
+    return this.storageSaveQueue;
   }
 
   private initListeners() {
@@ -88,9 +166,9 @@ export class SessionTabAffinityManager {
                 modified = true;
               }
             }
-            this.tabLineage.delete(removedTabId);
-            if (modified) {
-              void this.saveToStorage();
+            const lineageDeleted = this.tabLineage.delete(removedTabId);
+            if (modified || lineageDeleted) {
+              this.persistState();
             }
           });
         }
@@ -116,6 +194,12 @@ export class SessionTabAffinityManager {
 
               const parentId = tab.openerTabId;
               if (typeof parentId === 'number') {
+                // Strict ownership inheritance: only confirmed agent tabs pass ownership to children.
+                // Pure session-affinity access on a user parent MUST NEVER turn popup children into owned tabs!
+                if (tabGroupManager.isAgentTab(parentId)) {
+                  tabGroupManager.registerAgentTab(tab.id);
+                }
+
                 const existingLineage = this.tabLineage.get(tab.id);
                 if (!existingLineage) {
                   this.tabLineage.set(tab.id, {
@@ -125,6 +209,7 @@ export class SessionTabAffinityManager {
                     url: tab.url,
                     title: tab.title,
                   });
+                  this.persistState();
                 }
                 const lineage = this.tabLineage.get(tab.id);
                 if (tab.active) {
@@ -229,24 +314,31 @@ export class SessionTabAffinityManager {
       }
     }
     if (modified) {
-      void this.saveToStorage();
+      this.persistState();
     }
 
-    // Auto-group child tab into parent's tab group when parent belongs to an agent group
-    if (typeof chrome !== 'undefined' && chrome.tabs?.get && chrome.tabs?.group) {
+    // Auto-group child tab into parent's tab group when parent has a valid group
+    if (typeof chrome !== 'undefined' && chrome.tabs?.get) {
       try {
         chrome.tabs
           .get(parentTabId)
           .then(async (pTab) => {
-            if (pTab && typeof pTab.groupId === 'number' && pTab.groupId > 0) {
-              const isAgent =
-                parentHadAffinity ||
-                tabGroupManager.isAgentTab(parentTabId) ||
-                (await tabGroupManager.isAgentGroup(pTab.groupId));
-              if (isAgent && !isNewTabUrl(url) && title !== 'New Tab' && title !== '新标签页') {
-                tabGroupManager.registerAgentTab(childTabId);
-                chrome.tabs.group({ tabIds: [childTabId], groupId: pTab.groupId }).catch(() => {});
-              }
+            const hasValidGroup = pTab && typeof pTab.groupId === 'number' && pTab.groupId > 0;
+            // 1. Strict ownership: ONLY confirmed agent parent can confer agent ownership to child tab!
+            // Pure affinity or group membership NEVER confers ownership!
+            if (tabGroupManager.isAgentTab(parentTabId)) {
+              tabGroupManager.registerAgentTab(childTabId);
+            }
+
+            // 2. UI Group inheritance: inherit parent's tab group if parent is grouped
+            if (
+              hasValidGroup &&
+              chrome.tabs.group &&
+              !isNewTabUrl(url) &&
+              title !== 'New Tab' &&
+              title !== '新标签页'
+            ) {
+              chrome.tabs.group({ tabIds: [childTabId], groupId: pTab.groupId }).catch(() => {});
             }
           })
           .catch(() => {});
@@ -290,7 +382,12 @@ export class SessionTabAffinityManager {
       const isNavConfirmed = navConfirmedChildTabIds.has(tab.id);
 
       if (isDirectOpener || isNavConfirmed) {
-        // Record lineage
+        // Strict ownership: only confirmed agent parents pass ownership to children
+        if (tabGroupManager.isAgentTab(parentTabId)) {
+          tabGroupManager.registerAgentTab(tab.id);
+        }
+
+        // Record lineage (for session affinity routing, independent of ownership)
         this.tabLineage.set(tab.id, {
           parentTabId,
           createdAt: Date.now(),
@@ -299,6 +396,7 @@ export class SessionTabAffinityManager {
           title: tab.title,
           sessionId: effectiveSessionId,
         });
+        this.persistState();
 
         if (activated) {
           detectedChildTab = tab;
@@ -507,7 +605,7 @@ export class SessionTabAffinityManager {
   public setAffinity(sessionId: string, tabId: number): void {
     if (!sessionId || typeof tabId !== 'number') return;
     this.affinityMap.set(sessionId, tabId);
-    void this.saveToStorage();
+    this.persistState();
   }
 
   public getAffinity(sessionId: string): number | undefined {
@@ -530,13 +628,15 @@ export class SessionTabAffinityManager {
   public removeAffinity(sessionId: string): void {
     if (!sessionId) return;
     this.affinityMap.delete(sessionId);
-    void this.saveToStorage();
+    this.persistState();
   }
 
   public clearAll(): void {
     this.affinityMap.clear();
     this.tabLineage.clear();
-    void this.saveToStorage();
+    this.activeHandoverTrackers.clear();
+    this.storageSaveQueue = Promise.resolve();
+    this.persistState();
   }
 
   public getMapSize(): number {
@@ -549,9 +649,7 @@ export class SessionTabAffinityManager {
    */
   public async resolveSessionTab(sessionId?: string): Promise<chrome.tabs.Tab | null> {
     if (!sessionId) return null;
-    if (!this.affinityMap.has(sessionId)) {
-      await this.loadFromStorage();
-    }
+    await this.ensureStorageLoaded();
     const tabId = this.affinityMap.get(sessionId);
     if (typeof tabId !== 'number') return null;
 
@@ -561,10 +659,10 @@ export class SessionTabAffinityManager {
         return tab;
       }
       this.affinityMap.delete(sessionId);
-      void this.saveToStorage();
+      this.persistState();
     } catch {
       this.affinityMap.delete(sessionId);
-      void this.saveToStorage();
+      this.persistState();
     }
     return null;
   }

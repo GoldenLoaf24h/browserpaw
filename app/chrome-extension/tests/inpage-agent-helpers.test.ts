@@ -343,16 +343,26 @@ describe('In-Page Agent Helpers & Workflows', () => {
       });
     });
 
-    it('ignores another evaluation’s stamps and falls back to the standard map', async () => {
+    it('ignores another evaluation’s stamps and refuses fallback to forged data-mcp-idx', async () => {
       document.body.innerHTML = `
         <button id="fast-target" data-browserpaw-ref-ab12cd34="1">Fast</button>
+        <button id="own-target" data-browserpaw-ref-ffffffff="2">Own</button>
         <button id="standard-target" data-mcp-idx="1">Standard</button>
       `;
-      // This evaluation is bound to a different attribute, so the foreign stamp is
-      // invisible and the standard index map answers instead.
-      const result = await evaluateInPage(`return mcp.get(1)?.id;`, 'data-browserpaw-ref-ffffffff');
+      // This evaluation is bound to data-browserpaw-ref-ffffffff:
+      // foreign stamp (ref-ab12cd34="1") is ignored, forged data-mcp-idx is rejected,
+      // and only own stamp (ref-ffffffff="2") resolves.
+      const result = await evaluateInPage(
+        `
+        return {
+          foreignRef: mcp.get(1)?.id ?? null,
+          ownRef: mcp.get(2)?.id ?? null,
+        };
+      `,
+        'data-browserpaw-ref-ffffffff',
+      );
 
-      expect(result).toBe('standard-target');
+      expect(result).toEqual({ foreignRef: null, ownRef: 'own-target' });
     });
 
     it('does not resolve through a stamp when the evaluation has no bridge', async () => {

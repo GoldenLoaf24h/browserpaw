@@ -6,10 +6,9 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-// The bundled repair wrappers cd into skill/config before invoking doctor, so these cases
-// run doctor from that directory inside a sandbox checkout and assert the paths it resolves.
+// The bundled repair wrappers run doctor from its scripts directory inside a sandbox checkout.
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const doctorSource = path.join(repoRoot, 'skill', 'config', 'doctor.mjs');
+const doctorSource = path.join(repoRoot, 'skills', 'browserpaw', 'scripts', 'doctor.mjs');
 
 function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -18,7 +17,7 @@ function write(file, content) {
 
 function createSandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-doctor-'));
-  write(path.join(root, 'skill/config/doctor.mjs'), fs.readFileSync(doctorSource));
+  write(path.join(root, 'skills/browserpaw/scripts/doctor.mjs'), fs.readFileSync(doctorSource));
   // The checkout marker doctor climbs to; the build output lives below it.
   write(path.join(root, 'app/chrome-extension/package.json'), '{"name":"chrome-mcp-server"}');
   write(
@@ -56,7 +55,7 @@ function runDoctor(sandbox, args = [], env = {}) {
     process.execPath,
     ['--import', pathToFileURL(sandbox.preload).href, 'doctor.mjs', ...args],
     {
-      cwd: path.join(sandbox.root, 'skill/config'),
+      cwd: path.join(sandbox.root, 'skills/browserpaw/scripts'),
       env: {
         ...process.env,
         TEST_TEMP_HOME: sandbox.home,
@@ -89,13 +88,16 @@ describe('doctor.mjs repair behaviour', () => {
 
     assert.ok(output.includes(expected), `doctor should report ${expected}\n${output}`);
     assert.ok(
-      !output.includes(path.join('skill', 'config', 'app')),
+      !output.includes(path.join('skills', 'browserpaw', 'config', 'app')),
       'doctor must not resolve the build under config/',
     );
   });
 
   it('resolves the checkout from a plugin mirror nested four levels deep', () => {
-    const mirrorDir = path.join(sandbox.root, 'plugins/browserpaw-claude/skills/browserpaw/config');
+    const mirrorDir = path.join(
+      sandbox.root,
+      'plugins/browserpaw-claude/skills/browserpaw/scripts',
+    );
     write(path.join(mirrorDir, 'doctor.mjs'), fs.readFileSync(doctorSource));
     const proc = spawnSync(
       process.execPath,

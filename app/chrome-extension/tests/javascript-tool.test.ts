@@ -62,6 +62,168 @@ describe('wrapUserCode', () => {
   });
 });
 
+describe('JavaScript frame target validation', () => {
+  it.each([-1, 1.5, NaN, Infinity])(
+    'rejects invalid frameId %s instead of targeting the main frame',
+    async (frameId) => {
+      const result = await javascriptTool.execute({ code: 'return 1', frameId });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as { text: string }).text).toContain('frameId');
+    },
+  );
+
+  it('rejects conflicting frame and execution context targets', async () => {
+    const result = await javascriptTool.execute({ code: 'return 1', frameId: 4, contextId: 9 });
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('not both');
+  });
+});
+
+describe('JavaScript execution outcome classification', () => {
+  const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
+
+  beforeEach(() => {
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
+  });
+
+  afterEach(() => {
+    delete (chrome as unknown as { scripting?: unknown }).scripting;
+  });
+
+  it('never replays root JavaScript through scripting after Runtime.evaluate was dispatched', async () => {
+    let sideEffects = 0;
+    let scriptingRuns = 0;
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tab, _owner, fn) => fn());
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(async (_tab, method) => {
+      if (method !== 'Runtime.evaluate') return {};
+      sideEffects++;
+      throw new Error('Another debugger is already attached');
+    });
+    (chrome as unknown as { scripting: unknown }).scripting = {
+      executeScript: vi.fn(async () => {
+        scriptingRuns++;
+        return [{ result: { ok: true, value: 'replayed' } }];
+      }),
+    };
+
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(result.isError).toBe(true);
+    expect(sideEffects).toBe(1);
+    expect(scriptingRuns).toBe(0);
+    expect(payload).toMatchObject({
+      status: 'unknown',
+      outcome: 'unknown',
+      retry: false,
+      engine: 'cdp',
+    });
+  });
+
+  it('reports a missing root Runtime.evaluate receipt as unknown without replaying', async () => {
+    let scriptingRuns = 0;
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tab, _owner, fn) => fn());
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({});
+    (chrome as unknown as { scripting: unknown }).scripting = {
+      executeScript: vi.fn(async () => {
+        scriptingRuns++;
+        return [{ result: { ok: true, value: 'replayed' } }];
+      }),
+    };
+
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(result.isError).toBe(true);
+    expect(scriptingRuns).toBe(0);
+    expect(payload).toMatchObject({
+      status: 'unknown',
+      outcome: 'unknown',
+      retry: false,
+      engine: 'cdp',
+    });
+  });
+
+  it('reports a root Runtime.evaluate timeout after dispatch as unknown', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tab, _owner, fn) => fn());
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      Object.assign(new Error('Runtime.evaluate timed out'), { name: 'TimeoutError' }),
+    );
+
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'unknown',
+      outcome: 'unknown',
+      retry: false,
+      engine: 'cdp',
+      error: { kind: 'timeout' },
+    });
+  });
+
+  it('reports a scripting timeout after injection as unknown', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached'),
+    );
+    (chrome as unknown as { scripting: unknown }).scripting = {
+      executeScript: vi.fn(() => new Promise(() => {})),
+    };
+
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;', timeoutMs: 5 });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'unknown',
+      outcome: 'unknown',
+      retry: false,
+      engine: 'scripting',
+      error: { kind: 'timeout' },
+    });
+  });
+
+  it('reports a scripting renderer rejection after injection as unknown', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached'),
+    );
+    (chrome as unknown as { scripting: unknown }).scripting = {
+      executeScript: vi.fn().mockRejectedValue(new Error('Frame was removed after dispatch')),
+    };
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;' });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
+      success: false,
+      status: 'unknown',
+      outcome: 'unknown',
+      retry: false,
+    });
+    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark an assertTabInjectable failure before scripting dispatch as unknown', async () => {
+    vi.mocked(chrome.tabs.get).mockResolvedValue({
+      id: 42,
+      url: 'chrome://settings/',
+    } as chrome.tabs.Tab);
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached'),
+    );
+    (chrome as unknown as { scripting: unknown }).scripting = {
+      executeScript: vi.fn(),
+    };
+
+    const result = await javascriptTool.execute({ tabId: 42, code: 'return 1;' });
+    const payload = JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload.status).toBeUndefined();
+    expect(payload.outcome).toBeUndefined();
+    expect(payload.retry).toBeUndefined();
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+  });
+});
+
 describe('JavaScriptTool restricted-URL guard (D-14)', () => {
   it('rejects chrome:// tabs before any CDP evaluation', async () => {
     vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
@@ -305,8 +467,8 @@ describe('D-15 scripting fallback teardown', () => {
 
   beforeEach(() => {
     vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
-    // Force executeViaCdp into a debugger conflict so execute() takes the scripting fallback.
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    // Fail at the attach boundary, before any CDP command is dispatched.
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
     // Run the real injected function in this realm, as chrome.scripting.executeScript would.
@@ -484,8 +646,23 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
     expect(payload.result).toBe('fast-target');
   });
 
+  it('does not stamp DOM references for ordinary JavaScript containing numeric data', async () => {
+    vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementation(
+      async (_tab: number, method: string, params?: any) => {
+        if (method !== 'Runtime.evaluate') return {};
+        return { result: { value: await inPageWorld(() => (0, eval)(params.expression)) } };
+      },
+    );
+    const result = await javascriptTool.execute({
+      tabId: 42,
+      code: 'const input={limit:3};return {limit:input.limit,version:2};',
+    });
+    expect(result.isError).toBe(false);
+    expect(executeScript).not.toHaveBeenCalled();
+  });
+
   it('removes the stamp after the evaluation, even when it throws', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
 
@@ -496,7 +673,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   });
 
   it('does not bridge when the code mentions no positive numeric literal', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
 
@@ -506,7 +683,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   });
 
   it('keeps the evaluation result when the tab closes before cleanup', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
     executeScript
@@ -530,7 +707,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   });
 
   it('keeps a concurrent bridge alive when an earlier evaluation cleans up', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
     // Two evaluations interleave: the first finishes and cleans up while the second
@@ -588,7 +765,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   });
 
   it('binds each evaluation to its own stamp instead of a shared pointer', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
     document.body.insertAdjacentHTML('beforeend', '<button id="newer-target">Newer</button>');
@@ -609,9 +786,9 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
           // its stamp pass marks that element. A fast snapshot resolves through
           // __pawFast.actionElements, so the fast cache is what moves here.
           if (stampCount === 2) {
-            (globalThis as any).__pawFast = {
-              actionElements: new Map([[1, document.getElementById('newer-target')]]),
-            };
+            (globalThis as any)[indexMapSymbol] = new Map([
+              [1, document.getElementById('newer-target')],
+            ]);
           }
           const out = [{ result: await opts.func(...opts.args) }];
           if (stampCount === 2) bothStamped();
@@ -643,7 +820,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   });
 
   it.each(['open', 'closed'] as const)('removes stamps inside %s shadow roots', async (mode) => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
       new Error('Another debugger is already attached to this target'),
     );
     const host = document.createElement('div');
@@ -665,7 +842,7 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
   it('charges bridge setup to the tool deadline instead of granting a fresh one', async () => {
     vi.useFakeTimers();
     try {
-      vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
+      vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
         new Error('Another debugger is already attached to this target'),
       );
       // The bridge injection never settles, as with an open native dialog; the
@@ -691,5 +868,189 @@ describe('snapshot index bridge across the execution world (PR6 comment 43103226
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('findings 1 & 2 regression: unified index resolution & subframe targeting', () => {
+  const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
+  const indexMapSymbol = Symbol.for('__browser_use_isolated_index_map__');
+  let executeScript: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
+    executeScript = vi.fn(async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => [
+      { result: await opts.func(...(opts.args ?? [])) },
+    ]);
+    (chrome as unknown as { scripting: unknown }).scripting = { executeScript };
+  });
+
+  afterEach(() => {
+    delete (chrome as unknown as { scripting?: unknown }).scripting;
+    delete (globalThis as any)[indexMapSymbol];
+    delete (globalThis as any).__browserpawRefStamps;
+    document.body.innerHTML = '';
+  });
+
+  it('resolves large monotonic indexes (>= 2^24) with e-prefix, ref-prefix, and numeric formats', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    const largeId = 16777218; // 2^24 + 2
+    document.body.innerHTML = '<button id="large-target">Large</button>';
+    (globalThis as any)[indexMapSymbol] = new Map([
+      [largeId, document.getElementById('large-target')],
+    ]);
+
+    // Test with 'e' prefix
+    const resE = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get("e16777218")?.id;',
+    });
+    expect(resE.isError).toBe(false);
+    expect(JSON.parse((resE.content[0] as { text: string }).text).result).toBe('large-target');
+
+    // Test with 'ref_' prefix
+    const resRef = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get("ref_16777218")?.id;',
+    });
+    expect(resRef.isError).toBe(false);
+    expect(JSON.parse((resRef.content[0] as { text: string }).text).result).toBe('large-target');
+
+    // Test with number
+    const resNum = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get(16777218)?.id;',
+    });
+    expect(resNum.isError).toBe(false);
+    expect(JSON.parse((resNum.content[0] as { text: string }).text).result).toBe('large-target');
+  });
+
+  it('rejects forged data-mcp-idx attributes when element is not in isolated index map', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    document.body.innerHTML = '<button id="fake-target" data-mcp-idx="42">Fake</button>';
+    // Index 42 is deliberately not in indexMapSymbol
+
+    for (const token of [42, '42', 'e42', 'ref_42']) {
+      const code =
+        typeof token === 'string'
+          ? `return mcp.get("${token}")?.id ?? null;`
+          : `return mcp.get(${token})?.id ?? null;`;
+      const res = await javascriptTool.execute({ tabId: 42, code });
+      expect(res.isError).toBe(false);
+      expect(JSON.parse((res.content[0] as { text: string }).text).result).toBe('null');
+    }
+  });
+
+  it('does not stamp disconnected elements, cross-document elements, or expired WeakRefs, and refuses forged attributes', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    const disconnectedEl = document.createElement('button');
+    disconnectedEl.id = 'disconnected-target';
+
+    const otherDoc = document.implementation.createHTMLDocument('other');
+    const crossDocEl = otherDoc.createElement('button');
+    crossDocEl.id = 'cross-doc-target';
+    otherDoc.body.appendChild(crossDocEl);
+
+    const expiredFakeEl = document.createElement('button');
+    expiredFakeEl.id = 'expired-target';
+    expiredFakeEl.setAttribute('data-mcp-idx', '12');
+    document.body.appendChild(expiredFakeEl);
+
+    (globalThis as any)[indexMapSymbol] = new Map([
+      [10, disconnectedEl],
+      [11, crossDocEl],
+      [12, { deref: () => undefined }],
+      [13, new WeakRef(document.createElement('div'))],
+    ]);
+
+    const resDisc = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get(10)?.id ?? null;',
+    });
+    expect(resDisc.isError).toBe(false);
+    expect(JSON.parse((resDisc.content[0] as { text: string }).text).result).toBe('null');
+
+    const resCross = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get(11)?.id ?? null;',
+    });
+    expect(resCross.isError).toBe(false);
+    expect(JSON.parse((resCross.content[0] as { text: string }).text).result).toBe('null');
+
+    const resExpired = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get("e12")?.id ?? null;',
+    });
+    expect(resExpired.isError).toBe(false);
+    expect(JSON.parse((resExpired.content[0] as { text: string }).text).result).toBe('null');
+  });
+
+  it('precisely targets the frame when an attach conflict requires scripting fallback', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValueOnce(
+      new Error('Another debugger is already attached'),
+    );
+    document.body.innerHTML = '<button id="subframe-btn">Sub</button>';
+    (globalThis as any)[indexMapSymbol] = new Map([[99, document.getElementById('subframe-btn')]]);
+
+    const targetCalls: Array<chrome.scripting.InjectionTarget> = [];
+    executeScript.mockImplementation(
+      async (opts: {
+        target: chrome.scripting.InjectionTarget;
+        func: (...a: any[]) => unknown;
+        args?: unknown[];
+      }) => {
+        targetCalls.push(opts.target);
+        return [{ result: await opts.func(...(opts.args ?? [])) }];
+      },
+    );
+
+    const res = await javascriptTool.execute({
+      tabId: 42,
+      frameId: 105,
+      code: 'return mcp.get(99)?.id;',
+    });
+
+    expect(res.isError).toBe(false);
+    expect(JSON.parse((res.content[0] as { text: string }).text).result).toBe('subframe-btn');
+
+    // Verify all executeScript calls (stamping, execution, cleanup) targeted frameId: 105
+    expect(targetCalls.length).toBeGreaterThanOrEqual(3);
+    for (const target of targetCalls) {
+      expect(target).toEqual({ tabId: 42, frameIds: [105] });
+      expect((target as any).allFrames).toBeUndefined();
+    }
+    const subBtn = document.getElementById('subframe-btn')!;
+    expect(
+      [...subBtn.attributes].filter((a) => a.name.startsWith('data-browserpaw-ref-')),
+    ).toHaveLength(0);
+  });
+
+  it('resolves elements inside open shadow root via mcp.get and cleans them up', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('button');
+    inner.id = 'open-shadow-target';
+    shadow.appendChild(inner);
+    document.body.appendChild(host);
+
+    (globalThis as any)[indexMapSymbol] = new Map([[50, inner]]);
+
+    const res = await javascriptTool.execute({
+      tabId: 42,
+      code: 'return mcp.get(50)?.id;',
+    });
+
+    expect(res.isError).toBe(false);
+    expect(JSON.parse((res.content[0] as { text: string }).text).result).toBe('open-shadow-target');
+    expect(inner.attributes).toHaveLength(1);
   });
 });

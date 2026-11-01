@@ -8,14 +8,21 @@ import {
   createMousePressGuard,
   isCdpOutcomeUncertainError,
 } from '@/utils/race-cdp';
-import { animateAgentCursor, animateAgentCursorClick } from './agent-cursor';
-import { getSubframeViewportOffset } from './interact-index';
+import {
+  animateAgentCursor,
+  animateAgentCursorClick,
+  formatAgentCursorAction,
+} from './agent-cursor';
+import { projectFramePoint } from '@/utils/frame-coordinates';
+import { withActionReceipt, type ActionReceipt } from '@/utils/action-receipt';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
 import { resolveTargetLocation } from './unified-locator';
 import { sessionTabAffinity, type TabHandoverInfo } from '@/utils/session-tab-affinity';
 import { resolveToolName } from 'chrome-mcp-shared';
 import { dispatchNativeSelectAll } from './keyboard';
 import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
+import { throwIfAborted, TaskCancelledError } from '@/utils/action-abort';
+import { assertObservedTarget } from '@/utils/observed-target-guard';
 export { getNativeValueSetter, getNativeCheckedSetter } from './fast-snapshot';
 
 export class FocusVerificationError extends Error {
@@ -26,18 +33,23 @@ export class FocusVerificationError extends Error {
 }
 
 export interface PhysicalFillOptions {
+  expectedGuard?: unknown[];
   tabId: number;
   /** Numeric index from read_dom, or string ref, or CSS selector */
   target: number | string;
   text: string;
   selector?: string;
   ref?: string | number;
+  coordinate?: { x: number; y: number };
   clear?: boolean;
   pressEnter?: boolean;
   submit?: boolean;
   preferComposer?: boolean;
   sessionId?: string;
   sessionContext?: string;
+  frameId?: number;
+  deadlineAt?: number;
+  signal?: AbortSignal;
 }
 
 export interface PhysicalFillResult {
@@ -48,7 +60,7 @@ export interface PhysicalFillResult {
   selector?: string;
   filledText: string;
   isTrusted: boolean;
-  method: 'cdp_native' | 'cdp_key_by_key' | 'synthetic_inpage' | 'widget_native';
+  method: 'cdp_native' | 'synthetic_inpage' | 'widget_native';
   tagName?: string;
   inputType?: string;
   isComposer?: boolean;
@@ -69,6 +81,110 @@ export interface PhysicalFillResult {
   resolutionPath?: string;
   tabHandover?: TabHandoverInfo;
   autoSubmitHandled?: boolean;
+  status?: 'success' | 'timeout' | 'unknown';
+  timedOut?: boolean;
+  deadlineExceeded?: boolean;
+  retry?: false;
+  receipt?: ActionReceipt;
+}
+
+type DeadlineOutcome = 'not_started' | 'unknown' | 'committed';
+
+class FillDeadlineExceededError extends Error {
+  readonly deadlineExceeded = true;
+  readonly outcome: DeadlineOutcome;
+
+  constructor(message: string, outcome: DeadlineOutcome = 'not_started') {
+    super(message);
+    this.name = 'FillDeadlineExceededError';
+    this.outcome = outcome;
+  }
+}
+
+class PostDispatchCommitmentError extends Error {
+  constructor(
+    message: string,
+    readonly verification?: {
+      committed?: boolean;
+      currentValue?: string;
+    },
+  ) {
+    super(message);
+    this.name = 'PostDispatchCommitmentError';
+  }
+}
+
+function remainingBudget(deadlineAt?: number): number | undefined {
+  if (typeof deadlineAt !== 'number' || !Number.isFinite(deadlineAt)) return undefined;
+  return deadlineAt - Date.now();
+}
+
+function nestedTimeout(deadlineAt?: number): number | undefined {
+  const remaining = remainingBudget(deadlineAt);
+  return remaining === undefined ? undefined : Math.max(1, remaining);
+}
+
+function assertBudget(
+  deadlineAt: number | undefined,
+  phase: string,
+  outcome: DeadlineOutcome = 'not_started',
+): void {
+  const remaining = remainingBudget(deadlineAt);
+  if (remaining !== undefined && remaining <= 0) {
+    throw new FillDeadlineExceededError(`Fill deadline exceeded ${phase}`, outcome);
+  }
+}
+
+function rethrowIfDeadlineOrUncertain(
+  error: unknown,
+  deadlineAt: number | undefined,
+  phase: string,
+): void {
+  if (error instanceof FillDeadlineExceededError) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  const deadlineExpired =
+    typeof deadlineAt === 'number' && Number.isFinite(deadlineAt) && Date.now() >= deadlineAt;
+  if (
+    deadlineExpired ||
+    isCdpOutcomeUncertainError(error) ||
+    /executeScript timeout|not acking|outcome unknown|deadline exceeded/i.test(message)
+  ) {
+    throw new FillDeadlineExceededError(`${phase}: ${message}`, 'unknown');
+  }
+}
+
+async function delayWithinBudget(ms: number, deadlineAt?: number): Promise<void> {
+  const remaining = remainingBudget(deadlineAt);
+  const waitMs = remaining === undefined ? ms : Math.min(ms, Math.max(0, remaining));
+  if (waitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
+async function withDeadline<T>(
+  promise: Promise<T>,
+  deadlineAt: number | undefined,
+  phase: string,
+): Promise<T> {
+  const remaining = remainingBudget(deadlineAt);
+  if (remaining === undefined) return promise;
+  if (remaining <= 0) {
+    throw new FillDeadlineExceededError(`Fill deadline exceeded ${phase}`, 'not_started');
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new FillDeadlineExceededError(`Fill deadline exceeded ${phase}`, 'unknown'));
+        }, remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -77,10 +193,10 @@ export interface PhysicalFillResult {
  * Harmonizes fill-index, fill-form, form-pipeline, and batch fill onto a single
  * industrial-grade typing primitive. Supports:
  * - Humanized micro-trajectory cursor animation
- * - Cross-platform Deep Reset protocol (beforeinput + native Backspace)
+ * - Native selection and replacement, with Backspace only for clearing
  * - Multiline paragraph break preservation
  * - True Input Commitment verification with reactive debounce
- * - Key-by-key CDP typing fallback for complex reactive frameworks (React/Vue/Draft.js)
+ * - Post-dispatch commitment checks without replaying unconfirmed edits
  * - Special HTML5 widget native dispatch (select/date/color/checkbox/radio/file)
  * - 1-Turn auto-submit execution
  */
@@ -101,7 +217,24 @@ export async function performPhysicalFill(
       : null;
 
   try {
-    return await runPhysicalFill(options, handoverTracker);
+    return await withActionReceipt(options.tabId, () => runPhysicalFill(options, handoverTracker));
+  } catch (error) {
+    if (!(error instanceof FillDeadlineExceededError)) throw error;
+    const committed = error.outcome === 'committed';
+    return {
+      success: false,
+      committed,
+      filledText: committed ? String(options.text ?? '') : '',
+      isTrusted: committed,
+      method: 'cdp_native',
+      status: error.outcome === 'unknown' ? 'unknown' : 'timeout',
+      timedOut: true,
+      deadlineExceeded: true,
+      ...(error.outcome === 'unknown' ? { retry: false as const } : {}),
+      error: error.message,
+      diagnostics: error.message,
+      ...((error as any).receipt ? { receipt: (error as any).receipt } : {}),
+    };
   } finally {
     // Every exit path - normal return, early return, or throw - must release the
     // tracker, otherwise its listeners leak for the life of the extension.
@@ -119,6 +252,26 @@ async function runPhysicalFill(
   const pressEnter = options.pressEnter === true;
   const submit = options.submit === true;
   const sessionId = options.sessionId || options.sessionContext;
+  const deadlineAt = options.deadlineAt;
+  const signal = options.signal;
+  throwIfAborted(signal, 'before physical fill');
+  const executeWithBudget = <R = any>(
+    target: chrome.scripting.InjectionTarget,
+    fnName: string,
+    args: unknown[],
+  ) => {
+    const timeout = nestedTimeout(deadlineAt);
+    return timeout === undefined
+      ? executeInPage<R>(target, fnName, args)
+      : executeInPage<R>(target, fnName, args, timeout);
+  };
+  const raceInput = <T = any>(_targetTabId: number, method: string, params: object) => {
+    throwIfAborted(signal, `before ${method}`);
+    assertBudget(deadlineAt, `before ${method}`);
+    return raceCdp<T>(tabId, method, params, nestedTimeout(deadlineAt));
+  };
+  throwIfAborted(signal, 'before fill resolution');
+  assertBudget(deadlineAt, 'before fill resolution');
 
   const isNumericIndex =
     typeof target === 'number' || (typeof target === 'string' && /^\d+$/.test(target));
@@ -128,25 +281,90 @@ async function runPhysicalFill(
       : parseInt(target, 10)
     : undefined;
   const explicitSelector = options.selector;
-  const isExplicitRef =
-    typeof target === 'string' && (target.startsWith('ref_') || target.startsWith('e'));
+  const isExplicitRef = typeof target === 'string' && /^(?:ref_|e)\d+$/i.test(target);
   const effectiveSelector =
     explicitSelector || (!isNumericIndex && !isExplicitRef ? String(target) : undefined);
   const selectorOrRef = !isNumericIndex ? String(target) : effectiveSelector;
 
   let targetX: number | undefined;
   let targetY: number | undefined;
-  let targetFrameId = 0;
+  let targetFrameId = options.frameId ?? 0;
   let coords: any = null;
   let resolutionPath: string | undefined;
+  let resolutionError: string | undefined;
   let disambiguationWarning: string | undefined;
+
+  if (numericIndex === undefined && !selectorOrRef && !effectiveSelector && options.coordinate) {
+    const hitScope =
+      options.frameId !== undefined
+        ? { tabId, frameIds: [options.frameId] }
+        : { tabId, allFrames: true };
+    const hitResults = await executeWithBudget(hitScope, 'inPageSnapCoordinate', [
+      Math.round(options.coordinate.x),
+      Math.round(options.coordinate.y),
+      0,
+      true,
+      true,
+    ]);
+    const editableHits = (hitResults ?? []).filter(
+      (entry: any) =>
+        entry?.result?.targetEditable === true &&
+        typeof entry.result.targetIndex === 'number' &&
+        entry.result.targetIndex > 0,
+    );
+    if (editableHits.length === 0) {
+      return {
+        success: false,
+        committed: false,
+        filledText: '',
+        isTrusted: false,
+        method: 'cdp_native',
+        error: 'No editable element found at the supplied coordinate',
+        resolutionPath: 'coordinate_hit_test',
+      };
+    }
+    if (options.frameId === undefined && editableHits.length > 1) {
+      return {
+        success: false,
+        committed: false,
+        filledText: '',
+        isTrusted: false,
+        method: 'cdp_native',
+        error: 'Coordinate hit multiple editable elements across frames; rescan and pass frameId',
+        resolutionPath: 'coordinate_hit_test',
+      };
+    }
+    const hit = editableHits[0];
+    if (options.frameId !== undefined && (hit.frameId ?? 0) !== options.frameId) {
+      return {
+        success: false,
+        committed: false,
+        filledText: '',
+        isTrusted: false,
+        method: 'cdp_native',
+        error: `Coordinate hit-test returned frameId ${hit.frameId ?? 0}, expected ${options.frameId}`,
+        resolutionPath: 'coordinate_hit_test',
+      };
+    }
+    numericIndex = hit.result.targetIndex;
+    targetFrameId = hit.frameId ?? options.frameId ?? 0;
+    resolutionPath = 'coordinate_hit_test';
+  }
 
   // 1. Resolve target coordinates and metadata
   if (numericIndex !== undefined && numericIndex > 0) {
-    const coordRes = await executeInPage({ tabId }, 'inPageGetElementCoordinates', [numericIndex]);
+    const scopedTarget =
+      options.frameId !== undefined
+        ? { tabId, frameIds: [options.frameId] }
+        : targetFrameId
+          ? { tabId, frameIds: [targetFrameId] }
+          : { tabId };
+    const coordRes = await executeWithBudget(scopedTarget, 'inPageGetElementCoordinates', [
+      numericIndex,
+    ]);
     coords = coordRes?.[0]?.result;
-    if (!coords?.success) {
-      const frameResults = await executeInPage(
+    if (!coords?.success && options.frameId === undefined && targetFrameId === 0) {
+      const frameResults = await executeWithBudget(
         { tabId, allFrames: true },
         'inPageGetElementCoordinates',
         [numericIndex],
@@ -163,22 +381,17 @@ async function runPhysicalFill(
         if (coords.scopeHash && typeof numericIndex === 'number') {
           snapshotCacheManager.isScopeValid(tabId, numericIndex, coords.scopeHash);
         }
-        if (targetFrameId !== 0) {
-          const offset = await getSubframeViewportOffset(tabId, targetFrameId);
-          const localX = coords?.frameOffsetX || 0;
-          const localY = coords?.frameOffsetY || 0;
-          coords.x = coords.x - localX + offset.offsetX;
-          coords.y = coords.y - localY + offset.offsetY;
-        }
       }
     }
     // If numeric index lookup failed on dynamic page, fallback to selector resolution
     if (!coords?.success && effectiveSelector) {
       const loc = await resolveTargetLocation(tabId, {
-        ref: selectorOrRef,
+        ref: isExplicitRef ? selectorOrRef : undefined,
         selector: effectiveSelector,
         preferComposer,
+        frameId: options.frameId,
       });
+      resolutionError = loc.error;
       if (loc.success) {
         if (typeof loc.index === 'number' && loc.index > 0) {
           numericIndex = loc.index;
@@ -209,10 +422,12 @@ async function runPhysicalFill(
     resolutionPath = resolutionPath || 'numeric_index';
   } else if (selectorOrRef || effectiveSelector) {
     const loc = await resolveTargetLocation(tabId, {
-      ref: selectorOrRef,
+      ref: isExplicitRef ? selectorOrRef : undefined,
       selector: effectiveSelector,
       preferComposer,
+      frameId: options.frameId,
     });
+    resolutionError = loc.error;
     if (loc.success) {
       if (typeof loc.index === 'number' && loc.index > 0) {
         numericIndex = loc.index;
@@ -238,7 +453,48 @@ async function runPhysicalFill(
     }
   }
 
+  if (!coords?.success) {
+    return {
+      success: false,
+      committed: false,
+      filledText: '',
+      isTrusted: false,
+      method: 'cdp_native',
+      error: resolutionError || coords?.error || 'Cannot resolve fill target',
+    };
+  }
+
+  if (coords?.success && typeof numericIndex === 'number') {
+    const ready = (
+      await executeWithBudget(
+        targetFrameId ? { tabId, frameIds: [targetFrameId] } : { tabId },
+        'inPageWaitForActionable',
+        [numericIndex, 'fill'],
+      )
+    )?.[0]?.result;
+    if (!ready?.success) {
+      return {
+        success: false,
+        committed: false,
+        filledText: '',
+        isTrusted: false,
+        method: 'cdp_native',
+        error: ready?.error || 'Target is not actionable',
+      };
+    }
+    coords = { ...coords, ...ready };
+    targetX = coords.x;
+    targetY = coords.y;
+    if (targetFrameId !== 0) {
+      ({ x: targetX, y: targetY } = await projectFramePoint(tabId, targetFrameId, {
+        x: coords.x - (coords.frameOffsetX || 0),
+        y: coords.y - (coords.frameOffsetY || 0),
+      }));
+    }
+  }
+
   // 2. Special widget handling (select, custom combobox/listbox, color, date, range, time, checkbox, radio, file)
+  await assertObservedTarget(tabId, numericIndex, targetFrameId, options.expectedGuard);
   const isInput = coords?.tagName?.toLowerCase() === 'input';
   const inputType = coords?.inputType || coords?.attributes?.type;
   const isSearchInput =
@@ -268,16 +524,18 @@ async function runPhysicalFill(
 
   if (isSpecialWidget) {
     if (isCustomCombobox) {
+      throwIfAborted(signal, 'before custom combobox mutation');
+      assertBudget(deadlineAt, 'before custom combobox mutation');
       let comboRes: any = null;
       if (numericIndex !== undefined && numericIndex > 0) {
-        const res = await executeInPage(
+        const res = await executeWithBudget(
           targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
           'inPageSelectCustomCombobox',
           [numericIndex, undefined, textToFill],
         );
         comboRes = res?.[0]?.result;
       } else if (selectorOrRef) {
-        const res = await executeInPage(
+        const res = await executeWithBudget(
           targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
           'inPageSelectCustomCombobox',
           [undefined, selectorOrRef, textToFill],
@@ -305,10 +563,12 @@ async function runPhysicalFill(
       };
 
       if (submit && resObj.success) {
-        await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId);
+        await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt, signal);
       }
       if (handoverTracker) {
-        const handover = await handoverTracker.waitForHandover(800);
+        const handover = await handoverTracker.waitForHandover(
+          Math.min(800, Math.max(0, remainingBudget(deadlineAt) ?? 800)),
+        );
         if (handover) {
           resObj.tabHandover = handover;
         }
@@ -317,8 +577,10 @@ async function runPhysicalFill(
     }
 
     let outcome: any = null;
+    throwIfAborted(signal, 'before widget fill mutation');
+    assertBudget(deadlineAt, 'before widget fill mutation');
     if (numericIndex !== undefined && numericIndex > 0) {
-      const res = await executeInPage(
+      const res = await executeWithBudget(
         targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
         'inPageFillIndex',
         [numericIndex, textToFill, clear !== false],
@@ -328,83 +590,100 @@ async function runPhysicalFill(
       // Verification
       let vRes: any = null;
       try {
-        const verify = await executeInPage(
+        const verify = await executeWithBudget(
           targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
           'inPageVerifyInputCommitment',
           [numericIndex, textToFill],
         );
         vRes = verify?.[0]?.result;
-      } catch {}
+      } catch (verifyErr) {
+        rethrowIfDeadlineOrUncertain(
+          verifyErr,
+          deadlineAt,
+          'during widget commitment verification',
+        );
+      }
 
       if (vRes?.submitButtonState) {
         outcome = outcome || {};
         outcome.submitButtonState = vRes.submitButtonState;
       }
     } else if (selectorOrRef) {
-      const selRes = await executeInPage(
+      const selRes = await executeWithBudget(
         targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
         'inPageFillSelectorWidget',
         [selectorOrRef, textToFill, clear !== false],
-      ).catch(async () => {
+      ).catch(async (widgetErr) => {
+        if (widgetErr instanceof TaskCancelledError) throw widgetErr;
+        rethrowIfDeadlineOrUncertain(widgetErr, deadlineAt, 'during selector widget primary fill');
         // Fallback for selector widget
-        return await chrome.scripting.executeScript({
-          target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-          func: (sel: string, val: string, shouldClear: boolean) => {
-            const el = document.querySelector(sel);
-            if (!el) return { success: false, error: `Selector "${sel}" not found` };
-            if (typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
+        throwIfAborted(signal, 'before selector widget fallback');
+        assertBudget(deadlineAt, 'before selector widget fallback');
+        return await withDeadline(
+          chrome.scripting.executeScript({
+            target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
+            func: (sel: string, val: string, shouldClear: boolean) => {
+              const el = document.querySelector(sel);
+              if (!el) return { success: false, error: `Selector "${sel}" not found` };
+              if (typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
 
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-              window.HTMLInputElement?.prototype || {},
-              'value',
-            )?.set;
-            const nativeCheckboxSetter = Object.getOwnPropertyDescriptor(
-              window.HTMLInputElement?.prototype || {},
-              'checked',
-            )?.set;
-            const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
-              window.HTMLTextAreaElement?.prototype || {},
-              'value',
-            )?.set;
+              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement?.prototype || {},
+                'value',
+              )?.set;
+              const nativeCheckboxSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement?.prototype || {},
+                'checked',
+              )?.set;
+              const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement?.prototype || {},
+                'value',
+              )?.set;
 
-            if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
-              const isTruthy =
-                val === 'true' ||
-                val === '1' ||
-                val === 'checked' ||
-                val === 'on' ||
-                (val !== 'false' && val !== '0' && val !== 'off' && Boolean(val));
-              if (nativeCheckboxSetter) nativeCheckboxSetter.call(el, isTruthy);
-              else el.checked = isTruthy;
-            } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
-              if (shouldClear) nativeInputValueSetter.call(el, '');
-              nativeInputValueSetter.call(el, val);
-            } else if (el instanceof HTMLTextAreaElement && nativeTextAreaValueSetter) {
-              if (shouldClear) nativeTextAreaValueSetter.call(el, '');
-              nativeTextAreaValueSetter.call(el, val);
-            } else if (el instanceof HTMLSelectElement) {
-              let matched = false;
-              for (const opt of Array.from(el.options)) {
-                if (opt.value === val || opt.text === val || opt.text.trim() === val.trim()) {
-                  el.value = opt.value;
-                  matched = true;
-                  break;
+              if (
+                el instanceof HTMLInputElement &&
+                (el.type === 'checkbox' || el.type === 'radio')
+              ) {
+                const isTruthy =
+                  val === 'true' ||
+                  val === '1' ||
+                  val === 'checked' ||
+                  val === 'on' ||
+                  (val !== 'false' && val !== '0' && val !== 'off' && Boolean(val));
+                if (nativeCheckboxSetter) nativeCheckboxSetter.call(el, isTruthy);
+                else el.checked = isTruthy;
+              } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
+                if (shouldClear) nativeInputValueSetter.call(el, '');
+                nativeInputValueSetter.call(el, val);
+              } else if (el instanceof HTMLTextAreaElement && nativeTextAreaValueSetter) {
+                if (shouldClear) nativeTextAreaValueSetter.call(el, '');
+                nativeTextAreaValueSetter.call(el, val);
+              } else if (el instanceof HTMLSelectElement) {
+                let matched = false;
+                for (const opt of Array.from(el.options)) {
+                  if (opt.value === val || opt.text === val || opt.text.trim() === val.trim()) {
+                    el.value = opt.value;
+                    matched = true;
+                    break;
+                  }
                 }
+                if (!matched) el.value = val;
+              } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+                if (shouldClear) (el as any).value = '';
+                (el as any).value = val;
+              } else {
+                (el as any).value = val;
               }
-              if (!matched) el.value = val;
-            } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-              if (shouldClear) (el as any).value = '';
-              (el as any).value = val;
-            } else {
-              (el as any).value = val;
-            }
 
-            el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-            return { success: true, filledText: val };
-          },
-          args: [selectorOrRef, textToFill, clear !== false],
-        });
+              el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+              return { success: true, filledText: val };
+            },
+            args: [selectorOrRef, textToFill, clear !== false],
+          }),
+          deadlineAt,
+          'during selector widget fallback',
+        );
       });
       outcome = selRes?.[0]?.result;
     }
@@ -426,10 +705,12 @@ async function runPhysicalFill(
     };
 
     if (submit && resObj.success) {
-      await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId);
+      await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt);
     }
     if (handoverTracker) {
-      const handover = await handoverTracker.waitForHandover(800);
+      const handover = await handoverTracker.waitForHandover(
+        Math.min(800, Math.max(0, remainingBudget(deadlineAt) ?? 800)),
+      );
       if (handover) {
         resObj.tabHandover = handover;
       }
@@ -461,13 +742,20 @@ async function runPhysicalFill(
   // 4. Try CDP native mouse click + Input.insertText (isTrusted: true)
   let outcome: any = null;
   let filledViaCdp = false;
-  let fillMethod: 'cdp_native' | 'cdp_key_by_key' = 'cdp_native';
+  let appendBaseValue: string | undefined =
+    clear === false
+      ? typeof coords?.value === 'string'
+        ? coords.value
+        : typeof coords?.text === 'string'
+          ? coords.text
+          : ''
+      : undefined;
+  let expectedCommitment = clear === false ? `${appendBaseValue ?? ''}${textToFill}` : textToFill;
 
   if (coords?.success && typeof targetX === 'number' && typeof targetY === 'number') {
-    const fillVal = typeof textToFill === 'string' ? textToFill : String(textToFill ?? '');
-    const fillNote = fillVal
-      ? `Filling "${fillVal.length > 18 ? fillVal.slice(0, 15) + '...' : fillVal}"`
-      : 'Filling input';
+    throwIfAborted(signal, 'before CDP focus click');
+    assertBudget(deadlineAt, 'before CDP focus click');
+    const fillNote = formatAgentCursorAction('fill', coords);
     await animateAgentCursor(tabId, targetX, targetY, {
       waitForArrival: true,
       timeoutMs: 350,
@@ -479,16 +767,12 @@ async function runPhysicalFill(
       (coords.value === undefined && (!coords.text || coords.text.trim() === ''));
 
     let verification: any = null;
-    const isSingleLineInput =
-      coords?.tagName === 'input' &&
-      coords?.inputType !== 'search' &&
-      !coords?.isComposer &&
-      !coords?.isEditor;
+    let textWasDispatched = false;
 
     // Phase M1 Instantaneous Occlusion Circuit Breaker & Live Target Re-resolution
     if (numericIndex !== undefined && numericIndex > 0) {
       const occResult = (
-        await executeInPage(
+        await executeWithBudget(
           targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
           'inPageCheckOcclusion',
           [{ node: numericIndex, kind: 'fill' }],
@@ -499,9 +783,10 @@ async function runPhysicalFill(
         if (effectiveSelector) {
           try {
             const freshLoc = await resolveTargetLocation(tabId, {
-              ref: selectorOrRef,
+              ref: isExplicitRef ? selectorOrRef : undefined,
               selector: effectiveSelector,
               preferComposer,
+              frameId: options.frameId,
             });
             if (
               freshLoc.success &&
@@ -545,9 +830,10 @@ async function runPhysicalFill(
     } else if (effectiveSelector || selectorOrRef) {
       try {
         const freshLoc = await resolveTargetLocation(tabId, {
-          ref: selectorOrRef,
+          ref: isExplicitRef ? selectorOrRef : undefined,
           selector: effectiveSelector,
           preferComposer,
+          frameId: options.frameId,
         });
         if (freshLoc.success && typeof freshLoc.x === 'number' && typeof freshLoc.y === 'number') {
           if (targetX !== freshLoc.x || targetY !== freshLoc.y) {
@@ -565,24 +851,35 @@ async function runPhysicalFill(
     }
 
     try {
+      throwIfAborted(signal, 'before CDP fill mutation');
+      assertBudget(deadlineAt, 'before CDP fill mutation');
       await cdpSessionManager.withSession(tabId, 'fill-core', async () => {
         // Humanized micro-trajectory (bounded tightly within proximity window)
         const startX = Math.max(0, targetX! - (15 + Math.floor(Math.random() * 15)));
         const startY = Math.max(0, targetY! - (10 + Math.floor(Math.random() * 12)));
         const points = computeHumanizedPoints(startX, startY, targetX!, targetY!, 3);
         for (const pt of points) {
-          await raceCdp(tabId, 'Input.dispatchMouseEvent', {
+          await raceInput(tabId, 'Input.dispatchMouseEvent', {
             type: 'mouseMoved',
             x: pt.x,
             y: pt.y,
           });
-          await new Promise((r) => setTimeout(r, 10));
+          await delayWithinBudget(10, deadlineAt);
         }
 
         // Mouse click to focus
         await animateAgentCursorClick(tabId, targetX, targetY, fillNote);
+        let focusPressDispatched = false;
         const focusGuard = createMousePressGuard(
-          (eventParams) => raceCdp(tabId, 'Input.dispatchMouseEvent', eventParams),
+          async (eventParams) => {
+            if (eventParams.type === 'mousePressed') {
+              await assertObservedTarget(tabId, numericIndex, targetFrameId, options.expectedGuard);
+              throwIfAborted(signal, 'after observed fill target validation');
+              focusPressDispatched = true;
+            }
+            if (options.expectedGuard !== undefined && !focusPressDispatched) return;
+            return raceInput(tabId, 'Input.dispatchMouseEvent', eventParams);
+          },
           {
             type: 'mouseReleased',
             x: targetX,
@@ -601,18 +898,18 @@ async function runPhysicalFill(
             buttons: 1,
             clickCount: 1,
           });
-          await new Promise((r) => setTimeout(r, 35));
+          await delayWithinBudget(35, deadlineAt);
           await focusGuard.release();
         } finally {
           await focusGuard.compensate();
         }
 
         // Click settling pause for composers
-        await new Promise((r) => setTimeout(r, 50));
+        await delayWithinBudget(50, deadlineAt);
 
         // Active Element Focus Guard: strictly verify via in-page check that document.activeElement is target
         const focusCheck = (
-          await executeInPage(
+          await executeWithBudget(
             targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
             'inPageVerifyActiveElement',
             [numericIndex, effectiveSelector || selectorOrRef],
@@ -626,167 +923,110 @@ async function runPhysicalFill(
           );
         }
 
-        // Deep reset with native SelectAll command (Task B3)
-        if (clear === true || (clear !== false && !isKnownEmpty)) {
-          if (numericIndex !== undefined) {
-            try {
-              await executeInPage(
-                targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-                'inPageDeepResetElement',
-                [numericIndex],
-              );
-            } catch {}
+        if (clear === false && numericIndex !== undefined) {
+          if (coords?.inputType === 'number') {
+            throw new Error('Number inputs require the synthetic append path');
           }
-          await dispatchNativeSelectAll(tabId).catch(() => {});
-          await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-            type: 'rawKeyDown',
-            windowsVirtualKeyCode: 8,
-            key: 'Backspace',
-            code: 'Backspace',
-          });
-          await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-            type: 'keyUp',
-            windowsVirtualKeyCode: 8,
-            key: 'Backspace',
-            code: 'Backspace',
-          });
+          const prepared = (
+            await executeWithBudget(
+              targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
+              'inPagePrepareAppend',
+              [numericIndex],
+            )
+          )?.[0]?.result;
+          if (!prepared?.success) {
+            throw new Error(
+              prepared?.error || `Cannot prepare element [${numericIndex}] for append`,
+            );
+          }
+          appendBaseValue = String(prepared.currentValue ?? '');
+          expectedCommitment = `${appendBaseValue}${textToFill}`;
         }
 
-        // Insert text
-        if (textToFill) {
-          const lines = String(textToFill).split(/\r?\n/);
-          if (lines.length > 1 && !isSingleLineInput) {
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i];
-              if (line.length > 0) {
-                await raceCdp(tabId, 'Input.insertText', { text: line });
-                await new Promise((r) => setTimeout(r, 15));
-              }
-              if (i < lines.length - 1) {
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'rawKeyDown',
-                  windowsVirtualKeyCode: 13,
-                  nativeVirtualKeyCode: 13,
-                  key: 'Enter',
-                  code: 'Enter',
-                  text: '\r',
-                  unmodifiedText: '\r',
-                });
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'keyUp',
-                  windowsVirtualKeyCode: 13,
-                  nativeVirtualKeyCode: 13,
-                  key: 'Enter',
-                  code: 'Enter',
-                });
-                await new Promise((r) => setTimeout(r, 25));
-              }
-            }
-          } else {
-            await raceCdp(tabId, 'Input.insertText', { text: String(textToFill) });
+        if (clear === true || (clear !== false && !isKnownEmpty)) {
+          await dispatchNativeSelectAll(tabId, nestedTimeout(deadlineAt));
+          if (!textToFill) {
+            await raceInput(tabId, 'Input.dispatchKeyEvent', {
+              type: 'rawKeyDown',
+              windowsVirtualKeyCode: 8,
+              key: 'Backspace',
+              code: 'Backspace',
+            });
+            textWasDispatched = true;
+            await raceInput(tabId, 'Input.dispatchKeyEvent', {
+              type: 'keyUp',
+              windowsVirtualKeyCode: 8,
+              key: 'Backspace',
+              code: 'Backspace',
+            });
           }
+        }
 
-          // Synthetic bubbling input & change pair to guarantee framework reactive states see update
-          try {
-            await executeInPage(
-              targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-              'inPageDispatchInputEvents',
-              [numericIndex],
-            ).catch(() => {});
-          } catch {}
+        // Whole-text insertion preserves linebreaks without triggering Enter handlers.
+        if (textToFill) {
+          await raceInput(tabId, 'Input.insertText', { text: String(textToFill) });
+          textWasDispatched = true;
         }
 
         // Settle React/Vue microtasks
-        await new Promise((r) => setTimeout(r, 40));
+        await delayWithinBudget(40, deadlineAt);
 
         // True Input Commitment verification
         if (numericIndex !== undefined) {
           try {
-            const vRes = await executeInPage(
+            const vRes = await executeWithBudget(
               targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
               'inPageVerifyInputCommitment',
-              [numericIndex, textToFill],
+              [numericIndex, expectedCommitment],
             );
             verification = vRes?.[0]?.result;
-          } catch {}
+          } catch (verifyErr) {
+            rethrowIfDeadlineOrUncertain(
+              verifyErr,
+              deadlineAt,
+              'during initial commitment verification',
+            );
+          }
 
-          if (textToFill && verification && verification.committed === false) {
+          if (!verification || typeof verification.committed !== 'boolean') {
+            throw new PostDispatchCommitmentError(
+              'Input verification returned no committed state after native editing; not retrying',
+              verification,
+            );
+          }
+
+          if (verification && verification.committed === false) {
             await new Promise((r) => setTimeout(r, 60));
             try {
-              const retryRes = await executeInPage(
+              const retryRes = await executeWithBudget(
                 targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
                 'inPageVerifyInputCommitment',
-                [numericIndex, textToFill],
+                [numericIndex, expectedCommitment],
               );
-              if (retryRes?.[0]?.result?.committed) {
+              if (retryRes?.[0]?.result) {
                 verification = retryRes[0].result;
               }
-            } catch {}
-          }
-
-          // Reactive failure fallback to CDP key-by-key typing
-          if (textToFill && verification && verification.committed === false) {
-            console.warn(
-              `[performPhysicalFill] Reactive state commitment failed after insertText for [${target}]. Retrying with key-by-key typing...`,
-            );
-            for (const char of textToFill) {
-              if (char === '\n') {
-                if (isSingleLineInput) continue;
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'rawKeyDown',
-                  windowsVirtualKeyCode: 13,
-                  nativeVirtualKeyCode: 13,
-                  key: 'Enter',
-                  code: 'Enter',
-                  text: '\r',
-                  unmodifiedText: '\r',
-                });
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'keyUp',
-                  windowsVirtualKeyCode: 13,
-                  nativeVirtualKeyCode: 13,
-                  key: 'Enter',
-                  code: 'Enter',
-                });
-              } else if (char === '\r') {
-                continue;
-              } else {
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'keyDown',
-                  text: char,
-                  unmodifiedText: char,
-                  key: char,
-                });
-                await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-                  type: 'keyUp',
-                  key: char,
-                });
-              }
-              await new Promise((r) => setTimeout(r, 8));
-            }
-            fillMethod = 'cdp_key_by_key';
-            await new Promise((r) => setTimeout(r, 50));
-
-            try {
-              const vRes2 = await executeInPage(
-                targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-                'inPageVerifyInputCommitment',
-                [numericIndex, textToFill],
+            } catch (retryErr) {
+              rethrowIfDeadlineOrUncertain(
+                retryErr,
+                deadlineAt,
+                'during commitment verification retry',
               );
-              verification = vRes2?.[0]?.result;
-            } catch {}
+            }
           }
 
-          if (textToFill && verification && verification.committed === false) {
-            throw new Error(
-              `True Input Commitment failed: ${verification.diagnostics || 'Reactive state did not update'}`,
+          if (verification && verification.committed === false) {
+            throw new PostDispatchCommitmentError(
+              `Input commitment failed after native editing (observed length ${verification.currentValue?.length ?? 0}, expected length ${expectedCommitment.length}, committed=false); not retrying`,
+              verification,
             );
           }
         }
 
         // pressEnter if requested
         if (pressEnter) {
-          await raceCdp(tabId, 'Input.dispatchKeyEvent', {
+          assertBudget(deadlineAt, 'before pressEnter mutation');
+          await raceInput(tabId, 'Input.dispatchKeyEvent', {
             type: 'keyDown',
             key: 'Enter',
             code: 'Enter',
@@ -795,7 +1035,7 @@ async function runPhysicalFill(
             windowsVirtualKeyCode: 13,
             nativeVirtualKeyCode: 13,
           });
-          await raceCdp(tabId, 'Input.dispatchKeyEvent', {
+          await raceInput(tabId, 'Input.dispatchKeyEvent', {
             type: 'keyUp',
             key: 'Enter',
             code: 'Enter',
@@ -813,7 +1053,7 @@ async function runPhysicalFill(
         selector: selectorOrRef,
         filledText: textToFill,
         isTrusted: true,
-        method: fillMethod,
+        method: 'cdp_native',
         tagName: coords?.tagName,
         inputType: coords?.inputType,
         isComposer: coords?.isComposer,
@@ -826,6 +1066,12 @@ async function runPhysicalFill(
       };
       filledViaCdp = true;
     } catch (cdpErr) {
+      if (cdpErr instanceof TaskCancelledError) {
+        throw cdpErr;
+      }
+      if (cdpErr instanceof FillDeadlineExceededError) {
+        throw cdpErr;
+      }
       if (cdpErr instanceof FocusVerificationError) {
         return {
           success: false,
@@ -841,6 +1087,24 @@ async function runPhysicalFill(
           resolutionPath,
         };
       }
+      if (cdpErr instanceof PostDispatchCommitmentError) {
+        const diagnostics = cdpErr.message;
+        return {
+          success: false,
+          committed: false,
+          index: numericIndex,
+          ref: options.target,
+          selector: selectorOrRef,
+          filledText: textToFill,
+          isTrusted: false,
+          method: 'cdp_native',
+          status: 'unknown',
+          retry: false,
+          error: cdpErr.message,
+          diagnostics,
+          resolutionPath,
+        };
+      }
       if (cdpErr instanceof DialogOpenedError) {
         throw cdpErr;
       }
@@ -850,7 +1114,47 @@ async function runPhysicalFill(
       if (isCdpOutcomeUncertainError(cdpErr)) {
         // The native fill may already have committed; a synthetic retry could
         // concatenate the same text, so fail closed instead.
+        if (clear === false) {
+          const message =
+            'Append input outcome is unknown after dispatch; inspect the field and do not retry';
+          return {
+            success: false,
+            committed: false,
+            index: numericIndex,
+            ref: options.target,
+            selector: selectorOrRef,
+            filledText: textToFill,
+            isTrusted: false,
+            method: 'cdp_native',
+            status: 'unknown',
+            retry: false,
+            error: message,
+            diagnostics: message,
+            resolutionPath,
+          };
+        }
         throw cdpErr;
+      }
+      if (textWasDispatched) {
+        const observedLength =
+          typeof verification?.currentValue === 'string'
+            ? verification.currentValue.length
+            : 'unknown';
+        return {
+          success: false,
+          committed: false,
+          index: numericIndex,
+          ref: options.target,
+          selector: selectorOrRef,
+          filledText: textToFill,
+          isTrusted: false,
+          method: 'cdp_native',
+          status: 'unknown',
+          retry: false,
+          error: `Text was dispatched, but post-dispatch validation failed (observed length ${observedLength}, expected length ${expectedCommitment.length}); not retrying`,
+          diagnostics: `Text was dispatched, but post-dispatch validation failed (observed length ${observedLength}, expected length ${expectedCommitment.length}); not retrying`,
+          resolutionPath,
+        };
       }
       console.warn(
         `[performPhysicalFill] CDP native fill failed on target [${target}], falling back to inPageFillIndex:`,
@@ -861,21 +1165,28 @@ async function runPhysicalFill(
 
   // 5. Fallback to in-page synthetic fill
   if (!filledViaCdp) {
+    throwIfAborted(signal, 'before synthetic fill fallback');
+    assertBudget(deadlineAt, 'before synthetic fill fallback');
     if (numericIndex !== undefined && numericIndex > 0) {
-      const results = await executeInPage({ tabId }, 'inPageFillIndex', [
+      const scopedTarget =
+        options.frameId !== undefined
+          ? { tabId, frameIds: [options.frameId] }
+          : targetFrameId
+            ? { tabId, frameIds: [targetFrameId] }
+            : { tabId };
+      const results = await executeWithBudget(scopedTarget, 'inPageFillIndex', [
         numericIndex,
         textToFill,
         clear !== false,
         pressEnter,
       ]);
       outcome = results?.[0]?.result;
-      if (!outcome || !outcome.success) {
-        const frameResults = await executeInPage({ tabId, allFrames: true }, 'inPageFillIndex', [
-          numericIndex,
-          textToFill,
-          clear !== false,
-          pressEnter,
-        ]);
+      if ((!outcome || !outcome.success) && options.frameId === undefined && targetFrameId === 0) {
+        const frameResults = await executeWithBudget(
+          { tabId, allFrames: true },
+          'inPageFillIndex',
+          [numericIndex, textToFill, clear !== false, pressEnter],
+        );
         const match = frameResults.find((r) => r.result?.success);
         if (match?.result) outcome = match.result;
       }
@@ -889,13 +1200,19 @@ async function runPhysicalFill(
 
         let fallbackVerify: any = null;
         try {
-          const vRes = await executeInPage(
+          const vRes = await executeWithBudget(
             targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
             'inPageVerifyInputCommitment',
-            [numericIndex, textToFill],
+            [numericIndex, expectedCommitment],
           );
           fallbackVerify = vRes?.[0]?.result;
-        } catch {}
+        } catch (fallbackVerifyErr) {
+          rethrowIfDeadlineOrUncertain(
+            fallbackVerifyErr,
+            deadlineAt,
+            'during synthetic fallback verification',
+          );
+        }
 
         if (textToFill && fallbackVerify && fallbackVerify.committed === false) {
           outcome.committed = false;
@@ -911,98 +1228,122 @@ async function runPhysicalFill(
     } else if (selectorOrRef) {
       // In-page synthetic fallback for selector/ref targets
       try {
-        const selRes = await chrome.scripting.executeScript({
-          target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-          func: (sel: string, val: string, shouldClear: boolean) => {
-            const el = document.querySelector(sel);
-            if (!el) return { success: false, error: `Selector "${sel}" not found` };
-            if (typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
+        const selRes = await withDeadline(
+          chrome.scripting.executeScript({
+            target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
+            func: (sel: string, val: string, shouldClear: boolean) => {
+              const el = document.querySelector(sel);
+              if (!el) return { success: false, error: `Selector "${sel}" not found` };
+              if (typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
 
-            const isContentEditable =
-              (el as HTMLElement).isContentEditable ||
-              el.getAttribute('contenteditable') === 'true' ||
-              el.getAttribute('contenteditable') === '';
+              const isContentEditable =
+                (el as HTMLElement).isContentEditable ||
+                el.getAttribute('contenteditable') === 'true' ||
+                el.getAttribute('contenteditable') === '';
 
-            if (isContentEditable) {
-              const editEl = el as HTMLElement;
-              editEl.focus();
-              if (shouldClear) {
-                const doc = editEl.ownerDocument || document;
-                const selObj = (doc.defaultView || window).getSelection();
-                const range = doc.createRange();
-                range.selectNodeContents(editEl);
-                selObj?.removeAllRanges();
-                selObj?.addRange(range);
-                try {
-                  doc.execCommand('delete', false);
-                } catch {}
-                editEl.innerText = '';
-              }
-              let inserted = false;
-              try {
-                inserted = document.execCommand('insertText', false, val);
-              } catch {}
-              if (!inserted) {
-                editEl.innerText = val;
-              }
-              editEl.dispatchEvent(
-                new InputEvent('input', {
-                  bubbles: true,
-                  composed: true,
-                  inputType: 'insertText',
-                  data: val,
-                }),
-              );
-              editEl.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-              return { success: true, filledText: val };
-            }
-
-            const getNativeSetter = (element: any, prop: string) => {
-              let proto = Object.getPrototypeOf(element);
-              while (proto) {
-                const desc = Object.getOwnPropertyDescriptor(proto, prop);
-                if (desc?.set) return desc.set;
-                proto = Object.getPrototypeOf(proto);
-              }
-              return null;
-            };
-
-            const nativeValSetter = getNativeSetter(el, 'value');
-            const nativeChkSetter = getNativeSetter(el, 'checked');
-
-            if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
-              const isTruthy =
-                val === 'true' ||
-                val === '1' ||
-                val === 'checked' ||
-                val === 'on' ||
-                (val !== 'false' && val !== '0' && val !== 'off' && Boolean(val));
-              if (nativeChkSetter) nativeChkSetter.call(el, isTruthy);
-              else el.checked = isTruthy;
-            } else if (el instanceof HTMLSelectElement) {
-              let matched = false;
-              for (const opt of Array.from(el.options)) {
-                if (opt.value === val || opt.text === val || opt.text.trim() === val.trim()) {
-                  el.value = opt.value;
-                  matched = true;
-                  break;
+              if (isContentEditable) {
+                const editEl = el as HTMLElement;
+                editEl.focus();
+                if (shouldClear) {
+                  const doc = editEl.ownerDocument || document;
+                  const selObj = (doc.defaultView || window).getSelection();
+                  const range = doc.createRange();
+                  range.selectNodeContents(editEl);
+                  selObj?.removeAllRanges();
+                  selObj?.addRange(range);
+                  try {
+                    doc.execCommand('delete', false);
+                  } catch {}
+                  editEl.innerText = '';
                 }
+                if (!shouldClear) {
+                  const doc = editEl.ownerDocument || document;
+                  const selection = (doc.defaultView || window).getSelection();
+                  if (selection) {
+                    const range = doc.createRange();
+                    range.selectNodeContents(editEl);
+                    range.collapse(false);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                  }
+                }
+                const beforeText = String(editEl.innerText ?? editEl.textContent ?? '');
+                let inserted = false;
+                try {
+                  inserted = document.execCommand('insertText', false, val);
+                } catch {}
+                if (!inserted) {
+                  const afterText = String(editEl.innerText ?? editEl.textContent ?? '');
+                  if (shouldClear) {
+                    editEl.innerText = val;
+                  } else if (afterText === beforeText) {
+                    editEl.appendChild(document.createTextNode(val));
+                  }
+                }
+                editEl.dispatchEvent(
+                  new InputEvent('input', {
+                    bubbles: true,
+                    composed: true,
+                    inputType: 'insertText',
+                    data: val,
+                  }),
+                );
+                editEl.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                return { success: true, filledText: val };
               }
-              if (!matched) el.value = val;
-            } else if (nativeValSetter) {
-              if (shouldClear) nativeValSetter.call(el, '');
-              nativeValSetter.call(el, val);
-            } else {
-              if (shouldClear) (el as any).value = '';
-              (el as any).value = val;
-            }
 
-            el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-            return { success: true, filledText: val };
-          },
-          args: [selectorOrRef, textToFill, clear !== false],
-        });
+              const getNativeSetter = (element: any, prop: string) => {
+                let proto = Object.getPrototypeOf(element);
+                while (proto) {
+                  const desc = Object.getOwnPropertyDescriptor(proto, prop);
+                  if (desc?.set) return desc.set;
+                  proto = Object.getPrototypeOf(proto);
+                }
+                return null;
+              };
+
+              const nativeValSetter = getNativeSetter(el, 'value');
+              const nativeChkSetter = getNativeSetter(el, 'checked');
+
+              if (
+                el instanceof HTMLInputElement &&
+                (el.type === 'checkbox' || el.type === 'radio')
+              ) {
+                const isTruthy =
+                  val === 'true' ||
+                  val === '1' ||
+                  val === 'checked' ||
+                  val === 'on' ||
+                  (val !== 'false' && val !== '0' && val !== 'off' && Boolean(val));
+                if (nativeChkSetter) nativeChkSetter.call(el, isTruthy);
+                else el.checked = isTruthy;
+              } else if (el instanceof HTMLSelectElement) {
+                let matched = false;
+                for (const opt of Array.from(el.options)) {
+                  if (opt.value === val || opt.text === val || opt.text.trim() === val.trim()) {
+                    el.value = opt.value;
+                    matched = true;
+                    break;
+                  }
+                }
+                if (!matched) el.value = val;
+              } else if (nativeValSetter) {
+                const currentValue = String((el as any).value ?? '');
+                nativeValSetter.call(el, shouldClear ? val : `${currentValue}${val}`);
+              } else {
+                const currentValue = String((el as any).value ?? '');
+                (el as any).value = shouldClear ? val : `${currentValue}${val}`;
+              }
+
+              el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+              return { success: true, filledText: val };
+            },
+            args: [selectorOrRef, textToFill, clear !== false],
+          }),
+          deadlineAt,
+          'during synthetic selector fill',
+        );
         const scriptResult = selRes?.[0]?.result;
         if (scriptResult && typeof scriptResult === 'object') {
           outcome = {
@@ -1017,6 +1358,8 @@ async function runPhysicalFill(
           };
         }
       } catch (selErr) {
+        if (selErr instanceof TaskCancelledError) throw selErr;
+        if (selErr instanceof FillDeadlineExceededError) throw selErr;
         outcome = {
           success: false,
           error: `Selector fill error: ${selErr instanceof Error ? selErr.message : String(selErr)}`,
@@ -1069,6 +1412,7 @@ async function runPhysicalFill(
   if (resObj.success && typeof coords?.value === 'string' && numericIndex !== undefined) {
     actionHistoryManager.pushAction(tabId, {
       type: 'fill',
+      frameId: targetFrameId,
       index: numericIndex,
       selector: typeof options.target === 'string' && !isNumericIndex ? options.target : undefined,
       prevValue: coords.value,
@@ -1078,11 +1422,13 @@ async function runPhysicalFill(
 
   // 6. Handle auto-submit if requested (and not already submitted via pressEnter)
   if (submit && resObj.success && !resObj.submitted) {
-    await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId);
+    await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt);
   }
 
   if (handoverTracker) {
-    const handover = await handoverTracker.waitForHandover(800);
+    const handover = await handoverTracker.waitForHandover(
+      Math.min(800, Math.max(0, remainingBudget(deadlineAt) ?? 800)),
+    );
     if (handover) {
       resObj.tabHandover = handover;
     }
@@ -1099,9 +1445,32 @@ async function handleAutoSubmit(
   result: PhysicalFillResult,
   sessionId?: string,
   targetFrameId = 0,
+  deadlineAt?: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   result.autoSubmitHandled = true;
   if (result.submitted) return;
+  const markDeadlineStop = (message: string, status: 'timeout' | 'unknown' = 'timeout') => {
+    result.success = false;
+    result.status = status;
+    result.timedOut = true;
+    result.deadlineExceeded = true;
+    result.submitted = false;
+    result.submitResult = {
+      success: false,
+      status,
+      timedOut: true,
+      message,
+    };
+  };
+
+  throwIfAborted(signal, 'before auto-submit');
+  try {
+    assertBudget(deadlineAt, 'before auto-submit');
+  } catch (error) {
+    markDeadlineStop(error instanceof Error ? error.message : String(error));
+    return;
+  }
 
   if (result.submitButtonState?.found && typeof result.submitButtonState.index === 'number') {
     const btnIdx = result.submitButtonState.index;
@@ -1109,52 +1478,69 @@ async function handleAutoSubmit(
       // P1: Rich-text editor (Draft.js/ProseMirror/React) reactive settle polling:
       // Wait for button to transition from disabled to enabled (up to 450ms, polling every 50ms)
       try {
-        await chrome.scripting.executeScript({
-          target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-          func: (idx: number) => {
-            return new Promise<void>((resolve) => {
-              const start = Date.now();
-              function check() {
-                const isolatedMap = (globalThis as any)[
-                  Symbol.for('__browser_use_isolated_index_map__')
-                ];
-                const entry = isolatedMap?.get(idx);
-                const el = typeof entry?.deref === 'function' ? entry.deref() : entry;
-                if (el) {
-                  const disabled =
-                    el.disabled === true ||
-                    el.getAttribute('aria-disabled') === 'true' ||
-                    el.classList.contains('disabled') ||
-                    el.style.pointerEvents === 'none';
-                  if (!disabled || Date.now() - start > 450) {
+        await withDeadline(
+          chrome.scripting.executeScript({
+            target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
+            func: (idx: number) => {
+              return new Promise<void>((resolve) => {
+                const start = Date.now();
+                function check() {
+                  const isolatedMap = (globalThis as any)[
+                    Symbol.for('__browser_use_isolated_index_map__')
+                  ];
+                  const entry = isolatedMap?.get(idx);
+                  const el = typeof entry?.deref === 'function' ? entry.deref() : entry;
+                  if (el) {
+                    const disabled =
+                      el.disabled === true ||
+                      el.getAttribute('aria-disabled') === 'true' ||
+                      el.classList.contains('disabled') ||
+                      el.style.pointerEvents === 'none';
+                    if (!disabled || Date.now() - start > 450) {
+                      resolve();
+                      return;
+                    }
+                  } else if (Date.now() - start > 450) {
                     resolve();
                     return;
                   }
-                } else if (Date.now() - start > 450) {
-                  resolve();
-                  return;
+                  setTimeout(check, 50);
                 }
-                setTimeout(check, 50);
-              }
-              check();
-            });
-          },
-          args: [btnIdx],
-        });
-      } catch {}
+                check();
+              });
+            },
+            args: [btnIdx],
+          }),
+          deadlineAt,
+          'during submit-button readiness polling',
+        );
+      } catch (pollErr) {
+        if (pollErr instanceof FillDeadlineExceededError) {
+          markDeadlineStop(pollErr.message);
+          return;
+        }
+      }
 
       const { interactIndexTool } = await import('./interact-index');
+      assertBudget(deadlineAt, 'before submit click');
+      const clickBudget = nestedTimeout(deadlineAt);
+      const clickTimeoutDueToDeadline = clickBudget !== undefined && clickBudget <= 4000;
       const clickPromise = interactIndexTool.execute({
         index: btnIdx,
         action: 'click',
         tabId,
+        frameId: targetFrameId,
         skipLock: true,
         sessionId,
         waitForSettle: false,
+        ...(typeof deadlineAt === 'number' ? { expectedDeadlineAt: deadlineAt } : {}),
       });
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<{ isTimeout: true }>((resolve) => {
-        timeoutTimer = setTimeout(() => resolve({ isTimeout: true }), 4000);
+        timeoutTimer = setTimeout(
+          () => resolve({ isTimeout: true }),
+          Math.min(4000, clickBudget ?? 4000),
+        );
       });
       let raceRes: { isTimeout: boolean; res?: any };
       try {
@@ -1178,6 +1564,9 @@ async function handleAutoSubmit(
           status: 'unknown',
           message: 'Auto-submit click timed out after 4000ms; submit delivery status is unknown',
         };
+        result.status = 'unknown';
+        result.success = false;
+        result.deadlineExceeded = clickTimeoutDueToDeadline;
         return;
       }
 
@@ -1202,6 +1591,10 @@ async function handleAutoSubmit(
       }
       return;
     } catch (clickErr) {
+      if (clickErr instanceof FillDeadlineExceededError) {
+        markDeadlineStop(clickErr.message, clickErr.outcome === 'unknown' ? 'unknown' : 'timeout');
+        return;
+      }
       if (isCdpOutcomeUncertainError(clickErr)) {
         result.submitted = false;
         result.submitMethod = 'click';
@@ -1212,6 +1605,8 @@ async function handleAutoSubmit(
             clickErr instanceof Error ? clickErr.message : String(clickErr)
           }`,
         };
+        result.status = 'unknown';
+        result.success = false;
         return;
       }
       console.warn(
@@ -1223,27 +1618,45 @@ async function handleAutoSubmit(
 
   // Fallback to Enter key
   try {
+    assertBudget(deadlineAt, 'before submit Enter fallback');
     await cdpSessionManager.withSession(tabId, 'auto-submit', async () => {
-      await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: 'Enter',
-        code: 'Enter',
-        text: '\r',
-        unmodifiedText: '\r',
-        windowsVirtualKeyCode: 13,
-        nativeVirtualKeyCode: 13,
-      });
-      await raceCdp(tabId, 'Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13,
-        nativeVirtualKeyCode: 13,
-      });
+      await raceCdp(
+        tabId,
+        'Input.dispatchKeyEvent',
+        {
+          type: 'keyDown',
+          key: 'Enter',
+          code: 'Enter',
+          text: '\r',
+          unmodifiedText: '\r',
+          windowsVirtualKeyCode: 13,
+          nativeVirtualKeyCode: 13,
+        },
+        nestedTimeout(deadlineAt),
+      );
+      await raceCdp(
+        tabId,
+        'Input.dispatchKeyEvent',
+        {
+          type: 'keyUp',
+          key: 'Enter',
+          code: 'Enter',
+          windowsVirtualKeyCode: 13,
+          nativeVirtualKeyCode: 13,
+        },
+        nestedTimeout(deadlineAt),
+      );
     });
     result.submitted = true;
     result.submitMethod = 'pressEnter';
   } catch (enterErr) {
+    if (enterErr instanceof FillDeadlineExceededError) {
+      markDeadlineStop(
+        enterErr.message,
+        enterErr.outcome === 'not_started' ? 'timeout' : 'unknown',
+      );
+      return;
+    }
     if (isCdpOutcomeUncertainError(enterErr)) {
       result.submitted = false;
       result.submitMethod = 'pressEnter';
@@ -1258,15 +1671,24 @@ async function handleAutoSubmit(
     }
     // If CDP fails, fallback to in-page synthetic Enter
     try {
+      assertBudget(deadlineAt, 'before synthetic Enter fallback');
       if (typeof result.index === 'number' && result.index > 0) {
         await executeInPage(
           targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
           'inPageFillIndex',
           [result.index, '', false, true],
+          nestedTimeout(deadlineAt),
         );
       }
       result.submitted = true;
       result.submitMethod = 'pressEnter';
-    } catch {}
+    } catch (fallbackErr) {
+      if (fallbackErr instanceof FillDeadlineExceededError) {
+        markDeadlineStop(
+          fallbackErr.message,
+          fallbackErr.outcome === 'not_started' ? 'timeout' : 'unknown',
+        );
+      }
+    }
   }
 }

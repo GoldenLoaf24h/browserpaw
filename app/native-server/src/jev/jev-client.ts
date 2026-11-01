@@ -51,7 +51,7 @@ export interface JevVisionResult {
   usage?: { input_tokens: number | null; output_tokens: number | null };
 }
 
-// 14 Built-in destructive keywords (Iron Rule §2.3)
+// 16 Built-in destructive keywords (Iron Rule §2.3)
 export const DESTRUCTIVE_KEYWORDS: readonly string[] = [
   'pay',
   '支付',
@@ -63,8 +63,10 @@ export const DESTRUCTIVE_KEYWORDS: readonly string[] = [
   'submit',
   '提交',
   '发送',
+  'send',
   'post',
   '发布',
+  'publish',
   'confirm',
   '确认',
 ];
@@ -95,6 +97,11 @@ export function resetInvalidKeyLatch(): void {
   isKeyInvalidLatched = false;
   keyInvalidLatchedAt = 0;
 }
+
+// An explicit enable/configuration change must not inherit the previous credential failure.
+jevModelManager.onModeStateChanged((state) => {
+  if (state.activeMode !== 'off') resetInvalidKeyLatch();
+});
 
 /**
  * Filter out sensitive elements (password, file upload) from AX tree
@@ -131,7 +138,8 @@ export function buildState(
     const trimmed = rawLine.trim();
     if (!trimmed) continue;
     if (isSensitiveElement(trimmed)) continue;
-    cleanLines.push(trimmed.slice(0, 120));
+    // Field values are execution data, not evidence for selecting a control.
+    cleanLines.push(trimmed.replace(/\s(?:current_)?value=[\s\S]*/, '').slice(0, 120));
   }
 
   // The result of a control action is usually rendered as page text, not as another control.
@@ -697,35 +705,60 @@ export class JevClientWrapper {
     state: JevState,
     questions: Record<string, any>,
     mode?: JevMode,
-    options?: { signal?: AbortSignal; timeout?: number },
+    options?: { signal?: AbortSignal; timeout?: number; retry?: { maxRetries: number } },
   ): Promise<{
     result: SystemOneResult<any> | null;
     errorReason: FallbackReason;
     rawError?: any;
   }> {
-    const targetMode = mode || jevModelManager.getActiveMode();
+    const enabledMode = jevModelManager.getActiveMode();
+    const targetMode =
+      enabledMode === 'off' || (mode && mode !== enabledMode) ? 'off' : enabledMode;
+    const modeToken = jevModelManager.captureModeToken();
+    const failure = (errorReason: FallbackReason, rawError?: unknown) => {
+      const cancelled = options?.signal?.aborted && options.signal.reason?.name !== 'TimeoutError';
+      if (!cancelled)
+        jevModelManager.disableIfCurrent(modeToken, errorReason || 'invalid_model_response');
+      return { result: null, errorReason, ...(rawError ? { rawError } : {}) };
+    };
     if (targetMode === 'off') {
       return {
         result: null,
         errorReason: 'jev_disabled',
       };
     }
+    if (options?.signal?.aborted) return { result: null, errorReason: 'jev_disabled' };
 
     let client: TypeSafeClient | null = null;
     // Capture the configuration before selecting the client; a switch in between must not be
     // attributed to the new configuration.
     const identity = targetMode === 'remote' ? this.resolveRemoteConfig().identity : undefined;
     if (targetMode === 'local') {
-      await jevModelManager.ensureLocalServiceRunning();
+      let abortStartup: (() => void) | undefined;
+      try {
+        const startup = jevModelManager.ensureLocalServiceRunning();
+        const service = options?.signal
+          ? await Promise.race([
+              startup,
+              new Promise<never>((_resolve, reject) => {
+                abortStartup = () => reject(options.signal!.reason);
+                options.signal!.addEventListener('abort', abortStartup, { once: true });
+                if (options.signal!.aborted) abortStartup();
+              }),
+            ])
+          : await startup;
+        if (!service.success) return failure('local_service_offline');
+      } catch (error) {
+        return failure('local_service_offline', error);
+      } finally {
+        if (abortStartup) options?.signal?.removeEventListener('abort', abortStartup);
+      }
       jevModelManager.touchActivity();
       client = this.getLocalClient();
     } else {
       client = this.getRemoteClient();
       if (!client || isSessionKeyInvalid()) {
-        return {
-          result: null,
-          errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
-        };
+        return failure(isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key');
       }
     }
 
@@ -740,6 +773,7 @@ export class JevClientWrapper {
         },
         options,
       );
+      if (options?.signal?.aborted) return failure('network_error');
       // Cache the reported release only if it still describes the configuration that sent
       // this request; `client === this.client` also rejects the local service client.
       if (
@@ -750,6 +784,26 @@ export class JevClientWrapper {
       ) {
         this.resolvedModelId = response.model;
       }
+      if (!response?.answers || typeof response.answers !== 'object')
+        return failure('network_error');
+      for (const [id, question] of Object.entries(questions)) {
+        const answer = (response.answers as any)[id];
+        const valid =
+          question.type === 'choice'
+            ? validateChoice(answer, Object.keys(question.criteria)) &&
+              Number.isFinite(answer.confidence) &&
+              answer.confidence >= 0 &&
+              answer.confidence <= 1
+            : question.type === 'noul'
+              ? answer?.type === 'noul' &&
+                Number.isFinite(answer.noul) &&
+                answer.noul >= 0 &&
+                answer.noul <= 1
+              : answer?.type === question.type;
+        if (!valid) return failure('invalid_response');
+      }
+      if (jevModelManager.captureModeToken().revision !== modeToken.revision)
+        return { result: null, errorReason: 'jev_disabled' };
       return { result: response, errorReason: null };
     } catch (err: any) {
       if (targetMode === 'local') {
@@ -762,16 +816,20 @@ export class JevClientWrapper {
           err?.status === 503 ||
           err?.status === 504
         ) {
-          return { result: null, errorReason: 'local_service_offline', rawError: err };
+          return failure('local_service_offline', err);
         }
       }
 
       if (err instanceof AuthenticationError || err?.status === 401) {
-        latchInvalidKey();
-        return { result: null, errorReason: 'invalid_key', rawError: err };
+        if (
+          jevModelManager.captureModeToken().revision === modeToken.revision &&
+          (targetMode !== 'remote' || this.resolveRemoteConfig().identity === identity)
+        )
+          latchInvalidKey();
+        return failure('invalid_key', err);
       }
       if (err instanceof RateLimitError || err?.status === 429) {
-        return { result: null, errorReason: 'quota_exhausted', rawError: err };
+        return failure('quota_exhausted', err);
       }
       if (
         err instanceof APITimeoutError ||
@@ -779,18 +837,22 @@ export class JevClientWrapper {
         err?.code === 'ECONNREFUSED' ||
         err?.code === 'ETIMEDOUT'
       ) {
-        return { result: null, errorReason: 'network_error', rawError: err };
+        return failure('network_error', err);
       }
       if (err instanceof APIError) {
         if (err.status === 401 || err.status === 403) {
-          latchInvalidKey();
-          return { result: null, errorReason: 'invalid_key', rawError: err };
+          if (
+            jevModelManager.captureModeToken().revision === modeToken.revision &&
+            (targetMode !== 'remote' || this.resolveRemoteConfig().identity === identity)
+          )
+            latchInvalidKey();
+          return failure('invalid_key', err);
         }
         if (err.status === 429) {
-          return { result: null, errorReason: 'rate_limited', rawError: err };
+          return failure('rate_limited', err);
         }
       }
-      return { result: null, errorReason: 'network_error', rawError: err };
+      return failure('network_error', err);
     }
   }
 
@@ -818,12 +880,16 @@ export class JevClientWrapper {
       };
     }
 
+    const modeToken = jevModelManager.captureModeToken();
+    const failure = (errorReason: FallbackReason, rawError?: unknown) => {
+      if (!options?.signal?.aborted || options.signal.reason?.name === 'TimeoutError')
+        jevModelManager.disableIfCurrent(modeToken, errorReason || 'invalid_response');
+      return { result: null, errorReason, ...(rawError ? { rawError } : {}) };
+    };
+    if (options?.signal?.aborted) return { result: null, errorReason: 'jev_disabled' };
     const client = this.getRemoteClient();
     if (!client || isSessionKeyInvalid()) {
-      return {
-        result: null,
-        errorReason: isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key',
-      };
+      return failure(isSessionKeyInvalid() ? 'invalid_key' : 'no_api_key');
     }
     const identity = this.resolveRemoteConfig().identity;
 
@@ -880,11 +946,19 @@ export class JevClientWrapper {
         {
           signal: options?.signal,
           timeout: options?.timeout,
+          retry: { maxRetries: 0 },
           headers: {
             [DANGER_ZONE_IMAGES_HEADER]: 'true',
           },
         },
       );
+      if (options?.signal?.aborted) return failure('network_error');
+      if (
+        jevModelManager.captureModeToken().revision !== modeToken.revision ||
+        jevModelManager.getActiveMode() !== 'remote' ||
+        this.resolveRemoteConfig().identity !== identity
+      )
+        return { result: null, errorReason: 'jev_disabled' };
       // Same attribution rule as `query`, plus the mode guard: a revoked vision consent must
       // not refresh the cache.
       if (
@@ -941,12 +1015,20 @@ export class JevClientWrapper {
         errorReason: null,
       };
     } catch (err: any) {
+      if (options?.signal?.aborted) return failure('network_error', err);
+      const latchCurrent = () => {
+        if (
+          jevModelManager.captureModeToken().revision === modeToken.revision &&
+          this.resolveRemoteConfig().identity === identity
+        )
+          latchInvalidKey();
+      };
       if (err instanceof AuthenticationError || err?.status === 401) {
-        latchInvalidKey();
-        return { result: null, errorReason: 'invalid_key', rawError: err };
+        latchCurrent();
+        return failure('invalid_key', err);
       }
       if (err instanceof RateLimitError || err?.status === 429) {
-        return { result: null, errorReason: 'quota_exhausted', rawError: err };
+        return failure('quota_exhausted', err);
       }
       if (
         err instanceof APITimeoutError ||
@@ -954,18 +1036,18 @@ export class JevClientWrapper {
         err?.code === 'ECONNREFUSED' ||
         err?.code === 'ETIMEDOUT'
       ) {
-        return { result: null, errorReason: 'network_error', rawError: err };
+        return failure('network_error', err);
       }
       if (err instanceof APIError) {
         if (err.status === 401 || err.status === 403) {
-          latchInvalidKey();
-          return { result: null, errorReason: 'invalid_key', rawError: err };
+          latchCurrent();
+          return failure('invalid_key', err);
         }
         if (err.status === 429) {
-          return { result: null, errorReason: 'rate_limited', rawError: err };
+          return failure('rate_limited', err);
         }
       }
-      return { result: null, errorReason: 'network_error', rawError: err };
+      return failure('network_error', err);
     }
   }
 
@@ -974,111 +1056,150 @@ export class JevClientWrapper {
     goal: string,
     options: Array<{ text: string; value: string }>,
     mode?: JevMode,
+    requestOptions?: {
+      signal?: AbortSignal;
+      timeout?: number;
+      retry?: { maxRetries: number };
+      onUsage?: (usage: {
+        inputTokens: number | null;
+        outputTokens: number | null;
+        model: string;
+      }) => void;
+    },
   ): Promise<{
     bestIndex: number;
     bestOption: { text: string; value: string };
     confidence: number;
     score: number;
-    usage?: { inputTokens: number };
+    usage?: {
+      inputTokens: number | null;
+      outputTokens?: number | null;
+    } | null;
   } | null> {
-    const targetMode = mode || jevModelManager.getActiveMode();
-    if (!this.getClient(targetMode) || options.length === 0) return null;
-    if (options.length === 1) {
-      return {
-        bestIndex: 0,
-        bestOption: options[0],
-        confidence: 1.0,
-        score: 0,
-        usage: { inputTokens: 0 },
-      };
+    if (!Array.isArray(options) || options.length === 0 || options.length > 32) {
+      return null;
     }
 
-    // When options exceed 20 (Choice primitive optimal budget), shortlist candidates based on relevance to goal
-    let candidateOptions = options;
-    if (options.length > 20) {
-      const goalLower = goal.toLowerCase();
-      const scored = options.map((opt, idx) => {
-        const text = `${opt.text} ${opt.value}`.toLowerCase();
-        let scoreVal = 0;
-        if (goalLower.includes(text) || text.includes(goalLower)) scoreVal += 5;
-        for (const word of goalLower.split(/\s+/)) {
-          if (word.length >= 2 && text.includes(word)) scoreVal += 2;
-        }
-        return { opt, idx, scoreVal };
-      });
-      scored.sort((a, b) => b.scoreVal - a.scoreVal);
-      candidateOptions = scored.slice(0, 20).map((s) => s.opt);
+    const enabledMode = jevModelManager.getActiveMode();
+    if (enabledMode === 'off' || (mode && mode !== enabledMode)) {
+      return null;
+    }
+    if (requestOptions?.signal?.aborted) {
+      return null;
+    }
+    const timeoutMs = Math.min(
+      1500,
+      typeof requestOptions?.timeout === 'number' ? requestOptions.timeout : 1500,
+    );
+    if (timeoutMs <= 0) {
+      return null;
     }
 
     const choiceCriteria: Record<string, string> = {};
-    candidateOptions.forEach((opt, idx) => {
-      choiceCriteria[String(idx)] = `${opt.text || opt.value || ''}`.trim() || `Option ${idx}`;
+    options.forEach((opt, idx) => {
+      choiceCriteria[String(idx)] = opt.text.trim() || 'Option ' + idx;
     });
+    choiceCriteria['none'] = 'None of the above options matches the goal';
 
     const selectQuestion = choice(
-      `Select the option index that best satisfies the selection goal: "${goal}"`,
+      'Select the option index that best satisfies the selection goal: ' +
+        JSON.stringify(goal) +
+        '. Return none if no option is a suitable match.',
       choiceCriteria,
     );
 
+    const effectiveSignal = requestOptions?.signal
+      ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs);
+
+    const { onUsage, ...transportOptions } = requestOptions || {};
+    const mergedRequestOptions = {
+      ...transportOptions,
+      signal: effectiveSignal,
+      timeout: timeoutMs,
+      retry: { maxRetries: 0 },
+    };
+
+    const modeToken = jevModelManager.captureModeToken();
     const response = await this.query(
       {
         task: goal,
         page: { url: '', title: '' },
-        elements: candidateOptions.map((o, i) => `[${i}] ${o.text} (${o.value})`),
+        elements: options.map((o, i) => '[' + i + '] ' + o.text),
         history: [],
       },
       { select_option: selectQuestion },
-      targetMode,
+      enabledMode,
+      mergedRequestOptions,
     );
 
+    if (response.result)
+      onUsage?.({
+        inputTokens: response.result.usage?.input_tokens ?? null,
+        outputTokens: response.result.usage?.output_tokens ?? null,
+        model: response.result.model,
+      });
     if (!response.result?.answers?.select_option) {
       return null;
     }
 
     const answer = (response.result.answers as Record<string, any>).select_option;
-    let bestCandidateIndex = 0;
-    let confidence = 0;
-    let scoreVal = 0;
-    const probs = answer.probabilities || {};
+    const expectedKeys = [...options.map((_, i) => String(i)), 'none'];
 
-    if (answer.type === 'choice') {
-      const chosenKey = String(answer.choice ?? '');
-      const parsedIdx = parseInt(chosenKey, 10);
-      if (!isNaN(parsedIdx) && parsedIdx >= 0 && parsedIdx < candidateOptions.length) {
-        bestCandidateIndex = parsedIdx;
-      } else {
-        const found = candidateOptions.findIndex(
-          (opt) => opt.text === chosenKey || opt.value === chosenKey,
-        );
-        if (found >= 0) bestCandidateIndex = found;
-      }
-      confidence =
-        typeof answer.confidence === 'number' ? answer.confidence : (probs[chosenKey] ?? 1.0);
-      scoreVal = bestCandidateIndex;
-    } else {
-      // type === 'score' or legacy rubric response
-      let maxProb = -1;
-      for (let i = 0; i < candidateOptions.length; i++) {
-        const p = probs[String(i)] ?? probs[i] ?? 0;
-        if (p > maxProb) {
-          maxProb = p;
-          bestCandidateIndex = i;
-        }
-      }
-      confidence = typeof answer.confidence === 'number' ? answer.confidence : maxProb;
-      scoreVal = typeof answer.score === 'number' ? answer.score : bestCandidateIndex;
+    if (!validateChoice(answer, expectedKeys)) {
+      jevModelManager.disableIfCurrent(modeToken, 'invalid_response');
+      return null;
     }
 
-    const bestOption = candidateOptions[bestCandidateIndex];
-    const originalIndex = options.indexOf(bestOption);
+    if (
+      typeof answer.confidence !== 'number' ||
+      !Number.isFinite(answer.confidence) ||
+      answer.confidence < 0 ||
+      answer.confidence > 1
+    ) {
+      jevModelManager.disableIfCurrent(modeToken, 'invalid_response');
+      return null;
+    }
+
+    if (answer.confidence < 0.85) return null;
+
+    if (answer.choice === 'none') {
+      return null;
+    }
+
+    const bestIndex = parseInt(answer.choice, 10);
+    if (isNaN(bestIndex) || bestIndex < 0 || bestIndex >= options.length) {
+      return null;
+    }
+
+    const sortedProbs = Object.values(answer.probabilities as Record<string, number>).sort(
+      (a, b) => b - a,
+    );
+    const topProb = sortedProbs[0] ?? 0;
+    const runnerUpProb = sortedProbs[1] ?? 0;
+    if (topProb - runnerUpProb < 0.2) {
+      return null;
+    }
+
+    const bestOption = options[bestIndex];
+
+    const inputTokens =
+      typeof response.result.usage?.input_tokens === 'number'
+        ? response.result.usage.input_tokens
+        : null;
+    const outputTokens =
+      typeof response.result.usage?.output_tokens === 'number'
+        ? response.result.usage.output_tokens
+        : null;
 
     return {
-      bestIndex: originalIndex >= 0 ? originalIndex : bestCandidateIndex,
+      bestIndex,
       bestOption,
-      confidence,
-      score: scoreVal,
+      confidence: answer.confidence,
+      score: bestIndex,
       usage: {
-        inputTokens: response.result.usage?.input_tokens || 0,
+        inputTokens,
+        outputTokens,
       },
     };
   }

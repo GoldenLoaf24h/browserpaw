@@ -1,161 +1,65 @@
-# Dual-Brain Semantic Micro-Loop Reference (`chrome_act_toward_goal`)
+# Semantic interaction and bounded goals
 
-This reference documents BrowserPaw's Fast/System 1 local autonomous loop powered by TypeSafe Jev with built-in heuristic fallback.
+BrowserPaw uses deterministic locators first. When an enabled decision model can resolve a supported semantic mismatch, the existing tool completes the operation without an extra agent call. TypeSafe Jev is the remote backend; the local decider is a separate model with separate capabilities and evaluation.
 
----
+## Ordinary interaction
 
-## 1. System Architecture
+- Unique exact targets execute without inference.
+- Non-exact text, labels and named roles may use semantic matching when deterministic lookup finds no target. For example, an email label can match an equivalent label in another language.
+- Exact selectors, explicit refs, screenshot coordinates, frame restrictions and actionability checks remain strict. A stale reference is not permission to guess another target.
+- The model selects from observed candidates; it cannot generate selectors, coordinates or input values. A response is applied only after target identity and action conditions are checked again.
+- Public locator/batch responses retain the semantic backend, model, attempts, latency, cache status and available token usage. Form pipelines report their bounded decisions separately. Unknown usage remains unknown.
+- Semantic matching uses at most 32 candidates and one bounded model request. Insufficient coverage, ambiguity or low confidence returns control to the caller. Refine the target instead of repeating an uncertain action.
+- Keep target descriptions separate from text to enter. Never put passwords or tokens in locator descriptions.
+- Form choice answers are matched locally against observed options. If an answer cannot be matched locally, return control instead of uploading the answer for semantic interpretation.
 
-```
-┌─ System 2: Macro Planner (Remote LLM) ──────────────────┐
-│  High-level goal decomposition, multi-page strategy,    │
-│  reasoning, creative text generation, macro supervision │
-└────────────────────────────┬────────────────────────────┘
-                             │  chrome_act_toward_goal { goal: "..." }
-                             ▼
-┌─ System 1: Semantic Micro-Loop (Local Native Server) ──┐
-│  Perceive compact DOM → Decide via Jev / Heuristic     │
-│  → Dispatch CDP action → Verify outcome                 │
-└────────────────────────────┬────────────────────────────┘
-                             │  Returns: status ("done" | "escalate" | ...)
-                             ▼
-```
+## Modes and failures
 
-- **Speed**: Local IPC execution avoids multi-turn remote round-trips for micro-steps.
-- **Cost**: Eliminates repetitive multi-turn remote LLM calls for deterministic micro-steps.
-- **Privacy**: Only a compact DOM budget (≤250 lines, sensitive password/file fields scrubbed) is evaluated.
+The Native service owns the effective `off`, `local` or `remote` mode. The extension displays that state. A call cannot override global off or switch to another backend.
 
----
+Native retains the user's requested backend separately from its effective state. Temporary network, timeout and rate-limit failures pause inference for 30 seconds. The next use can resume that same backend; there is no background inference or replay of the failed action. Authentication and configuration errors wait for correction; saving a corrected configuration restores the requested mode. A deliberate Off selection stays off across configuration changes and restarts. Ordinary deterministic tools remain available throughout.
 
-## 2. Parameter Contract
+No match, low confidence, changed page identity and user cancellation are valid outcomes, not reasons to disable a healthy model. A late response from an old configuration cannot disable or restore the replacement configuration.
 
-```json
-{
-  "goal": "Click on 'Electronics', then select 'Smartphones'",
-  "tabId": 101,
-  "maxSteps": 10,
-  "timeoutMs": 90000,
-  "confidenceThreshold": 0.55,
-  "textHint": "Optional text to type if not clearly quoted in goal",
-  "pauseBeforeKeywords": ["Post", "Submit", "Pay"],
-  "pressEnter": true,
-  "mode": "local"
-}
-```
+Remote inference sends relevant target descriptions and local page context to the configured endpoint. Keep secrets out of those descriptions. Local execution has a separate model and does not inherit remote accuracy or performance claims.
 
-- `goal`: Natural language goal or objective on the active page (required).
-- `tabId`: Target tab ID (optional, defaults to active tab).
-- `maxSteps`: Default 10. Maximum 60 in Jev mode; forced ≤5 in Heuristic mode.
-- `timeoutMs`: Default 90,000ms (90s); hard cap 300,000ms (5 minutes).
-- `confidenceThreshold`: Default 0.55. Actions below this threshold trigger instant escalation.
-- `textHint`: Explicit text to enter when typing if not clearly quoted in the goal string.
-- `pauseBeforeKeywords`: Array of keyword strings (e.g. `["Post", "Submit", "Pay"]`). Halts execution with `status: "paused"` and `pausedBeforeAction` before dispatching an action against matching elements.
-- `pressEnter`: Automatically press Enter key after typing actions (optional, boolean, default `false`).
-- `mode`: Jev engine execution mode (`"off"` | `"local"` | `"remote"`). Defaults to active mode configured in extension popup or environment.
+## Bounded goal execution
 
----
+`chrome_act_toward_goal` remains available for a short, explicit page goal. Use it when several dependent interactions are necessary; ordinary click/fill calls do not require it.
 
-## 3. Three-Tier Jev Architecture & Degradation Ladder
+- `goal`: the bounded objective.
+- `tabId`: the intended page; task-bound calls retain task ownership checks.
+- `maxSteps`: default 10, maximum 60.
+- `timeoutMs`: total deadline, default 90000, maximum 300000.
+- `textHint`: exact input supplied by the caller.
+- `pressEnter`: explicit submission intent; never authorize an unrelated external write.
+- `pauseBeforeKeywords`: additional stopping points.
+- `verification`: up to eight independent read-only observations with concrete JSON Schema assertions.
 
-### Engine Modes
+A verification contains `tool` (`chrome_read_dom` or GET `chrome_network_request`), `args`, optional JSON Pointer `resultPath`, and `expect`. Keep the assertion specific enough to establish the requested outcome. Network status, a trusted click or matching goal words alone do not prove business completion.
 
-1. **Tier 1 (Off)**:
-   - Jev semantic execution is disabled by the user in the extension popup.
-   - `chrome_act_toward_goal` is dynamically hidden from `tools/list` across all connected MCP sessions.
-   - Direct execution attempts are intercepted with an explicit user authorization requirement.
+After a confirmed step, BrowserPaw checks those assertions before asking the model for another action. Passing checks end the loop immediately. An unmet assertion permits progress; a failed read, cancellation or unknown result stops execution.
 
-2. **Tier 2 (Local)**:
-   - Zero-cloud-latency, privacy-first local decider service running on port 8009 (`http://127.0.0.1:8009/v1/systemone`).
-   - Powered by `Mapika/decider-2b` weights stored locally in `~/.browserpaw/models/decider-2b`.
-   - Features automatic hot-loading, persistent background process management, and CUDA GPU acceleration with CPU fallback.
-   - If local weights are missing or service cannot be reached, cleanly falls back to heuristic engine with `fallbackReason: "local_service_offline"`.
+Without independent verification, a model's completion judgment remains unverified. Inspect the returned evidence before declaring the task complete.
 
-3. **Tier 3 (Remote)**:
-   - Cloud TypeSafe Jev System One model requiring `TYPESAFE_API_KEY` (or `JEV_API_KEY`).
-   - Supports custom `baseUrl` and `modelId` persisted in `~/.browserpaw/jev-remote.json`.
-   - On 401 unauthenticated, latches key invalidation for 5 minutes and falls back to heuristic engine.
+Guarded goal actions supply the next complete page observation. The following step consumes it once; target guards still run before dispatch, and final completion uses a separate read-only check.
 
-### Heuristic Rule Engine & Boundaries
+The text decision state excludes current field values and caller-provided input. Existing editor content is withheld from control names. When a populated editable control could echo private content into page text, the micro-loop omits that free text from model state and relies on independent completion checks. A model-selected target without an observation guard is refused, including observations from older extensions.
 
-- Zero-dependency string tokenization, role weighting, and bigram matching.
-- Bounded execution: `maxSteps` is strictly capped at <= 5 when running heuristic evaluation.
-- When Jev is disabled in settings (off mode) or misconfigured, calls return an actionable configuration error rather than executing unconfigured autonomous actions.
+## Stop and recover
 
-### Macro Escalation to Caller LLM
+`unknown` means an action may already have happened: stop and inspect fresh evidence. Do not repeat the action or restart the entire goal. Cancellation stops future work and does not roll back dispatched actions.
 
-- When confidence drops below threshold or ambiguity/stuck state is reached, immediately returns control to the primary LLM with structured diagnostic context and fresh indexed candidate elements (`currentElements`).
+For `blocked`, `paused`, `escalate`, `stuck`, `timeout` or `max_steps`, inspect the reason, original result and receipts. Resolve the missing evidence or permissions before continuing. Navigation still requires the task's normal document-identity and resume procedure.
 
----
+Semantic assistance does not authorize payments, publishing, deletion or other external writes. Return those decisions to the calling agent under the current task's authorization.
 
-## 4. Response Contract
+## Skills and measured costs
 
-```json
-{
-  "status": "done",
-  "engine": "jev",
-  "engineSwitched": false,
-  "fallbackReason": null,
-  "summary": "Clicked 'Electronics' and selected 'Smartphones'",
-  "steps": [
-    {
-      "action": "click",
-      "target": { "index": 4, "text": "Electronics", "role": "button" },
-      "confidence": 0.92,
-      "outcome": { "mutated": true, "urlChanged": false, "visualDiff": 0.12 }
-    }
-  ],
-  "finalPage": { "url": "https://example.com/shop", "title": "Shop" },
-  "currentElements": ["[1] input: Search", "[2] button: Cart (0)", "[4] button: Electronics"],
-  "pausedBeforeAction": null,
-  "jevUsage": { "calls": 2, "inputTokens": 840, "estCostUsd": 0.000035 }
-}
-```
+Skill discovery first filters active skills by domain and deterministic intent evidence. When enabled, semantic ranking may help distinguish remaining candidates; a recommendation does not run or activate a skill. Explicit skill IDs continue through the existing verified skill service.
 
-### Possible Statuses
+Learned skills remain in `$BROWSERPAW_HOME/skills` (default `~/.browserpaw/skills`). Independent validation and version checks remain required. Do not save temporary refs, tab/document IDs, coordinates or credentials in reusable skills.
 
-- `"done"`: Goal successfully achieved (`goal_done >= 0.85` or heuristic coverage $\ge 0.80$).
-- `"paused"`: Safety breakpoint hit before executing an action matching `pauseBeforeKeywords`. Caller inspects `pausedBeforeAction` and `currentElements` without action execution.
-- `"escalate"`: Low confidence, destructive action detected, or ambiguous decision. Caller LLM should resume with standard Tier 0 tools.
-- `"stuck"`: 3 consecutive steps without DOM mutation, URL change, or visual change.
-- `"blocked"`: Anti-bot challenge or captcha detected.
-- `"max_steps"`: Reached `maxSteps` limit before completing goal.
-- `"timeout"`: Execution time exceeded `timeoutMs`.
+Read actual backend/model, request latency and token usage from diagnostics. Candidate limits and confidence thresholds are execution policy, not a guarantee of correctness. Evaluate relevant cases before making accuracy or speed claims.
 
----
-
-## 5. Escalation Guard Rules
-
-The micro-loop evaluates guard conditions in strict priority order:
-
-1. **Safety Breakpoint Guard (`pauseBeforeKeywords`)**: Evaluated _before_ destructive guard. If the proposed element matches any keyword in `pauseBeforeKeywords`, execution immediately halts with `status: "paused"`, populating `pausedBeforeAction` and fresh `currentElements` while leaving page state untouched.
-2. **Low Confidence**: `action confidence < 0.55` or `target confidence < 0.45`.
-3. **Destructive Guard**: Detects actions matching protected keywords (`pay`, `delete`, `purchase`, `buy`, `submit`, `confirm`) or Jev `destructive >= 0.50`. The keyword match runs against the element's **human-visible text/label only** — never its `id`, `class`, or `href`. This prevents kebab-case false positives (e.g. the Reddit "Add tags" button with `id="#reddit-post-flair-button"` is NOT treated as destructive; only a button whose visible text actually says "Post"/"Submit" is).
-4. **Stuck Circuit-Breaker**: 3 consecutive unchanged steps ($mutated=false$, $urlChanged=false$, $visualDiff \le 0.01$).
-5. **Ambiguous Input**: Typing required but text payload cannot be determined.
-
----
-
-## 6. Macro Supervisor Recovery Protocol
-
-When `chrome_act_toward_goal` yields with `status === "paused"`, `"escalate"`, `"stuck"`, or `"max_steps"`, the Macro Planner (System 2) resumes control using the following protocol:
-
-1. **Handling Safety Breakpoint Pauses (`status === "paused"`)**:
-   - Inspect `pausedBeforeAction` (e.g. `{ action: "click", target: { index: 12, text: "Post" } }`) and review draft content in `currentElements`.
-   - If draft/form state is verified and ready to commit, dispatch `chrome_interact_index { index: pausedBeforeAction.target.index }` (or prompt human user for final approval).
-   - Zero DOM re-read required: target indices are fresh and guaranteed valid.
-
-2. **Zero-Read Element Re-Use**:
-   - The escalation response includes `currentElements`, an array of 1-based indexed element strings (e.g. `"[4] button: 'Confirm Purchase'"`).
-   - The Macro Planner can select the target index directly from this array without executing an extra `chrome_read_dom` call.
-
-3. **Handling Sensitive / Destructive Actions**:
-   - If escalated due to `destructive >= 0.50` or protected keywords (`pay`, `delete`, `purchase`, `buy`, `submit`, `confirm`), the Macro Planner evaluates user intent and authorization before dispatching `chrome_interact_index { index: N }`.
-
-4. **Fallback to Tier 0 Primitives**:
-   - For single clicks or selections: `chrome_interact_index { index: N, includeDelta: true }`.
-   - For single text entries: `chrome_fill_index { index: N, text: "...", pressEnter: true }`.
-   - For media injection: `chrome_insert_media { index: N, filePath: "..." }`.
-   - For multi-step sequences: `chrome_batch_actions { actions: [...] }` (_see `batch-pipeline.md`_).
-
-5. **Handling CAPTCHA / Bot Blocks**:
-   - When `status === "blocked"`, immediately invoke `chrome_request_human_intervention { reason: "..." }` to yield control to the human user.
+The current remote evaluation is not sufficient to qualify stable Chinese semantic automation: an independent Jev 1.14.0 holdout safely refused two clear targets below the execution threshold. Do not lower thresholds or treat these refusals as completed work. Local-model capabilities require their own evaluation.

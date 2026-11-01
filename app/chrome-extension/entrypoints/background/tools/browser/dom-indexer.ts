@@ -35,10 +35,535 @@ export function wrapElement(el: Element): any {
 }
 
 export function getIsolatedIndexMap(): Map<number, any> {
-  if (!(globalThis as any)[ISOLATED_INDEX_MAP_KEY]) {
-    (globalThis as any)[ISOLATED_INDEX_MAP_KEY] = new Map<number, any>();
+  const g = globalThis as any;
+  if (!g[ISOLATED_INDEX_MAP_KEY]) {
+    g[ISOLATED_INDEX_MAP_KEY] = new Map<number, any>();
   }
-  return (globalThis as any)[ISOLATED_INDEX_MAP_KEY];
+  return g[ISOLATED_INDEX_MAP_KEY];
+}
+
+export const INDEX_NAMESPACE_SIZE = 2 ** 24;
+const INDEX_IDENTITY_KEY = Symbol.for('__browser_use_index_identity__');
+
+function getIndexState() {
+  const g = globalThis as any;
+  const base = g[Symbol.for('__browser_use_index_namespace__')] ?? 0;
+  if (!g[INDEX_IDENTITY_KEY]) {
+    const ids = new WeakMap<Element, Map<string, number>>();
+    let next = base + 1;
+    const map = getIsolatedIndexMap();
+    for (const [index, entry] of map) {
+      const node = derefElement(entry);
+      if (node) ids.set(node, new Map([['', index]]));
+      next = Math.max(next, index + 1);
+    }
+    g[INDEX_IDENTITY_KEY] = { ids, next, base };
+  }
+  return g[INDEX_IDENTITY_KEY] as {
+    ids: WeakMap<Element, Map<string, number>>;
+    next: number;
+    base: number;
+  };
+}
+
+export function inPageSetIndexNamespace(base: number): boolean {
+  if (
+    !Number.isSafeInteger(base) ||
+    base < INDEX_NAMESPACE_SIZE ||
+    base % INDEX_NAMESPACE_SIZE !== 0 ||
+    base + INDEX_NAMESPACE_SIZE > Number.MAX_SAFE_INTEGER
+  ) {
+    return false;
+  }
+  const g = globalThis as any;
+  const key = Symbol.for('__browser_use_index_namespace__');
+  if (g[key] !== undefined) return true;
+  // Invalidate references from an older engine before installing the document namespace.
+  getIsolatedIndexMap().clear();
+  delete g[INDEX_IDENTITY_KEY];
+  for (const cache of [g.__pawFast, g.__clawFast]) {
+    cache?.actionElements?.clear();
+  }
+  g[key] = base;
+  return true;
+}
+
+export function indexElement(el: Element, key = '', minimum = 1): number {
+  const map = getIsolatedIndexMap();
+  const state = getIndexState();
+  let ids = state.ids.get(el);
+  if (!ids) {
+    ids = new Map();
+    state.ids.set(el, ids);
+  }
+  let index = ids.get(key);
+  if (index === undefined) {
+    state.next = Math.max(state.next, minimum);
+    while (map.has(state.next)) state.next++;
+    if (state.next >= state.base + INDEX_NAMESPACE_SIZE) {
+      throw new Error('DOM index namespace exhausted; refusing to reuse an element index');
+    }
+    index = state.next++;
+    ids.set(key, index);
+  }
+  map.set(index, wrapElement(el));
+  return index;
+}
+
+export interface FormObservationMetadata {
+  label?: string;
+  description?: string;
+  errormessage?: string;
+  invalid: boolean;
+  invalidRaw?: string;
+  valid?: boolean;
+  required?: boolean;
+  invalidReason?: string;
+  validationMessage?: string;
+}
+
+export function isAriaInvalidToken(value: string | null | undefined): boolean {
+  const token = (value || '').trim().toLowerCase();
+  return token !== '' && token !== 'false';
+}
+
+export function readFormObservationMetadata(el: Element): FormObservationMetadata | null {
+  const tag = el.tagName.toLowerCase();
+  const role = (el.getAttribute('role') || '').trim().toLowerCase();
+  const editable =
+    (el as HTMLElement).isContentEditable ||
+    el.getAttribute('contenteditable') === 'true' ||
+    el.getAttribute('contenteditable') === '';
+  const nativeControl = tag === 'input' || tag === 'textarea' || tag === 'select';
+  const formRole = ['textbox', 'combobox', 'searchbox', 'spinbutton'].includes(role);
+  if (!nativeControl && !editable && !formRole) return null;
+
+  const rawInvalid = el.getAttribute('aria-invalid');
+  const ariaInvalid = isAriaInvalidToken(rawInvalid);
+  const validity = nativeControl ? (el as HTMLInputElement).validity : undefined;
+  const invalid = ariaInvalid || validity?.valid === false;
+  const invalidReason = (
+    [
+      'valueMissing',
+      'typeMismatch',
+      'patternMismatch',
+      'tooShort',
+      'tooLong',
+      'rangeUnderflow',
+      'rangeOverflow',
+      'stepMismatch',
+      'badInput',
+      'customError',
+    ] as const
+  ).find((reason) => validity?.[reason]);
+  const validationMessage = nativeControl ? (el as HTMLInputElement).validationMessage : '';
+  const label = getLocatorAccessibleName(el).replace(/\s+/g, ' ').trim().slice(0, 120);
+  const description = getAriaReferenceText(el, 'aria-describedby', 120);
+  const errormessage = ariaInvalid ? getAriaReferenceText(el, 'aria-errormessage', 120) : '';
+
+  return {
+    invalid,
+    ...(validity ? { valid: !invalid } : {}),
+    ...(el.hasAttribute('required') || el.getAttribute('aria-required') === 'true'
+      ? { required: true }
+      : {}),
+    ...(invalidReason || ariaInvalid ? { invalidReason: invalidReason || 'aria-invalid' } : {}),
+    ...(validationMessage ? { validationMessage: String(validationMessage).slice(0, 120) } : {}),
+    ...(rawInvalid?.trim() ? { invalidRaw: rawInvalid.trim() } : {}),
+    ...(label ? { label } : {}),
+    ...(description ? { description } : {}),
+    ...(errormessage ? { errormessage } : {}),
+  };
+}
+
+export type TableObservationRole =
+  'table' | 'grid' | 'row' | 'header' | 'cell' | 'gridcell' | 'columnheader' | 'rowheader';
+
+const TABLE_OBSERVATION_ROLES = new Set<TableObservationRole>([
+  'table',
+  'grid',
+  'row',
+  'cell',
+  'gridcell',
+  'columnheader',
+  'rowheader',
+]);
+
+export function getTableObservationRole(el: Element): TableObservationRole | null {
+  const explicit = (el.getAttribute('role') || '').trim().toLowerCase();
+  if (explicit) {
+    return TABLE_OBSERVATION_ROLES.has(explicit as TableObservationRole)
+      ? (explicit as TableObservationRole)
+      : null;
+  }
+
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'table') return 'table';
+  if (tag === 'tr' || tag === 'td' || tag === 'th') {
+    const nativeTable = el.closest('table');
+    const tableRole = (nativeTable?.getAttribute('role') || '').trim().toLowerCase();
+    if (tableRole === 'none' || tableRole === 'presentation') return null;
+  }
+  if (tag === 'tr') return 'row';
+  if (tag === 'td') return 'cell';
+  if (tag === 'th') {
+    const scope = (el.getAttribute('scope') || '').toLowerCase();
+    if (scope === 'row' || scope === 'rowgroup') return 'rowheader';
+    if (scope === 'col' || scope === 'colgroup') return 'columnheader';
+    return 'header';
+  }
+  return null;
+}
+
+export interface TableObservation {
+  role: TableObservationRole;
+  text?: string;
+  attributes: Record<string, string>;
+}
+
+function positiveAriaIndex(value: string | null): number | undefined {
+  if (!value || !/^\d+$/.test(value.trim())) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
+
+const TABLE_CELL_SELECTOR =
+  'th,td,[role="columnheader"],[role="rowheader"],[role="cell"],[role="gridcell"]';
+
+export interface TableObservationMetadata {
+  hasComplexSpans: boolean;
+  cells: Element[];
+  rowPositions: WeakMap<Element, number>;
+  nativeColumns: WeakMap<Element, number>;
+  rowHeaders: WeakMap<Element, Element>;
+  columnHeaders: WeakMap<Element, Element>;
+  headerTexts: WeakMap<Element, string>;
+}
+
+export type TableObservationCache = WeakMap<Element, TableObservationMetadata>;
+
+export function createTableObservationCache(): TableObservationCache {
+  return new WeakMap();
+}
+
+function hasComplexSpan(cell: Element): boolean {
+  for (const attr of ['rowspan', 'colspan', 'aria-rowspan', 'aria-colspan']) {
+    const raw = cell.getAttribute(attr);
+    if (raw === null) continue;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value !== 1) return true;
+  }
+  return false;
+}
+
+function nearestTableContainer(el: Element): Element | null {
+  return el.closest('table,[role="table"],[role="grid"]');
+}
+
+export function isPresentationalNativeTable(table: Element): boolean {
+  if (table.tagName.toLowerCase() !== 'table') return false;
+  const role = (table.getAttribute('role') || '').trim().toLowerCase();
+  return role === 'none' || role === 'presentation';
+}
+
+function buildTableObservationMetadata(
+  table: Element,
+  nativeTable: boolean,
+): TableObservationMetadata {
+  const metadata: TableObservationMetadata = {
+    hasComplexSpans: false,
+    cells: [],
+    rowPositions: new WeakMap(),
+    nativeColumns: new WeakMap(),
+    rowHeaders: new WeakMap(),
+    columnHeaders: new WeakMap(),
+    headerTexts: new WeakMap(),
+  };
+
+  if (nativeTable) {
+    const activeColumnHeaders = new Map<number, Element>();
+    const rows = Array.from((table as HTMLTableElement).rows);
+    rows.forEach((row, rowPosition) => {
+      metadata.rowPositions.set(row, rowPosition + 1);
+      const cells = Array.from(row.cells);
+      metadata.cells.push(...cells);
+      cells.forEach((cell, columnPosition) => {
+        metadata.nativeColumns.set(cell, columnPosition + 1);
+        if (hasComplexSpan(cell)) metadata.hasComplexSpans = true;
+        const role = getTableObservationRole(cell);
+        if (role === 'rowheader' && !metadata.rowHeaders.has(row)) {
+          metadata.rowHeaders.set(row, cell);
+        }
+        if (role === 'columnheader') activeColumnHeaders.set(columnPosition, cell);
+      });
+      cells.forEach((cell, columnPosition) => {
+        if (getTableObservationRole(cell) !== 'cell') return;
+        const header = activeColumnHeaders.get(columnPosition);
+        if (header) metadata.columnHeaders.set(cell, header);
+      });
+    });
+    return metadata;
+  }
+
+  metadata.cells = Array.from(table.querySelectorAll(TABLE_CELL_SELECTOR)).filter(
+    (cell) => nearestTableContainer(cell) === table,
+  );
+  metadata.hasComplexSpans = metadata.cells.some(hasComplexSpan);
+  return metadata;
+}
+
+function getTableObservationMetadata(
+  table: Element,
+  nativeTable: boolean,
+  cache?: TableObservationCache,
+): TableObservationMetadata {
+  const cached = cache?.get(table);
+  if (cached) return cached;
+  const metadata = buildTableObservationMetadata(table, nativeTable);
+  cache?.set(table, metadata);
+  return metadata;
+}
+
+function getTableHeaderText(metadata: TableObservationMetadata, header?: Element): string {
+  if (!header) return '';
+  const cached = metadata.headerTexts.get(header);
+  if (cached !== undefined) return cached;
+  const text = getVisibleReferenceText(header, 120);
+  metadata.headerTexts.set(header, text);
+  return text;
+}
+
+function tableCellText(el: Element, maxTextLength: number): string {
+  return extractCleanElementText(el, maxTextLength).replace(/\s+/g, ' ').trim();
+}
+
+function resolveHeaderReferences(
+  el: Element,
+  table: Element,
+): {
+  elements: Element[];
+  texts: string[];
+} {
+  const ids = (el.getAttribute('headers') || '').split(/\s+/).filter(Boolean);
+  const elements: Element[] = [];
+  const texts: string[] = [];
+  for (const id of ids) {
+    const ref = getSameRootReference(el, id);
+    const role = ref ? getTableObservationRole(ref) : null;
+    if (!ref || !role || nearestTableContainer(ref) !== table) continue;
+    if (elements.includes(ref)) continue;
+    elements.push(ref);
+    const text = getVisibleReferenceText(ref, 120);
+    if (text) texts.push(text);
+  }
+  return { elements, texts };
+}
+
+export function buildTableObservation(
+  el: Element,
+  maxTextLength = 120,
+  cache?: TableObservationCache,
+): TableObservation | null {
+  const role = getTableObservationRole(el);
+  if (!role) return null;
+
+  const table =
+    role === 'table' || role === 'grid' ? el : el.closest('table,[role="table"],[role="grid"]');
+  if (!table || isPresentationalNativeTable(table)) return null;
+
+  const nativeTable = table.tagName.toLowerCase() === 'table';
+  const metadata = getTableObservationMetadata(table, nativeTable, cache);
+  const rowEl = role === 'row' ? el : el.closest('tr,[role="row"]');
+  const tableIndex = indexElement(table);
+  const rowIndex = rowEl ? indexElement(rowEl) : undefined;
+  const attributes: Record<string, string> = {};
+
+  for (const attr of [
+    'scope',
+    'headers',
+    'aria-rowindex',
+    'aria-colindex',
+    'aria-rowcount',
+    'aria-colcount',
+    'aria-rowspan',
+    'aria-colspan',
+    'aria-labelledby',
+    'aria-sort',
+  ]) {
+    const value = el.getAttribute(attr);
+    if (value !== null && value.trim() !== '') attributes[attr] = value.trim().slice(0, 120);
+  }
+  if (el.hasAttribute('rowspan')) attributes.rowspan = el.getAttribute('rowspan') || '1';
+  if (el.hasAttribute('colspan')) attributes.colspan = el.getAttribute('colspan') || '1';
+  if (!attributes.rowspan && attributes['aria-rowspan']) {
+    attributes.rowspan = attributes['aria-rowspan'];
+  }
+  if (!attributes.colspan && attributes['aria-colspan']) {
+    attributes.colspan = attributes['aria-colspan'];
+  }
+
+  const explicitRole = (el.getAttribute('role') || '').trim().toLowerCase();
+  if (role === 'header' || role === 'rowheader' || role === 'columnheader') {
+    if (explicitRole) {
+      attributes.headerScopeSource = 'aria-role';
+    } else if (el.tagName.toLowerCase() === 'th') {
+      const scope = (el.getAttribute('scope') || '').trim().toLowerCase();
+      attributes.headerScopeSource = !scope
+        ? 'implicit-html'
+        : ['row', 'rowgroup', 'col', 'colgroup'].includes(scope)
+          ? 'scope'
+          : 'scope-invalid';
+    }
+    if (role === 'header') attributes.headerDirection = 'unknown';
+  }
+
+  if (role !== 'table' && role !== 'grid') attributes.parentTable = String(tableIndex);
+  if (role !== 'table' && role !== 'grid' && role !== 'row' && rowIndex !== undefined) {
+    attributes.parentRow = String(rowIndex);
+  }
+
+  const explicitRow = positiveAriaIndex(el.getAttribute('aria-rowindex'));
+  const rowElementIndex = rowEl
+    ? positiveAriaIndex(rowEl.getAttribute('aria-rowindex'))
+    : undefined;
+  const nativeRowIndex = nativeTable && rowEl ? metadata.rowPositions.get(rowEl) : undefined;
+  if (role !== 'table' && role !== 'grid') {
+    const row = explicitRow ?? rowElementIndex ?? nativeRowIndex;
+    attributes.row = row === undefined ? 'unknown' : String(row);
+    attributes.rowSource =
+      explicitRow || rowElementIndex ? 'aria' : nativeRowIndex ? 'dom-local' : 'unknown';
+  }
+
+  const explicitColumn = positiveAriaIndex(el.getAttribute('aria-colindex'));
+  const tableHasSpans = metadata.hasComplexSpans;
+  const nativeColumn = nativeTable && !tableHasSpans ? metadata.nativeColumns.get(el) : undefined;
+  if (role !== 'table' && role !== 'grid' && role !== 'row') {
+    const column = explicitColumn ?? nativeColumn;
+    attributes.column = column === undefined ? 'unknown' : String(column);
+    attributes.columnSource = explicitColumn ? 'aria' : nativeColumn ? 'dom-local' : 'unknown';
+  }
+
+  if ((role === 'table' || role === 'grid') && nativeTable && metadata.cells.length > 0) {
+    attributes.tableSemantics = 'html';
+  } else if ((role === 'table' || role === 'grid') && !nativeTable) {
+    const hasMissingPosition = metadata.cells.some((cell) => {
+      const cellRole = getTableObservationRole(cell);
+      if (
+        !cellRole ||
+        cellRole === 'header' ||
+        cellRole === 'columnheader' ||
+        cellRole === 'rowheader'
+      ) {
+        return !positiveAriaIndex(cell.getAttribute('aria-colindex'));
+      }
+      return (
+        !positiveAriaIndex(cell.getAttribute('aria-colindex')) ||
+        (!positiveAriaIndex(cell.getAttribute('aria-rowindex')) &&
+          !positiveAriaIndex(cell.closest('[role="row"]')?.getAttribute('aria-rowindex') || null))
+      );
+    });
+    attributes.tableSemantics = hasMissingPosition ? 'aria-partial' : 'aria-explicit';
+    if (hasMissingPosition) {
+      attributes.tableNotice =
+        'ARIA table/grid is missing aria-rowindex or aria-colindex; unknown positions are not inferred';
+    }
+  }
+
+  if (role === 'table' || role === 'grid') {
+    const labelText = (() => {
+      const labelledBy = (el.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => getVisibleReferenceText(getSameRootReference(el, id), 120))
+        .filter(Boolean)
+        .join(' ');
+      if (labelledBy) return labelledBy;
+      const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+      if (ariaLabel) return ariaLabel;
+      const caption = nativeTable ? (table as HTMLTableElement).caption?.textContent || '' : '';
+      return caption.replace(/\s+/g, ' ').trim();
+    })();
+    return {
+      role,
+      ...(labelText ? { text: labelText.slice(0, maxTextLength) } : {}),
+      attributes,
+    };
+  }
+
+  if (role === 'row') return { role, attributes };
+
+  const text = tableCellText(el, maxTextLength);
+  if (role === 'header' || role === 'columnheader' || role === 'rowheader') {
+    return {
+      role,
+      ...(text ? { text } : {}),
+      attributes,
+    };
+  }
+  const headerRefs = resolveHeaderReferences(el, table);
+  if (headerRefs.elements.length > 0) {
+    attributes.headerRelation = 'explicit';
+    if (headerRefs.texts.length > 0) attributes.headerText = headerRefs.texts.join(' ');
+    attributes.headerRefs = headerRefs.elements.map((header) => indexElement(header)).join(' ');
+    const rowHeaderTexts = headerRefs.elements
+      .filter((header) => getTableObservationRole(header) === 'rowheader')
+      .map((header) => getVisibleReferenceText(header, 120))
+      .filter(Boolean);
+    const columnHeaderTexts = headerRefs.elements
+      .filter((header) => getTableObservationRole(header) === 'columnheader')
+      .map((header) => getVisibleReferenceText(header, 120))
+      .filter(Boolean);
+    if (rowHeaderTexts.length > 0) attributes.rowHeader = rowHeaderTexts.join(' ');
+    if (columnHeaderTexts.length > 0) attributes.columnHeader = columnHeaderTexts.join(' ');
+  } else if (nativeTable && !tableHasSpans && role === 'cell') {
+    const rowHeader = getTableHeaderText(
+      metadata,
+      rowEl ? metadata.rowHeaders.get(rowEl) : undefined,
+    );
+    const columnHeader = getTableHeaderText(metadata, metadata.columnHeaders.get(el));
+    if (rowHeader) attributes.rowHeader = rowHeader;
+    if (columnHeader) attributes.columnHeader = columnHeader;
+    attributes.headerRelation = rowHeader || columnHeader ? 'derived' : 'unknown';
+  } else {
+    attributes.headerRelation = 'unknown';
+  }
+
+  return {
+    role,
+    ...(text ? { text } : {}),
+    attributes,
+  };
+}
+
+export function hasDirectTableAction(el: Element): boolean {
+  if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown')) return true;
+  if (typeof (el as any).onclick === 'function') return true;
+  if (
+    (el as HTMLElement).isContentEditable ||
+    el.getAttribute('contenteditable') === 'true' ||
+    el.getAttribute('contenteditable') === ''
+  ) {
+    return true;
+  }
+  try {
+    const getEventListeners = (globalThis as any).getEventListeners;
+    if (typeof getEventListeners !== 'function') return false;
+    const listeners = getEventListeners(el);
+    return ['click', 'mousedown', 'pointerdown'].some(
+      (type) => Array.isArray(listeners?.[type]) && listeners[type].length > 0,
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function pruneDetachedIndices(): void {
+  for (const [index, entry] of getIsolatedIndexMap()) {
+    const el = derefElement(entry);
+    if (!el?.isConnected || el.ownerDocument !== document) {
+      getIsolatedIndexMap().delete(index);
+    }
+  }
 }
 
 /**
@@ -88,7 +613,7 @@ export function composedChildren(element: Element): Element[] {
     const assigned = (element as HTMLSlotElement).assignedElements?.({ flatten: true }) || [];
     if (assigned.length > 0) return assigned;
   }
-  const container = (element as HTMLElement).shadowRoot || element;
+  const container = getShadowRoot(element) || element;
   return Array.from(container.children || []) as Element[];
 }
 
@@ -104,6 +629,22 @@ export function composedContains(ancestor: Node | null, descendant: Node | null)
     cur = composedParent(cur);
   }
   return false;
+}
+
+export function observationFocusScope(active: Element | null): Element | null {
+  const form = (active as HTMLInputElement | null)?.form;
+  if (form) return form;
+  for (let element = active; element; element = composedParent(element)) {
+    if (element.matches('form,dialog,[role="form"],[role="dialog"],article,li,tr,[role="row"]'))
+      return element;
+  }
+  return null;
+}
+
+export function withinObservationFocusScope(element: Element, scope: Element | null): boolean {
+  return (
+    !!scope && ((element as HTMLInputElement).form === scope || composedContains(scope, element))
+  );
 }
 
 export function hitElementAtPoint(target: Element, x: number, y: number): Element | null {
@@ -231,6 +772,19 @@ export function getShadowRoot(node: Node | null | undefined): ShadowRoot | null 
     }
   } catch {}
   return (node as Element).shadowRoot || null;
+}
+
+export function getDeepActiveElement(): Element | null {
+  let active = typeof document !== 'undefined' ? document.activeElement : null;
+  const seen = new Set<Element>();
+  while (active && !seen.has(active)) {
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) break;
+    seen.add(active);
+    const inner = getShadowRoot(active)?.activeElement;
+    if (!inner || inner === active) break;
+    active = inner;
+  }
+  return active;
 }
 
 /**
@@ -585,9 +1139,7 @@ export async function inPageScrollUntilFound(
       }
 
       if (targetIndex === undefined) {
-        const maxIdx = isolatedMap.size > 0 ? Math.max(...isolatedMap.keys()) : 0;
-        targetIndex = maxIdx + 1;
-        isolatedMap.set(targetIndex, wrapElement(hit));
+        targetIndex = indexElement(hit);
       }
 
       const rect = hit.getBoundingClientRect();
@@ -890,28 +1442,6 @@ export function querySelectorDeep(
   return all.length > 0 ? all[0] : null;
 }
 
-/**
- * Helper to find an element by index using pure in-memory WeakRef mapping without DOM attribute pollution.
- */
-/**
- * Lightweight metadata fingerprint for self-healing DOM node recovery across React/Vue re-renders.
- */
-const INDEX_FINGERPRINT_KEY = Symbol.for('__browser_use_index_fingerprint_map__');
-
-export interface ElementFingerprint {
-  tag: string;
-  id?: string;
-  name?: string;
-  type?: string;
-  placeholder?: string;
-  testId?: string;
-  ariaLabel?: string;
-  role?: string;
-  text?: string;
-  inShadowDom?: boolean;
-  scopeHash?: string;
-}
-
 export function computeScopeHash(text: string): string {
   if (!text) return '';
   let hash = 5381;
@@ -922,202 +1452,58 @@ export function computeScopeHash(text: string): string {
   return (hash >>> 0).toString(16);
 }
 
-export function getIndexFingerprintMap(): Map<number, ElementFingerprint> {
-  const g = globalThis as any;
-  if (!g[INDEX_FINGERPRINT_KEY]) {
-    g[INDEX_FINGERPRINT_KEY] = new Map<number, ElementFingerprint>();
-  }
-  return g[INDEX_FINGERPRINT_KEY];
+export interface ParsedIndex {
+  numericIndex: number;
+  isExplicitFast: boolean;
+  rawString?: string;
 }
 
-function selfHealInShadowRoots(root: Node, fp: ElementFingerprint): Element | null {
-  if (!root) return null;
-  const shadow = getShadowRoot(root);
-  if (shadow) {
-    if (fp.id) {
-      const escapeId =
-        typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-          ? CSS.escape(fp.id)
-          : fp.id.replace(/([ #;?%&,.+*~':"!^$[\]()=>|/@])/g, '\\$1');
-      const found = shadow.querySelector('#' + escapeId);
-      if (found && found.tagName.toLowerCase() === fp.tag) return found;
+export function parseElementIndex(refOrIndex: unknown): ParsedIndex | null {
+  if (typeof refOrIndex === 'number') {
+    if (Number.isSafeInteger(refOrIndex) && refOrIndex > 0) {
+      return { numericIndex: refOrIndex, isExplicitFast: false };
     }
-    if (fp.ariaLabel) {
-      const found = shadow.querySelector(
-        fp.tag + '[aria-label=' + JSON.stringify(fp.ariaLabel) + ']',
-      );
-      if (found) return found;
-    }
-    if (fp.placeholder) {
-      const found = shadow.querySelector(
-        fp.tag + '[placeholder=' + JSON.stringify(fp.placeholder) + ']',
-      );
-      if (found) return found;
-    }
-    if (fp.testId) {
-      const found = shadow.querySelector('[data-testid=' + JSON.stringify(fp.testId) + ']');
-      if (found && found.tagName.toLowerCase() === fp.tag) return found;
-    }
-    if (fp.name) {
-      const found = shadow.querySelector(fp.tag + '[name=' + JSON.stringify(fp.name) + ']');
-      if (found) return found;
-    }
-    for (const child of Array.from(shadow.children)) {
-      const res = selfHealInShadowRoots(child, fp);
-      if (res) return res;
-    }
+    return null;
   }
-  if ('children' in root && (root as Element).children) {
-    for (const child of Array.from((root as Element).children)) {
-      const res = selfHealInShadowRoots(child, fp);
-      if (res) return res;
+  if (typeof refOrIndex === 'string') {
+    const trimmed = refOrIndex.trim();
+    if (!trimmed) return null;
+    const fastMatch = trimmed.match(/^e(\d+)$/i);
+    if (fastMatch) {
+      const num = parseInt(fastMatch[1], 10);
+      if (Number.isSafeInteger(num) && num > 0) {
+        return { numericIndex: num, isExplicitFast: true, rawString: trimmed };
+      }
+      return null;
+    }
+    const refMatch = trimmed.match(/^ref_(\d+)$/i);
+    if (refMatch) {
+      const num = parseInt(refMatch[1], 10);
+      if (Number.isSafeInteger(num) && num > 0) {
+        return { numericIndex: num, isExplicitFast: false, rawString: trimmed };
+      }
+      return null;
+    }
+    const numMatch = trimmed.match(/^(\d+)$/);
+    if (numMatch) {
+      const num = parseInt(numMatch[1], 10);
+      if (Number.isSafeInteger(num) && num > 0) {
+        return { numericIndex: num, isExplicitFast: false, rawString: trimmed };
+      }
+      return null;
     }
   }
   return null;
-}
-
-function selfHealFindElement(fp: ElementFingerprint): Element | null {
-  if (typeof document === 'undefined') return null;
-  const searchRoot = document.body || document.documentElement || null;
-  if (fp.inShadowDom && searchRoot) {
-    const inShadow = selfHealInShadowRoots(searchRoot, fp);
-    if (inShadow) return inShadow;
-  }
-  if (fp.id) {
-    const byId = document.getElementById(fp.id);
-    if (byId && byId.tagName.toLowerCase() === fp.tag) return byId;
-  }
-  if (fp.testId) {
-    const byTestId = document.querySelector('[data-testid=' + JSON.stringify(fp.testId) + ']');
-    if (byTestId && byTestId.tagName.toLowerCase() === fp.tag) return byTestId;
-  }
-  if (fp.ariaLabel) {
-    const byAria = document.querySelector(
-      fp.tag + '[aria-label=' + JSON.stringify(fp.ariaLabel) + ']',
-    );
-    if (byAria) return byAria;
-  }
-  if (fp.name) {
-    const byName = document.querySelector(fp.tag + '[name=' + JSON.stringify(fp.name) + ']');
-    if (byName) return byName;
-  }
-  if (fp.placeholder) {
-    const byPl = document.querySelector(
-      fp.tag + '[placeholder=' + JSON.stringify(fp.placeholder) + ']',
-    );
-    if (byPl) return byPl;
-  }
-  if (fp.role) {
-    if (fp.name) {
-      const byRoleName = document.querySelector(
-        fp.tag + '[role=' + JSON.stringify(fp.role) + '][name=' + JSON.stringify(fp.name) + ']',
-      );
-      if (byRoleName) return byRoleName;
-    }
-    if (fp.ariaLabel) {
-      const byRoleAria = document.querySelector(
-        fp.tag +
-          '[role=' +
-          JSON.stringify(fp.role) +
-          '][aria-label=' +
-          JSON.stringify(fp.ariaLabel) +
-          ']',
-      );
-      if (byRoleAria) return byRoleAria;
-    }
-    const byRole = document.querySelector(fp.tag + '[role=' + JSON.stringify(fp.role) + ']');
-    if (byRole) return byRole;
-  }
-  if (fp.text && searchRoot) {
-    const selector = fp.tag ? fp.tag : '*';
-    const candidates = Array.from(searchRoot.querySelectorAll(selector));
-    for (const c of candidates) {
-      const cText = (c.textContent || '').trim();
-      if (
-        cText === fp.text ||
-        (cText.length > 0 &&
-          fp.text.length > 0 &&
-          (cText.includes(fp.text) || fp.text.includes(cText)))
-      ) {
-        if (!fp.role || c.getAttribute('role') === fp.role) {
-          return c;
-        }
-      }
-    }
-  }
-  return searchRoot ? selfHealInShadowRoots(searchRoot, fp) : null;
 }
 
 export function findIndexedElement(index: number | string): Element | null {
-  const numIdx = typeof index === 'string' && /^\d+$/.test(index) ? parseInt(index, 10) : index;
-  const isExplicitFast = typeof index === 'string' && index.startsWith('e');
-  const g = globalThis as any;
-  const lastSnapshotType = g[Symbol.for('__browser_use_last_snapshot_type__')];
-  const clawFast = g.__pawFast || g.__clawFast;
+  const parsed = parseElementIndex(index);
+  if (!parsed) return null;
 
-  const isConnectedElement = (el: any): boolean => {
-    if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) return false;
-    const doc = typeof document !== 'undefined' ? document : undefined;
-    return typeof (el as any).isConnected === 'boolean'
-      ? (el as any).isConnected
-      : doc && typeof doc.contains === 'function'
-        ? doc.contains(el) ||
-          (typeof el.getRootNode === 'function' &&
-            typeof ShadowRoot !== 'undefined' &&
-            el.getRootNode() instanceof ShadowRoot)
-        : !doc;
-  };
-
-  // If explicit fast action id ('e1') or last snapshot was fast, resolve via fast actionElements first
-  if (isExplicitFast || lastSnapshotType === 'fast') {
-    if (clawFast?.actionElements) {
-      const el =
-        clawFast.actionElements.get(index) ||
-        (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
-      if (isConnectedElement(el)) {
-        return el;
-      }
-    }
-  }
-
-  // Standard isolatedMap lookup
-  const isolatedMap = getIsolatedIndexMap();
-  if (
-    isolatedMap.has(index as any) ||
-    (typeof numIdx === 'number' && isolatedMap.has(numIdx as any))
-  ) {
-    const el = derefElement(
-      isolatedMap.get(index as any) ??
-        (typeof numIdx === 'number' ? isolatedMap.get(numIdx as any) : undefined),
-    );
-    if (isConnectedElement(el)) {
-      return el;
-    }
-  }
-
-  // Fallback to fast actionElements (never traversal nodes) if not explicit fast and standard didn't match
-  if (!isExplicitFast && lastSnapshotType !== 'fast' && clawFast?.actionElements) {
-    const el =
-      clawFast.actionElements.get(index) ||
-      (typeof numIdx === 'number' ? clawFast.actionElements.get(numIdx) : undefined);
-    if (isConnectedElement(el)) {
-      return el;
-    }
-  }
-
-  // Self-healing recovery pass: if element reference disconnected or GC'd (e.g. React/Vue re-render)
-  if (typeof numIdx === 'number' && !isNaN(numIdx)) {
-    const fp = getIndexFingerprintMap().get(numIdx);
-    if (fp) {
-      const recovered = selfHealFindElement(fp);
-      if (recovered) {
-        isolatedMap.set(numIdx, wrapElement(recovered));
-        return recovered;
-      }
-    }
-  }
-
-  return null;
+  const entry = getIsolatedIndexMap().get(parsed.numericIndex);
+  const el = derefElement(entry);
+  if (!el?.isConnected || el.ownerDocument !== document) return null;
+  return el;
 }
 
 /**
@@ -1191,23 +1577,7 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
 
   if (!text) {
     // 1. ARIA labelledby (highest priority in W3C accessible name specification)
-    const ariaLabelledBy = el.getAttribute?.('aria-labelledby')?.trim();
-    if (ariaLabelledBy) {
-      try {
-        const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null);
-        if (doc) {
-          const ids = ariaLabelledBy.split(/\s+/);
-          const parts: string[] = [];
-          for (const id of ids) {
-            let labelEl: Element | null = doc.getElementById(id);
-            if (!labelEl) labelEl = querySelectorDeep(`#${id}`, doc);
-            const lt = (labelEl?.textContent || '').trim();
-            if (lt) parts.push(lt);
-          }
-          if (parts.length > 0) text = parts.join(' ');
-        }
-      } catch {}
-    }
+    text = getAriaLabelledByText(el);
   }
 
   if (!text) {
@@ -1216,34 +1586,40 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
     if (ariaLabel) {
       text = ariaLabel;
     } else {
-      const title = el.getAttribute?.('title')?.trim();
-      if (title) {
-        text = title;
+      const rawValue = String((el as HTMLInputElement).value ?? '').trim();
+      const nativeLabel = getNativeLabelText(el);
+      if (nativeLabel && nativeLabel !== rawValue) {
+        text = nativeLabel;
       } else {
-        const ariaDesc = el.getAttribute?.('aria-description')?.trim();
-        if (ariaDesc) {
-          text = ariaDesc;
+        const title = el.getAttribute?.('title')?.trim();
+        if (title) {
+          text = title;
         } else {
-          // 3. Inner accessible children ([role="img"][aria-label], [aria-label], SVG titles)
-          try {
-            const innerRoleImg = el
-              .querySelector?.('[role="img"][aria-label]')
-              ?.getAttribute('aria-label')
-              ?.trim();
-            const svgAria = el
-              .querySelector?.('svg[aria-label]')
-              ?.getAttribute('aria-label')
-              ?.trim();
-            const svgTitle = el.querySelector?.('svg title, svg desc')?.textContent?.trim();
-            const anyInnerAria = el
-              .querySelector?.('[aria-label]')
-              ?.getAttribute('aria-label')
-              ?.trim();
-            if (innerRoleImg) text = innerRoleImg;
-            else if (svgAria) text = svgAria;
-            else if (svgTitle) text = svgTitle;
-            else if (anyInnerAria) text = anyInnerAria;
-          } catch {}
+          const ariaDesc = el.getAttribute?.('aria-description')?.trim();
+          if (ariaDesc) {
+            text = ariaDesc;
+          } else {
+            // 3. Inner accessible children ([role="img"][aria-label], [aria-label], SVG titles)
+            try {
+              const innerRoleImg = el
+                .querySelector?.('[role="img"][aria-label]')
+                ?.getAttribute('aria-label')
+                ?.trim();
+              const svgAria = el
+                .querySelector?.('svg[aria-label]')
+                ?.getAttribute('aria-label')
+                ?.trim();
+              const svgTitle = el.querySelector?.('svg title, svg desc')?.textContent?.trim();
+              const anyInnerAria = el
+                .querySelector?.('[aria-label]')
+                ?.getAttribute('aria-label')
+                ?.trim();
+              if (innerRoleImg) text = innerRoleImg;
+              else if (svgAria) text = svgAria;
+              else if (svgTitle) text = svgTitle;
+              else if (anyInnerAria) text = anyInnerAria;
+            } catch {}
+          }
         }
       }
     }
@@ -1296,6 +1672,11 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
     } catch {}
   }
 
+  if (tag === 'input') {
+    const inputValue = String((el as HTMLInputElement).value ?? '').trim();
+    if (inputValue && text.trim() === inputValue) text = '';
+  }
+
   // Strip Unicode Private Use Area (PUA) characters (\uE000-\uF8FF) used by icon fonts
   // (e.g. \ue610 on JD/Taobao/FontAwesome), which crash Windows GBK console / python stdout.
   const sanitized = text
@@ -1306,59 +1687,81 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
   return sanitized.slice(0, maxLen);
 }
 
-/**
- * Re-index elements in a subframe by applying an index offset.
- * Synchronizes the subframe's in-page index map, DOM attributes, and visual badges.
- */
-export function inPageReindexFrame(offset: number, highlight = false): boolean {
-  if (typeof offset !== 'number' || offset === 0) return false;
-  const isolatedMap = getIsolatedIndexMap();
-  const entries = Array.from(isolatedMap.entries()).sort((a, b) => a[0] - b[0]);
-  isolatedMap.clear();
-
-  const fpMap = getIndexFingerprintMap();
-  const fpEntries = Array.from(fpMap.entries()).sort((a, b) => a[0] - b[0]);
-  fpMap.clear();
-  for (const [oldIdx, fp] of fpEntries) {
-    fpMap.set(oldIdx + offset, fp);
-  }
-
-  const reindexedElements: IndexedElement[] = [];
-
-  for (const [oldIdx, wrapped] of entries) {
-    const el = derefElement(wrapped);
-    if (!el || !(el instanceof Element)) continue;
-
-    const newIdx = oldIdx + offset;
-    isolatedMap.set(newIdx, wrapElement(el));
-
-    if (highlight) {
-      try {
-        const rect = el.getBoundingClientRect();
-        const text = extractCleanElementText(el);
-        reindexedElements.push({
-          index: newIdx,
-          tagName: el.tagName.toLowerCase(),
-          role: el.getAttribute('role') || undefined,
-          text: text || undefined,
-          attributes: {},
-          rect: {
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          },
-          isInteractive: true,
-        });
-      } catch {}
+export function getSameRootReference(el: Element, id: string): Element | null {
+  const root = el.getRootNode?.() as Document | ShadowRoot | null;
+  if (!root) return null;
+  try {
+    if (typeof (root as Document).getElementById === 'function') {
+      return (root as Document).getElementById(id);
     }
+    return root.querySelector?.(`#${CSS.escape(id)}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function getVisibleReferenceText(ref: Element | null, maxLen: number): string {
+  if (!ref || maxLen <= 0) return '';
+  const win = ref.ownerDocument?.defaultView;
+  let text = '';
+
+  const isHidden = (el: Element): boolean => {
+    if (
+      el.hasAttribute('hidden') ||
+      el.hasAttribute('inert') ||
+      el.getAttribute('aria-hidden') === 'true'
+    ) {
+      return true;
+    }
+    try {
+      const style = win?.getComputedStyle(el);
+      return (
+        style?.display === 'none' ||
+        style?.visibility === 'hidden' ||
+        style?.visibility === 'collapse' ||
+        parseFloat(style?.opacity || '1') <= 0
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  for (let current: Element | null = ref; current; current = composedParent(current)) {
+    if (isHidden(current)) return '';
   }
 
-  if (highlight && reindexedElements.length > 0) {
-    inPageRenderHighlights(reindexedElements);
-  }
+  const walk = (node: Node): void => {
+    if (text.length >= maxLen) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent || '';
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const current = node as Element;
+    const tag = current.tagName.toLowerCase();
+    if (tag === 'script' || tag === 'style' || tag === 'template') return;
+    if (isHidden(current)) return;
+    for (const child of Array.from(current.childNodes)) walk(child);
+  };
 
-  return true;
+  walk(ref);
+  return text.replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
+function getAriaReferenceText(el: Element, attribute: string, maxLen = 120): string {
+  const ids = (el.getAttribute?.(attribute) || '').split(/\s+/).filter(Boolean);
+  const parts: string[] = [];
+  const seen = new Set<Element>();
+  for (const id of ids) {
+    const ref = getSameRootReference(el, id);
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    const remaining = maxLen - parts.join(' ').length;
+    if (remaining <= 0) break;
+    const text = getVisibleReferenceText(ref, remaining);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, maxLen);
 }
 
 /**
@@ -1670,7 +2073,10 @@ export function detectEditorSemantics(el: Element): {
  * Detect fixed/sticky top and bottom occlusion bars (navbars, sticky headers, floating toolbars).
  * Returns safe margins to ensure elements scrolled or targeted are not occluded.
  */
-export function getStickyOcclusionMargins(win: Window): { top: number; bottom: number } {
+export function getStickyOcclusionMargins(
+  win: Window,
+  target?: Element,
+): { top: number; bottom: number } {
   let topMargin = 0;
   let bottomMargin = 0;
   try {
@@ -1683,6 +2089,7 @@ export function getStickyOcclusionMargins(win: Window): { top: number; bottom: n
     );
     for (const c of Array.from(candidates)) {
       if (!(c instanceof (win as any).HTMLElement)) continue;
+      if (target && composedContains(c, target)) continue;
       const s = win.getComputedStyle(c);
       if (s.position === 'fixed' || s.position === 'sticky') {
         const r = c.getBoundingClientRect();
@@ -1768,6 +2175,11 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         d.getAttribute('aria-modal') === 'true';
 
       if (!isPositioned && !isDialogRole) continue;
+      // Large positioned application shells are not evidence of a modal blocker.
+      const hasModalIdentity = /modal|dialog|backdrop|overlay|mask/i.test(
+        `${d.id} ${d.getAttribute('class') || ''}`,
+      );
+      if (!isDialogRole && !hasModalIdentity && !d.hasAttribute('popover')) continue;
 
       const rect = d.getBoundingClientRect();
       const ix = Math.max(0, Math.min(rect.right, vpWidth) - Math.max(rect.left, 0));
@@ -1856,10 +2268,7 @@ export function inPageEnsureModalFocus(modalEl?: Element): boolean {
   if (!target) return false;
 
   // Check if current active element is already inside target
-  if (
-    document.activeElement &&
-    (target === document.activeElement || target.contains(document.activeElement))
-  ) {
+  if (composedContains(target, getDeepActiveElement())) {
     return true;
   }
 
@@ -1931,6 +2340,7 @@ export function flattenCompositeCards(
     if (cand.isVirtualMarker || cand.isFile || !cand.node || !(cand.node instanceof Element)) {
       continue;
     }
+    if ((cand as any).isTableStructure) continue;
 
     const card = cand.node.closest?.(
       'article, [role="article"], [role="listitem"], li, [aria-roledescription="card"], [aria-roledescription="item"]',
@@ -2063,6 +2473,7 @@ export function flattenCompositeCards(
     // while explicitly identifying and preserving action triggers (reply, retweet, like, share, etc.)
     for (const it of items) {
       if (it === primaryCandidate) continue;
+      if ((it as any).isTableStructure) continue;
       const isControl = it.node.matches?.(
         'button, [role="button"], input[type="checkbox"], input[type="radio"], [role="checkbox"]',
       );
@@ -2113,6 +2524,7 @@ export function inPageDOMPruner(options?: {
       : (options?.viewportThreshold ?? 1000);
   const startingIndex = options?.startingIndex ?? 1;
   const frameId = options?.frameId;
+  const tableObservationCache = createTableObservationCache();
 
   // Robust :has-text evaluator for container scoping & exclusion
   function splitTopLevelCommas(selector: string): string[] {
@@ -2438,22 +2850,9 @@ export function inPageDOMPruner(options?: {
     { selector?: string; backendNodeId?: number; frameId?: string; tagName?: string }
   > = {};
 
-  const isolatedMap = getIsolatedIndexMap();
-  if (startingIndex === 1) {
-    isolatedMap.clear();
-    getIndexFingerprintMap().clear();
-    const g = globalThis as any;
-    g[Symbol.for('__browser_use_last_snapshot_type__')] = 'standard';
-    const fast = g.__pawFast || g.__clawFast;
-    if (fast) {
-      fast.actionElements?.clear();
-      fast.nodes?.clear();
-      fast.ids = typeof WeakMap !== 'undefined' ? new WeakMap() : new Map();
-      fast.next = 1;
-    }
-  }
-
-  let nextIndex = startingIndex;
+  const g = globalThis as any;
+  g[Symbol.for('__browser_use_last_snapshot_type__')] = 'standard';
+  pruneDetachedIndices();
 
   const PROPAGATING_ELEMENTS = new Set([
     'p',
@@ -2493,6 +2892,9 @@ export function inPageDOMPruner(options?: {
       (el as any).inert === true ||
       el.getAttribute('aria-hidden') === 'true'
     ) {
+      return false;
+    }
+    if (getTableObservationRole(el) && !hasDirectTableAction(el)) {
       return false;
     }
     if (
@@ -2833,13 +3235,11 @@ export function inPageDOMPruner(options?: {
     const role = (el.getAttribute('role') || '').toLowerCase();
     if (role === 'alert' || role === 'status' || role === 'heading') return true;
     if (el.hasAttribute('aria-live')) return true;
-    // Leaf elements with concise visible text (labels, cards, badges, tiles, ritual plates)
-    // are semantic informational nodes that agents need to perceive and target
+    // Text budgets truncate long leaves during serialization instead of hiding their content.
     if (
       el.children.length === 0 &&
       el.textContent &&
       el.textContent.trim().length > 0 &&
-      el.textContent.trim().length <= 80 &&
       !['script', 'style', 'noscript', 'meta', 'link'].includes(tag)
     ) {
       return true;
@@ -2883,13 +3283,10 @@ export function inPageDOMPruner(options?: {
   const shouldVirtualize =
     options?.virtualizeViewport === true ||
     (options?.virtualizeViewport !== false && !options?.selector && !options?.scope);
+  const focusForVirtualization = getDeepActiveElement();
 
   function isProtectedFromVirtualization(el: Element): boolean {
-    if (typeof document !== 'undefined' && document.activeElement) {
-      if (el === document.activeElement || el.contains(document.activeElement)) {
-        return true;
-      }
-    }
+    if (composedContains(el, focusForVirtualization)) return true;
     const tag = (el.tagName || '').toLowerCase();
     if (
       tag === 'header' ||
@@ -2959,6 +3356,8 @@ export function inPageDOMPruner(options?: {
       : `${tag}${classSig}${testIdPart}`;
   }
 
+  const selectOptionOmissions = new Map<HTMLSelectElement, { total: number; shown: number }>();
+
   function traverse(
     node: Element,
     propagatingParentRect?: DOMRect | null,
@@ -2984,6 +3383,9 @@ export function inPageDOMPruner(options?: {
       return;
     }
 
+    // Native options are indexed through the budgeted select pass below.
+    if (tag === 'option') return;
+
     if (droppedTags.has(tag)) return;
     if (svgInternalTags.has(tag)) {
       const insideSvg = typeof node.closest === 'function' ? Boolean(node.closest('svg')) : true;
@@ -3000,13 +3402,6 @@ export function inPageDOMPruner(options?: {
     if (typeof Element !== 'undefined' && !(node instanceof Element)) return;
     if (isAdOrTrackingElement(node)) return;
 
-    const isFile = tag === 'input' && (node as HTMLInputElement).type === 'file';
-    if (!isFile && typeof (node as any).checkVisibility === 'function') {
-      if (!(node as any).checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
-        return;
-      }
-    }
-
     if (
       node.hasAttribute('inert') ||
       (node as any).inert === true ||
@@ -3022,12 +3417,24 @@ export function inPageDOMPruner(options?: {
     if (!style) {
       return;
     }
-    const rect = node.getBoundingClientRect();
-    const isZeroSize = rect.width <= 0 || rect.height <= 0;
+
+    const isFile = tag === 'input' && (node as HTMLInputElement).type === 'file';
+    const isContents = style.display === 'contents';
 
     if (!isFile) {
       if (style.display === 'none' || style.visibility === 'hidden') return;
       if (parseFloat(style.opacity || '1') <= 0) return;
+      if (!isContents && typeof (node as any).checkVisibility === 'function') {
+        if (!(node as any).checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return;
+        }
+      }
+    }
+
+    const rect = node.getBoundingClientRect();
+    const isZeroSize = isContents || rect.width <= 0 || rect.height <= 0;
+
+    if (!isFile) {
       if (isZeroSize) {
         if (node.children.length === 0 && !getShadowRoot(node)) return;
       } else {
@@ -3061,6 +3468,7 @@ export function inPageDOMPruner(options?: {
     const currentHasPointer = style.cursor === 'pointer';
     const interactive = isInteractive(node, style, parentHasPointer);
     const informational = !interactive && isInformationalNode(node);
+    const tableRole = getTableObservationRole(node);
 
     if (propagatingParentRect && !interactive && !isFile && !informational) {
       const xOverlap = Math.max(
@@ -3127,7 +3535,11 @@ export function inPageDOMPruner(options?: {
     if (
       !isZeroSize &&
       !isWrapperOverFormControl &&
-      (interactive || isFile || (informational && hasInfoText) || isClosedHost)
+      (interactive ||
+        isFile ||
+        (informational && hasInfoText) ||
+        isClosedHost ||
+        tableRole !== null)
     ) {
       candidates.push({
         node,
@@ -3137,16 +3549,18 @@ export function inPageDOMPruner(options?: {
         isInteractive: interactive || isFile || isClosedHost,
         inShadowDom: insideShadow || (isClosedHost ? true : undefined),
         isClosedShadowHost: isClosedHost ? true : undefined,
+        isTableStructure: tableRole !== null,
       });
     }
 
     // Task B4: Native <select> options static flattening into virtual entries
     if (tag === 'select' && (node as HTMLSelectElement).options) {
       const selectEl = node as HTMLSelectElement;
-      for (const opt of Array.from(selectEl.options)) {
-        if (opt.disabled || (opt.closest && opt.closest('optgroup[disabled]'))) {
-          continue;
-        }
+      const enabledOptions = Array.from(selectEl.options).filter(
+        (opt) => !opt.disabled && !(opt.closest && opt.closest('optgroup[disabled]')),
+      );
+      const shownOptions = enabledOptions.slice(0, 50);
+      for (const opt of shownOptions) {
         candidates.push({
           node: opt,
           tag: 'option',
@@ -3158,6 +3572,12 @@ export function inPageDOMPruner(options?: {
           parentSelect: selectEl,
           optionValue: opt.value,
           optionLabel: opt.label || opt.text || opt.value,
+        });
+      }
+      if (enabledOptions.length > shownOptions.length) {
+        selectOptionOmissions.set(selectEl, {
+          total: enabledOptions.length,
+          shown: shownOptions.length,
         });
       }
     }
@@ -3314,6 +3734,7 @@ export function inPageDOMPruner(options?: {
     optionValue?: string;
     optionLabel?: string;
     text?: string;
+    isTableStructure?: boolean;
   }> = [];
 
   let roots: Element[] = [];
@@ -3500,6 +3921,9 @@ export function inPageDOMPruner(options?: {
     flattenedCardCount = flattenCompositeCards(candidates as any, maxTextLength);
   }
 
+  const deepActiveElement = getDeepActiveElement();
+  const focusScope = observationFocusScope(deepActiveElement);
+
   for (const cand of candidates) {
     if ((cand as any).isCardSecondary) {
       continue;
@@ -3519,14 +3943,7 @@ export function inPageDOMPruner(options?: {
 
     safeClickPointWeakMap.set(cand.node, occlusion.safeClickPoint);
 
-    const assignedIndex = nextIndex++;
-    isolatedMap.set(assignedIndex, wrapElement(cand.node));
-    const gFast = globalThis as any;
-    const pawFast = gFast.__pawFast || gFast.__clawFast;
-    if (pawFast) {
-      pawFast.nodes.set(assignedIndex, cand.node);
-      pawFast.ids.set(cand.node, assignedIndex);
-    }
+    const assignedIndex = indexElement(cand.node, '', startingIndex);
 
     // Detect visual geometric shape if styled or transformed (diamond, circle, hex, triangle, square)
     let detectedShape: string | undefined = undefined;
@@ -3551,6 +3968,10 @@ export function inPageDOMPruner(options?: {
       'aria-selected',
       'aria-expanded',
       'aria-pressed',
+      'aria-invalid',
+      'aria-required',
+      'aria-describedby',
+      'aria-errormessage',
     ];
     for (const attr of attrsToKeep) {
       const val = cand.node.getAttribute(attr);
@@ -3593,23 +4014,6 @@ export function inPageDOMPruner(options?: {
       attributes['selected'] = (cand.node as HTMLOptionElement).selected ? 'true' : 'false';
     }
 
-    const candText =
-      cand.text ||
-      (cand.node ? (cand.node.textContent || '').trim().slice(0, 100) : undefined) ||
-      undefined;
-    getIndexFingerprintMap().set(assignedIndex, {
-      tag: cand.tag,
-      id: attributes.id,
-      name: attributes.name,
-      type: attributes.type,
-      placeholder: attributes.placeholder,
-      testId: attributes['data-testid'],
-      ariaLabel: attributes['aria-label'],
-      role: attributes.role,
-      text: candText,
-      inShadowDom: cand.inShadowDom,
-      scopeHash: scopeHash || undefined,
-    });
     if (
       (cand.node as HTMLElement).isContentEditable ||
       cand.node.getAttribute('contenteditable') === 'true' ||
@@ -3658,38 +4062,52 @@ export function inPageDOMPruner(options?: {
       const el = cand.node as HTMLInputElement;
       const supportsValidity =
         cand.tag === 'input' || cand.tag === 'textarea' || cand.tag === 'select';
-      if (supportsValidity && el.validity) {
-        if (el.validity.valid === false) attributes['invalid'] = 'true';
-        if (el.validity.valid === true) attributes['valid'] = 'true';
-        if (el.validity.valueMissing) attributes['invalidReason'] = 'valueMissing';
-        else if (el.validity.typeMismatch) attributes['invalidReason'] = 'typeMismatch';
-        else if (el.validity.patternMismatch) attributes['invalidReason'] = 'patternMismatch';
-        else if (el.validity.tooShort) attributes['invalidReason'] = 'tooShort';
-        else if (el.validity.tooLong) attributes['invalidReason'] = 'tooLong';
-        else if (el.validity.rangeUnderflow) attributes['invalidReason'] = 'rangeUnderflow';
-        else if (el.validity.rangeOverflow) attributes['invalidReason'] = 'rangeOverflow';
-        else if (el.validity.stepMismatch) attributes['invalidReason'] = 'stepMismatch';
-        else if (el.validity.badInput) attributes['invalidReason'] = 'badInput';
-        else if (el.validity.customError) attributes['invalidReason'] = 'customError';
-        if (el.validationMessage) {
-          attributes['validationMessage'] = String(el.validationMessage).slice(0, 120);
-        }
-      }
-      // Framework validators commonly only flip aria-invalid.
-      if (cand.node.getAttribute('aria-invalid') === 'true') attributes['invalid'] = 'true';
-      if (
-        cand.node.hasAttribute('required') ||
-        cand.node.getAttribute('aria-required') === 'true'
-      ) {
-        attributes['required'] = 'true';
-      }
+      const formMeta = readFormObservationMetadata(cand.node);
+      if (formMeta?.valid !== undefined) attributes['valid'] = String(formMeta.valid);
+      if (formMeta?.invalidReason) attributes['invalidReason'] = formMeta.invalidReason;
+      if (formMeta?.validationMessage) attributes['validationMessage'] = formMeta.validationMessage;
+      if (formMeta?.required) attributes['required'] = 'true';
       // Constraint hints so an agent can satisfy the field without guessing.
       for (const attr of ['pattern', 'min', 'max', 'minlength', 'maxlength', 'step']) {
         if (attributes[attr]) continue;
         const val = cand.node.getAttribute(attr);
         if (val) attributes[attr] = val.slice(0, 100);
       }
+
+      if (formMeta) {
+        const rawValue = supportsValidity
+          ? typeof (el as any).value === 'string'
+            ? String((el as any).value).trim()
+            : ''
+          : (cand.node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+        if (formMeta.label && formMeta.label !== rawValue) {
+          attributes['label'] = formMeta.label;
+        }
+        if (formMeta.invalid) {
+          attributes['invalid'] = 'true';
+          delete attributes['valid'];
+          if (!attributes['invalidReason']) attributes['invalidReason'] = 'aria-invalid';
+          if (formMeta.invalidRaw) attributes['aria-invalid'] = formMeta.invalidRaw;
+        } else {
+          delete attributes['aria-errormessage'];
+        }
+
+        const existingTexts = new Set(
+          [attributes['validationMessage'], attributes['label'], rawValue].filter(Boolean),
+        );
+        if (formMeta.errormessage && !existingTexts.has(formMeta.errormessage)) {
+          attributes['errormessage'] = formMeta.errormessage;
+          existingTexts.add(formMeta.errormessage);
+        }
+        if (formMeta.description && !existingTexts.has(formMeta.description)) {
+          attributes['description'] = formMeta.description;
+        }
+      }
     } catch {}
+
+    if (deepActiveElement === cand.node) {
+      attributes['focused'] = 'true';
+    }
 
     // Dialog / modal status (P1-7)
     try {
@@ -3729,11 +4147,18 @@ export function inPageDOMPruner(options?: {
     }
 
     const isCard = (cand as any).isCard === true;
-    let text = isCard
-      ? (cand as any).aggregatedText
-      : extractCleanElementText(cand.node, maxTextLength);
+    const tableObservation = cand.isTableStructure
+      ? buildTableObservation(cand.node, maxTextLength, tableObservationCache)
+      : null;
+    let text = tableObservation
+      ? tableObservation.text || ''
+      : isCard
+        ? (cand as any).aggregatedText
+        : extractCleanElementText(cand.node, maxTextLength);
     const editorSemantics = detectEditorSemantics(cand.node);
-    let role = isCard ? 'card' : cand.node.getAttribute('role') || undefined;
+    let role =
+      tableObservation?.role || (isCard ? 'card' : cand.node.getAttribute('role') || undefined);
+    if (tableObservation) Object.assign(attributes, tableObservation.attributes);
 
     // Task B4: Virtual select option text and role
     if (cand.isSelectOption) {
@@ -3765,13 +4190,17 @@ export function inPageDOMPruner(options?: {
         height: Math.round(cand.rect.height),
       },
       isInteractive: cand.isInteractive,
+      ...(withinObservationFocusScope(cand.node, focusScope) ? { withinFocusScope: true } : {}),
       isOccluded: occlusion.isOccluded,
       occludedBy: occlusion.occludedBy,
       inShadowDom: cand.inShadowDom,
-      safeClickPoint: {
-        x: occlusion.safeClickPoint.x,
-        y: occlusion.safeClickPoint.y,
-      },
+      safeClickPoint:
+        cand.isTableStructure && !cand.isInteractive
+          ? undefined
+          : {
+              x: occlusion.safeClickPoint.x,
+              y: occlusion.safeClickPoint.y,
+            },
       isComposer: editorSemantics.isComposer || undefined,
       isEditor: editorSemantics.isEditor || undefined,
       isSearch: editorSemantics.isSearch || undefined,
@@ -3788,6 +4217,24 @@ export function inPageDOMPruner(options?: {
       frameId,
       tagName: cand.tag,
     };
+
+    const omittedOptions =
+      cand.tag === 'select' ? selectOptionOmissions.get(cand.node as HTMLSelectElement) : undefined;
+    if (omittedOptions) {
+      const omitted = omittedOptions.total - omittedOptions.shown;
+      const selectName =
+        attributes.label ||
+        attributes.name ||
+        attributes.id ||
+        cand.node.textContent?.replace(/\s+/g, ' ').trim().slice(0, 60) ||
+        'select';
+      const readPath = `${resolveToolName('get_dropdown_options')} index=${assignedIndex}`;
+      const message = `${omitted} enabled options omitted for select "${selectName}" (showing ${omittedOptions.shown} of ${omittedOptions.total}); use ${readPath} to read all`;
+      treeOutputItems.push({
+        type: 'marker',
+        line: outputFormat === 'html' ? `<!-- [${message}] -->` : `~ [${message}]`,
+      });
+    }
   }
 
   // Calculate scroll guidance (pages_up / pages_down)
@@ -3971,7 +4418,7 @@ export function actionPointForElement(
 
   const vw = typeof view?.innerWidth === 'number' && view.innerWidth > 0 ? view.innerWidth : 1280;
   const vh = typeof view?.innerHeight === 'number' && view.innerHeight > 0 ? view.innerHeight : 800;
-  const margins = getStickyOcclusionMargins(view);
+  const margins = getStickyOcclusionMargins(view, target);
   const safeTop = margins.top > 0 ? margins.top : 0;
   const safeBottom = margins.bottom > 0 ? vh - margins.bottom : vh;
 
@@ -4006,13 +4453,9 @@ export function actionPointForElement(
   }
 
   if (best) {
-    const safeY = Math.min(
-      Math.max(best.rect.top + 5, safeTop + 10),
-      Math.max(safeTop + 10, Math.min(best.rect.bottom - 5, safeBottom - 10)),
-    );
     return {
       x: (best.rect.left + best.rect.right) / 2,
-      y: safeY,
+      y: (best.rect.top + best.rect.bottom) / 2,
     };
   }
   return null;
@@ -4099,7 +4542,10 @@ export function scrollRequestForPoint(
   };
 }
 
-export function extractElementLocationDetails(el: Element): {
+export function extractElementLocationDetails(
+  el: Element,
+  allowScroll = true,
+): {
   success: boolean;
   index?: number;
   x: number;
@@ -4130,7 +4576,7 @@ export function extractElementLocationDetails(el: Element): {
   const initialRect = el.getBoundingClientRect();
   const vh = win.innerHeight || 0;
   const vw = win.innerWidth || 0;
-  const margins = getStickyOcclusionMargins(win);
+  const margins = getStickyOcclusionMargins(win, el);
   const elStyle = typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
   const scrollMarginTop = parseFloat(elStyle?.scrollMarginTop || '0') || 0;
   const scrollMarginBottom = parseFloat(elStyle?.scrollMarginBottom || '0') || 0;
@@ -4152,7 +4598,7 @@ export function extractElementLocationDetails(el: Element): {
     initialRect.width > 0 &&
     initialRect.height > 0;
 
-  if (!inViewport) {
+  if (!inViewport && allowScroll) {
     // Try local scroll first
     const point = actionPointForElement(el, win);
     if (point) {
@@ -4351,9 +4797,7 @@ export function extractElementLocationDetails(el: Element): {
     }
     // Pass 3: allocate new index if still unindexed
     if (matchedIndex === undefined) {
-      const maxIdx = isolatedMap.size > 0 ? Math.max(...isolatedMap.keys()) : 0;
-      matchedIndex = maxIdx + 1;
-      isolatedMap.set(matchedIndex, wrapElement(el));
+      matchedIndex = indexElement(el);
     }
   } catch {}
 
@@ -4433,6 +4877,7 @@ export function extractElementLocationDetails(el: Element): {
  */
 export function inPageGetElementCoordinates(refOrIndex: number | string): {
   success: boolean;
+  notFound?: boolean;
   x?: number;
   y?: number;
   width?: number;
@@ -4458,82 +4903,270 @@ export function inPageGetElementCoordinates(refOrIndex: number | string): {
   isSelectOption?: boolean;
   error?: string;
 } {
-  let index: number;
-  if (typeof refOrIndex === 'string') {
-    const parsed = refOrIndex.startsWith('ref_')
-      ? parseInt(refOrIndex.slice(4), 10)
-      : parseInt(refOrIndex, 10);
-    if (isNaN(parsed)) {
-      return { success: false, error: `Invalid index or ref format: ${refOrIndex}` };
-    }
-    index = parsed;
-  } else {
-    index = refOrIndex;
-  }
-
-  if (index <= 0) {
+  const parsed = parseElementIndex(refOrIndex);
+  if (!parsed) {
     return {
       success: false,
-      error: `Index must be a positive 1-based integer. Received: ${index}`,
+      error: `Invalid index or ref format: ${refOrIndex}`,
     };
   }
+  const index = parsed.numericIndex;
 
-  const rawEntry = getIsolatedIndexMap().get(index);
-  const rawEl = derefElement(rawEntry);
-  const fp = getIndexFingerprintMap().get(index);
-
-  let warning: string | undefined;
-  let hadDrift = false;
-
-  if (rawEl && fp) {
-    const isConnected = (rawEl as any).isConnected ?? true;
-    const currentTag = rawEl.tagName?.toLowerCase();
-    const currentRole =
-      rawEl.getAttribute?.('role')?.toLowerCase() || (rawEl as any).role?.toLowerCase();
-    const currentText = (rawEl.textContent || '').trim().slice(0, 100);
-    const tagMismatch = Boolean(fp.tag && currentTag !== fp.tag.toLowerCase());
-    const roleMismatch = Boolean(fp.role && currentRole && currentRole !== fp.role.toLowerCase());
-    const textMismatch = Boolean(
-      fp.text && currentText && !currentText.includes(fp.text) && !fp.text.includes(currentText),
-    );
-    if (!isConnected || tagMismatch || roleMismatch || textMismatch) {
-      hadDrift = true;
-    }
-  } else if (!rawEl && fp) {
-    hadDrift = true;
-  }
-
-  let el = findIndexedElement(index);
-
-  // Task B12: Multi-attribute index drift verification and in-place self-healing (Tag, Role, Text)
-  if (hadDrift && fp) {
-    if (!el || el === rawEl) {
-      const recovered = selfHealFindElement(fp);
-      if (recovered) {
-        el = recovered;
-        getIsolatedIndexMap().set(index, wrapElement(recovered));
-      }
-    }
-    if (el && el !== rawEl) {
-      warning = `Element index drift detected for index [${index}]; auto-healed target using element fingerprint (${fp.tag}${fp.id ? '#' + fp.id : ''}${fp.text ? ' "' + fp.text + '"' : ''})`;
-    }
-  }
+  const el = findIndexedElement(refOrIndex);
 
   if (!el || !(el instanceof Element)) {
     return {
       success: false,
+      notFound: true,
       error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
     };
   }
 
   const details: any = extractElementLocationDetails(el);
-  if (warning) {
-    details.warning = warning;
-  }
   if (el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option') {
     details.isSelectOption = true;
   }
   return details;
+}
+
+export type ActionableResult = ReturnType<typeof inPageGetElementCoordinates> & {
+  actionable: boolean;
+  reason?: string;
+  stableFrames?: number;
+  durationMs?: number;
+  method?: 'raf' | 'timer';
+};
+
+function getActionableBlockReason(el: Element, action: string): string | null {
+  if (!el.isConnected || el.ownerDocument !== document) return 'disconnected';
+
+  const isOption = el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option';
+  const isHover = action === 'hover' || action === 'mouse_move';
+  const isFill = action === 'fill' || action === 'type' || action === 'clear';
+
+  // 1. Disabled (hover allows disabled for tooltips)
+  if (!isHover) {
+    try {
+      if (el.matches?.(':disabled') || (el as any).disabled === true) return 'disabled';
+    } catch {
+      if ((el as any).disabled === true || el.hasAttribute('disabled')) return 'disabled';
+    }
+  }
+
+  // 2. Readonly for fill actions
+  if (isFill && ((el as any).readOnly === true || el.hasAttribute('readonly'))) {
+    return 'readonly';
+  }
+
+  // 3. Visibility on target element (descendant can override visible)
+  const win = el.ownerDocument?.defaultView || window;
+  if (typeof win.getComputedStyle === 'function') {
+    try {
+      const style = win.getComputedStyle(el);
+      if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
+    } catch {}
+  }
+
+  // 4. Single composed ancestor pass: inert, aria-disabled, display:none, hidden attribute
+  for (let cur: Element | null = el; cur; cur = composedParent(cur)) {
+    if ((cur as any).inert === true || cur.hasAttribute('inert')) return 'inert';
+    if (!isHover && cur.getAttribute('aria-disabled') === 'true') return 'aria-disabled';
+    if ((cur as any).hidden === true || cur.hasAttribute('hidden')) return 'hidden';
+    if (typeof win.getComputedStyle === 'function') {
+      try {
+        if (win.getComputedStyle(cur).display === 'none') return 'hidden';
+      } catch {}
+    }
+  }
+
+  // 5. Zero-size check: any dimension <= 0 is non-actionable (options exempt)
+  if (!isOption) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return 'hidden';
+  }
+
+  return null;
+}
+
+function waitForNextTick(): Promise<'raf' | 'timer'> {
+  return new Promise((resolve) => {
+    const isDocHidden = typeof document !== 'undefined' && document.hidden;
+    const hasRaf = typeof requestAnimationFrame === 'function';
+    if (isDocHidden || !hasRaf) {
+      setTimeout(() => resolve('timer'), 16);
+      return;
+    }
+    let settled = false;
+    let timerId: any = null;
+    const rafId = requestAnimationFrame(() => {
+      if (!settled) {
+        settled = true;
+        if (timerId) clearTimeout(timerId);
+        resolve('raf');
+      }
+    });
+    timerId = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
+        resolve('timer');
+      }
+    }, 50);
+  });
+}
+
+/**
+ * Actionability pre-flight and 2-frame geometry stability watchdog.
+ * Direct drop-in replacement for inPageGetElementCoordinates on user action paths.
+ * Returns spread coordinate metadata on success, and distinguishes notFound: true vs false on errors.
+ */
+export async function inPageWaitForActionable(
+  refOrIndex: number | string,
+  action: string = 'click',
+  timeoutMs = 1000,
+): Promise<ActionableResult> {
+  const parsed = parseElementIndex(refOrIndex);
+  if (!parsed) {
+    return {
+      success: false,
+      actionable: false,
+      notFound: true,
+      reason: 'not_found',
+      error: `Invalid index: ${refOrIndex}`,
+    };
+  }
+  const index = parsed.numericIndex;
+  const entry = getIsolatedIndexMap().get(index);
+  const el = entry ? derefElement(entry) : null;
+
+  if (!el || !(el instanceof Element)) {
+    return {
+      success: false,
+      actionable: false,
+      notFound: true,
+      reason: 'not_found',
+      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
+    };
+  }
+
+  let blockReason = getActionableBlockReason(el, action);
+  if (blockReason) {
+    return {
+      success: false,
+      actionable: false,
+      notFound: false,
+      reason: blockReason,
+      error: `Element [${index}] is not actionable (${blockReason})`,
+    };
+  }
+
+  // Pre-scroll and initial coordinates resolution
+  const initialCoords = inPageGetElementCoordinates(refOrIndex);
+  if (!initialCoords?.success) {
+    return {
+      ...initialCoords,
+      actionable: false,
+      notFound: Boolean(initialCoords?.notFound),
+      error: initialCoords?.error || `Failed to resolve coords for [${index}]`,
+    };
+  }
+
+  // <option> elements have no separate layout box; delegate to select and bypass stability loop
+  const isOption = el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option';
+  if (isOption) {
+    return {
+      ...initialCoords,
+      success: true,
+      actionable: true,
+      notFound: false,
+    };
+  }
+
+  const STABILITY_THRESHOLD = 0.25;
+  const startTime = performance.now();
+  let prevRect = el.getBoundingClientRect();
+  let stableFrames = 0;
+  let everUsedTimer = false;
+
+  while (true) {
+    const tickMethod = await waitForNextTick();
+    if (tickMethod === 'timer') everUsedTimer = true;
+
+    // Re-verify actionable state immediately after tick
+    blockReason = getActionableBlockReason(el, action);
+    if (blockReason) {
+      return {
+        ...initialCoords,
+        success: false,
+        actionable: false,
+        notFound: false,
+        reason: blockReason,
+        error: `Element [${index}] became non-actionable (${blockReason}) during stability wait`,
+        durationMs: Math.round(performance.now() - startTime),
+        method: everUsedTimer ? 'timer' : 'raf',
+      };
+    }
+
+    const currRect = el.getBoundingClientRect();
+    const dx = Math.abs(currRect.left - prevRect.left);
+    const dy = Math.abs(currRect.top - prevRect.top);
+    const dw = Math.abs(currRect.width - prevRect.width);
+    const dh = Math.abs(currRect.height - prevRect.height);
+
+    if (
+      dx <= STABILITY_THRESHOLD &&
+      dy <= STABILITY_THRESHOLD &&
+      dw <= STABILITY_THRESHOLD &&
+      dh <= STABILITY_THRESHOLD
+    ) {
+      stableFrames++;
+      if (stableFrames >= 2) {
+        // Final check before success return
+        blockReason = getActionableBlockReason(el, action);
+        if (blockReason) {
+          return {
+            ...initialCoords,
+            success: false,
+            actionable: false,
+            notFound: false,
+            reason: blockReason,
+            error: `Element [${index}] became non-actionable (${blockReason}) during stability wait`,
+            durationMs: Math.round(performance.now() - startTime),
+            method: everUsedTimer ? 'timer' : 'raf',
+          };
+        }
+
+        // Compute live safe point & fresh metadata with scrolling disabled
+        const finalCoords = extractElementLocationDetails(el, false);
+        return {
+          ...finalCoords,
+          success: true,
+          actionable: true,
+          notFound: false,
+          stableFrames,
+          durationMs: Math.round(performance.now() - startTime),
+          method: everUsedTimer ? 'timer' : 'raf',
+        };
+      }
+    } else {
+      stableFrames = 0;
+    }
+
+    prevRect = currRect;
+
+    if (performance.now() - startTime >= timeoutMs) {
+      return {
+        ...initialCoords,
+        success: false,
+        actionable: false,
+        notFound: false,
+        reason: 'unstable',
+        error: `Element [${index}] geometry did not stabilize within ${timeoutMs}ms (dx=${dx.toFixed(2)}, dy=${dy.toFixed(2)})`,
+        durationMs: Math.round(performance.now() - startTime),
+        method: everUsedTimer ? 'timer' : 'raf',
+      };
+    }
+  }
 }
 
 /**
@@ -4545,6 +5178,8 @@ export function inPageSnapCoordinate(
   x: number,
   y: number,
   snapRadius = 24,
+  topLevelViewport = false,
+  editableOnly = false,
 ): {
   snapped: boolean;
   x: number;
@@ -4553,11 +5188,60 @@ export function inPageSnapCoordinate(
   originalY: number;
   targetIndex?: number;
   targetTag?: string;
+  targetEditable?: boolean;
+  frameOffsetX?: number;
+  frameOffsetY?: number;
   distance?: number;
 } {
-  const origX = Math.round(x);
-  const origY = Math.round(y);
-  const defaultRes = { snapped: false, x: origX, y: origY, originalX: origX, originalY: origY };
+  const inputX = Math.round(x);
+  const inputY = Math.round(y);
+  let frameOffsetX = 0;
+  let frameOffsetY = 0;
+  if (topLevelViewport) {
+    try {
+      let curWin: Window = window;
+      while (curWin !== curWin.top) {
+        const frameEl = curWin.frameElement;
+        if (!frameEl) throw new Error('Frame owner unavailable');
+        const frameRect = frameEl.getBoundingClientRect();
+        const parentWin = curWin.parent || frameEl.ownerDocument?.defaultView || window;
+        const frameStyle =
+          typeof parentWin.getComputedStyle === 'function'
+            ? parentWin.getComputedStyle(frameEl)
+            : undefined;
+        const borderLeft = parseFloat(frameStyle?.borderLeftWidth || '0') || 0;
+        const borderTop = parseFloat(frameStyle?.borderTopWidth || '0') || 0;
+        const zoom = parseFloat((frameStyle as any)?.zoom || '1') || 1;
+        frameOffsetX += (frameRect.left + borderLeft) / zoom;
+        frameOffsetY += (frameRect.top + borderTop) / zoom;
+        curWin = curWin.parent;
+      }
+    } catch {
+      return {
+        snapped: false,
+        x: inputX,
+        y: inputY,
+        originalX: inputX,
+        originalY: inputY,
+        targetEditable: false,
+      };
+    }
+  }
+  const origX = inputX - Math.round(frameOffsetX);
+  const origY = inputY - Math.round(frameOffsetY);
+  const toViewportPoint = (localX: number, localY: number) => ({
+    x: topLevelViewport ? Math.round(localX + frameOffsetX) : localX,
+    y: topLevelViewport ? Math.round(localY + frameOffsetY) : localY,
+  });
+  const defaultViewportPoint = toViewportPoint(origX, origY);
+  const defaultRes = {
+    snapped: false,
+    ...defaultViewportPoint,
+    originalX: inputX,
+    originalY: inputY,
+    frameOffsetX: Math.round(frameOffsetX),
+    frameOffsetY: Math.round(frameOffsetY),
+  };
 
   if (typeof document === 'undefined') return defaultRes;
 
@@ -4570,6 +5254,49 @@ export function inPageSnapCoordinate(
   try {
     hitEl = deepElementFromPoint(origX, origY);
   } catch {}
+
+  const findEditableElement = (start: Element | null): Element | null => {
+    let current = start;
+    while (current && current !== document.body && current !== document.documentElement) {
+      const tag = current.tagName.toLowerCase();
+      const inputType = ((current as HTMLInputElement).type || '').toLowerCase();
+      const nonTextInput =
+        /^(button|submit|reset|checkbox|radio|hidden|image|file|range|color)$/.test(inputType);
+      if (
+        (tag === 'input' && !nonTextInput) ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        (current as HTMLElement).isContentEditable ||
+        current.getAttribute('contenteditable') === 'true' ||
+        current.getAttribute('contenteditable') === ''
+      ) {
+        return current;
+      }
+      current = composedParent(current);
+    }
+    return null;
+  };
+
+  const directEditable = editableOnly ? findEditableElement(hitEl) : null;
+  if (directEditable) {
+    let targetIndex: number | undefined;
+    for (const [idx, wrapped] of getIsolatedIndexMap().entries()) {
+      if (derefElement(wrapped) === directEditable) {
+        targetIndex = idx;
+        break;
+      }
+    }
+    if (targetIndex === undefined) targetIndex = indexElement(directEditable);
+    return {
+      ...defaultRes,
+      targetIndex,
+      targetTag: directEditable.tagName.toLowerCase(),
+      targetEditable: true,
+    };
+  }
+  if (editableOnly) {
+    return { ...defaultRes, targetEditable: false };
+  }
 
   const isInteractiveNode = (el: Element | null): boolean => {
     if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) return false;
@@ -4610,7 +5337,20 @@ export function inPageSnapCoordinate(
   let cur: Element | null = hitEl;
   while (cur && cur !== document.body && cur !== document.documentElement) {
     if (isInteractiveNode(cur)) {
-      return defaultRes;
+      let targetIndex: number | undefined;
+      for (const [idx, wrapped] of getIsolatedIndexMap().entries()) {
+        if (derefElement(wrapped) === cur) {
+          targetIndex = idx;
+          break;
+        }
+      }
+      if (targetIndex === undefined) targetIndex = indexElement(cur);
+      return {
+        ...defaultRes,
+        targetIndex,
+        targetTag: cur.tagName.toLowerCase(),
+        targetEditable: Boolean(findEditableElement(cur)),
+      };
     }
     cur = composedParent(cur);
   }
@@ -4743,14 +5483,17 @@ export function inPageSnapCoordinate(
         Math.max(bestRect.top + marginY, Math.min(bestRect.bottom - marginY, origY)),
       );
     }
+    const viewportPoint = toViewportPoint(safeX, safeY);
     return {
       snapped: true,
-      x: safeX,
-      y: safeY,
-      originalX: origX,
-      originalY: origY,
+      ...viewportPoint,
+      originalX: inputX,
+      originalY: inputY,
       targetIndex: bestIndex,
       targetTag: bestEl.tagName.toLowerCase(),
+      targetEditable: Boolean(findEditableElement(bestEl)),
+      frameOffsetX: Math.round(frameOffsetX),
+      frameOffsetY: Math.round(frameOffsetY),
       distance: Math.round(bestDist),
     };
   }
@@ -4817,6 +5560,32 @@ export function inPageReadDeliveryProbe(disarm?: boolean): {
   return { delivered: hits.length > 0, hits };
 }
 
+function isLocatorCandidateVisible(el: Element): boolean {
+  const view = el.ownerDocument?.defaultView || window;
+  const visibility = view.getComputedStyle(el).visibility;
+  if (visibility === 'hidden' || visibility === 'collapse') return false;
+  for (let current: Element | null = el; current; current = composedParent(current)) {
+    const style = view.getComputedStyle(current);
+    if (
+      current.hasAttribute('inert') ||
+      current.getAttribute('aria-hidden') === 'true' ||
+      style.display === 'none' ||
+      parseFloat(style.opacity || '1') <= 0
+    ) {
+      return false;
+    }
+  }
+  const rect = el.getBoundingClientRect();
+  return (
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
 /**
  * Locate element coordinates and info using CSS or XPath selector.
  */
@@ -4825,6 +5594,8 @@ export function inPageLocateBySelector(
   selectorType?: 'css' | 'xpath',
 ): {
   success: boolean;
+  matchCount?: number;
+  notFound?: boolean;
   x?: number;
   y?: number;
   width?: number;
@@ -4841,41 +5612,116 @@ export function inPageLocateBySelector(
   }
 
   try {
-    let targetEl: Element | null = null;
     const isXPath =
       selectorType === 'xpath' ||
       selector.startsWith('//') ||
       selector.startsWith('(') ||
       selector.startsWith('/html');
 
+    let rawElements: Element[] = [];
+
     if (isXPath && typeof document !== 'undefined' && typeof document.evaluate === 'function') {
-      const xRes = document.evaluate(
-        selector,
-        document,
-        null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
-        null,
-      );
-      if (xRes.singleNodeValue instanceof Element) {
-        targetEl = xRes.singleNodeValue;
-      }
-    } else if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
       try {
-        targetEl = document.querySelector(selector);
-      } catch {
-        // Native querySelector throws DOMException on shadow combinators like '>>>' or '/deep/'
-        targetEl = null;
+        const xRes = document.evaluate(
+          selector,
+          document,
+          null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+          null,
+        );
+        for (let i = 0; i < xRes.snapshotLength; i++) {
+          const node = xRes.snapshotItem(i);
+          if (node instanceof Element) {
+            rawElements.push(node);
+          }
+        }
+      } catch (xpathErr) {
+        return {
+          success: false,
+          error: `XPath evaluation error: ${xpathErr instanceof Error ? xpathErr.message : String(xpathErr)}`,
+        };
       }
-      if (!targetEl) {
-        targetEl = querySelectorDeep(selector, document);
+    } else if (typeof document !== 'undefined') {
+      const hasCustomShadowCombinator =
+        selector.includes('>>>') || selector.includes('/deep/') || selector.includes(' >> ');
+
+      let mainElements: Element[] = [];
+      if (!hasCustomShadowCombinator) {
+        try {
+          mainElements = Array.from(document.querySelectorAll(selector));
+        } catch (cssErr) {
+          return {
+            success: false,
+            error: `Invalid CSS selector "${selector}": ${cssErr instanceof Error ? cssErr.message : String(cssErr)}`,
+          };
+        }
+      } else {
+        const segments = selector.split(/>>>|\/deep\/|\s>>\s/);
+        for (const seg of segments) {
+          const trimmed = seg.trim();
+          if (!trimmed) continue;
+          try {
+            document.createDocumentFragment().querySelector(trimmed);
+          } catch (segErr) {
+            return {
+              success: false,
+              error: `Invalid CSS selector segment "${trimmed}": ${segErr instanceof Error ? segErr.message : String(segErr)}`,
+            };
+          }
+        }
+      }
+
+      let deepElements: Element[] = [];
+      try {
+        deepElements = querySelectorAllDeep(selector, document);
+      } catch (deepErr) {
+        return {
+          success: false,
+          error: `Invalid CSS selector "${selector}": ${deepErr instanceof Error ? deepErr.message : String(deepErr)}`,
+        };
+      }
+
+      rawElements = Array.from(new Set([...mainElements, ...deepElements]));
+    }
+
+    const uniqueElements = Array.from(new Set(rawElements));
+    const eligibleMatches: Element[] = [];
+
+    for (const el of uniqueElements) {
+      if (isLocatorCandidateVisible(el)) {
+        eligibleMatches.push(el);
       }
     }
 
-    if (!targetEl) {
-      return { success: false, error: `Element not found by selector: ${selector}` };
+    if (eligibleMatches.length === 0) {
+      return {
+        success: false,
+        matchCount: 0,
+        notFound: true,
+        error: `Element not found by selector: ${selector}`,
+      };
     }
 
-    return extractElementLocationDetails(targetEl);
+    if (eligibleMatches.length > 1) {
+      return {
+        success: false,
+        matchCount: eligibleMatches.length,
+        error: `Strict mode violation: selector "${selector}" resolved to ${eligibleMatches.length} visible elements in current frame. Specify a more specific selector, text, or ref.`,
+      };
+    }
+
+    const loc = extractElementLocationDetails(eligibleMatches[0]);
+    if (!Number.isFinite(loc.x) || !Number.isFinite(loc.y)) {
+      return {
+        success: false,
+        error: `Element found by selector "${selector}" has non-finite coordinates (x: ${loc.x}, y: ${loc.y})`,
+      };
+    }
+
+    return {
+      ...loc,
+      matchCount: 1,
+    };
   } catch (err) {
     return {
       success: false,
@@ -4884,21 +5730,296 @@ export function inPageLocateBySelector(
   }
 }
 
+const LOCATOR_ROLE_SET = new Set([
+  'button',
+  'link',
+  'textbox',
+  'combobox',
+  'searchbox',
+  'checkbox',
+  'radio',
+  'heading',
+  'option',
+  'tab',
+  'menuitem',
+  'switch',
+]);
+
+function normalizeLocatorText(value: string): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getAriaLabelledByText(el: Element): string {
+  const ariaLabelledBy = el.getAttribute?.('aria-labelledby')?.trim();
+  if (!ariaLabelledBy) return '';
+  const parts: string[] = [];
+  for (const id of ariaLabelledBy.split(/\s+/).filter(Boolean)) {
+    const labelEl = getSameRootReference(el, id);
+    const text = normalizeLocatorText(labelEl?.textContent || '');
+    if (text) parts.push(text);
+  }
+  return normalizeLocatorText(parts.join(' '));
+}
+
+function getNativeLabelText(el: Element): string {
+  const labels = (el as HTMLElement & { labels?: NodeListOf<HTMLLabelElement> }).labels;
+  if (labels && labels.length > 0) {
+    return normalizeLocatorText(
+      Array.from(labels)
+        .map((label) => label.textContent || '')
+        .join(' '),
+    );
+  }
+
+  const id = el.getAttribute?.('id');
+  if (id) {
+    const explicitLabels = Array.from(
+      (el.getRootNode() as ParentNode).querySelectorAll('label[for]'),
+    ).filter((label) => label.getAttribute('for') === id);
+    if (explicitLabels.length > 0) {
+      return normalizeLocatorText(explicitLabels.map((label) => label.textContent || '').join(' '));
+    }
+  }
+  return normalizeLocatorText(el.closest?.('label')?.textContent || '');
+}
+
+export function getLocatorAccessibleName(el: Element): string {
+  const labelledBy = getAriaLabelledByText(el);
+  if (labelledBy) return labelledBy;
+
+  const ariaLabel = normalizeLocatorText(el.getAttribute?.('aria-label') || '');
+  if (ariaLabel) return ariaLabel;
+
+  const nativeLabel = getNativeLabelText(el);
+  if (nativeLabel) return nativeLabel;
+
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'input') {
+    const input = el as HTMLInputElement;
+    const type = (input.type || 'text').toLowerCase();
+    if (type === 'button' || type === 'submit' || type === 'reset') {
+      return normalizeLocatorText(input.value || '');
+    }
+  }
+  if (tag === 'img') {
+    return normalizeLocatorText(el.getAttribute('alt') || '');
+  }
+
+  const contentNameRoles = new Set(['button', 'link', 'heading', 'option', 'tab', 'menuitem']);
+  const role = el.getAttribute?.('role')?.toLowerCase();
+  if (
+    contentNameRoles.has(role || '') ||
+    tag === 'button' ||
+    tag === 'a' ||
+    tag === 'option' ||
+    tag === 'summary' ||
+    /^h[1-6]$/.test(tag)
+  ) {
+    const contentName = normalizeLocatorText((el as HTMLElement).innerText || el.textContent || '');
+    if (contentName) return contentName;
+  }
+
+  const innerName =
+    normalizeLocatorText(el.querySelector?.('img[alt]')?.getAttribute('alt') || '') ||
+    normalizeLocatorText(
+      el.querySelector?.('[role="img"][aria-label], [aria-label]')?.getAttribute('aria-label') ||
+        '',
+    ) ||
+    normalizeLocatorText(el.querySelector?.('svg title, svg desc')?.textContent || '');
+  if (innerName) return innerName;
+
+  return normalizeLocatorText(el.getAttribute?.('title') || '');
+}
+
+function getLocatorLabelText(el: Element): string {
+  return (
+    getAriaLabelledByText(el) ||
+    normalizeLocatorText(el.getAttribute?.('aria-label') || '') ||
+    getNativeLabelText(el)
+  );
+}
+
+function getLocatorRole(el: Element): string | undefined {
+  const explicit = el.getAttribute?.('role')?.trim().toLowerCase();
+  if (explicit) return explicit;
+
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'button') return 'button';
+  if (tag === 'a' && el.hasAttribute('href')) return 'link';
+  if (tag === 'textarea') return 'textbox';
+  if (tag === 'select') return 'combobox';
+  if (/^h[1-6]$/.test(tag)) return 'heading';
+  if (tag === 'option') return 'option';
+  if (tag === 'input') {
+    const type = ((el as HTMLInputElement).type || 'text').toLowerCase();
+    if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+    if (type === 'checkbox') return 'checkbox';
+    if (type === 'radio') return 'radio';
+    if (type === 'search') return 'searchbox';
+    if (!['hidden', 'file', 'image', 'range', 'color'].includes(type)) {
+      return 'textbox';
+    }
+  }
+  if (
+    (el as HTMLElement).isContentEditable ||
+    el.getAttribute('contenteditable') === 'true' ||
+    el.getAttribute('contenteditable') === ''
+  ) {
+    return 'textbox';
+  }
+  return undefined;
+}
+
+function locatorIsInteractive(el: Element): boolean {
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'body' || tag === 'html') return false;
+  if (['button', 'select', 'textarea', 'summary', 'option', 'a'].includes(tag)) return true;
+  if (tag === 'input' && (el as HTMLInputElement).type !== 'hidden') return true;
+  const role = getLocatorRole(el);
+  if (
+    role &&
+    [
+      'button',
+      'link',
+      'checkbox',
+      'radio',
+      'tab',
+      'menuitem',
+      'option',
+      'switch',
+      'textbox',
+      'combobox',
+      'searchbox',
+    ].includes(role)
+  ) {
+    return true;
+  }
+  return (
+    el.hasAttribute('onclick') ||
+    el.hasAttribute('data-action') ||
+    (typeof (el as HTMLElement).tabIndex === 'number' && (el as HTMLElement).tabIndex >= 0)
+  );
+}
+
+function collapseNestedLocatorMatches(elements: Element[]): Element[] {
+  if (elements.length <= 1) return elements;
+  const interactive = new Map(elements.map((el) => [el, locatorIsInteractive(el)]));
+  const dominated = new Set<Element>();
+  for (const el of elements) {
+    const elInteractive = interactive.get(el)!;
+    for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const ancestorInteractive = interactive.get(ancestor);
+      if (ancestorInteractive === undefined) continue;
+      if (!ancestorInteractive || elInteractive) dominated.add(ancestor);
+      if (ancestorInteractive && !elInteractive) dominated.add(el);
+    }
+  }
+  return elements.filter((el) => !dominated.has(el));
+}
+
+function finalizeLocatorMatches(elements: Element[], descriptor: string) {
+  const matches = collapseNestedLocatorMatches(elements);
+  if (matches.length === 0) {
+    return {
+      success: false,
+      matchCount: 0,
+      notFound: true,
+      error: `Element not found matching ${descriptor}`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      success: false,
+      matchCount: matches.length,
+      error: `Strict mode violation: ${descriptor} resolved to ${matches.length} visible elements in current frame. Specify a unique target.`,
+    };
+  }
+  const location = extractElementLocationDetails(matches[0]);
+  if (!Number.isFinite(location.x) || !Number.isFinite(location.y)) {
+    return {
+      success: false,
+      error: `Element found matching ${descriptor} has non-finite coordinates`,
+    };
+  }
+  return { ...location, matchCount: 1 };
+}
+
+export interface LocateByLabelOptions {
+  exact?: boolean;
+}
+
+export function inPageLocateByLabel(label: string, options: LocateByLabelOptions = {}) {
+  const target = normalizeLocatorText(label);
+  if (!target) return { success: false, error: 'Label must be provided' };
+  const targetLower = target.toLowerCase();
+  const candidates = querySelectorAllDeep(
+    'input:not([type="hidden"]), textarea, select, button, [role], [aria-label], [aria-labelledby]',
+    document,
+  );
+  const matches = candidates.filter((el) => {
+    if (!isLocatorCandidateVisible(el)) return false;
+    const candidate = getLocatorLabelText(el);
+    if (!candidate) return false;
+    return options.exact ? candidate === target : candidate.toLowerCase().includes(targetLower);
+  });
+  return finalizeLocatorMatches(matches, `label "${label}"`);
+}
+
+export interface LocateByRoleOptions {
+  name?: string;
+  exact?: boolean;
+}
+
+export function inPageLocateByRole(role: string, options: LocateByRoleOptions = {}) {
+  const targetRole = normalizeLocatorText(role).toLowerCase();
+  if (!LOCATOR_ROLE_SET.has(targetRole)) {
+    return {
+      success: false,
+      error: `Unsupported role locator "${role}". Supported roles: ${Array.from(LOCATOR_ROLE_SET).join(', ')}`,
+    };
+  }
+  const targetName = normalizeLocatorText(options.name || '');
+  const targetNameLower = targetName.toLowerCase();
+  const candidates = querySelectorAllDeep(
+    'button, a, input, textarea, select, option, h1, h2, h3, h4, h5, h6, [role], [contenteditable]',
+    document,
+  );
+  const matches = candidates.filter((el) => {
+    if (!isLocatorCandidateVisible(el)) return false;
+    if (getLocatorRole(el) !== targetRole) return false;
+    if (!targetName) return true;
+    const accessibleName = getLocatorAccessibleName(el);
+    return options.exact
+      ? accessibleName === targetName
+      : accessibleName.toLowerCase().includes(targetNameLower);
+  });
+  return finalizeLocatorMatches(
+    matches,
+    `role "${targetRole}"${targetName ? ` name "${targetName}"` : ''}`,
+  );
+}
+
 export interface LocateByTextOptions {
   role?: string;
   exact?: boolean;
   visibleOnly?: boolean;
   threshold?: number;
+  mode?: 'legacy' | 'text';
 }
 
 /**
  * Locate element coordinates and info by visible text content and/or ARIA role.
+ * Enforces strict uniqueness within the frame: multiple matching visible elements fail closed with matchCount and strict error.
  */
 export function inPageLocateByText(
   text: string,
   roleOrOptions?: string | LocateByTextOptions,
 ): {
   success: boolean;
+  matchCount?: number;
+  notFound?: boolean;
   index?: number;
   x?: number;
   y?: number;
@@ -4925,54 +6046,112 @@ export function inPageLocateByText(
     typeof roleOrOptions === 'object' && roleOrOptions !== null
       ? Boolean(roleOrOptions.exact)
       : false;
+  const textOnly =
+    typeof roleOrOptions === 'object' && roleOrOptions !== null && roleOrOptions.mode === 'text';
 
   if (!text && !role) {
     return { success: false, error: 'Either text or role must be provided' };
   }
 
   try {
-    const normalizedTarget = (text || '').trim().toLowerCase();
+    const displayTarget = normalizeLocatorText(text || '');
+    const normalizedTarget = displayTarget.toLowerCase();
     const isSeekingComposer = role === 'composer' || role === 'editor';
-    const selector = role
-      ? isSeekingComposer
-        ? '[role="textbox"], textarea, [contenteditable], [data-testid*="composer" i], [data-testid*="editor" i], [data-testid*="post" i], [data-testid*="tweet" i], [data-testid*="comment" i], [data-testid*="chat" i], [data-testid*="message" i], .DraftEditor-root, .ProseMirror, .ql-editor, .monaco-editor, .cm-editor, .tiptap, div, span, [role]'
-        : `[role="${role}"], ${role}`
-      : 'button, a, input, textarea, select, span, p, div, h1, h2, h3, h4, [role]';
-    let elements: Element[];
-    try {
-      elements = querySelectorAllDeep(selector, document);
-    } catch {
-      elements = querySelectorAllDeep('*', document);
+
+    let selector: string;
+    if (role) {
+      if (isSeekingComposer) {
+        selector =
+          '[role="textbox"], textarea, [contenteditable], [data-testid*="composer" i], [data-testid*="editor" i], [data-testid*="post" i], [data-testid*="tweet" i], [data-testid*="comment" i], [data-testid*="chat" i], [data-testid*="message" i], .DraftEditor-root, .ProseMirror, .ql-editor, .monaco-editor, .cm-editor, .tiptap, div, span, [role]';
+      } else if (role.toLowerCase() === 'textbox') {
+        selector =
+          '[role="textbox"], textarea, input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="image"]):not([type="file"]), [contenteditable="true"], [contenteditable=""]';
+      } else if (role.toLowerCase() === 'button') {
+        selector =
+          '[role="button"], button, input[type="button"], input[type="submit"], input[type="reset"]';
+      } else if (role.toLowerCase() === 'link') {
+        selector = '[role="link"], a[href], a';
+      } else if (role.toLowerCase() === 'combobox') {
+        selector = '[role="combobox"], select';
+      } else {
+        selector = `[role="${role}"], ${role}`;
+      }
+    } else {
+      selector = 'button, a, input, textarea, select, span, p, div, h1, h2, h3, h4, [role]';
     }
 
-    let bestMatch: Element | null = null;
-    let bestScore = -1;
+    let rawCandidates: Element[];
+    try {
+      rawCandidates = querySelectorAllDeep(selector, document);
+    } catch {
+      rawCandidates = querySelectorAllDeep('*', document);
+    }
 
-    for (let i = 0; i < elements.length; i++) {
-      const el = elements[i];
-      if (!(el instanceof Element)) continue;
-      let style: CSSStyleDeclaration | null = null;
-      try {
-        style = window.getComputedStyle(el);
-      } catch {}
-      if (
-        style?.display === 'none' ||
-        style?.visibility === 'hidden' ||
-        parseFloat(style?.opacity || '1') <= 0 ||
-        style?.pointerEvents === 'none' ||
-        el.hasAttribute('inert') ||
-        (el as any).inert === true ||
-        el.getAttribute('aria-hidden') === 'true' ||
-        (typeof el.closest === 'function' && el.closest('[aria-hidden="true"], [inert]') !== null)
-      )
-        continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) continue;
+    const candidates = Array.from(new Set(rawCandidates));
+    const exactMatches: Element[] = [];
+    const substringMatches: Element[] = [];
+    const roleOnlyMatches: Element[] = [];
 
-      const vh = window.innerHeight || 800;
-      const vw = window.innerWidth || 1280;
-      const inActiveViewport = rect.top < vh && rect.bottom > 0 && rect.left < vw && rect.right > 0;
-      const viewportBonus = inActiveViewport ? 1000 : 0;
+    function matchRole(element: Element, targetRole: string): boolean {
+      const explicitRole = element.getAttribute('role')?.toLowerCase();
+      if (explicitRole) {
+        return explicitRole === targetRole.toLowerCase();
+      }
+      const tag = element.tagName.toLowerCase();
+      const normTarget = targetRole.toLowerCase();
+      if (normTarget === 'textbox') {
+        if (tag === 'textarea') return true;
+        if (tag === 'input') {
+          const inputType = ((element as HTMLInputElement).type || 'text').toLowerCase();
+          const nonTextTypes = new Set([
+            'button',
+            'submit',
+            'reset',
+            'checkbox',
+            'radio',
+            'hidden',
+            'image',
+            'file',
+            'range',
+            'color',
+          ]);
+          return !nonTextTypes.has(inputType);
+        }
+        if (
+          (element as HTMLElement).isContentEditable ||
+          element.getAttribute('contenteditable') === 'true' ||
+          element.getAttribute('contenteditable') === ''
+        ) {
+          return true;
+        }
+        return false;
+      }
+      if (normTarget === 'button') {
+        if (tag === 'button') return true;
+        if (tag === 'input') {
+          const inputType = ((element as HTMLInputElement).type || '').toLowerCase();
+          return inputType === 'button' || inputType === 'submit' || inputType === 'reset';
+        }
+        return false;
+      }
+      if (normTarget === 'link') {
+        return (
+          tag === 'a' &&
+          (element.hasAttribute('href') || Boolean((element as HTMLAnchorElement).href))
+        );
+      }
+      if (normTarget === 'combobox') {
+        return tag === 'select';
+      }
+      if (normTarget === 'checkbox' || normTarget === 'radio') {
+        return tag === 'input' && (element as HTMLInputElement).type?.toLowerCase() === normTarget;
+      }
+      return tag === normTarget;
+    }
+
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      if (!isLocatorCandidateVisible(el)) continue;
 
       const semantics = detectEditorSemantics(el);
       if (role === 'composer') {
@@ -4980,58 +6159,169 @@ export function inPageLocateByText(
       } else if (role === 'editor') {
         if (!semantics.isEditor && !semantics.isComposer) continue;
       } else if (typeof role === 'string' && role.length > 0) {
-        const elRole = el.getAttribute('role')?.toLowerCase() || el.tagName.toLowerCase();
-        if (elRole !== role.toLowerCase()) continue;
+        if (!matchRole(el, role)) continue;
       }
 
-      // If looking for textbox, penalize generic search inputs and reward rich compose boxes
-      const searchPenalty = role === 'textbox' && semantics.isSearch ? 40 : 0;
-      const composerBonus = semantics.isComposer ? 25 : semantics.isEditor ? 15 : 0;
-
       if (normalizedTarget) {
-        const elText = (el.textContent || '').trim().toLowerCase();
+        const displayText = normalizeLocatorText(el.textContent || '');
+        const elText = displayText.toLowerCase();
         const ariaLabel = (el.getAttribute('aria-label') || '').trim().toLowerCase();
         const placeholder = (el.getAttribute('placeholder') || '').trim().toLowerCase();
+        const value = ((el as HTMLInputElement).value || '').trim().toLowerCase();
 
-        let matchScore = 0;
-        if (
-          elText === normalizedTarget ||
-          ariaLabel === normalizedTarget ||
-          placeholder === normalizedTarget
-        ) {
-          matchScore = 100;
+        const exactMatch = textOnly
+          ? isExact
+            ? displayText === displayTarget
+            : elText === normalizedTarget
+          : elText === normalizedTarget ||
+            ariaLabel === normalizedTarget ||
+            placeholder === normalizedTarget ||
+            value === normalizedTarget;
+        if (exactMatch) {
+          exactMatches.push(el);
         } else if (
           !isExact &&
-          (elText.includes(normalizedTarget) || ariaLabel.includes(normalizedTarget))
+          (textOnly
+            ? elText.includes(normalizedTarget)
+            : elText.includes(normalizedTarget) ||
+              ariaLabel.includes(normalizedTarget) ||
+              placeholder.includes(normalizedTarget))
         ) {
-          matchScore = 50;
-        }
-
-        if (matchScore > 0) {
-          const totalScore = matchScore + composerBonus + viewportBonus - searchPenalty;
-          if (totalScore > bestScore) {
-            bestMatch = el;
-            bestScore = totalScore;
-          }
+          substringMatches.push(el);
         }
       } else {
-        // Only role was specified
-        const roleScore = 10 + composerBonus + viewportBonus - searchPenalty;
-        if (roleScore > bestScore) {
-          bestMatch = el;
-          bestScore = roleScore;
-        }
+        roleOnlyMatches.push(el);
       }
     }
 
-    if (!bestMatch) {
+    function isInteractive(el: Element): boolean {
+      if (!(el instanceof Element)) return false;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'body' || tag === 'html') return false;
+      if (
+        tag === 'button' ||
+        tag === 'select' ||
+        tag === 'textarea' ||
+        tag === 'summary' ||
+        tag === 'option'
+      ) {
+        return true;
+      }
+      if (tag === 'input' && (el as HTMLInputElement).type !== 'hidden') {
+        return true;
+      }
+      if (tag === 'a' && ((el as HTMLAnchorElement).href || el.hasAttribute('href'))) {
+        return true;
+      }
+      if (
+        (el as HTMLElement).isContentEditable ||
+        el.getAttribute('contenteditable') === 'true' ||
+        el.getAttribute('contenteditable') === ''
+      ) {
+        return true;
+      }
+      const elRole = el.getAttribute('role')?.toLowerCase();
+      const interactiveRoles = new Set([
+        'button',
+        'link',
+        'checkbox',
+        'radio',
+        'tab',
+        'menuitem',
+        'menuitemcheckbox',
+        'menuitemradio',
+        'option',
+        'switch',
+        'textbox',
+        'combobox',
+        'searchbox',
+        'spinbutton',
+      ]);
+      if (elRole && interactiveRoles.has(elRole)) {
+        return true;
+      }
+      if (
+        el.hasAttribute('onclick') ||
+        el.hasAttribute('oncontextmenu') ||
+        el.hasAttribute('ondblclick') ||
+        (typeof (el as HTMLElement).tabIndex === 'number' && (el as HTMLElement).tabIndex >= 0) ||
+        el.hasAttribute('data-action') ||
+        el.getAttribute('aria-pressed') !== null ||
+        el.getAttribute('aria-expanded') !== null ||
+        el.getAttribute('aria-selected') !== null ||
+        el.getAttribute('aria-checked') !== null
+      ) {
+        return true;
+      }
+      let st: CSSStyleDeclaration | null = null;
+      try {
+        const win = el.ownerDocument?.defaultView || window;
+        st = win.getComputedStyle(el);
+      } catch {}
+      if (st?.cursor === 'pointer') {
+        return true;
+      }
+      return false;
+    }
+
+    function collapseNested(elements: Element[]): Element[] {
+      if (elements.length <= 1) return elements;
+      const interactive = new Map(elements.map((el) => [el, isInteractive(el)]));
+      const dominated = new Set<Element>();
+      for (const el of elements) {
+        const isElInteractive = interactive.get(el)!;
+        // Only matched ancestors can dominate a candidate or be dominated by it.
+        for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const isAncestorInteractive = interactive.get(ancestor);
+          if (isAncestorInteractive === undefined) continue;
+          if (!isAncestorInteractive || isElInteractive) dominated.add(ancestor);
+          if (isAncestorInteractive && !isElInteractive) dominated.add(el);
+        }
+      }
+      return elements.filter((el) => !dominated.has(el));
+    }
+
+    let targetElementList: Element[] = [];
+    if (normalizedTarget) {
+      const collapsedExact = collapseNested(exactMatches);
+      if (collapsedExact.length > 0) {
+        targetElementList = collapsedExact;
+      } else if (!isExact) {
+        targetElementList = collapseNested(substringMatches);
+      }
+    } else {
+      targetElementList = collapseNested(roleOnlyMatches);
+    }
+
+    if (targetElementList.length === 0) {
       return {
         success: false,
+        matchCount: 0,
+        notFound: true,
         error: `Element not found matching text="${text}" role="${role || ''}"`,
       };
     }
 
-    return extractElementLocationDetails(bestMatch);
+    if (targetElementList.length > 1) {
+      return {
+        success: false,
+        matchCount: targetElementList.length,
+        error: `Strict mode violation: text "${text || role}" resolved to ${targetElementList.length} visible elements in current frame. Specify a more specific selector, text, or ref.`,
+      };
+    }
+
+    const loc = extractElementLocationDetails(targetElementList[0]);
+    if (!Number.isFinite(loc.x) || !Number.isFinite(loc.y)) {
+      return {
+        success: false,
+        error: `Element found matching text="${text}" has non-finite coordinates (x: ${loc.x}, y: ${loc.y})`,
+      };
+    }
+
+    return {
+      ...loc,
+      matchCount: 1,
+    };
   } catch (err) {
     return {
       success: false,
@@ -5040,10 +6330,6 @@ export function inPageLocateByText(
   }
 }
 
-/**
- * Return the current frame's origin (used to distinguish cross-origin subframes from
- * same-origin iframes whose cumulative frame offset is 0).
- */
 export function inPageGetFrameOrigin(): string {
   try {
     return window.location.origin;
@@ -5234,7 +6520,7 @@ export function inPageFocusIndex(index: number): {
   try {
     if (typeof htmlEl.focus === 'function') {
       htmlEl.focus({ preventScroll: true });
-      focused = document.activeElement === el || el.contains(document.activeElement);
+      focused = composedContains(el, getDeepActiveElement());
     }
   } catch {}
 
@@ -5244,7 +6530,7 @@ export function inPageFocusIndex(index: number): {
     try {
       el.setAttribute('tabindex', '-1');
       htmlEl.focus({ preventScroll: true });
-      focused = document.activeElement === el || el.contains(document.activeElement);
+      focused = composedContains(el, getDeepActiveElement());
     } catch {}
   }
 
@@ -5351,6 +6637,93 @@ export function inPageInteractIndex(
   };
 }
 
+function resolveEditableTextTarget(el: Element): HTMLElement | null {
+  if (el instanceof HTMLInputElement) {
+    const type = (el.type || 'text').toLowerCase();
+    if (/^(text|search|email|url|tel|password|number)$/.test(type)) return el;
+    return null;
+  }
+  if (el instanceof HTMLTextAreaElement) return el;
+  const ownEditable =
+    (el as HTMLElement).isContentEditable ||
+    el.getAttribute('contenteditable') === 'true' ||
+    el.getAttribute('contenteditable') === '';
+  if (ownEditable) return el as HTMLElement;
+  return (
+    (el.querySelector?.('[contenteditable="true"], [contenteditable=""]') as HTMLElement) || null
+  );
+}
+
+function readEditableTextValue(el: Element): string {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value || '';
+  const target = resolveEditableTextTarget(el);
+  if (!target) return '';
+  return String(target.innerText ?? target.textContent ?? '');
+}
+
+/**
+ * Focus the editable target, place its caret at the true end, and return the
+ * pre-append value used by commitment verification.
+ */
+export function inPagePrepareAppend(refOrIndex: number | string): {
+  success: boolean;
+  currentValue: string;
+  tagName?: string;
+  error?: string;
+} {
+  const parsed = parseElementIndex(refOrIndex);
+  if (!parsed) return { success: false, currentValue: '', error: 'Invalid index or ref format' };
+  const index = parsed.numericIndex;
+  const el = findIndexedElement(refOrIndex);
+  if (!el || !(el instanceof Element)) {
+    return { success: false, currentValue: '', error: `Element with index [${index}] not found` };
+  }
+
+  try {
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
+  } catch {}
+
+  const editTarget = resolveEditableTextTarget(el);
+  if (!editTarget) {
+    return {
+      success: false,
+      currentValue: '',
+      tagName: el.tagName.toLowerCase(),
+      error: `Element [${index}] is not a text-editable control`,
+    };
+  }
+
+  try {
+    editTarget.focus({ preventScroll: true });
+  } catch {
+    try {
+      editTarget.focus();
+    } catch {}
+  }
+
+  if (editTarget instanceof HTMLInputElement || editTarget instanceof HTMLTextAreaElement) {
+    try {
+      editTarget.setSelectionRange(editTarget.value.length, editTarget.value.length);
+    } catch {}
+  } else {
+    const doc = editTarget.ownerDocument || document;
+    const selection = doc.defaultView?.getSelection?.() || null;
+    if (selection && typeof doc.createRange === 'function') {
+      const range = doc.createRange();
+      range.selectNodeContents(editTarget);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+
+  return {
+    success: true,
+    currentValue: readEditableTextValue(el),
+    tagName: el.tagName.toLowerCase(),
+  };
+}
+
 /**
  * Fill input or textarea by 1-based index inside active tab.
  */
@@ -5369,32 +6742,17 @@ export function inPageFillIndex(
   diagnostics?: string;
   error?: string;
 } {
-  let index: number;
-  if (typeof refOrIndex === 'string') {
-    const parsed = refOrIndex.startsWith('ref_')
-      ? parseInt(refOrIndex.slice(4), 10)
-      : parseInt(refOrIndex, 10);
-    if (isNaN(parsed)) {
-      return {
-        success: false,
-        index: 0,
-        error: `Invalid index or ref format: ${refOrIndex}`,
-      };
-    }
-    index = parsed;
-  } else {
-    index = refOrIndex;
-  }
-
-  if (index <= 0) {
+  const parsed = parseElementIndex(refOrIndex);
+  if (!parsed) {
     return {
       success: false,
-      index,
-      error: `Index must be a positive 1-based integer. Received: ${index}`,
+      index: 0,
+      error: `Invalid index or ref format: `,
     };
   }
+  const index = parsed.numericIndex;
 
-  const el = findIndexedElement(index);
+  const el = findIndexedElement(refOrIndex);
   if (!el || !(el instanceof Element)) {
     return {
       success: false,
@@ -5409,6 +6767,19 @@ export function inPageFillIndex(
 
   if (typeof (el as HTMLElement).focus === 'function') {
     (el as HTMLElement).focus();
+  }
+
+  let expectedAfterFill = textToFill;
+  if (!clear && resolveEditableTextTarget(el)) {
+    const prepared = inPagePrepareAppend(refOrIndex);
+    if (!prepared.success) {
+      return {
+        success: false,
+        index,
+        error: prepared.error || `Cannot prepare element [${index}] for append`,
+      };
+    }
+    expectedAfterFill = `${prepared.currentValue}${textToFill}`;
   }
 
   const getNativeSetter = (element: any, prop: string) => {
@@ -5438,8 +6809,10 @@ export function inPageFillIndex(
       el.checked = isTruthy;
     }
   } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
-    if (clear) nativeInputValueSetter.call(el, '');
-    nativeInputValueSetter.call(el, textToFill);
+    nativeInputValueSetter.call(el, clear ? textToFill : `${el.value || ''}${textToFill}`);
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch {}
     try {
       el.dispatchEvent(
         new InputEvent('input', {
@@ -5454,8 +6827,10 @@ export function inPageFillIndex(
     }
     el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
   } else if (el instanceof HTMLTextAreaElement && nativeTextAreaValueSetter) {
-    if (clear) nativeTextAreaValueSetter.call(el, '');
-    nativeTextAreaValueSetter.call(el, textToFill);
+    nativeTextAreaValueSetter.call(el, clear ? textToFill : `${el.value || ''}${textToFill}`);
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch {}
     try {
       el.dispatchEvent(
         new InputEvent('input', {
@@ -5492,10 +6867,10 @@ export function inPageFillIndex(
       void inPageSelectCustomCombobox(index, undefined, textToFill);
     } catch {}
   } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    if (clear) {
-      el.value = '';
-    }
-    el.value = textToFill;
+    el.value = clear ? textToFill : `${el.value || ''}${textToFill}`;
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch {}
   } else if (
     (el as HTMLElement).isContentEditable ||
     el.getAttribute('contenteditable') === 'true' ||
@@ -5524,15 +6899,22 @@ export function inPageFillIndex(
     if (lines.length > 1) {
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].length > 0) {
+          const beforeLine = String(editTarget.innerText ?? editTarget.textContent ?? '');
           let insertedLine = false;
           try {
             insertedLine = document.execCommand('insertText', false, lines[i]);
           } catch {}
-          if (!insertedLine && typeof editTarget.appendChild === 'function') {
+          const afterLine = String(editTarget.innerText ?? editTarget.textContent ?? '');
+          if (
+            !insertedLine &&
+            (!clear || afterLine === beforeLine) &&
+            typeof editTarget.appendChild === 'function'
+          ) {
             editTarget.appendChild(document.createTextNode(lines[i]));
           }
         }
         if (i < lines.length - 1) {
+          const beforeBreak = String(editTarget.innerText ?? editTarget.textContent ?? '');
           let paraInserted = false;
           try {
             paraInserted = document.execCommand('insertParagraph', false);
@@ -5542,7 +6924,12 @@ export function inPageFillIndex(
               paraInserted = document.execCommand('insertLineBreak', false);
             } catch {}
           }
-          if (!paraInserted && typeof editTarget.appendChild === 'function') {
+          const afterBreak = String(editTarget.innerText ?? editTarget.textContent ?? '');
+          if (
+            !paraInserted &&
+            afterBreak === beforeBreak &&
+            typeof editTarget.appendChild === 'function'
+          ) {
             editTarget.appendChild(document.createElement('br'));
           }
           try {
@@ -5570,12 +6957,18 @@ export function inPageFillIndex(
         }
       }
     } else {
+      const beforeText = String(editTarget.innerText ?? editTarget.textContent ?? '');
       let inserted = false;
       try {
         inserted = document.execCommand('insertText', false, textToFill);
       } catch {}
       if (!inserted) {
-        editTarget.innerText = textToFill;
+        const afterText = String(editTarget.innerText ?? editTarget.textContent ?? '');
+        if (clear) {
+          editTarget.innerText = textToFill;
+        } else if (afterText === beforeText && typeof editTarget.appendChild === 'function') {
+          editTarget.appendChild(document.createTextNode(textToFill));
+        }
       }
     }
     try {
@@ -5643,7 +7036,7 @@ export function inPageFillIndex(
   }
 
   const verification: any = textToFill
-    ? inPageVerifyInputCommitment(index, textToFill)
+    ? inPageVerifyInputCommitment(index, expectedAfterFill)
     : { committed: true };
 
   return {
@@ -5659,223 +7052,7 @@ export function inPageFillIndex(
   };
 }
 
-/**
- * Dispatch bubbling synthetic input and change events to force controlled components
- * (React/Vue/Angular/Svelte) to commit values updated via native CDP / typing.
- */
-export function inPageDispatchInputEvents(refOrIndex: number | string): {
-  success: boolean;
-  error?: string;
-} {
-  let index: number;
-  if (typeof refOrIndex === 'string') {
-    const parsed = refOrIndex.startsWith('ref_')
-      ? parseInt(refOrIndex.slice(4), 10)
-      : parseInt(refOrIndex, 10);
-    if (isNaN(parsed)) return { success: false, error: `Invalid index: ${refOrIndex}` };
-    index = parsed;
-  } else {
-    index = refOrIndex;
-  }
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) {
-    return { success: false, error: `Element [${index}] not found` };
-  }
-  try {
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
-  } catch {
-    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-  }
-  el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-  return { success: true };
-}
-
 export { inPageWaitForDOMSettle } from '@/utils/action-watchdog';
-
-/**
- * Cross-platform Deep Reset Protocol for rich-text editors and form controls.
- * Uses In-Page DOM Selection + execCommand/beforeinput delete + value resetting.
- * Eliminates text concatenation and phantom residual characters across Draft.js, Lexical, and React controlled inputs.
- */
-export function inPageDeepResetElement(refOrIndex: number | string): {
-  success: boolean;
-  cleared: boolean;
-  currentLength: number;
-  tagName?: string;
-  isComposer?: boolean;
-  error?: string;
-} {
-  let index: number;
-  if (typeof refOrIndex === 'string') {
-    const parsed = refOrIndex.startsWith('ref_')
-      ? parseInt(refOrIndex.slice(4), 10)
-      : parseInt(refOrIndex, 10);
-    if (isNaN(parsed)) {
-      return {
-        success: false,
-        cleared: false,
-        currentLength: 0,
-        error: `Invalid index: ${refOrIndex}`,
-      };
-    }
-    index = parsed;
-  } else {
-    index = refOrIndex;
-  }
-
-  if (index <= 0) {
-    return {
-      success: false,
-      cleared: false,
-      currentLength: 0,
-      error: `Index must be positive: ${index}`,
-    };
-  }
-
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      cleared: false,
-      currentLength: 0,
-      error: `Element [${index}] not found`,
-    };
-  }
-
-  try {
-    if (typeof (el as HTMLElement).focus === 'function') {
-      (el as HTMLElement).focus();
-    }
-  } catch {}
-
-  const semantics = detectEditorSemantics(el);
-
-  // Standard <input> or <textarea>
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    const inputEl = el as HTMLInputElement | HTMLTextAreaElement;
-    try {
-      inputEl.select();
-    } catch {}
-
-    const proto =
-      el instanceof HTMLInputElement
-        ? window.HTMLInputElement?.prototype
-        : window.HTMLTextAreaElement?.prototype;
-    const nativeSetter = Object.getOwnPropertyDescriptor(proto || {}, 'value')?.set;
-    if (nativeSetter) {
-      nativeSetter.call(inputEl, '');
-    } else {
-      inputEl.value = '';
-    }
-
-    try {
-      inputEl.dispatchEvent(
-        new InputEvent('beforeinput', {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          inputType: 'deleteContentBackward',
-        }),
-      );
-    } catch {}
-
-    try {
-      inputEl.dispatchEvent(
-        new InputEvent('input', {
-          bubbles: true,
-          composed: true,
-          inputType: 'deleteContentBackward',
-        }),
-      );
-    } catch {
-      inputEl.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    }
-    inputEl.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
-    const currentLen = (inputEl.value || '').length;
-    return {
-      success: true,
-      cleared: currentLen === 0,
-      currentLength: currentLen,
-      tagName: el.tagName.toLowerCase(),
-      isComposer: semantics.isComposer,
-    };
-  }
-
-  // Rich-text editor (contenteditable, Draft.js, Lexical, ProseMirror, Quill)
-  const editTarget =
-    (el as HTMLElement).isContentEditable || el.getAttribute('contenteditable') === 'true'
-      ? (el as HTMLElement)
-      : (el.querySelector?.('[contenteditable="true"]') as HTMLElement) || (el as HTMLElement);
-
-  try {
-    if (typeof editTarget.focus === 'function') {
-      editTarget.focus();
-    }
-  } catch {}
-
-  // 1. Select all contents in DOM selection
-  const sel = window.getSelection();
-  if (sel && typeof document.createRange === 'function') {
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(editTarget);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch {}
-  }
-
-  // 2. Dispatch synthetic beforeinput with deleteContentBackward
-  try {
-    editTarget.dispatchEvent(
-      new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        inputType: 'deleteContentBackward',
-      }),
-    );
-  } catch {}
-
-  // 3. Native document.execCommand delete
-  try {
-    document.execCommand('delete', false);
-  } catch {}
-
-  // 4. If content remains, clear innerText / innerHTML directly
-  let currentLen = (editTarget.innerText || editTarget.textContent || '').trim().length;
-  if (currentLen > 0) {
-    try {
-      editTarget.innerText = '';
-    } catch {}
-    try {
-      editTarget.innerHTML = '';
-    } catch {}
-  }
-
-  // 5. Notify framework of input deletion
-  try {
-    editTarget.dispatchEvent(
-      new InputEvent('input', {
-        bubbles: true,
-        composed: true,
-        inputType: 'deleteContentBackward',
-      }),
-    );
-  } catch {
-    editTarget.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-  }
-  editTarget.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
-  currentLen = (editTarget.innerText || editTarget.textContent || '').trim().length;
-  return {
-    success: true,
-    cleared: currentLen === 0,
-    currentLength: currentLen,
-    tagName: el.tagName.toLowerCase(),
-    isComposer: semantics.isComposer || semantics.isEditor,
-  };
-}
 
 export function cleanAndNormalizeText(str: string): string {
   return str
@@ -5928,43 +7105,32 @@ export function inPageVerifyActiveElement(
     };
   }
 
-  const getDeepActive = (): Element | null => {
-    let el = typeof document !== 'undefined' ? document.activeElement : null;
-    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
-      el = el.shadowRoot.activeElement;
-    }
-    return el;
-  };
-
-  let active = getDeepActive();
+  let active = getDeepActiveElement();
 
   // Check if active matches targetEl or is contained within targetEl (e.g. contenteditable or custom input inside wrapper)
-  let isFocused =
-    active === targetEl || Boolean(targetEl.contains && active && targetEl.contains(active));
+  let isFocused = composedContains(targetEl, active);
 
   // If focus failed via mouse click, attempt programmatic focus fallback
   if (!isFocused && typeof (targetEl as HTMLElement).focus === 'function') {
     try {
       (targetEl as HTMLElement).focus({ preventScroll: true });
-      active = getDeepActive();
-      isFocused =
-        active === targetEl || Boolean(targetEl.contains && active && targetEl.contains(active));
+      active = getDeepActiveElement();
+      isFocused = composedContains(targetEl, active);
     } catch {}
   }
 
   // If still not focused and targetEl is a composite container wrapping an input/textarea/contenteditable
   if (!isFocused && typeof targetEl.querySelector === 'function') {
-    const innerFocusable = targetEl.querySelector(
+    const innerFocusable = querySelectorDeep(
       'input:not([type="hidden"]), textarea, [contenteditable="true"]',
+      targetEl,
     ) as HTMLElement | null;
     if (innerFocusable && typeof innerFocusable.focus === 'function') {
       try {
         innerFocusable.focus({ preventScroll: true });
-        active = getDeepActive();
+        active = getDeepActiveElement();
         isFocused =
-          active === targetEl ||
-          active === innerFocusable ||
-          Boolean(targetEl.contains && active && targetEl.contains(active));
+          active === targetEl || active === innerFocusable || composedContains(targetEl, active);
       } catch {}
     }
   }
@@ -6012,10 +7178,7 @@ export function inPageGetActiveElementSummary(): {
   hasActiveModal?: boolean;
 } {
   try {
-    let el = typeof document !== 'undefined' ? document.activeElement : null;
-    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
-      el = el.shadowRoot.activeElement;
-    }
+    const el = getDeepActiveElement();
     const modalBlocker =
       typeof detectActiveModalBlocker === 'function' ? detectActiveModalBlocker(window) : null;
     const hasActiveModal = Boolean(modalBlocker && modalBlocker.el);
@@ -6033,7 +7196,9 @@ export function inPageGetActiveElementSummary(): {
       ['input', 'textarea', 'select'].includes(tagName) ||
       targetEl.getAttribute('contenteditable') === 'true';
     const value =
-      isInput && 'value' in targetEl
+      isInput &&
+      !['password', 'file', 'hidden'].includes((type || '').toLowerCase()) &&
+      'value' in targetEl
         ? String((targetEl as any).value ?? '').slice(0, 60)
         : undefined;
     const text = targetEl.textContent?.trim()?.slice(0, 60) || undefined;
@@ -6351,17 +7516,20 @@ export function inPageVerifyInputCommitment(
   };
   diagnostics?: string;
 } {
-  let index: number;
-  if (typeof refOrIndex === 'string') {
-    const parsed = refOrIndex.startsWith('ref_')
-      ? parseInt(refOrIndex.slice(4), 10)
-      : parseInt(refOrIndex, 10);
-    index = isNaN(parsed) ? 0 : parsed;
-  } else {
-    index = refOrIndex;
+  const parsed = parseElementIndex(refOrIndex);
+  if (!parsed) {
+    return {
+      committed: false,
+      currentValue: '',
+      expectedValue: expectedText,
+      length: 0,
+      tagName: 'unknown',
+      diagnostics: `Invalid index or ref format: `,
+    };
   }
+  const index = parsed.numericIndex;
 
-  const el = findIndexedElement(index);
+  const el = findIndexedElement(refOrIndex);
   if (!el || !(el instanceof Element)) {
     return {
       committed: false,
@@ -6565,9 +7733,7 @@ export function inPageVerifyInputCommitment(
         }
         // Pass 3: allocate new index if still unindexed
         if (candidateBtnIndex === undefined) {
-          const maxIdx = isolatedMap.size > 0 ? Math.max(...isolatedMap.keys()) : 0;
-          candidateBtnIndex = maxIdx + 1;
-          isolatedMap.set(candidateBtnIndex, wrapElement(candidateBtn));
+          candidateBtnIndex = indexElement(candidateBtn);
         }
       } catch {}
       submitButtonState = {
@@ -6627,11 +7793,12 @@ export function inPageVerifyInputCommitment(
     };
   }
 
-  // Custom ARIA combobox and listbox
+  // Native editable comboboxes are verified by their value, not option text.
   if (
-    el.getAttribute('role') === 'combobox' ||
-    el.getAttribute('role') === 'listbox' ||
-    el.getAttribute('aria-haspopup') === 'listbox'
+    !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
+    (el.getAttribute('role') === 'combobox' ||
+      el.getAttribute('role') === 'listbox' ||
+      el.getAttribute('aria-haspopup') === 'listbox')
   ) {
     const activeDescendant = el.getAttribute('aria-activedescendant');
     let selectedOptionText = '';
@@ -6948,8 +8115,6 @@ export function inPageDetectPerceptiveSignature(): PerceptiveSignature {
     ),
   ).filter(isVisibleInViewport);
 
-  let maxIdx = isolatedMap.size > 0 ? Math.max(...isolatedMap.keys()) : 0;
-
   for (const inp of inputElements) {
     const tag = inp.tagName.toLowerCase();
     const type = (inp as HTMLInputElement).type?.toLowerCase();
@@ -6963,9 +8128,7 @@ export function inPageDetectPerceptiveSignature(): PerceptiveSignature {
 
     let inpIndex = indexLookup.get(inp);
     if (typeof inpIndex !== 'number') {
-      maxIdx++;
-      inpIndex = maxIdx;
-      isolatedMap.set(inpIndex, wrapElement(inp));
+      inpIndex = indexElement(inp);
       indexLookup.set(inp, inpIndex);
     }
 
@@ -7056,8 +8219,6 @@ export function inPageQueryChoiceCandidates(): ChoiceCandidateItem[] {
     if (target) indexLookup.set(target, idx);
   }
 
-  let maxIdx = isolatedMap.size > 0 ? Math.max(...isolatedMap.keys()) : 0;
-
   const selector =
     'button, [role="button"], [role="radio"], [role="option"], label, input[type="radio"], input[type="checkbox"], [role="checkbox"], a, li[role="treeitem"]';
   let elements: Element[];
@@ -7080,9 +8241,7 @@ export function inPageQueryChoiceCandidates(): ChoiceCandidateItem[] {
 
     let idx = indexLookup.get(el);
     if (typeof idx !== 'number') {
-      maxIdx++;
-      idx = maxIdx;
-      isolatedMap.set(idx, wrapElement(el));
+      idx = indexElement(el);
       indexLookup.set(el, idx);
     }
 
@@ -7920,7 +9079,6 @@ export function inPageFindSmartScrollTarget(options?: {
       } else {
         try {
           targetEl.setAttribute('data-browserpaw-scroll-target', 'true');
-          targetEl.setAttribute('data-browserclaw-scroll-target', 'true');
           selector = `${targetEl.tagName.toLowerCase()}[data-browserpaw-scroll-target="true"]`;
         } catch {
           selector = targetEl.tagName.toLowerCase();
@@ -8469,6 +9627,11 @@ export function renderCompactElementLine(el: IndexedElement, frameId?: string | 
   let role = el.role || el.tagName.toLowerCase();
   const tag = el.tagName.toLowerCase();
   const inputType = el.attributes?.type?.toLowerCase();
+  const compactValue = (value: string | undefined) =>
+    String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
 
   if (el.role === 'card') {
     role = 'card';
@@ -8513,8 +9676,55 @@ export function renderCompactElementLine(el: IndexedElement, frameId?: string | 
   parts.push(role);
   if (text) parts.push(text);
 
+  if (
+    ['table', 'grid', 'row', 'header', 'columnheader', 'rowheader', 'cell', 'gridcell'].includes(
+      role,
+    )
+  ) {
+    if (el.attributes?.tableSemantics) {
+      parts.push(`tableSemantics="${compactValue(el.attributes.tableSemantics)}"`);
+    }
+    if (el.attributes?.tableNotice) {
+      parts.push(`tableNotice="${compactValue(el.attributes.tableNotice)}"`);
+    }
+    if (el.attributes?.parentTable) parts.push(`table-ref=${el.attributes.parentTable}`);
+    if (el.attributes?.parentRow) parts.push(`row-ref=${el.attributes.parentRow}`);
+    if (el.attributes?.row) {
+      const source = el.attributes.rowSource === 'aria' ? '[aria]' : '';
+      parts.push(`row=${el.attributes.row}${source}`);
+    }
+    if (el.attributes?.column) {
+      const source = el.attributes.columnSource === 'aria' ? '[aria]' : '';
+      parts.push(`column=${el.attributes.column}${source}`);
+    }
+    if (el.attributes?.rowspan) parts.push(`rowspan=${el.attributes.rowspan}`);
+    if (el.attributes?.colspan) parts.push(`colspan=${el.attributes.colspan}`);
+    if (el.attributes?.['aria-sort'])
+      parts.push(`sort="${compactValue(el.attributes['aria-sort'])}"`);
+    if (el.attributes?.scope) parts.push(`scope="${compactValue(el.attributes.scope)}"`);
+    if (el.attributes?.headerScopeSource) {
+      parts.push(`headerScopeSource="${compactValue(el.attributes.headerScopeSource)}"`);
+    }
+    if (el.attributes?.headerDirection) {
+      parts.push(`headerDirection="${compactValue(el.attributes.headerDirection)}"`);
+    }
+    if (el.attributes?.headers) parts.push(`headers="${compactValue(el.attributes.headers)}"`);
+    if (el.attributes?.headerRefs)
+      parts.push(`headerRefs="${compactValue(el.attributes.headerRefs)}"`);
+    if (el.attributes?.rowHeader)
+      parts.push(`rowHeader="${compactValue(el.attributes.rowHeader)}"`);
+    if (el.attributes?.columnHeader) {
+      parts.push(`columnHeader="${compactValue(el.attributes.columnHeader)}"`);
+    }
+    if (el.attributes?.headerRelation) {
+      parts.push(`headerRelation="${compactValue(el.attributes.headerRelation)}"`);
+    }
+  }
+
   if (el.attributes?.id) parts.push(`#${el.attributes.id}`);
-  if (el.attributes?.name) parts.push(`name="${el.attributes.name}"`);
+  if (el.attributes?.name && el.attributes.name !== el.text) {
+    parts.push(`name="${el.attributes.name}"`);
+  }
   if (el.attributes?.placeholder) parts.push(`placeholder="${el.attributes.placeholder}"`);
   if (tag === 'a' && el.attributes?.href) parts.push(`href="${el.attributes.href}"`);
   if (el.value !== undefined && el.value !== '') {
@@ -8526,10 +9736,34 @@ export function renderCompactElementLine(el: IndexedElement, frameId?: string | 
     const valDisplay = isSensitive ? '•••' : el.value;
     parts.push(`value="${valDisplay}"`);
   }
+  const label = compactValue(el.attributes?.label);
+  if (
+    label &&
+    label !== compactValue(el.text) &&
+    label !== compactValue(el.value) &&
+    label !== '••••••••'
+  ) {
+    parts.push(`label="${label}"`);
+  }
   if (el.attributes?.['visual-shape']) parts.push(`shape="${el.attributes['visual-shape']}"`);
 
   if (el.attributes?.required === 'true' || el.attributes?.required === '') parts.push('required');
   if (el.attributes?.disabled === 'true' || el.attributes?.disabled === '') parts.push('disabled');
+  if (el.attributes?.invalid === 'true') {
+    parts.push('invalid');
+    if (el.attributes.invalidReason) {
+      parts.push(`invalidReason="${compactValue(el.attributes.invalidReason)}"`);
+    }
+    if (el.attributes.validationMessage) {
+      parts.push(`validationMessage="${compactValue(el.attributes.validationMessage)}"`);
+    }
+    if (el.attributes.errormessage) {
+      parts.push(`errormessage="${compactValue(el.attributes.errormessage)}"`);
+    }
+  }
+  if (el.attributes?.description) {
+    parts.push(`description="${compactValue(el.attributes.description)}"`);
+  }
   if (
     el.attributes?.['aria-checked'] === 'true' ||
     el.attributes?.checked === 'true' ||
@@ -8538,6 +9772,7 @@ export function renderCompactElementLine(el: IndexedElement, frameId?: string | 
     parts.push('checked');
   if (el.attributes?.['aria-selected'] === 'true') parts.push('selected');
   if (el.attributes?.['aria-expanded']) parts.push(`expanded=${el.attributes['aria-expanded']}`);
+  if (el.attributes?.focused === 'true') parts.push('focused');
 
   if (frameId !== undefined && frameId !== 0 && frameId !== '0') {
     parts.push(`frame="${frameId}"`);
@@ -8650,7 +9885,7 @@ export function inPageInsertMedia(options: {
 
     // If no explicit target, prefer document.activeElement if editable
     if (!targetEl) {
-      const active = document.activeElement;
+      const active = getDeepActiveElement();
       if (
         active &&
         active !== document.body &&

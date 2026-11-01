@@ -129,9 +129,10 @@ console.log('DOM snapshot:', dom.content[0].text);
 
 ---
 
-## 2. Canonical Tool Surface (50 MCP Tools)
+## 2. Canonical Tool Surface
 
-BrowserPaw exposes 50 canonical MCP tools organized into 8 functional categories:
+BrowserPaw exposes its canonical MCP tools in functional categories. Use
+`chrome_tool_docs` or `tools/list` for the exact runtime surface:
 
 1. **Autonomous Micro-Loop (1)**: `chrome_act_toward_goal` (local fast-decision loop).
 2. **Navigation & Tabs (7)**: `chrome_navigate`, `chrome_switch_tab`, `chrome_close_tabs`, `chrome_move_tab`, `get_windows_and_tabs`, `chrome_attach_tab`, `chrome_detach_tab`.
@@ -149,7 +150,7 @@ BrowserPaw exposes 50 canonical MCP tools organized into 8 functional categories
 ### 3.1 Pruned 1-Based DOM Indexing (`chrome_read_dom`)
 
 - Extracts a compact numbered tree (`[1]`, `[2]`, `[14]`) stripped of decorative wrappers and invisible elements.
-- Returns `treeString` directly to prompt contexts, slashing token usage by 85%+ vs raw HTML.
+- Returns `treeString` directly to prompt contexts with explicit omission and budget metadata; compare actual token usage for each page and task.
 - Preserves accessibility metadata: `role`, `aria-label`, `placeholder`, `disabled`, and `href`.
 
 ### 3.2 Action Delta Piggybacking (`includeDelta: true`)

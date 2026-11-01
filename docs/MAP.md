@@ -13,7 +13,7 @@ This map provides architecture and code references. Use [README.md](./README.md)
 │ 👤 End-User          │ 🤖 Agent Developer   │ 🏗️ Core Contributor           │
 ├──────────────────────┼──────────────────────┼───────────────────────────────┤
 │ 1. README.md         │ 1. AGENT_CONFIG_GUIDE│ 1. docs/ARCHITECTURE.md       │
-│    (Quick Start)     │ 2. skill/SKILL.md    │ 2. packages/shared/tools.ts   │
+│    (Quick Start)     │ 2. skills/browserpaw/SKILL.md    │ 2. packages/shared/src/tools.ts   │
 │ 2. Load Extension    │ 3. docs/TOOLS.md     │ 3. app/chrome-extension/      │
 │ 3. Configure Client  │ 4. Batch Pipeline &  │ 4. app/native-server/         │
 │                      │    Delta Strategies  │ 5. Test Suite (Vitest + Node) │
@@ -21,13 +21,13 @@ This map provides architecture and code references. Use [README.md](./README.md)
 ```
 
 - **I just want my AI to drive my browser**:
-  1. Read the **[Quick Start in README.md](../README.md#quick-start-let-ai-do-the-work)** or the **[Chinese Quick Start](../README.zh-CN.md)**.
+  1. Read the **[Quick Start in README.md](../README.md#-quick-start)** or the **[Chinese Quick Start](../README.zh-CN.md)**.
   2. Download the prebuilt clean extension from **[Releases](https://github.com/GoldenLoaf24h/browserpaw/releases)** and load it in `chrome://extensions`.
   3. Copy your client JSON from **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** into Cursor, Claude, or Codex.
 - **I am an AI Agent / Prompt Engineer integrating BrowserPaw**:
-  1. Study **[skill/SKILL.md](../skill/SKILL.md)**: Encodes dual-engine workflows (DOM-First vs Visual Fallback), the Escalation Ladder, and recovery patterns.
-  2. Consult **[docs/TOOLS.md](./TOOLS.md)**: Auto-generated parameter references for all 50 canonical tools across Core (14), Crawl (12), and Full (50) profiles.
-  3. Follow the 6 interaction rules in **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** (especially `includeDelta: true` and `chrome_grep`).
+  1. Read **[skills/browserpaw/SKILL.md](../skills/browserpaw/SKILL.md)** and load only the relevant files under `references/` for progressive disclosure.
+  2. Consult **[docs/TOOLS.md](./TOOLS.md)** for generated parameter references; use `chrome_tool_docs` for the live runtime list.
+  3. Install the same canonical skill with `browserpaw skill install` for ordinary Agent Skills clients, or use the official ChatGPT/Codex, Hermes, Claude Code, or DSH package documented in **[PLUGIN_COMPATIBILITY.md](./development/PLUGIN_COMPATIBILITY.md)**.
 - **I want to contribute or audit the architecture**:
   1. Inspect **[docs/ARCHITECTURE.md](./ARCHITECTURE.md)**: Complete system topology, IPC buffer guards, and sequence diagrams.
   2. Check **[PROJECT.md](../PROJECT.md)**: High-level package notes and quality gates.
@@ -42,15 +42,15 @@ mcp-chrome-master/
 ├── packages/
 │   └── shared/                  # 🌟 Single Source of Truth
 │       └── src/
-│           ├── tools.ts         # All 50 canonical tool schemas, tool names
-│           ├── tool-profiles.ts # Profile definitions (Core 14, Crawl 12, Full 50)
+│           ├── tools.ts         # Canonical tool schemas and names
+│           ├── tool-profiles.ts # Core, Crawl, and Full profile definitions
 │           ├── types.ts         # Universal coordinate, batch item & diff result types
 │           └── error-format.ts  # Standardized error reporting with stack control
 │
 ├── app/
 │   ├── chrome-extension/        # 🧩 Chrome MV3 Extension (WXT + Vue 3)
 │   │   ├── entrypoints/
-│   │   │   ├── background/      # Main Service Worker (49 Browser Atomic Tool Executors)
+│   │   │   ├── background/      # Main service worker and registered browser tools
 │   │   │   │   └── tools/browser/tab-group-manager.ts # Tab grouping & orphan cleanup
 │   │   │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay
 │   │   │   ├── inpage-engine.ts # Isolated-world DOM indexing & pruning engine
@@ -65,7 +65,18 @@ mcp-chrome-master/
 │       └── src/scripts/         # Auto-installer for Native Messaging manifest
 │
 ├── docs/                        # 📚 Documentation Vault (MAP, TOOLS, ARCHITECTURE)
-├── skill/                       # 🧠 AI Agent Skill Package (SKILL.md)
+├── skills/browserpaw/           # 🧠 Client-neutral Agent Skill
+│   ├── SKILL.md                 # Small entry point
+│   ├── references/              # On-demand operating knowledge
+│   ├── scripts/                 # Diagnostics and repair helpers
+│   └── assets/recipes/           # Static site recipes copied into Native dist
+├── plugins/
+│   ├── browserpaw/              # ChatGPT/Codex portable Agent Plugin
+│   ├── browserpaw-hermes/       # Hermes native plugin and wrapper skill
+│   ├── browserpaw-claude/       # Claude Code plugin
+│   └── browserpaw-dsh/          # DeepSeek Harness Cordis bundle
+├── .agents/plugins/             # ChatGPT/Codex marketplace metadata
+├── .claude-plugin/              # Claude Code marketplace metadata
 └── test/                        # 🧪 Integration & E2E Verification
 ```
 
@@ -78,37 +89,38 @@ mcp-chrome-master/
 | **[README.md](../README.md)**                                                                     |      English      |    All Users / Community    | Project homepage, architectural benefits, quick start, and feature overview         | Maintained manually                            |
 | **[README.zh-CN.md](../README.zh-CN.md)**                                                         |      Chinese      |     Chinese Developers      | Complete Chinese homepage, Windows file lock resolutions & quickstart guide         | Kept in sync with README.md                    |
 | **[docs/MAP.md](./MAP.md)**                                                                       |      English      |    All Users / AI Agents    | **Master Navigation Hub**: repository topology, reading paths, and capability radar | This document                                  |
-| **[docs/TOOLS.md](./TOOLS.md)**                                                                   |      English      |     Agents / Developers     | Parameter dictionary for all 50 canonical tools across profiles                     | Auto-generated via `scripts/gen-tools-doc.mjs` |
+| **[docs/TOOLS.md](./TOOLS.md)**                                                                   |      English      |     Agents / Developers     | Parameter dictionary for the canonical tools across profiles                        | Auto-generated via `scripts/gen-tools-doc.mjs` |
 | **[docs/ARCHITECTURE.md](./ARCHITECTURE.md)**                                                     |      English      |    Architects / Auditors    | 3-tier architecture topology, Native Messaging protocols, and ADR records           | Updated on architecture changes                |
 | **[docs/TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** ([Chinese](./TROUBLESHOOTING.zh-CN.md))       | English / Chinese | Operators / Troubleshooters | Diagnostic checklist for connection errors, tokens, CDP detachment, etc.            | Updated on issue discovery                     |
 | **[AGENT_CONFIG_GUIDE.md](../AGENT_CONFIG_GUIDE.md)** ([Chinese](../AGENT_CONFIG_GUIDE.zh-CN.md)) | English / Chinese |     Agents / Developers     | Client configurations (Claude, Cursor, Windsurf) and 6 interaction rules            | Updated on client updates                      |
-| **[skill/SKILL.md](../skill/SKILL.md)**                                                           |      English      |          AI Agents          | Machine-executable skill definition: dual-engine routing and recovery ladders       | Synchronized with MCP schemas                  |
+| **[skills/browserpaw/SKILL.md](../skills/browserpaw/SKILL.md)**                                   |      English      |          AI Agents          | Client-neutral entry point with on-demand references, scripts, and recipes          | Synchronized into client packages              |
+| **[docs/development/PLUGIN_COMPATIBILITY.md](./development/PLUGIN_COMPATIBILITY.md)**             |      English      |     Client Integrators      | Official-format contracts for ChatGPT/Codex, Hermes, Claude Code, and DSH           | Updated with host and package validation       |
 | **[PROJECT.md](../PROJECT.md)**                                                                   |      English      |         Maintainers         | Engineering specifications, quality gates, and architecture summaries               | Updated on version releases                    |
-| **[TEST_INFRA.md](../TEST_INFRA.md)**                                                             |      English      |     Testers / Auditors      | 4-tier E2E testing architecture, test harness specifications & 153-test matrix      | Updated on test changes                        |
+| **[TEST_INFRA.md](../TEST_INFRA.md)**                                                             |      English      |     Testers / Auditors      | E2E test architecture, harness specifications, and real-site evidence rules         | Updated on test changes                        |
 
 ---
 
-## 🛠️ 4. 50 Canonical Tools Capability Radar
+## 🛠️ 4. Canonical Tools Capability Radar
 
 BrowserPaw supports **Dynamic Profile Layering**, balancing prompt token consumption for smaller models while providing full low-level control for advanced agents:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                              50 MCP TOOLS                              │
+│                          BROWSERPAW MCP TOOLS                          │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🟢 CORE (14 Tools) - High-Frequency Semantic & Visual Interaction     │
-│   • Navigate (4): navigate, switch_tab, close_tabs, get_windows_and_tabs
-│   • Perceive (4): read_dom, get_markdown, inspect_media, grep          │
-│   • Act (3): interact_index, fill_index, batch_actions                 │
-│   • Observe (2): screenshot, smart_scroll                              │
+│ 🟢 CORE - High-Frequency Semantic & Visual Interaction                │
+│   • Navigation and safe tab selection                                 │
+│   • DOM, markdown, media, grep, and delta perception                   │
+│   • Index-based interaction, fill, and batch actions                   │
+│   • Screenshot and overflow-aware scrolling                            │
 │   • Discovery (1): chrome_tool_docs                                    │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🟡 CRAWL (12 Tools) - Lightweight High-Throughput Web Extraction       │
+│ 🟡 CRAWL - Lightweight High-Throughput Web Extraction                  │
 │   • Content: get_markdown, inspect_media, read_dom, grep               │
 │   • Navigation & Storage: navigate, smart_scroll, storage...           │
 │   • Network & Low-level: cdp_execute, network_request, screenshot...   │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 🟣 FULL (50 Tools) - Comprehensive Low-Level & Enterprise Control      │
+│ 🟣 FULL - Comprehensive Low-Level & Enterprise Control                 │
 │   • Autonomous Micro-Loop: chrome_act_toward_goal (Fast Jev Engine)    │
 │   • Advanced CDP: cdp_execute (Target polymorphic routing + Anti-Hang) │
 │   • Human-in-the-Loop: request_human_intervention, undo_last_action   │

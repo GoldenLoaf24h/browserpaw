@@ -38,6 +38,52 @@ import {
 } from './mcp-server-stdio';
 
 describe('mcp-server-stdio: BUG-18, BUG-19, and PERF-02', () => {
+  it.each(['chrome_read_dom', 'browserpaw_read_dom', 'chrome_skill', 'browserpaw_skill'])(
+    'keeps opaque page and skill data intact when forwarding %s',
+    async (name) => {
+      const handlers: Array<(req: any) => Promise<any>> = [];
+      setupTools({
+        setRequestHandler: (_schema: any, handler: any) => handlers.push(handler),
+      } as any);
+      const payload = {
+        text: 'chrome_read_dom and browserpaw_read_dom are source text',
+        source: 'https://example.com/browserpaw_examples/chrome_reference',
+        definition: {
+          id: 'page-reader',
+          steps: [
+            {
+              tool: 'chrome_javascript',
+              args: {
+                program: 'dom-extract',
+                config: { fields: [{ name: 'browserpaw_title', selector: 'h1', value: 'text' }] },
+              },
+            },
+          ],
+        },
+      };
+      const encoded = JSON.stringify(payload);
+      const image = { type: 'image', mimeType: 'image/png', data: 'AA==' };
+      const call = (jest.fn() as any).mockResolvedValue({
+        content: [{ type: 'text', text: encoded }, image],
+        structuredContent: payload,
+      });
+      setMcpClientForTesting({ callTool: call } as any);
+      try {
+        const result = await handlers[1]({
+          params: { name, arguments: { action: 'get', id: 'page-reader' } },
+        });
+        expect(call).toHaveBeenCalledTimes(1);
+        expect(
+          result.content.some((item: any) => item.type === 'text' && item.text === encoded),
+        ).toBe(true);
+        expect(result.content).toContainEqual(image);
+        expect(result.structuredContent).toEqual(payload);
+      } finally {
+        resetMcpClientForTesting();
+      }
+    },
+  );
+
   it.each(['http://example.com/mcp', 'https://127.0.0.1/mcp', 'http://user@localhost/mcp'])(
     'rejects unsafe bridge URL %s before reading local credentials',
     async (url) => {

@@ -1,10 +1,10 @@
 <div align="center">
   <img src="./docs/images/logo.png" width="128" alt="BrowserPaw Logo" />
   <h1>BrowserPaw</h1>
-  <p><b>Control your everyday Chrome browser from AI agents, without losing logins or focus.</b></p>
+  <p><b>Reliable browser automation inside the Chrome session you already use.</b></p>
   <p>
     <a href="./docs/MAP.md">Project Map</a> ·
-    <a href="./docs/TOOLS.md">Tool Reference (50)</a> ·
+    <a href="./docs/TOOLS.md">Tool Reference</a> ·
     <a href="./AGENT_CONFIG_GUIDE.md">Client Config</a> ·
     <a href="./README.zh-CN.md">Chinese (zh-CN)</a> ·
     <a href="./LICENSE">AGPL-3.0 license</a> ·
@@ -14,54 +14,77 @@
 
 ---
 
-<details>
-<summary><b>The Backstory: Why I Built BrowserPaw</b></summary>
+## Why BrowserPaw
 
-<br/>
+BrowserPaw runs as a Chrome MV3 extension plus a local Native Messaging bridge. It
+uses the browser profile you already have instead of copying profile data or
+starting a separate automation browser. MCP clients can inspect pages, act with
+bounded tools, and verify results without making a remote service the owner of
+your browser session.
 
-Traditional browser automation frameworks and LLM browser-use agents were designed for isolated sandbox testing, not for real daily desktop workflows. Every time I tried to let an AI agent assist me in my real browser, I kept hitting the same six frustrating roadblocks:
+The project separates three things that are often mixed together:
 
-1. **Lost Logins, Cookies & Saved Sessions**: Standalone browsers launch from an empty profile. They do not inherit your active Google, GitHub, or enterprise SSO logins, cookies, or extensions. Logging in from scratch constantly triggers 2FA and anti-bot verification challenges.
-2. **Windows File-Sharing Locks (`[WinError 32]`)**: Attempting to reuse an active Chrome User Data directory on Windows immediately crashes because Chromium holds exclusive file-sharing locks on open profile databases.
-3. **Mandatory Manual Mouse-Click Approvals**: Whenever an agent attempts to control your local browser via raw CDP or remote debugging ports, Chromium frequently forces intrusive confirmation popups and security prompts. You must stop your work, locate the browser window, and physically click with your mouse to grant permission—completely defeating the purpose of unattended, autonomous automation.
-4. **Sluggish Execution & Astronomical Token Consumption**: Conventional AI browser agents upload full-page retina screenshots or massive raw DOM trees back to remote frontier LLMs for every single micro-action. Each step suffers a 6–12 second roundtrip latency and burns tens of thousands of tokens, making multi-step automation painfully slow and prohibitively expensive.
-5. **Intrusive Debugging Banners & Viewport Jitter**: Standard remote debugging injects a native top notification bar (_'BrowserPaw is debugging this browser'_), shifting the viewport downward by ~36px and causing visual layout jitter and misaligned coordinate clicks.
-6. **Foreground Focus Stealing**: Typical automation tools force the browser window into the foreground, hijacking your keyboard and mouse focus while you are attempting to perform other tasks.
-
-Frustrated by these roadblocks, I built BrowserPaw to solve all of these problems at their root. By pairing a Chrome MV3 extension directly with a local Native Messaging bridge, BrowserPaw operates seamlessly inside the Chrome you already use every day—automating workflows quietly in background tabs without losing logins, stealing focus, or demanding repetitive manual approvals.
-
-</details>
+- **Static operating guidance** that teaches an agent how to use BrowserPaw.
+- **Durable task and page ownership**, so parallel work does not silently take
+  over user pages.
+- **Verified site skills**, which are learned from successful tasks and reused
+  only after independent validation.
 
 ---
 
 ## ⚡ What is BrowserPaw?
 
-BrowserPaw is a Chrome extension + local MCP server that lets AI agents operate your real browser. It exposes 50 tools across 8 categories (autonomous execution, navigation & tabs, perception & extraction, action & pipeline, observation & diagnostics, management, network, performance & health), defaulting to a minimal 14-tool core profile for everyday sessions to avoid token bloat and decision paralysis. Full tool exposure is enabled via `CHROME_MCP_TOOL_PROFILE=full` or dynamic activation through `chrome_tool_docs`.
+BrowserPaw is a Chrome extension and local MCP server. Its canonical tool names
+start with `chrome_*`, while each client may add its own namespace around them.
+The default `core` tool profile keeps discovery small; use
+`CHROME_MCP_TOOL_PROFILE=full` or `chrome_tool_docs` when a task needs the wider
+surface.
 
 Two execution paths are available:
 
-1. **Deterministic tools** – indexed clicks, fills, batch pipelines, form wizards, screenshots, network capture, etc. The calling agent plans each step.
-2. **`chrome_act_toward_goal`** – a local perception-action micro-loop without per-step MCP round-trips. The native server perceives the page, decides the next action, and acts, without an MCP round-trip per step. It supports local decider models (with GPU acceleration) and TypeSafe Jev System One cloud inference.
+1. **Deterministic tools and pipelines** for indexed actions, forms, keyboard,
+   uploads, downloads, screenshots, network work, and assertions.
+2. **`chrome_act_toward_goal`** for a bounded local perception-action loop when
+   an on-page goal is easier to describe than to decompose into every step.
+
+The persistent `browserpaw repl` exposes the same execution service as small
+task, page, locator, skill, and help interfaces for multi-step code workflows.
+It is a documented BrowserPaw subset, not a claim of full Playwright
+compatibility.
 
 ---
 
 ## 🎯 Key capabilities
 
-- **Session continuity** – Runs inside your existing Chrome. Google, GitHub, and SSO logins are already there; no profile copying, no re-authentication.
-- **Pruned, indexed DOM** – `chrome_read_dom` strips non-interactive and occluded nodes and assigns 1-based indices. On 1,000+ node pages this reduces node count by over 85% (test-validated), keeping snapshots small. A fast snapshot mode returns a viewport summary within an optimized budget target of 10–30 ms and ≤15 KB.
+- **Session reuse** – Runs against the profile already open in Chrome; BrowserPaw
+  does not copy your browser profile or move credentials into a second browser.
+- **Pruned, indexed DOM** – `chrome_read_dom` assigns document-scoped
+  references and reports action budgets, frame coverage, omitted regions, and
+  truncation. A fast snapshot prioritizes the viewport and interactive targets.
+- **Strict, frame-aware actions** – Explicit frame targets stay within that
+  frame; ambiguous matches are rejected; nested OOPIF coordinates are projected
+  through their actual renderer geometry.
 - **Card flattening and viewport virtualization** – `flattenCards` collapses repetitive feed cards into one-line summaries; `virtualizeViewport` folds off-screen list items into count placeholders.
 - **Shadow DOM traversal** – Recursively walks open shadow roots; closed shadow hosts are tagged and interacted with at the host level. Accessible names are extracted from icon-only buttons (aria-label, title, SVG titles).
-- **Batch pipelines** – `chrome_batch_actions` runs multi-step click/fill/wait/assert/extract sequences in a single MCP round-trip. `chrome_form_pipeline` advances multi-step forms locally.
+- **Batch and form pipelines** – Run multi-step click/fill/wait/assert/extract
+  sequences with one mutation budget and explicit partial or unknown outcomes.
 - **Overlay dismissal** – `chrome_dismiss_overlay` closes marketing popups, cookie banners, and modals in one step, without dumping the DOM.
-- **Delta piggybacking** – `includeDelta: true` returns DOM mutations in the same response as an action, removing the need for a follow-up DOM read.
+- **Delta observations** – Request DOM changes together with an action instead
+  of paying for a separate full snapshot after every step.
 - **Native event fidelity** – Clicks and keystrokes are dispatched as trusted CDP events (`isTrusted: true`), so React/Vue/Angular and Shadow DOM handlers fire normally.
-- **Coordinate fallback** – When DOM indexing fails (canvas, WebGL, icon-only UI), a screenshot grid plus `chrome_computer` provides coordinate-based control with 24 px magnetic auto-snapping.
+- **Action outcomes** – Results distinguish pre-dispatch rejection, dispatched,
+  unknown, and verified or unverified postconditions. Unknown mutations are never
+  silently replayed.
+- **Coordinate fallback** – When DOM indexing fails (canvas, WebGL, unknown
+  custom UI), screenshots and `chrome_computer` provide a documented visual path.
 - **Human handoff** – `chrome_request_human_intervention` dims the page, shows a banner, and parks the cursor so the user can complete 2FA or captchas; automation resumes afterward.
-- **Tab and window management** – Create, group, move, and close tabs, query history and bookmarks, and capture performance traces, all under the user's existing credentials.
+- **Task ownership and learning** – Durable tasks track borrowed, newly opened,
+  handed-off, and temporary pages. Verified site skills are stored in the Native
+  library and shared by every connected client.
 
 ---
 
-## 🧠 Dual-brain execution
+## 🧠 Interactive micro-loop
 
 ```text
 ┌─ Macro Planner (your reasoning LLM) ───────────────────┐
@@ -71,13 +94,13 @@ Two execution paths are available:
                             ▼
 ┌─ Semantic Micro-Loop (Native Server) ──────────────────┐
 │  chrome_act_toward_goal:                               │
-│  perceive → decide (Jev or heuristic) → act → verify   │
+│  perceive → decide (enabled model) → act → verify   │
 │  No MCP round-trip per step                            │
 └───────────────────────────┬────────────────────────────┘
                             │ Native Messaging
                             ▼
 ┌─ Chrome MV3 Extension ─────────────────────────────────┐
-│  49 browser tools · CDP events · in-page engine        │
+│  canonical tools · CDP events · in-page engine         │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -87,126 +110,112 @@ Routing guideline:
 - Single-page goal in natural language → `chrome_act_toward_goal`.
 - Long-horizon, multi-page, novel, or escalated situations → the calling agent drives.
 
-The micro-loop is bounded: at most 60 steps in Jev mode (default 10), truncated to 5 steps in heuristic fallback. It intercepts 14 destructive action keywords (pay, delete, submit, etc.) and escalates ambiguous or low-confidence decisions back to the calling agent with candidate elements.
+Ordinary click, fill and named-target tools resolve targets deterministically first. Supported non-exact text, label and named-role misses may use one bounded semantic decision when a model is enabled. Exact selectors, explicit references, coordinates, frame boundaries and actionability remain strict. Input values stay separate from target descriptions.
 
-**Autonomous Jev Modes & Smart Gating:**
+The optional micro-loop remains bounded (default 10, maximum 60 steps). It selects complete action-target candidates, stops on uncertain delivery, and requires independent read-only verification before reporting completion. Automatic submission is limited to explicitly requested searches on identified search controls. External writes return to the calling agent.
 
-- **Off**: Disabled by the user in the extension popup. `chrome_act_toward_goal` is automatically hidden from `tools/list`; if invoked directly, it is rejected and prompts for user authorization.
-- **Local**: Runs an offline, privacy-first decider model (`decider-2b`) locally on port 8009 with NVIDIA GPU acceleration (CUDA RTX) or CPU fallback. Once weights are downloaded via popup or setup script, the bridge manages process lifecycle and hot-loads automatically.
-- **Remote**: Uses TypeSafe Jev System One cloud inference. Set `TYPESAFE_API_KEY` (or configure via popup) with optional custom `Base URL` and custom fine-tuned `modelId`. Failing configurations return actionable diagnostic logs instead of silent heuristic fallback.
-- **Experimental remote vision**: No switch and no pinned vision model. Point the popup's `Model` field at any id and click Apply; before capturing anything BrowserPaw asks upstream which release answers that endpoint and sends viewport screenshots only when it can answer Jev 1.14 `box` questions (`jev-preview` and `jev-1.14.0` qualify today, while `jev-latest` still resolves to Jev 1.13 and is declined without sending an image). Text and DOM targeting remain the normal path, and vision is unavailable in local/off modes. Images and Box are experimental TypeSafe APIs, so uncertain or stale targets escalate to the calling agent.
+**Model modes:**
+
+- **Off**: No semantic inference or model preload. Deterministic tools remain available; the autonomous micro-loop is hidden from tool discovery and rejects direct execution.
+- **Local**: Uses the separately installed local decider. Availability, accuracy and performance are evaluated independently from TypeSafe Jev.
+- **Remote**: Uses the configured TypeSafe endpoint and model. Set `TYPESAFE_API_KEY` or configure the Native service through the popup. Candidate descriptions and relevant context go to that endpoint; do not put secrets in locator descriptions.
+- **Failures**: BrowserPaw preserves your selected backend. Temporary network, timeout and rate-limit failures pause inference for 30 seconds; the next use can resume the same backend without replaying the failed operation. Authentication/configuration faults require a correction; saving a corrected configuration restores the previously selected mode. A deliberate Off selection stays off, including after restart. The popup follows Native state.
+- **Existing remote vision**: Remains experimental and capability-gated before screenshot capture. The concrete release returned by the endpoint determines eligibility; an alias alone does not establish image support. Coordinate freshness and consent checks remain required.
+
+See [semantic interaction and bounded goals](./skills/browserpaw/references/dual-brain-jev.md) for limits, verification, recovery and learned-skill boundaries.
 
 ---
 
 ## 🚀 Quick start
 
-### Option 1: Install with an AI agent (Recommended)
-
-Paste this to your agent:
-
-> "Set up BrowserPaw: https://github.com/GoldenLoaf24h/browserpaw. Read INSTALL.md and follow the steps."
-
-Your agent will compile the project and register the OS native host automatically. Then simply open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `app/chrome-extension/.output/chrome-mv3` (or your configured local staging directory).
-
-### Option 2: Prebuilt extension (No extension build required)
-
-1. Download the latest `browserpaw-extension-v*.zip` and `browserpaw-skill-v*.zip` from [Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest).
-2. Unzip the extension to a local persistent directory, open `chrome://extensions`, enable Developer mode, and click **Load unpacked**.
-3. The extension ZIP does not include the Native Messaging server. Clone the repository and follow [INSTALL.md](./INSTALL.md) to build and register the local bridge.
-4. Copy the full `skill/` directory (including its `references/` folder) into your agent's skills directory (Codex: `~/.codex/skills/browserpaw/`).
-
-### Option 3: Build from source
+### 1. Build the bridge and load the extension
 
 ```bash
 git clone https://github.com/GoldenLoaf24h/browserpaw.git
-cd browserpaw && pnpm install && pnpm build
+cd browserpaw
+pnpm install
+pnpm build
 node app/native-server/dist/scripts/register-dev.js
 ```
 
-Then load `app/chrome-extension/.output/chrome-mv3` (or your configured staging directory) into `chrome://extensions`.
+Open `chrome://extensions`, enable Developer mode, and load
+`app/chrome-extension/.output/chrome-mv3`. A prebuilt extension, release
+installation, Windows details, Jev configuration, and troubleshooting are
+covered in [INSTALL.md](./INSTALL.md).
 
-### Verification
+### 2. Connect a client
 
-Verify that all components are functioning with the built-in diagnostic suite:
+| Client             | Supported integration                                                              |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| Generic MCP client | Stdio `mcp-chrome-stdio`, or authenticated loopback HTTP                           |
+| ChatGPT/Codex      | Portable plugin in `plugins/browserpaw` through `.agents/plugins/marketplace.json` |
+| Hermes Agent       | Native plugin in `plugins/browserpaw-hermes`                                       |
+| Claude Code        | Plugin marketplace in `.claude-plugin/marketplace.json`                            |
+| DeepSeek Harness   | Cordis bundle in `plugins/browserpaw-dsh`                                          |
+
+Every client ultimately talks to the same local BrowserPaw Native service and
+therefore shares tasks, page ownership, and verified site skills.
+
+### 3. Install the operating skill
+
+For an ordinary Agent Skills client, install the packaged, client-neutral skill:
 
 ```bash
-node skill/config/doctor.mjs
+browserpaw skill install
 ```
 
-**Claude Code users** can install the bundled plugin by running `/plugin marketplace add GoldenLoaf24h/browserpaw` and then `/plugin install browserpaw@browserpaw`, after which `/browserpaw` loads the operating guide.
+The default destination is `~/.agents/skills/browserpaw`. `--target` names a
+different skills root, so the final directory is always
+`<target>/browserpaw`. `--force` only replaces an existing BrowserPaw install
+that carries its ownership marker.
 
-Full onboarding (Codex Stdio setup, Cursor, Claude Desktop, Claude Code, Hermes, Jev API key) is in **[INSTALL.md](./INSTALL.md)**.
+### 4. Verify
+
+```bash
+browserpaw doctor
+node skills/browserpaw/scripts/doctor.mjs
+```
 
 ---
 
-## 🛠️ Tool catalog
+## 🛠️ Tool surface
 
-All 50 tools are grouped below. For machine-readable schemas and parameter details, see [docs/TOOLS.md](./docs/TOOLS.md).
+The canonical `chrome_*` tools cover task/page ownership, navigation, DOM
+observation, strict indexed actions, batch and form pipelines, keyboard, uploads,
+downloads, dialogs, screenshots, visual fallback, network capture, storage,
+history, bookmarks, performance traces, and bridge health. The live `core`
+profile avoids announcing the entire surface to every session.
 
-### Autonomous execution (1)
+Use [docs/TOOLS.md](./docs/TOOLS.md) for generated schemas or call
+`chrome_tool_docs` for the exact version in the running Native service. Client
+prefixes differ: DSH exposes `mcp__browserpaw__chrome_*`, Claude Code exposes
+`mcp__plugin_browserpaw_browserpaw__chrome_*`, and Hermes intentionally exposes a
+curated `browserpaw_*` wrapper set.
 
-- **`chrome_act_toward_goal`** – Local perception-action loop toward a natural-language goal. Jev inference with heuristic fallback; escalates on ambiguity or destructive actions.
+---
 
-### Navigation & tabs (7)
+## 🧩 Skills, references, and recipes
 
-- **`chrome_navigate`** – Open URL, refresh, history back/forward, background tabs.
-- **`chrome_switch_tab`** – Switch active tab or bind session affinity (auto-handover strictly restricted to verified openerTabId or webNavigation lineage).
-- **`chrome_close_tabs`** – Close tabs by id, URL, or session (requires confirm for active tab).
-- **`chrome_move_tab`** – Reposition tabs or move across windows.
-- **`get_windows_and_tabs`** – List windows and tabs with state.
-- **`chrome_attach_tab` / `chrome_detach_tab`** – Attach or detach the CDP debugger.
+BrowserPaw keeps reusable knowledge in three separate layers:
 
-### Perception & extraction (7)
+| Layer                  | Location                                                            | Purpose                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Canonical Agent Skill  | `skills/browserpaw/`                                                | Client-neutral operating instructions, `references/`, diagnostics, and packaged site recipes            |
+| Installed static skill | `<skills-root>/browserpaw/` (default `~/.agents/skills/browserpaw`) | Read-only copy installed from the Native package                                                        |
+| Learned Native skills  | `$BROWSERPAW_HOME/skills` (default `~/.browserpaw/skills`)          | Parameterized site skills learned from successful tasks and enabled only after independent verification |
 
-- **`chrome_read_dom`** – Indexed, pruned DOM tree with shadow DOM traversal and fast snapshot mode.
-- **`chrome_scroll_until_found`** – Client-side auto-scroll to find target text/element, settles virtual DOM, centers element, and returns live index.
-- **`chrome_grep`** – Regex or text search returning element indices without a full DOM dump.
-- **`chrome_get_markdown`** – Clean Markdown extraction for reading tasks.
-- **`chrome_inspect_media`** – Extract image or canvas data; super-resolves small captchas.
-- **`chrome_get_dropdown_options`** – List select/combobox options.
-- **`chrome_console`** – Capture console logs and errors.
+The canonical skill is distributed to the ChatGPT/Codex, Claude Code, and DSH
+plugins unchanged. Hermes uses its own skill template because its public tool
+surface consists of `browserpaw_*` wrappers rather than the full
+`chrome_*`/MCP namespace. Learned skills are never copied into client plugin
+directories; every client reads them through the shared Native service.
 
-### Action & pipeline (15)
-
-- **`chrome_interact_index`** – Trusted click, hover, double-click, drag by 1-based index.
-- **`chrome_fill_index`** – Trusted text input with clear, submit, and multiline support.
-- **`chrome_batch_actions`** – Multi-step pipeline (click/fill/wait/assert/extract) in one round-trip.
-- **`chrome_form_pipeline`** – Autonomous multi-step form filling.
-- **`chrome_smart_scroll`** – Scroll page or inner containers with progress reporting.
-- **`chrome_keyboard`** – Raw key presses and shortcuts.
-- **`chrome_upload_file`** – Native file-input upload.
-- **`chrome_insert_media`** – Paste/drop a real File into rich-text editors.
-- **`chrome_handle_dialog`** – Accept or dismiss native alert/confirm/prompt.
-- **`chrome_handle_download`** – Wait for and locate downloads.
-- **`chrome_computer`** – Coordinate-level mouse/keyboard control (visual fallback).
-- **`chrome_request_human_intervention`** – Yield to the user for captcha/2FA.
-- **`chrome_undo_last_action`** – Roll back the last mutation.
-- **`chrome_dismiss_overlay`** – Close popups, modals, and cookie banners.
-- **`chrome_javascript`** – Evaluate JavaScript in the page context.
-
-### Observation & diagnostics (3)
-
-- **`chrome_screenshot`** – Viewport, element, or full-page capture with optional coordinate grid.
-- **`chrome_cdp_execute`** – Raw CDP escape hatch.
-- **`chrome_tool_docs`** – Query tool schemas and activate hidden profiles.
-
-### Management (10)
-
-- **`chrome_tab_group_create`** / **`chrome_tab_group_update`** / **`chrome_tab_group_list`** / **`chrome_tab_group_ungroup`** / **`chrome_tab_group_close`** – Tab group lifecycle.
-- **`chrome_history`** – Search browsing history.
-- **`chrome_bookmark_search`** / **`chrome_bookmark_add`** / **`chrome_bookmark_delete`** – Bookmark operations.
-- **`chrome_storage`** – Read and manipulate cookies, localStorage, and sessionStorage.
-
-### Network (3)
-
-- **`chrome_intercept_api`** – Capture backend JSON responses matching a URL pattern.
-- **`chrome_network_capture`** – Record network traffic.
-- **`chrome_network_request`** – Authenticated HTTP requests through the browser session.
-
-### Performance & health (4)
-
-- **`performance_start_trace`** / **`performance_stop_trace`** / **`performance_analyze_insight`** – Record and analyze performance traces.
-- **`chrome_doctor`** – Check port, extension link, token, and native host health.
+The `references/` files contain durable operational knowledge such as tool
+selection, action outcomes, visual fallback, task and skill lifecycle, and
+troubleshooting. They must not contain temporary element references, tab,
+document, or session IDs, coordinates, credentials, cookies, or user input.
+Packaged recipes under `assets/recipes/` are copied into the Native distribution
+and remain read-only site guidance.
 
 ---
 
@@ -218,7 +227,7 @@ AI Client (any MCP-capable agent)
          ▼
 Native Messaging Bridge (Fastify + Stdio Host)
          ├── Fast Decision Engine (Jev micro-loop)
-         └── Passthrough for 49 deterministic tools (50 tools total)
+         └── Passthrough for extension-executed canonical tools
          │  Chrome Native Messaging
          ▼
 Chrome MV3 Extension (Service Worker)
@@ -234,9 +243,10 @@ For details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 ## 📚 Documentation
 
 - [Project Map](./docs/MAP.md) – Navigation hub and reading paths.
-- [Tool Reference](./docs/TOOLS.md) – Schemas for all 50 tools.
+- [Tool Reference](./docs/TOOLS.md) – Schemas for all canonical tools.
 - [Install & Onboard](./INSTALL.md) – Step-by-step setup including Jev key.
 - [Agent Integration](./AGENT_CONFIG_GUIDE.md) – MCP client configuration.
+- [Plugin Compatibility](./docs/development/PLUGIN_COMPATIBILITY.md) – Official package formats and per-client boundaries.
 - [Architecture](./docs/ARCHITECTURE.md) – Design and decisions.
 - [Troubleshooting](./docs/TROUBLESHOOTING.md) – Connection and execution issues.
 
@@ -275,3 +285,13 @@ _Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of
 
 Development acceptance gates, build/deployment verification, and runtime identity standards are defined in [**`docs/QUALITY.md`**](./docs/QUALITY.md).
 Run `pnpm verify` to execute full static quality and build audits.
+
+Version 4.1.0 brings document-scoped observations, guarded native input,
+task-owned resources, persistent code sessions and client-specific plugin packages.
+See the [release record](./docs/releases/v4.1.0.md) for validation and limitations.
+4.1.0 is prepared locally and has not been published. The reproduced Native idle protocol failure was repaired and verified on an unchanged connection for more than eleven minutes; this is bounded runtime evidence, not a guarantee for every long-running workload. See [current development work](./docs/development/DEVELOPMENT.md).
+The 320-run M7 comparison has stopped; its historical evidence remains available.
+The planned 95% task success and 20%/30%/50% efficiency thresholds are unproven.
+Report performance only from matched, versioned runs.
+
+The new Jev interaction integration is not yet runtime-qualified. Real Jev 1.14.0 evaluation safely refused two clear targets in an independent Chinese-language holdout, below the acceptance target. Deterministic tools remain the default; do not lower confidence thresholds or infer production accuracy from unit tests. See the [development ledger](./docs/releases/unreleased.md).

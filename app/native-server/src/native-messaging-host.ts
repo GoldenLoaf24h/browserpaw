@@ -5,8 +5,8 @@ import { NativeMessageType } from 'chrome-mcp-shared';
 import { TIMEOUTS, getChromeMcpPort } from './constant';
 import fileHandler from './file-handler';
 import { getBridgeToken } from './server/token';
-import { choice } from '@typesafe-ai/sdk';
-import { JevClientWrapper, buildState, isSessionKeyInvalid, HeuristicEngine } from './jev';
+import { matchSemanticTarget } from './jev/semantic-match';
+import { jevModelManager } from './server/jev-model-manager';
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -15,6 +15,8 @@ interface PendingRequest {
 }
 
 export class NativeMessagingHost {
+  private semanticRequests = new Map<string, AbortController>();
+  private stopModeNotifications?: () => void;
   private associatedServer: Server | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private incomingChunks: Map<
@@ -30,6 +32,10 @@ export class NativeMessagingHost {
   // add message handler to wait for start server
   public start(): void {
     try {
+      this.stopModeNotifications?.();
+      this.stopModeNotifications = jevModelManager.onModeStateChanged((state) => {
+        this.sendMessage({ type: 'jev_mode_state', payload: state });
+      });
       this.setupMessageHandling();
     } catch (error: any) {
       process.exit(1);
@@ -193,6 +199,7 @@ export class NativeMessagingHost {
           // environment configuration (CHROME_MCP_PORT > MCP_HTTP_PORT) that
           // HTTP-only clients resolve.
           await this.startServer(message.payload?.port || getChromeMcpPort());
+          this.sendMessage({ type: 'jev_mode_state', payload: jevModelManager.getModeState() });
           break;
         case NativeMessageType.STOP:
           await this.stopServer();
@@ -207,8 +214,18 @@ export class NativeMessagingHost {
         case 'jev_semantic_match':
           await this.handleJevSemanticMatch(message);
           break;
+        case 'cancel_jev_semantic_match':
+          this.semanticRequests
+            .get(message.requestId)
+            ?.abort(
+              message.payload?.reason === 'timeout'
+                ? new DOMException('Semantic request deadline exceeded', 'TimeoutError')
+                : undefined,
+            );
+          break;
         case 'get_server_info':
         case 'get_token':
+          this.sendMessage({ type: 'jev_mode_state', payload: jevModelManager.getModeState() });
           this.sendMessage({
             type: 'server_info_response',
             responseToRequestId: message.requestId,
@@ -275,100 +292,20 @@ export class NativeMessagingHost {
    * Handle Jev semantic matching requests from the extension (for form pipeline)
    */
   private async handleJevSemanticMatch(message: any): Promise<void> {
-    const payload = message.payload;
-    const query = String(payload?.query || '');
-    const value = payload?.value ? String(payload.value) : '';
-    const matchType = payload?.type || 'field';
-    const candidates: Array<{ id: string | number; text: string }> = Array.isArray(
-      payload?.candidates,
-    )
-      ? payload.candidates
-      : [];
-
-    const sendResponse = (data: any) => {
+    if (typeof message.requestId !== 'string' || this.semanticRequests.has(message.requestId))
+      return;
+    const controller = new AbortController();
+    this.semanticRequests.set(message.requestId, controller);
+    try {
+      const result = await matchSemanticTarget(message.payload, controller.signal);
       this.sendMessage({
         type: 'file_operation_response',
         responseToRequestId: message.requestId,
-        payload: data,
+        payload: result,
       });
-    };
-
-    if (candidates.length === 0) {
-      sendResponse({ success: false, reason: 'no_candidates' });
-      return;
+    } finally {
+      this.semanticRequests.delete(message.requestId);
     }
-
-    // 1. Try TypeSafe Jev System One
-    try {
-      const jevClient = new JevClientWrapper();
-      if (jevClient.isAvailable()) {
-        const targetCriteria: Record<string, string | null> = {};
-        for (const cand of candidates) {
-          targetCriteria[String(cand.id)] = cand.text;
-        }
-        targetCriteria['none'] = 'None of the above candidates match';
-
-        const prompt =
-          matchType === 'choice'
-            ? `Which candidate option best matches the desired choice "${value}" for query "${query}"?`
-            : matchType === 'input'
-              ? `Which input element best corresponds to the field "${query}"?`
-              : `Which field best corresponds to the current screen question: "${query}"?`;
-
-        const questions = {
-          matched_target: choice(prompt, targetCriteria),
-        };
-
-        const state = buildState(
-          `Match form field or option: ${query}`,
-          '',
-          '',
-          candidates.map((c) => `[${c.id}] ${c.text}`),
-          [],
-        );
-
-        const { result } = await jevClient.query(state, questions);
-        const answer = (result?.answers as any)?.matched_target;
-        if (answer && answer.choice && answer.choice !== 'none') {
-          const originalCand = candidates.find((c) => String(c.id) === String(answer.choice));
-          sendResponse({
-            success: true,
-            engine: 'jev',
-            matchedId: originalCand ? originalCand.id : answer.choice,
-            confidence: answer.confidence || 0.85,
-            probabilities: answer.probabilities,
-          });
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('[NativeHost] Jev semantic evaluation error:', err);
-    }
-
-    // 2. Fallback to Heuristic Engine
-    try {
-      const heuristicEngine = new HeuristicEngine();
-      const targetQuery = matchType === 'choice' && value ? value : query;
-      const elements = candidates.map((cand, idx) => `[${idx}] button "${cand.text}"`);
-      const decision = heuristicEngine.evaluate(targetQuery, elements, []);
-
-      if (decision && decision.targetIndex !== undefined && decision.confidence >= 0.3) {
-        const matched = candidates[decision.targetIndex];
-        if (matched) {
-          sendResponse({
-            success: true,
-            engine: 'heuristic',
-            matchedId: matched.id,
-            confidence: decision.confidence,
-          });
-          return;
-        }
-      }
-    } catch (heurErr) {
-      console.warn('[NativeHost] Heuristic evaluation error:', heurErr);
-    }
-
-    sendResponse({ success: false, engine: 'none' });
   }
 
   /**
@@ -381,13 +318,41 @@ export class NativeMessagingHost {
     messagePayload: any,
     messageType: string = 'request_data',
     timeoutMs: number = TIMEOUTS.DEFAULT_REQUEST_TIMEOUT,
+    signal?: AbortSignal,
   ): Promise<any> {
     if (!this.isConnected) {
-      return Promise.reject(new Error('Chrome extension is not connected'));
+      return Promise.reject(
+        Object.assign(new Error('Chrome extension is not connected'), { requestDispatched: false }),
+      );
     }
 
     return new Promise((resolve, reject) => {
       const requestId = uuidv4(); // Generate unique request ID
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        // The extension stops at its next action boundary. Do not reject here:
+        // the in-flight request may still have already dispatched a mutation.
+        this.sendMessage({
+          type: NativeMessageType.CANCEL_TOOL,
+          payload: { requestId },
+        });
+      };
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const resolveOnce = (value: any) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const rejectOnce = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
 
       // Pre-check payload size to fail immediately rather than hang until timeout
       try {
@@ -397,17 +362,39 @@ export class NativeMessagingHost {
           requestId,
         });
       } catch (err: any) {
-        reject(new Error(`Failed to serialize outgoing request: ${err?.message || err}`));
+        rejectOnce(
+          Object.assign(new Error(`Failed to serialize outgoing request: ${err?.message || err}`), {
+            requestDispatched: false,
+          }),
+        );
+        return;
+      }
+
+      if (signal?.aborted) {
+        rejectOnce(
+          Object.assign(new Error('Request cancelled before dispatch'), {
+            requestDispatched: false,
+          }),
+        );
         return;
       }
 
       const timeoutId = setTimeout(() => {
         this.pendingRequests.delete(requestId); // Remove from Map after timeout
-        reject(new Error(`Request timed out after ${timeoutMs}ms`));
+        rejectOnce(
+          Object.assign(new Error(`Request timed out after ${timeoutMs}ms`), {
+            requestDispatched: true,
+          }),
+        );
       }, timeoutMs);
 
       // Store request's resolve/reject functions and timeout ID
-      this.pendingRequests.set(requestId, { resolve, reject, timeoutId });
+      this.pendingRequests.set(requestId, {
+        resolve: resolveOnce,
+        reject: rejectOnce,
+        timeoutId,
+      });
+      signal?.addEventListener('abort', onAbort, { once: true });
 
       // Send message with requestId to Chrome
       this.sendMessage({
@@ -597,6 +584,10 @@ export class NativeMessagingHost {
    * Clean up resources
    */
   private cleanup(): void {
+    this.stopModeNotifications?.();
+    this.stopModeNotifications = undefined;
+    for (const controller of this.semanticRequests.values()) controller.abort();
+    this.semanticRequests.clear();
     this.isConnected = false;
     // Reject all pending requests
     this.pendingRequests.forEach((pending) => {

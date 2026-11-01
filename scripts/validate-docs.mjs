@@ -97,7 +97,8 @@ export function checkPackageVersions(repoRoot) {
     { name: 'native-server', file: 'app/native-server/package.json' },
     { name: 'shared', file: 'packages/shared/package.json' },
     { name: 'chrome-extension', file: 'app/chrome-extension/package.json' },
-    { name: 'codex-plugin', file: 'plugins/browserpaw/.codex-plugin/plugin.json' },
+    { name: 'portable-plugin', file: 'plugins/browserpaw/plugin.json' },
+    { name: 'hermes-plugin', file: 'plugins/browserpaw-hermes/plugin.yaml', format: 'yaml' },
     { name: 'claude-plugin', file: 'plugins/browserpaw-claude/.claude-plugin/plugin.json' },
   ];
 
@@ -110,8 +111,12 @@ export function checkPackageVersions(repoRoot) {
       continue;
     }
     try {
-      const json = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
-      const ver = json.version;
+      const content = fs.readFileSync(fullPath, 'utf8');
+      const ver =
+        m.format === 'yaml'
+          ? content.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m)?.[1]
+          : JSON.parse(content).version;
+      if (!ver) throw new Error('missing version');
       results.versions[m.name] = ver;
       if (!canonicalVersion) {
         canonicalVersion = ver;
@@ -214,6 +219,7 @@ export function getActiveMarkdownFiles(repoRoot) {
 
   const uniqueFiles = Array.from(new Set(tracked));
   return uniqueFiles.filter((file) => {
+    if (!fs.existsSync(path.join(repoRoot, file))) return false;
     const normalized = file.replace(/\\/g, '/');
     if (normalized.startsWith('docs/archive/') && !normalized.endsWith('README.md')) {
       return false;

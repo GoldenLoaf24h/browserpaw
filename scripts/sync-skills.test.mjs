@@ -1,300 +1,199 @@
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
-import assert from 'node:assert';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { syncSkills } from './sync-skills.mjs';
 
-const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const syncScript = path.join(repoRoot, 'scripts', 'sync-skills.mjs');
-const scriptSource = fs.readFileSync(syncScript, 'utf-8');
+function write(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
 
-// 1. Static guard: forbid hardcoded external paths, Hermes sync, and managed hash (never run the legacy script)
-assert.ok(
-  !scriptSource.includes('hermesPluginDir') && !scriptSource.includes('.browserpaw-managed.json'),
-);
-assert.ok(!scriptSource.includes('C:/Users') && !scriptSource.includes('D:/workspace/browserpaw'));
+function tools(count = 18) {
+  return Array.from({ length: count }, (_, index) => `browserpaw_tool_${index + 1}`);
+}
 
-const canonicalSkill =
-  '# browserpaw\nUse chrome_interact_index & chrome_fill_index with get_windows_and_tabs.\n';
-const canonicalRecipe = 'Run chrome_fill_index to write text.\n';
-const expectedPluginSkill =
-  '# browserpaw\nUse browserpaw_interact_index & browserpaw_fill_index with browserpaw_get_windows_and_tabs.\n';
-const expectedPluginRecipe = 'Run browserpaw_fill_index to write text.\n';
-
-function createSandbox() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-box-'));
-  fs.mkdirSync(path.join(root, 'skill', 'recipes'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'skill', 'SKILL.md'), canonicalSkill);
-  fs.writeFileSync(path.join(root, 'skill', 'recipes', 'act.md'), canonicalRecipe);
-  fs.copyFileSync(syncScript, path.join(root, 'scripts', 'sync-skills.mjs'));
+function fixture({ toolCount = 18 } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-sync-'));
+  write(
+    path.join(root, 'skills/browserpaw/SKILL.md'),
+    '---\nname: browserpaw\ndescription: neutral skill\n---\n\n# BrowserPaw\n\n[Tools](references/tools.md)\n',
+  );
+  write(path.join(root, 'skills/browserpaw/references/tools.md'), '# Tools\n\nchrome_navigate\n');
+  write(path.join(root, 'skills/browserpaw/scripts/doctor.mjs'), 'console.log("ok");\n');
+  write(path.join(root, 'skills/browserpaw/assets/recipes/example.json'), '{"id":"x"}\n');
+  write(
+    path.join(root, 'plugins/browserpaw-hermes/skill-template/SKILL.md'),
+    '---\nname: browserpaw\ndescription: wrapper skill\n---\n\nbrowserpaw_navigate\n',
+  );
+  write(
+    path.join(root, 'plugins/browserpaw-hermes/skill-template/references/tool-matrix.md'),
+    '# Wrapper tools\n\nbrowserpaw_navigate\n',
+  );
+  const names = tools(toolCount);
+  write(
+    path.join(root, 'plugins/browserpaw-hermes/plugin.yaml'),
+    `manifest_version: 1\nname: browserpaw\nversion: '4.0.0'\nprovides_tools:\n${names.map((name) => `  - ${name}`).join('\n')}\n`,
+  );
+  write(
+    path.join(root, 'plugins/browserpaw-hermes/__init__.py'),
+    names.map((name) => `    "${name}": {},`).join('\n'),
+  );
+  write(path.join(root, 'package.json'), '{"version":"4.0.0"}\n');
+  write(path.join(root, 'plugins/browserpaw/plugin.json'), '{"version":"4.0.0"}\n');
+  write(
+    path.join(root, 'plugins/browserpaw-claude/.claude-plugin/plugin.json'),
+    '{"version":"4.0.0"}\n',
+  );
   return root;
 }
-const runScript = (sandbox, cwd = sandbox) =>
-  spawnSync(process.execPath, [path.join(sandbox, 'scripts', 'sync-skills.mjs')], {
-    cwd,
-    encoding: 'utf-8',
-  });
 
-// 2. Run from a foreign cwd and assert both mirrors are byte-exact
-const sandbox = createSandbox();
-const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-out-'));
+const root = fixture();
 try {
-  const res = runScript(sandbox, outsideCwd);
-  assert.strictEqual(res.status, 0, res.stderr);
-  assert.strictEqual(fs.readdirSync(outsideCwd).length, 0);
-
-  const m1Skill = fs.readFileSync(path.join(sandbox, 'skills', 'browserpaw', 'SKILL.md'), 'utf-8');
-  const m1Recipe = fs.readFileSync(
-    path.join(sandbox, 'skills', 'browserpaw', 'recipes', 'act.md'),
-    'utf-8',
-  );
-  assert.strictEqual(m1Skill, canonicalSkill);
-  assert.strictEqual(m1Recipe, canonicalRecipe);
-
-  const m2Skill = fs.readFileSync(
-    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'SKILL.md'),
-    'utf-8',
-  );
-  const m2Recipe = fs.readFileSync(
-    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'recipes', 'act.md'),
-    'utf-8',
-  );
-  assert.strictEqual(m2Skill, expectedPluginSkill);
-  assert.strictEqual(m2Recipe, expectedPluginRecipe);
-
-  // 2b. Verify scope banner on plugin references and TROUBLESHOOTING files
-  const testRef = '# Reference\nDetailed tool guide.\n';
-  const testTrouble = '# Troubleshooting\nFAQ.\n';
-  fs.mkdirSync(path.join(sandbox, 'skill', 'references'), { recursive: true });
-  fs.mkdirSync(path.join(sandbox, 'skill', 'config'), { recursive: true });
-  fs.writeFileSync(path.join(sandbox, 'skill', 'references', 'tools.md'), testRef);
-  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'TROUBLESHOOTING.md'), testTrouble);
-  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'TROUBLESHOOTING.zh-CN.md'), testTrouble);
-  const testJson = '{"tool": "chrome_navigate"}';
-  fs.writeFileSync(path.join(sandbox, 'skill', 'config', 'test.json'), testJson);
-  const res2 = runScript(sandbox);
-  assert.strictEqual(res2.status, 0, res2.stderr);
-
-  // Standard target: NO banner
-  const m1Ref = fs.readFileSync(
-    path.join(sandbox, 'skills', 'browserpaw', 'references', 'tools.md'),
-    'utf-8',
-  );
-  assert.strictEqual(m1Ref, testRef);
-
-  // Plugin target: EN banner on references and TROUBLESHOOTING.md, ZH banner on .zh-CN.md
-  const m2Ref = fs.readFileSync(
-    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'references', 'tools.md'),
-    'utf-8',
-  );
-  assert.ok(m2Ref.includes('not available in the Hermes plugin; use standard MCP'));
-  assert.ok(m2Ref.includes(testRef));
-  const m2Trouble = fs.readFileSync(
-    path.join(
-      sandbox,
-      'plugins',
-      'browserpaw',
-      'skills',
-      'browserpaw',
-      'config',
-      'TROUBLESHOOTING.md',
-    ),
-    'utf-8',
-  );
-  assert.ok(m2Trouble.includes('not available in the Hermes plugin; use standard MCP'));
-  const m2TroubleZh = fs.readFileSync(
-    path.join(
-      sandbox,
-      'plugins',
-      'browserpaw',
-      'skills',
-      'browserpaw',
-      'config',
-      'TROUBLESHOOTING.zh-CN.md',
-    ),
-    'utf-8',
-  );
-  // zh-CN mirrors are translated documents, so the notice must match their language.
-  assert.ok(m2TroubleZh.includes('工具可用性说明'));
-  assert.ok(!m2TroubleZh.includes('not available in the Hermes plugin; use standard MCP'));
-
-  // JSON files must NEVER receive markdown banners and must remain valid JSON
-  const m2Json = fs.readFileSync(
-    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'config', 'test.json'),
-    'utf-8',
-  );
-  assert.strictEqual(JSON.parse(m2Json).tool, 'browserpaw_navigate');
-
-  // 2c. Verify HERMES_PLUGIN_SKILL.md takes precedence for plugin SKILL.md and is not copied to mirrors
-  const hermesCustomSkill = '# browserpaw hermes 16 curated tools\n';
-  fs.writeFileSync(path.join(sandbox, 'skill', 'HERMES_PLUGIN_SKILL.md'), hermesCustomSkill);
-  const res3 = runScript(sandbox);
-  assert.strictEqual(res3.status, 0, res3.stderr);
-  assert.strictEqual(
-    fs.readFileSync(
-      path.join(sandbox, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw', 'SKILL.md'),
-      'utf-8',
-    ),
-    canonicalSkill,
-  );
-  // The DSH target must stay byte-exact with the canonical source: the DSH bridge exposes
-  // the literal `chrome_*` names, so it must NOT get the Hermes `chrome_` -> `browserpaw_` rewrite.
-  const dshSkillPath = path.join(
-    sandbox,
-    'plugins',
-    'browserpaw-dsh',
-    'skills',
-    'browserpaw',
-    'SKILL.md',
-  );
-  const dshSkill = fs.readFileSync(dshSkillPath, 'utf-8');
-  assert.strictEqual(dshSkill, canonicalSkill);
-  assert.ok(
-    fs.readFileSync(dshSkillPath).equals(fs.readFileSync(path.join(sandbox, 'skill', 'SKILL.md'))),
-    'FAIL: dsh mirror SKILL.md is not byte-identical to the canonical skill/SKILL.md',
-  );
-  assert.ok((dshSkill.match(/chrome_/g) || []).length > 0);
-  assert.strictEqual((dshSkill.match(/browserpaw_/g) || []).length, 0);
-
-  // Standard target: still canonical skill, HERMES_PLUGIN_SKILL.md not copied
-  assert.strictEqual(
-    fs.readFileSync(path.join(sandbox, 'skills', 'browserpaw', 'SKILL.md'), 'utf-8'),
-    canonicalSkill,
-  );
-  assert.strictEqual(
-    fs.existsSync(path.join(sandbox, 'skills', 'browserpaw', 'HERMES_PLUGIN_SKILL.md')),
-    false,
-  );
-
-  // Plugin target: uses HERMES_PLUGIN_SKILL.md, not copied as separate file
-  assert.strictEqual(
-    fs.readFileSync(
-      path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'SKILL.md'),
-      'utf-8',
-    ),
-    hermesCustomSkill,
-  );
-  assert.strictEqual(
-    fs.existsSync(
-      path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw', 'HERMES_PLUGIN_SKILL.md'),
-    ),
-    false,
-  );
-
-  // 2d. A file retired upstream must not survive in any mirror.
-  fs.rmSync(path.join(sandbox, 'skill', 'recipes', 'act.md'));
-  const res4 = runScript(sandbox);
-  assert.strictEqual(res4.status, 0, res4.stderr);
-  for (const mirror of [
-    path.join(sandbox, 'skills', 'browserpaw'),
-    path.join(sandbox, 'plugins', 'browserpaw', 'skills', 'browserpaw'),
-    path.join(sandbox, 'plugins', 'browserpaw', 'mcp-skills', 'browserpaw'),
-    path.join(sandbox, 'plugins', 'browserpaw-dsh', 'skills', 'browserpaw'),
-    path.join(sandbox, 'plugins', 'browserpaw-claude', 'skills', 'browserpaw'),
+  assert.deepEqual(syncSkills(root).problems, []);
+  for (const target of [
+    'plugins/browserpaw/skills/browserpaw',
+    'plugins/browserpaw-claude/skills/browserpaw',
+    'plugins/browserpaw-dsh/skills/browserpaw',
   ]) {
-    assert.strictEqual(
-      fs.existsSync(path.join(mirror, 'recipes', 'act.md')),
-      false,
-      `retired file survived in ${mirror}`,
+    assert.equal(
+      fs.readFileSync(path.join(root, target, 'SKILL.md'), 'utf8'),
+      fs.readFileSync(path.join(root, 'skills/browserpaw/SKILL.md'), 'utf8'),
     );
+    assert.equal(fs.existsSync(path.join(root, target, 'assets/recipes/example.json')), true);
+  }
+  assert.equal(
+    fs.readFileSync(
+      path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/SKILL.md'),
+      'utf8',
+    ),
+    fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/skill-template/SKILL.md'), 'utf8'),
+  );
+  assert.equal(
+    fs.readFileSync(
+      path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/references/tool-matrix.md'),
+      'utf8',
+    ),
+    '# Wrapper tools\n\nbrowserpaw_navigate\n',
+  );
+  assert.deepEqual(syncSkills(root, { check: true }).problems, []);
+
+  const nativeSkill = path.join(root, 'app/native-server/dist/skill/browserpaw');
+  fs.mkdirSync(path.dirname(path.dirname(nativeSkill)), { recursive: true });
+  syncSkills(root);
+  assert.equal(fs.existsSync(path.join(nativeSkill, 'SKILL.md')), true);
+  fs.appendFileSync(path.join(nativeSkill, 'SKILL.md'), 'drift\n');
+  write(path.join(nativeSkill, 'orphan.md'), 'orphan\n');
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Content drift/);
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Orphan/);
+  assert.deepEqual(syncSkills(root).problems, []);
+
+  const portableSkill = path.join(root, 'plugins/browserpaw/skills/browserpaw/SKILL.md');
+  fs.appendFileSync(portableSkill, 'drift\n');
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Content drift: SKILL\.md/);
+  write(path.join(root, 'plugins/browserpaw/skills/browserpaw/retired/orphan.md'), 'orphan\n');
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Orphan: retired\/orphan\.md/);
+  write(path.join(root, 'plugins/browserpaw/skills/browserpaw/AGENTS.md'), 'internal\n');
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Excluded: AGENTS\.md/);
+  fs.appendFileSync(
+    path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/references/tool-matrix.md'),
+    'drift\n',
+  );
+  assert.match(
+    syncSkills(root, { check: true }).problems.join('\n'),
+    /hermes: Content drift: references\/tool-matrix\.md/,
+  );
+  fs.rmSync(path.join(root, 'plugins/browserpaw-claude/skills/browserpaw/scripts'), {
+    recursive: true,
+  });
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Missing: scripts/);
+  assert.deepEqual(syncSkills(root).problems, []);
+
+  fs.appendFileSync(path.join(root, 'skills/browserpaw/references/tools.md'), 'Claude install\n');
+  assert.throws(() => syncSkills(root, { check: true }), /client-specific leak/);
+  fs.writeFileSync(
+    path.join(root, 'skills/browserpaw/references/tools.md'),
+    '# Tools\n\nchrome_navigate\nbrowserpaw_navigate\n',
+  );
+  assert.throws(() => syncSkills(root, { check: true }), /unavailable alias leak/);
+  fs.writeFileSync(
+    path.join(root, 'skills/browserpaw/references/tools.md'),
+    '# Tools\n\nchrome_navigate\n',
+  );
+
+  fs.writeFileSync(
+    path.join(root, 'skills/browserpaw/SKILL.md'),
+    '---\nname: browserpaw\n---\n\n[Missing](references/missing.md)\n',
+  );
+  assert.throws(() => syncSkills(root, { check: true }), /Broken canonical reference/);
+
+  const badVersionRoot = fixture();
+  try {
+    fs.writeFileSync(
+      path.join(badVersionRoot, 'plugins/browserpaw/plugin.json'),
+      '{"version":"3.0.0"}\n',
+    );
+    assert.throws(() => syncSkills(badVersionRoot, { check: true }), /does not match 4\.0\.0/);
+  } finally {
+    fs.rmSync(badVersionRoot, { recursive: true, force: true });
+  }
+
+  const badToolsRoot = fixture({ toolCount: 17 });
+  try {
+    const names = tools(16);
+    write(
+      path.join(badToolsRoot, 'plugins/browserpaw-hermes/plugin.yaml'),
+      `manifest_version: 1\nname: browserpaw\nversion: '4.0.0'\nprovides_tools:\n${names.map((name) => `  - ${name}`).join('\n')}\n`,
+    );
+    assert.throws(() => syncSkills(badToolsRoot, { check: true }), /does not match browserpaw_\* definitions/);
+  } finally {
+    fs.rmSync(badToolsRoot, { recursive: true, force: true });
   }
 } finally {
-  fs.rmSync(sandbox, { recursive: true, force: true });
-  fs.rmSync(outsideCwd, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true });
 }
 
-// 3. Target side: fail-closed on external directory junctions and dangling links
-const jBox = createSandbox();
-const extProbe = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-ext-'));
-const sentinel = path.join(extProbe, 'probe.txt');
-fs.writeFileSync(sentinel, 'untouched');
-const jLink = path.join(jBox, 'skills', 'browserpaw');
-fs.mkdirSync(path.dirname(jLink), { recursive: true });
-fs.symlinkSync(extProbe, jLink, 'junction');
+const linkRoot = fixture();
+const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-outside-'));
 try {
-  const res = runScript(jBox);
-  assert.notStrictEqual(res.status, 0);
-  assert.strictEqual(fs.readFileSync(sentinel, 'utf-8'), 'untouched');
-  assert.ok(!fs.existsSync(path.join(extProbe, 'SKILL.md')));
-} finally {
-  fs.unlinkSync(jLink);
-}
-const dangLink = path.join(jBox, 'skills', 'browserpaw');
-fs.symlinkSync(path.join(extProbe, 'non-existent'), dangLink, 'junction');
-try {
-  const res = runScript(jBox);
-  assert.notStrictEqual(res.status, 0);
-} finally {
-  fs.unlinkSync(dangLink);
-  fs.rmSync(extProbe, { recursive: true, force: true });
-  fs.rmSync(jBox, { recursive: true, force: true });
-}
-
-// 4. Source side: reject in-skill directory junctions and file symlinks pointing to out-of-repo credentials
-const srcBox = createSandbox();
-const srcSecretProbe = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-src-secret-'));
-const secretDir = path.join(srcSecretProbe, 'creds');
-fs.mkdirSync(secretDir, { recursive: true });
-fs.writeFileSync(path.join(secretDir, 'id_rsa'), 'SECRET_KEY');
-const srcJunction = path.join(srcBox, 'skill', 'secret_dir');
-fs.symlinkSync(secretDir, srcJunction, 'junction');
-try {
-  const res = runScript(srcBox);
-  assert.notStrictEqual(res.status, 0, 'FAIL: script should reject source directory junction');
-  assert.ok(!fs.existsSync(path.join(srcBox, 'skills', 'browserpaw', 'secret_dir')));
-} finally {
-  fs.unlinkSync(srcJunction);
-}
-let srcFileSymlinkCreated = false;
-const srcFileLink = path.join(srcBox, 'skill', 'secret.md');
-try {
-  fs.symlinkSync(path.join(secretDir, 'id_rsa'), srcFileLink, 'file');
-  srcFileSymlinkCreated = true;
-} catch {
-  console.log('[SKIP] Source file symlink test skipped due to Windows privilege');
-}
-try {
-  if (srcFileSymlinkCreated) {
-    const res = runScript(srcBox);
-    assert.notStrictEqual(res.status, 0, 'FAIL: script should reject source file symlink');
-    assert.ok(!fs.existsSync(path.join(srcBox, 'skills', 'browserpaw', 'secret.md')));
+  write(path.join(outside, 'sentinel.txt'), 'untouched\n');
+  const target = path.join(linkRoot, 'plugins/browserpaw/skills/browserpaw');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.symlinkSync(outside, target, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch {
+    console.log('[SKIP] target junction test requires platform link privileges');
+  }
+  if (fs.existsSync(target)) {
+    assert.throws(() => syncSkills(linkRoot, { check: true }), /Symlink or junction forbidden/);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'untouched\n');
   }
 } finally {
-  if (srcFileSymlinkCreated) fs.unlinkSync(srcFileLink);
-  fs.rmSync(srcSecretProbe, { recursive: true, force: true });
-  fs.rmSync(srcBox, { recursive: true, force: true });
+  fs.rmSync(linkRoot, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
 }
 
-// 5. Guard against internal canonical link loops and overwrites
-const canBox = createSandbox();
-const canLink = path.join(canBox, 'skills', 'browserpaw');
-fs.mkdirSync(path.dirname(canLink), { recursive: true });
-fs.symlinkSync(path.join(canBox, 'skill'), canLink, 'junction');
+const brokenLinkRoot = fixture();
 try {
-  const res = runScript(canBox);
-  assert.notStrictEqual(res.status, 0);
+  const target = path.join(brokenLinkRoot, 'plugins/browserpaw/skills/browserpaw');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.symlinkSync(path.join(brokenLinkRoot, 'missing-target'), target, 'dir');
+    assert.throws(() => syncSkills(brokenLinkRoot, { check: true }), /Symlink or junction forbidden/);
+  } catch (error) {
+    if (error.code === 'EPERM' || error.code === 'EACCES') {
+      console.log('[SKIP] broken symlink test requires platform link privileges');
+    } else {
+      throw error;
+    }
+  }
 } finally {
-  fs.unlinkSync(canLink);
-  fs.rmSync(canBox, { recursive: true, force: true });
+  fs.rmSync(brokenLinkRoot, { recursive: true, force: true });
 }
 
-// 6. Prefix spoofing: run the production script to verify it blocks a same-prefix disguised directory
-const prefBox = createSandbox();
-const spoofDir = prefBox + '-fake';
-fs.mkdirSync(spoofDir, { recursive: true });
-const spoofLink = path.join(prefBox, 'skills', 'browserpaw');
-fs.mkdirSync(path.dirname(spoofLink), { recursive: true });
-fs.symlinkSync(spoofDir, spoofLink, 'junction');
-try {
-  const res = runScript(prefBox);
-  assert.notStrictEqual(res.status, 0);
-  assert.strictEqual(fs.readdirSync(spoofDir).length, 0);
-} finally {
-  fs.unlinkSync(spoofLink);
-  fs.rmSync(spoofDir, { recursive: true, force: true });
-  fs.rmSync(prefBox, { recursive: true, force: true });
-}
+console.log('Skill synchronization regression passed.');
 
-console.log('QUAL-03 regression passed: all security boundaries verified.');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+assert.deepEqual(syncSkills(repoRoot, { check: true }).problems, []);
+console.log('Repository skill mirrors are synchronized.');

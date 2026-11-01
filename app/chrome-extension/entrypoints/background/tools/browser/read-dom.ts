@@ -8,11 +8,14 @@ import {
   type IndexedElement,
 } from 'chrome-mcp-shared';
 import { executeInPage } from './in-page-engine';
-import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
+import { snapshotCacheManager, snapshotObservationKey } from '@/utils/snapshot-cache-manager';
 import { renderCompactElementLine } from './dom-indexer';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { scrubUrl } from '@/utils/url-sanitizer';
+import type { FastSnapshotOptions, FastSnapshotResult } from './fast-snapshot';
+import { describeFrameCoverage } from '@/utils/frame-coverage';
+import { observationPriority } from '@/utils/observation-priority';
 
 export interface ReadDOMParams {
   viewportThreshold?: number;
@@ -49,7 +52,8 @@ export interface ReadDOMParams {
    * Off by default: the pruned tree already carries index/tag/attributes/text
    * for every element, and the detail blocks duplicated it as pretty-printed
    * JSON — roughly 7x the payload for the same information. Only request them
-   * when you need geometry (rect/safeClickPoint) or per-element flags.
+   * when you need geometry (rect/safeClickPoint), per-element flags, or the
+   * fast engine's structured actions and validation metadata.
    */
   includeDetails?: boolean;
   /**
@@ -72,6 +76,34 @@ export interface ReadDOMParams {
    * [role="listitem"], li) and aggregates fragmented leaf text nodes into unified structured card summaries.
    */
   flattenCards?: boolean;
+}
+
+function roundRobinUniqueByFrame<T>(
+  buckets: Array<{ frameId: number; items: T[] }>,
+  keyOf: (item: T) => string | number,
+  priorityOf: (item: T) => number,
+  limit = Number.POSITIVE_INFINITY,
+): T[] {
+  const seen = new Set<string | number>();
+  const ordered: T[] = [];
+  let offset = 0;
+
+  while (true) {
+    let progressed = false;
+    for (const bucket of buckets) {
+      const item = bucket.items[offset];
+      if (item === undefined) continue;
+      progressed = true;
+      const key = keyOf(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(item);
+    }
+    if (!progressed) break;
+    offset++;
+  }
+
+  return ordered.sort((a, b) => priorityOf(b) - priorityOf(a)).slice(0, limit);
 }
 
 export class ReadDOMTool extends BaseBrowserToolExecutor {
@@ -101,12 +133,34 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         } catch {}
       }
 
-      // Fast Snapshot Engine branch (Phase F1: 10-30ms, <=15KB, WeakMap caching)
-      if (args.fast || args.format === 'fast') {
-        const snapRes = await executeInPage({ tabId: tab.id }, 'inPageFastSnapshot', [
-          { legacyVisibility: args.legacyVisibility },
-        ]);
-        const fastData = snapRes?.[0]?.result as any;
+      // Fast Snapshot Engine branch (bounded actions/text with WeakMap caching)
+      const hasNonZeroCursor = typeof args.cursor === 'number' && args.cursor > 0;
+      if ((args.fast || args.format === 'fast') && !args.deltaOnly && !hasNonZeroCursor) {
+        const effectiveSelector = args.scope || args.selector;
+        const fastObservationKey = snapshotObservationKey({
+          ...args,
+          selector: effectiveSelector,
+        });
+        const fastOpts: FastSnapshotOptions = {
+          legacyVisibility: args.legacyVisibility,
+          selector: effectiveSelector,
+          scope: args.scope,
+          exclude: args.exclude,
+          viewportThreshold: args.viewportThreshold,
+          viewportOnly: args.viewportOnly,
+          activeViewportOnly: args.activeViewportOnly,
+          limit: args.limit,
+          maxTextLength: args.maxTextLength,
+        };
+
+        const snapRes = await executeInPage<FastSnapshotResult>(
+          { tabId: tab.id, allFrames: true },
+          'inPageFastSnapshot',
+          [fastOpts],
+        );
+
+        const mainFrame = snapRes.find((r) => r.frameId === 0) || snapRes[0];
+        const fastData = mainFrame?.result as any;
         if (fastData?.isErrorPage) {
           const pageUrl = scrubUrl(tab.url || '');
           return {
@@ -132,61 +186,391 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Failed to execute fast DOM snapshot');
         }
 
-        const snapshotElements = (fastData.actions || []).map((a: any, idx: number) => {
-          const actionText = a.label || a.name || '';
-          const rect = a.rect
-            ? {
-                x: a.rect.x ?? 0,
-                y: a.rect.y ?? 0,
-                width: a.rect.w ?? a.rect.width ?? 0,
-                height: a.rect.h ?? a.rect.height ?? 0,
-              }
-            : { x: 0, y: 0, width: 0, height: 0 };
-          return {
-            index: idx + 1,
-            tagName: a.role || a.kind || 'element',
-            isInteractive: true,
-            attributes: {
-              role: a.role,
-              name: actionText,
-              id: a.id,
-              // The fast snapshot already carries the live control value; without it a caller
-              // cannot tell a filled field from an empty one, so a completed fill looks
-              // unperformed and gets repeated until the run reports itself stuck.
-              ...(a.kind === 'fill' && typeof a.value === 'string' && a.value !== ''
-                ? { value: a.value }
-                : {}),
-              ...(a.current_value ? { current_value: a.current_value } : {}),
-            },
-            text: actionText,
-            rect,
-          };
-        });
+        const subFrames = snapRes.filter(
+          (r) => r !== mainFrame && r.result && !(r.result as any).isErrorPage,
+        );
+        const seenIndices = new Set<number>();
+        const snapshotElements: any[] = [];
 
+        const processActionsToElements = (actions: any[], frameId: number) => {
+          for (const a of actions) {
+            if (!/^e\d+$/.test(a.id)) continue;
+            const index = Number(a.id.slice(1));
+            if (seenIndices.has(index)) {
+              if (a.kind === 'fill' && a.value) {
+                const existing = snapshotElements.find((e) => e.index === index);
+                if (existing && existing.attributes) {
+                  existing.attributes.value = a.value;
+                }
+              }
+              continue;
+            }
+            seenIndices.add(index);
+            const actionText = a.label || a.name || '';
+            const rect = a.rect
+              ? {
+                  x: a.rect.x ?? 0,
+                  y: a.rect.y ?? 0,
+                  width: a.rect.w ?? a.rect.width ?? 0,
+                  height: a.rect.h ?? a.rect.height ?? 0,
+                }
+              : { x: 0, y: 0, width: 0, height: 0 };
+            snapshotElements.push({
+              index,
+              tagName: a.role || a.kind || 'element',
+              isInteractive: true,
+              ...(a.withinFocusScope ? { withinFocusScope: true } : {}),
+              frameId: frameId !== 0 ? frameId : undefined,
+              attributes: {
+                role: a.role,
+                name: actionText,
+                ...(a.domId ? { id: a.domId } : {}),
+                ...(frameId !== 0 ? { frame: String(frameId) } : {}),
+                ...(a.kind === 'fill' && typeof a.value === 'string' && a.value !== ''
+                  ? { value: a.value }
+                  : {}),
+                ...(a.current_value ? { current_value: a.current_value } : {}),
+                ...(a.invalid ? { invalid: 'true' } : {}),
+                ...(a.invalidReason ? { invalidReason: a.invalidReason } : {}),
+                ...(a.validationMessage ? { validationMessage: a.validationMessage } : {}),
+                ...(a.required ? { required: 'true' } : {}),
+                ...(a.valid !== undefined ? { valid: String(a.valid) } : {}),
+                ...(a.checked !== undefined ? { checked: a.checked } : {}),
+                ...(a.selected !== undefined ? { 'aria-selected': a.selected } : {}),
+                ...(a.expanded !== undefined ? { 'aria-expanded': a.expanded } : {}),
+                ...(a.ariaInvalid ? { 'aria-invalid': a.ariaInvalid } : {}),
+                ...(a.errormessage ? { errormessage: a.errormessage } : {}),
+                ...(a.description ? { description: a.description } : {}),
+                ...(a.focused ? { focused: 'true' } : {}),
+              },
+              text: actionText,
+              value: a.kind === 'fill' ? a.value : a.current_value,
+              rect,
+            });
+          }
+        };
+
+        processActionsToElements(fastData.actions || [], mainFrame.frameId ?? 0);
+        for (const sf of subFrames) {
+          processActionsToElements(sf.result?.actions || [], sf.frameId);
+        }
+
+        const mergeStructuralElements = (elements: IndexedElement[], frameId: number) => {
+          for (const element of elements) {
+            const existing = snapshotElements.find(
+              (candidate) => candidate.index === element.index,
+            );
+            if (existing) {
+              existing.role = element.role || existing.role;
+              existing.attributes = {
+                ...element.attributes,
+                ...existing.attributes,
+                ...(frameId !== 0 ? { frame: String(frameId) } : {}),
+              };
+              if (!existing.text && element.text) existing.text = element.text;
+              continue;
+            }
+            snapshotElements.push({
+              ...element,
+              frameId: frameId !== 0 ? frameId : undefined,
+              attributes: {
+                ...element.attributes,
+                ...(frameId !== 0 ? { frame: String(frameId) } : {}),
+              },
+            });
+          }
+        };
+        mergeStructuralElements(fastData.structuralElements || [], mainFrame.frameId ?? 0);
+        for (const sf of subFrames) {
+          mergeStructuralElements(sf.result?.structuralElements || [], sf.frameId);
+        }
+
+        const FAST_GLOBAL_ELEMENT_LIMIT = 250;
+        let frameOmittedActions = 0;
+        let frameOmittedElements = 0;
+        for (const frame of snapRes) {
+          frameOmittedActions += frame.result?.omitted_actions || 0;
+          frameOmittedElements += frame.result?.omitted_elements || 0;
+        }
+        const totalElements = snapshotElements.length + frameOmittedElements;
+        const userLimit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
+        const effectiveLimit =
+          userLimit !== undefined
+            ? Math.min(userLimit, FAST_GLOBAL_ELEMENT_LIMIT)
+            : FAST_GLOBAL_ELEMENT_LIMIT;
+
+        const allInteractiveActions: any[] = [];
+        for (const a of fastData.actions || []) {
+          if (/^e\d+$/.test(a.id)) allInteractiveActions.push(a);
+        }
+        for (const sf of subFrames) {
+          for (const a of sf.result?.actions || []) {
+            if (/^e\d+$/.test(a.id)) allInteractiveActions.push(a);
+          }
+        }
+
+        const byFrame = snapRes.map((frame) => {
+          const actions = (frame.result?.actions || []).filter((a: any) => /^e\d+$/.test(a.id));
+          const seenElementIds = new Set<number>();
+          const elementIds: number[] = [];
+          for (const action of actions) {
+            const numericId = Number(action.id.slice(1));
+            if (seenElementIds.has(numericId)) continue;
+            seenElementIds.add(numericId);
+            elementIds.push(numericId);
+          }
+          for (const element of frame.result?.structuralElements || []) {
+            if (seenElementIds.has(element.index)) continue;
+            seenElementIds.add(element.index);
+            elementIds.push(element.index);
+          }
+          return { frameId: frame.frameId, actions, elementIds };
+        });
+        const selectedByFrame = new Map<number, any[]>();
+        for (const frame of byFrame) selectedByFrame.set(frame.frameId, []);
+        const priorities = new Map(
+          snapshotElements.map((element) => [element.index, observationPriority(element)]),
+        );
+        const chosenElementIds = new Set(
+          roundRobinUniqueByFrame(
+            byFrame.map((frame) => ({ frameId: frame.frameId, items: frame.elementIds })),
+            (elementId) => elementId,
+            (elementId) => priorities.get(elementId) || 0,
+            effectiveLimit,
+          ),
+        );
+
+        const allUniqueElementIds = new Set<number>();
+        for (const frame of byFrame) {
+          for (const elementId of frame.elementIds) allUniqueElementIds.add(elementId);
+        }
+
+        const retainedElementIds = chosenElementIds;
+        let actionRecordCount = 0;
+        const selectActionCounts = new Map<number, number>();
+        for (const frame of byFrame) {
+          for (const action of frame.actions) {
+            if (retainedElementIds.has(Number(action.id.slice(1)))) {
+              const numericId = Number(action.id.slice(1));
+              if (action.kind === 'select') {
+                const count = selectActionCounts.get(numericId) || 0;
+                if (count >= 50) continue;
+                selectActionCounts.set(numericId, count + 1);
+              }
+              selectedByFrame.get(frame.frameId)!.push(action);
+              actionRecordCount++;
+            }
+          }
+        }
+        const omitted_elements =
+          Math.max(0, allUniqueElementIds.size - retainedElementIds.size) + frameOmittedElements;
+        const omittedDueToBudget = allInteractiveActions.length - actionRecordCount;
+
+        const totalOmittedActions = frameOmittedActions + omittedDueToBudget;
+
+        const retainedActionIds = new Set([...selectedByFrame.values()].flat().map((a) => a.id));
+        const pagedElements = snapshotElements
+          .filter((e) => retainedElementIds.has(e.index))
+          .sort((a, b) => observationPriority(b) - observationPriority(a));
+
+        const coverage = await describeFrameCoverage(tab.id, snapRes);
         const snapshot = snapshotCacheManager.setSnapshot(tab.id, {
           url: scrubUrl(tab.url || fastData.url),
-          elementCount: snapshotElements.length,
-          elements: snapshotElements,
+          elementCount: pagedElements.length,
+          elements: pagedElements,
           representation: 'fast',
+          observationKey: fastObservationKey,
+          coverage,
         });
 
-        const treeString = snapshotElements
-          .map((e: any) => {
-            const valuePart = e.attributes?.value ? ` value="${e.attributes.value}"` : '';
-            return `[${e.index}] ${e.tagName}${e.text ? ' "' + e.text + '"' : ''}${valuePart}`;
-          })
-          .join('\n');
+        if (args.highlight) {
+          try {
+            await executeInPage({ tabId: tab.id, allFrames: true }, 'inPageRenderHighlights', []);
+          } catch {}
+        }
+
+        const treeLines: string[] = [];
+        let lastFrameId = 0;
+        for (const e of pagedElements) {
+          const frameId = e.frameId || 0;
+          if (frameId !== lastFrameId && frameId !== 0) {
+            treeLines.push(`\n<!-- Frame ${frameId} -->`);
+            lastFrameId = frameId;
+          }
+          treeLines.push(renderCompactElementLine(e, e.frameId));
+        }
+        const treeString = treeLines.join('\n');
+
+        const GLOBAL_BODY_TEXT_BUDGET = 6000;
+        const combinedTextParts = [fastData.text || ''];
+        for (const sf of subFrames) {
+          if (sf.result?.text) combinedTextParts.push(sf.result.text);
+        }
+        const rawCombinedText = combinedTextParts.join('\n');
+        let textTruncated = snapRes.some((r) => r.result?.textTruncated === true);
+        let totalOmittedText = snapRes.reduce((acc, r) => acc + (r.result?.omitted_text || 0), 0);
+
+        let combinedText = rawCombinedText;
+        if (rawCombinedText.length > GLOBAL_BODY_TEXT_BUDGET) {
+          textTruncated = true;
+          totalOmittedText += rawCombinedText.length - GLOBAL_BODY_TEXT_BUDGET;
+          combinedText = rawCombinedText.slice(0, GLOBAL_BODY_TEXT_BUDGET);
+        }
+
+        let combinedActions: any[] | undefined = undefined;
+        let combinedGuards: Record<string | number, any> | undefined = undefined;
+        let mergedPageKey: any[] | undefined = undefined;
+        let mergedMarker: any[] | undefined = undefined;
+
+        if (args.includeDetails) {
+          const subInteractiveActions: any[] = subFrames.flatMap(
+            (sf) => selectedByFrame.get(sf.frameId) || [],
+          );
+          const mainInteractiveActions = selectedByFrame.get(mainFrame.frameId) || [];
+          const mainControlActions = (fastData.actions || []).filter(
+            (a: any) => !/^e\d+$/.test(a.id),
+          );
+          const cappedInteractiveActions = [...mainInteractiveActions, ...subInteractiveActions];
+          combinedActions = [...cappedInteractiveActions, ...mainControlActions];
+
+          combinedGuards = {};
+          for (const a of fastData.actions || []) {
+            if (
+              retainedActionIds.has(a.id) &&
+              typeof a.node === 'number' &&
+              fastData.guards?.[a.node]
+            ) {
+              combinedGuards[a.node] = fastData.guards[a.node];
+              if (subFrames.length > 0) {
+                combinedGuards[a.id] = fastData.guards[a.node];
+              }
+            }
+          }
+
+          for (const sf of subFrames) {
+            for (const a of sf.result?.actions || []) {
+              if (
+                retainedActionIds.has(a.id) &&
+                typeof a.node === 'number' &&
+                sf.result?.guards?.[a.node]
+              ) {
+                const numericKey = Number(a.id.slice(1));
+                combinedGuards[numericKey] = sf.result.guards[a.node];
+                combinedGuards[a.id] = sf.result.guards[a.node];
+              }
+            }
+          }
+
+          if (subFrames.length > 0) {
+            const mergedInputsState = [
+              ...(Array.isArray(fastData.page_key?.[6]) ? fastData.page_key[6] : []),
+              ...subFrames.flatMap((sf) =>
+                (Array.isArray(sf.result?.page_key?.[6]) ? sf.result.page_key[6] : []).map(
+                  (item: any) => [
+                    item[0],
+                    item[1],
+                    item[2],
+                    item[3],
+                    item[4],
+                    item[5],
+                    `frame:${sf.frameId}`,
+                  ],
+                ),
+              ),
+            ];
+
+            mergedPageKey = [
+              fastData.page_key?.[0] ?? performance.timeOrigin,
+              fastData.page_key?.[1] ?? (tab.url || ''),
+              fastData.page_key?.[2] ?? 0,
+              fastData.page_key?.[3] ?? 0,
+              fastData.page_key?.[4] ?? fastData.w,
+              fastData.page_key?.[5] ?? fastData.h,
+              mergedInputsState,
+              ...subFrames.map((sf) => ({ frameId: sf.frameId, url: sf.result?.url })),
+            ];
+
+            mergedMarker = [
+              fastData.marker?.[0] ?? performance.timeOrigin,
+              fastData.marker?.[1] ?? (tab.url || fastData.url),
+              fastData.marker?.[2] ?? 0,
+              fastData.marker?.[3] ?? 0,
+              fastData.marker?.[4] ?? fastData.w,
+              fastData.marker?.[5] ?? fastData.h,
+              fastData.title,
+              combinedText,
+              combinedActions.map(({ rect, ...rest }: any) => rest),
+              mergedInputsState,
+            ];
+          } else {
+            mergedPageKey = fastData.page_key;
+            mergedMarker = fastData.marker;
+          }
+        }
+
+        let selectorMatched: boolean | undefined = undefined;
+        if (effectiveSelector !== undefined) {
+          selectorMatched = snapRes.some((r) => r.result?.selectorMatched === true);
+        }
+
+        const fastResponseData: any = { ...fastData };
+        delete fastResponseData.structuralElements;
+        delete fastResponseData.observationReused;
+
+        const responseObj: any = {
+          ...(args.includeDetails
+            ? {
+                ...fastResponseData,
+                actions: combinedActions,
+                guards: combinedGuards,
+                page_key: mergedPageKey,
+                marker: mergedMarker,
+                indexedElements: pagedElements,
+                omitted_actions: totalOmittedActions,
+                omitted_elements,
+                text: combinedText,
+                observations: snapRes.map((frame) => ({
+                  frameId: frame.frameId,
+                  documentId: frame.documentId,
+                  reused: (frame.result as any)?.observationReused ?? null,
+                })),
+              }
+            : {
+                title: fastData.title,
+                text: combinedText,
+                w: fastData.w,
+                h: fastData.h,
+                scroll: fastData.scroll,
+                omitted_actions: totalOmittedActions,
+                omitted_elements,
+              }),
+          url: scrubUrl(fastData.url || tab.url || ''),
+          snapshotId: snapshot.snapshotId,
+          treeString,
+          elementCount: pagedElements.length,
+          totalElements,
+          ...(textTruncated ? { textTruncated: true, omitted_text: totalOmittedText } : {}),
+        };
+
+        if (selectorMatched !== undefined) {
+          responseObj.selectorMatched = selectorMatched;
+        }
+
+        responseObj.coverage = coverage;
+
+        if (args.flattenCards || args.virtualizeViewport || args.isolateModal) {
+          const unsupported: string[] = [];
+          if (args.flattenCards) unsupported.push('flattenCards');
+          if (args.virtualizeViewport) unsupported.push('virtualizeViewport');
+          if (args.isolateModal) unsupported.push('isolateModal');
+          responseObj.unsupportedInFastMode = unsupported;
+        }
 
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                ...fastData,
-                url: scrubUrl(fastData.url || tab.url || ''),
-                snapshotId: snapshot.snapshotId,
-                treeString,
-              }),
+              text: JSON.stringify(responseObj),
             },
           ],
           isError: false,
@@ -198,7 +582,8 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         viewportThreshold: args.viewportThreshold ?? 1000,
         highlight: args.highlight ?? false,
         maxTextLength: args.maxTextLength,
-        format: args.format ?? 'compact',
+        format: (args.format === 'fast' || !args.format ? 'compact' : args.format) as
+          'compact' | 'html',
         viewportOnly: args.viewportOnly,
         activeViewportOnly: args.activeViewportOnly,
         selector: effectiveSelector,
@@ -208,24 +593,22 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         virtualizeViewport: args.virtualizeViewport,
         flattenCards: args.flattenCards,
       };
+      const standardObservationKey = snapshotObservationKey(prunerOpts);
 
-      let results: chrome.scripting.InjectionResult<PrunedDOMTreeResult>[] = [];
-      try {
-        // Multi-frame penetration using Chrome Extension native { allFrames: true }
-        results = await executeInPage({ tabId: tab.id, allFrames: true }, 'inPageDOMPruner', [
-          prunerOpts,
-        ]);
-      } catch (frameErr) {
-        // Fallback to main frame only if allFrames fails
-        results = await executeInPage({ tabId: tab.id }, 'inPageDOMPruner', [prunerOpts]);
-      }
+      // allFrames is the coverage contract: a failed broadcast must not silently
+      // degrade into a main-frame-only snapshot.
+      const results = await executeInPage({ tabId: tab.id, allFrames: true }, 'inPageDOMPruner', [
+        prunerOpts,
+      ]);
 
       if (!results || results.length === 0) {
         return createErrorResponse('Failed to execute DOM pruning and indexing');
       }
 
       // Handle Chrome native error page (chrome-error://chromewebdata/) gracefully
-      const errorPageResult = results.find((r) => (r?.result as any)?.isErrorPage);
+      const errorPageResult = results.find(
+        (r) => r.frameId === 0 && (r?.result as any)?.isErrorPage,
+      );
       if (errorPageResult) {
         const errPayload = errorPageResult.result as any;
         const pageUrl = scrubUrl(tab.url || '');
@@ -274,11 +657,10 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         virtualizedCount: mainData.virtualizedCount,
         virtualizedSummary: mainData.virtualizedSummary,
         flattenedCardCount: mainData.flattenedCardCount,
-        selectorMatched:
-          mainData.selectorMatched ?? (results.some((r) => r.result?.selectorMatched) || false),
+        selectorMatched: results.some((r) => r.result?.selectorMatched === true),
       };
+      const standardCoverage = await describeFrameCoverage(tab.id, results);
 
-      let currentIndex = (mergedData.indexedElements?.length || 0) + 1;
       let currentAssetIndex = (mergedData.assets?.length || 0) + 1;
       const subframeLines: string[] = [];
       const assetRoutes = new Map<number, { frameId: number; localIndex: number }>();
@@ -295,7 +677,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       }
 
       for (const r of results) {
-        if (r === mainFrame || !r.result) continue;
+        if (r === mainFrame || !r.result || (r.result as any).isErrorPage) continue;
         const subData = r.result;
         mergedData.elementCount += subData.elementCount;
 
@@ -314,21 +696,11 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         }
 
         if (subData.indexedElements && subData.indexedElements.length > 0) {
-          const startingIndexForFrame = currentIndex;
-          const frameOffset = startingIndexForFrame - 1;
-
           subframeLines.push(`\n<!-- Frame ${r.frameId} -->`);
           for (const el of subData.indexedElements) {
-            const remappedIndex = currentIndex++;
-            const remappedEl: IndexedElement = {
-              ...el,
-              index: remappedIndex,
-            };
-            mergedData.indexedElements!.push(remappedEl);
-            mergedData.indexMap[remappedIndex] = {
-              selector: el.attributes?.id
-                ? `#${el.attributes.id}`
-                : `${el.tagName}[data-mcp-idx="${remappedIndex}"]`,
+            mergedData.indexedElements!.push(el);
+            mergedData.indexMap[el.index] = {
+              selector: subData.indexMap?.[el.index]?.selector,
               frameId: String(r.frameId),
               tagName: el.tagName,
             };
@@ -340,22 +712,11 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
               const textPart = el.text ? ` "${el.text}"` : '';
               const shadowPart = el.inShadowDom ? ' [shadow]' : '';
               subframeLines.push(
-                `[${remappedIndex}]${shadowPart} <${el.tagName}${attrStr ? ' ' + attrStr : ''} frame="${r.frameId}">${textPart}</${el.tagName}>`,
+                `[${el.index}]${shadowPart} <${el.tagName}${attrStr ? ' ' + attrStr : ''} frame="${r.frameId}">${textPart}</${el.tagName}>`,
               );
             } else {
-              subframeLines.push(renderCompactElementLine(remappedEl, r.frameId));
+              subframeLines.push(renderCompactElementLine(el, r.frameId));
             }
-          }
-
-          // Crucial: Re-index the subframe in the tab context so its in-page isolatedMap, data-mcp-idx,
-          // and visual Set-of-Mark badges match the merged index!
-          try {
-            await executeInPage({ tabId: tab.id, frameIds: [r.frameId] }, 'inPageReindexFrame', [
-              frameOffset,
-              args.highlight ?? false,
-            ]);
-          } catch (reindexErr) {
-            console.warn(`Failed to synchronize subframe ${r.frameId} index map:`, reindexErr);
           }
         }
         if (subData.assets && subData.assets.length > 0) {
@@ -377,6 +738,27 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           }
         }
       }
+
+      const orderedFrames = [mainFrame, ...results.filter((result) => result !== mainFrame)];
+      const standardFrameBuckets = orderedFrames
+        .filter((result) => result?.result && !(result.result as any).isErrorPage)
+        .map((result) => ({ frameId: result.frameId, items: [] as IndexedElement[] }));
+      const bucketByFrameId = new Map(
+        standardFrameBuckets.map((bucket) => [String(bucket.frameId), bucket]),
+      );
+      const mainFrameId = String(mainFrame.frameId);
+      for (const element of mergedData.indexedElements || []) {
+        const mappedFrameId = mergedData.indexMap[element.index]?.frameId;
+        const bucket =
+          bucketByFrameId.get(mappedFrameId === undefined ? mainFrameId : String(mappedFrameId)) ||
+          bucketByFrameId.get(mainFrameId);
+        bucket?.items.push(element);
+      }
+      const fairStandardElements = roundRobinUniqueByFrame(
+        standardFrameBuckets,
+        (element) => element.index,
+        observationPriority,
+      );
 
       // Dual-track CDP Accessibility Tree alignment & fusion (Task B5)
       if (tab.id) {
@@ -521,19 +903,24 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         mergedData.treeString += `\n[Visual Assets: ${mergedData.assets.length} found. Pass assetIndex to ${resolveToolName('screenshot')} to view one.]\n${assetLines}`;
       }
 
+      let deltaRequiresFullBaseline = false;
+
       // Delta DOM support: return only changed/added/removed diffs
-      if (args.deltaOnly && tab.id) {
+      if (args.deltaOnly && tab.id && standardCoverage.status === 'complete') {
         const diff = snapshotCacheManager.diffWithPrevious(
           tab.id,
           mergedData.indexedElements || [],
-          { representation: 'standard' },
+          { representation: 'standard', observationKey: standardObservationKey },
         );
+        deltaRequiresFullBaseline = !diff.isDelta;
         snapshotCacheManager.setSnapshot(tab.id, {
           url: scrubUrl(tab.url || ''),
           elementCount: mergedData.elementCount,
           elements: mergedData.indexedElements,
           representation: 'standard',
+          observationKey: standardObservationKey,
           assetRoutes,
+          coverage: standardCoverage,
         });
 
         if (diff.isDelta && diff.unchanged) {
@@ -547,6 +934,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                     unchanged: true,
                     revision: diff.revision,
                     totalElements: diff.totalCurrent,
+                    coverage: standardCoverage,
                     message:
                       'Page DOM unchanged since last snapshot. No new or modified interactive elements.',
                   },
@@ -574,6 +962,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                     removedIndices: diff.removed,
                     added: diff.added,
                     modified: diff.modified,
+                    coverage: standardCoverage,
                     ...(diff.truncated
                       ? {
                           truncated: true,
@@ -600,7 +989,9 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         elementCount: mergedData.elementCount,
         elements: mergedData.indexedElements,
         representation: 'standard',
+        observationKey: standardObservationKey,
         assetRoutes,
+        coverage: standardCoverage,
       });
 
       // Pagination cursor support (P1-6)
@@ -608,46 +999,75 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       const totalElements =
         (mergedData.indexedElements || []).length || mergedData.elementCount || 0;
       const cursor = typeof args.cursor === 'number' ? Math.max(0, args.cursor) : 0;
-      const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
+      const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : 250;
 
       let treeString = mergedData.treeString;
       let returnElements = mergedData.indexedElements || [];
       let hasMore = false;
       let nextCursor: number | undefined = undefined;
 
-      if (limit !== undefined) {
-        const end = Math.min(cursor + limit, totalElements);
-        returnElements = returnElements.slice(cursor, end);
-        hasMore = end < totalElements;
-        nextCursor = hasMore ? end : undefined;
+      const end = Math.min(cursor + limit, totalElements);
+      returnElements = fairStandardElements.slice(cursor, end);
+      hasMore = end < totalElements;
+      nextCursor = hasMore ? end : undefined;
 
-        const allTreeLines = mergedData.treeString ? mergedData.treeString.split('\n') : [];
-        const allowedIndices = new Set(returnElements.map((e) => e.index));
-        const hasIndexedLines = allTreeLines.some((l) => /^\[\d+\]/.test(l));
-        if (hasIndexedLines) {
-          const slicedLines: string[] = [];
-          let passedElements = false;
-          for (const line of allTreeLines) {
-            const m = line.match(/^\[(\d+)\]/);
-            if (m) {
-              passedElements = true;
-              if (allowedIndices.has(parseInt(m[1], 10))) {
-                slicedLines.push(line);
-              }
-            } else if (!passedElements && cursor === 0) {
-              slicedLines.push(line);
-            } else if (passedElements && !hasMore) {
-              slicedLines.push(line);
-            }
-          }
-          treeString = slicedLines.join('\n');
-        } else {
-          treeString = allTreeLines.slice(cursor, end).join('\n');
+      const allTreeLines = mergedData.treeString ? mergedData.treeString.split('\n') : [];
+      const hasIndexedLines = allTreeLines.some((l) => /^\[\d+\]/.test(l));
+      if (hasIndexedLines) {
+        const elementLines = new Map<number, string>();
+        for (const line of allTreeLines) {
+          const match = line.match(/^\[(\d+)\]/);
+          if (match) elementLines.set(Number(match[1]), line);
         }
+        const firstElementLine = allTreeLines.findIndex((line) => /^\[\d+\]/.test(line));
+        const lastElementLine = allTreeLines.findLastIndex((line) => /^\[\d+\]/.test(line));
+        const leadingLines = cursor === 0 ? allTreeLines.slice(0, firstElementLine) : [];
+        const trailingLines = !hasMore ? allTreeLines.slice(lastElementLine + 1) : [];
+        const pageElementLines = returnElements.map((element) => {
+          const existingLine = elementLines.get(element.index);
+          if (existingLine) return existingLine;
+          const frameId = mergedData.indexMap[element.index]?.frameId;
+          return args.format === 'html'
+            ? `[${element.index}]${element.inShadowDom ? ' [shadow]' : ''} <${element.tagName}${Object.entries(
+                element.attributes || {},
+              )
+                .map(([key, value]) => ` ${key}="${value}"`)
+                .join(
+                  '',
+                )}${frameId && frameId !== '0' ? ` frame="${frameId}"` : ''}>${element.text ? ` "${element.text}"` : ''}</${element.tagName}>`
+            : renderCompactElementLine(
+                element,
+                frameId && frameId !== '0' ? Number(frameId) : undefined,
+              );
+        });
+        treeString = [...leadingLines, ...pageElementLines, ...trailingLines].join('\n');
+      } else {
+        treeString = allTreeLines.slice(cursor, end).join('\n');
       }
 
       const resultPayload: Record<string, any> = {
         ...mergedData,
+        ...(args.includeDetails
+          ? {
+              observations: results.map((frame) => ({
+                frameId: frame.frameId,
+                documentId: frame.documentId,
+                reused: frame.result?.observationReused ?? null,
+              })),
+            }
+          : {}),
+        coverage: standardCoverage,
+        ...(args.deltaOnly && (deltaRequiresFullBaseline || standardCoverage.status !== 'complete')
+          ? {
+              isDelta: false,
+              ...(standardCoverage.status !== 'complete'
+                ? {
+                    deltaError:
+                      'Incomplete frame observation; complete baseline retained, no removals inferred',
+                  }
+                : {}),
+            }
+          : {}),
         treeString,
         indexedElements: returnElements,
         snapshotId: snapshot.snapshotId,
@@ -656,6 +1076,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         cursor,
         limit,
         totalElements,
+        omitted_elements: Math.max(0, totalElements - returnElements.length - cursor),
         hasMore,
         nextCursor,
         ...(effectiveSelector !== undefined
@@ -685,7 +1106,6 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         ...(args.exclude !== undefined ? { exclude: args.exclude } : {}),
         ...(mergedData.modalIsolated ? { modalIsolated: true } : {}),
         ...(mergedData.isConfirmationTrap ? { isConfirmationTrap: true } : {}),
-        pipelineHint: `1-Turn Optimal Paradigm: Pipeline fill + submit in 1 turn via ${resolveToolName('batch_actions')}([{type: "fill", index: ..., text: "..."\x7d, {type: "click", index: ...\x7d]) or ${resolveToolName('fill_index')}({ index, text, pressEnter: true \x7d). Avoid splitting fill and submit into separate LLM turns.`,
       };
 
       // Default response is the pruned tree plus counters only. The detail

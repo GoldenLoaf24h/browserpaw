@@ -61,6 +61,39 @@ describe('TabFaviconManager (Glowing Agent Favicon & Clean Restoration)', () => 
     expect(executedScriptArgs[1].args[0]).toBe('https://example.com/favicon.ico');
   });
 
+  it('uses only current DOM markers and restores the original link after repeated activation', async () => {
+    document.head.innerHTML = '<link rel="shortcut icon" href="https://example.com/favicon.ico">';
+    (chrome.scripting.executeScript as any).mockImplementation(async (opts: any) => {
+      opts.func(...opts.args);
+      return [{ result: true }];
+    });
+
+    try {
+      await manager.setAgentFavicon(10);
+      await manager.setAgentFavicon(10);
+      expect(document.querySelectorAll('link[data-browserpaw-injected="true"]')).toHaveLength(1);
+      const markers = Array.from(document.querySelectorAll('link')).flatMap((link) =>
+        link.getAttributeNames().filter((name) => name.startsWith('data-browser')),
+      );
+      expect(markers.sort()).toEqual([
+        'data-browserpaw-injected',
+        'data-browserpaw-original-favicon',
+        'data-browserpaw-original-rel',
+      ]);
+
+      await manager.restoreFavicon(10);
+      const links = document.querySelectorAll('link');
+      expect(links).toHaveLength(1);
+      expect(links[0].rel).toBe('shortcut icon');
+      expect(links[0].href).toBe('https://example.com/favicon.ico');
+      expect(
+        links[0].getAttributeNames().filter((name) => name.startsWith('data-browser')),
+      ).toEqual([]);
+    } finally {
+      document.head.innerHTML = '';
+    }
+  });
+
   it('safely skips restricted chrome:// URLs', async () => {
     (chrome.tabs.get as any).mockResolvedValueOnce({
       id: 20,

@@ -4,6 +4,8 @@ Thank you for your interest in contributing to BrowserPaw! This document provide
 
 The authoritative acceptance contract is [QUALITY.md](./QUALITY.md). Run `pnpm verify` before delivery; individual test commands below are development checks. Extension delivery additionally requires `pnpm build:deploy`, `pnpm verify:delivery`, and runtime identity confirmation after manual reload.
 
+Before editing, read [development boundaries and current release work](./development/DEVELOPMENT.md). Use focused checks while iterating and the complete gate before release. Preserve existing worktree changes; do not clean runtime data or deploy during a documentation-only task.
+
 ## 🎯 How to Contribute
 
 We welcome contributions in many forms:
@@ -42,7 +44,7 @@ pnpm install
 3. **Start the project**
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 4. **Load the extension in Chrome**
@@ -57,7 +59,7 @@ browserpaw/
 ├── app/
 │   ├── chrome-extension/     # Chrome extension MV3 (WXT + Vue 3)
 │   │   ├── entrypoints/      # Background SW, popup, and isolated inpage scripts
-│   │   ├── tests/            # Vitest suite for all 50 extension tool executors & utilities
+│   │   ├── tests/            # Vitest contracts for extension tools and utilities
 │   │   └── utils/            # CDP session manager, storage managers, ring buffer
 │   └── native-server/        # Native messaging Fastify bridge & Stdio MCP host
 │       ├── src/mcp/          # MCP protocol implementation (HTTP, SSE, Stdio)

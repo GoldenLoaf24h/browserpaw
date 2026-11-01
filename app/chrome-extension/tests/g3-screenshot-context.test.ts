@@ -6,6 +6,7 @@ import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-e
 import { inPageGetAssetImage } from '../entrypoints/background/tools/browser/dom-indexer';
 import * as imageUtils from '@/utils/image-utils';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
+import * as frameCoordinates from '@/utils/frame-coordinates';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 
 describe('G3 Screenshot Context & Bounds Regression Suite', () => {
@@ -76,6 +77,11 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     screenshotContextManager.clear(tabId);
+    snapshotCacheManager.setSnapshot(tabId, {
+      url: 'https://example.com',
+      elementCount: 1,
+      assetRoutes: new Map([[1, { frameId: 0, localIndex: 0 }]]),
+    });
     urlSeqIdx = 0;
     lastCanvasWidth = 1000;
     lastCanvasHeight = 1000;
@@ -991,13 +997,17 @@ describe('G3 Screenshot Context & Bounds Regression Suite', () => {
                       success: false,
                       reason: 'tainted canvas',
                       rect: { x: 100, y: 80, width: 200, height: 100 },
-                      frameOffsetX: 300,
-                      frameOffsetY: 200,
                       devicePixelRatio: 1,
                       kind: 'canvas',
                     },
             },
           ] as any,
+      );
+      vi.spyOn(frameCoordinates, 'projectFramePoint').mockImplementation(
+        async (_tabId, frameId, point) => {
+          expect(frameId).toBe(42);
+          return { x: point.x + 300, y: point.y + 200 };
+        },
       );
 
       const res = await screenshotTool.execute({

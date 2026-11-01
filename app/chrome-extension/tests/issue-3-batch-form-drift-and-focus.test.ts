@@ -333,10 +333,10 @@ describe('GitHub Issue #3: Dynamic Index Drift, Active Element Focus Guard & Ant
   });
 
   describe('5. Hermes Plugin SKILL.md and Config Tool Names Alignment', () => {
-    it('confirms plugins/browserpaw/skills/browserpaw/SKILL.md has 0 chrome_* references', () => {
+    it('confirms the Hermes skill has 0 unavailable chrome_* references', () => {
       const skillMdPath = path.resolve(
         __dirname,
-        '../../../plugins/browserpaw/skills/browserpaw/SKILL.md',
+        '../../../plugins/browserpaw-hermes/skills/browserpaw/SKILL.md',
       );
       if (fs.existsSync(skillMdPath)) {
         const content = fs.readFileSync(skillMdPath, 'utf-8');
@@ -344,19 +344,6 @@ describe('GitHub Issue #3: Dynamic Index Drift, Active Element Focus Guard & Ant
         expect(chromeMatches).toEqual([]);
         expect(content).toContain('browserpaw_read_dom');
         expect(content).toContain('browserpaw_fill_index');
-      }
-    });
-
-    it('confirms plugins/browserpaw/skills/browserpaw/config/mcp-config.json has 0 chrome_* references', () => {
-      const configPath = path.resolve(
-        __dirname,
-        '../../../plugins/browserpaw/skills/browserpaw/config/mcp-config.json',
-      );
-      if (fs.existsSync(configPath)) {
-        const content = fs.readFileSync(configPath, 'utf-8');
-        const chromeMatches = content.match(/"chrome_[a-z_]+"/g) || [];
-        expect(chromeMatches).toEqual([]);
-        expect(content).toContain('browserpaw_read_dom');
       }
     });
   });

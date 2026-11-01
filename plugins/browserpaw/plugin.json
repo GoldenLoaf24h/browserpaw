@@ -1,0 +1,33 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "browserpaw",
+  "version": "4.1.0",
+  "description": "Control your own Chrome browser with BrowserPaw.",
+  "author": {
+    "name": "BrowserPaw Team",
+    "url": "https://github.com/GoldenLoaf24h/browserpaw"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
+  "repository": "https://github.com/GoldenLoaf24h/browserpaw",
+  "license": "AGPL-3.0",
+  "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "BrowserPaw",
+        "shortDescription": "Automate your Chrome session",
+        "longDescription": "Use your everyday Chrome through a controllable, readable, and verifiable local automation service while reusing existing sessions and authentication.",
+        "developerName": "BrowserPaw Team",
+        "category": "Productivity",
+        "capabilities": [
+          "Browser Automation",
+          "DOM Accessibility Tree",
+          "CDP Control",
+          "Session Reuse"
+        ],
+        "websiteURL": "https://github.com/GoldenLoaf24h/browserpaw",
+        "defaultPrompt": ["Open Chrome and inspect my active webpage"]
+      }
+    }
+  }
+}

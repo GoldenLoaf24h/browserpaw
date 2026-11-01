@@ -1,12 +1,12 @@
 # Pipelined Automation Reference (`chrome_batch_actions` & `chrome_form_pipeline`)
 
-This reference documents BrowserPaw's pipelined execution engines for multi-step workflows, atomic assertions, and zero-RTT form filling.
+This reference documents BrowserPaw's pipelined execution engines for multi-step workflows and mid-pipeline assertions. One tool call reduces round trips; it does not eliminate model or browser execution time.
 
 ---
 
 ## 1. `chrome_batch_actions`
 
-Executes sequential browser interactions atomically inside a single MCP turn, eliminating multi-turn network latency.
+Executes sequential browser interactions inside one MCP call. It stops on failed or unknown outcomes instead of replaying a mutation.
 
 ### Action Types Reference
 

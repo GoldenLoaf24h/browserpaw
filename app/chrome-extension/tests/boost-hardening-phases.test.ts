@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { type BatchActionItem, type ReadDOMParams, parseUnifiedCoordinate } from 'chrome-mcp-shared';
+import {
+  type BatchActionItem,
+  type ReadDOMParams,
+  parseUnifiedCoordinate,
+} from 'chrome-mcp-shared';
 import {
   inPageDOMPruner,
   inPageGetElementCoordinates,
   detectActiveModalBlocker,
   extractElementLocationDetails,
+  getIsolatedIndexMap,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import { readDOMTool } from '../entrypoints/background/tools/browser/read-dom';
 import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-actions';
@@ -36,6 +41,7 @@ describe('Phase 1: Contract & Assertion Engine Hardening', () => {
       } as DOMRect;
     };
     document.body.innerHTML = '';
+    getIsolatedIndexMap().clear();
   });
 
   afterEach(() => {
@@ -100,7 +106,7 @@ describe('Phase 1: Contract & Assertion Engine Hardening', () => {
 
     // Mock executeInPage for coordinates resolution and occlusion check
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target, fnName) => {
-      if (fnName === 'inPageGetElementCoordinates') {
+      if (fnName === 'inPageGetElementCoordinates' || fnName === 'inPageWaitForActionable') {
         return [
           {
             result: {
@@ -217,8 +223,11 @@ describe('Phase 1: Contract & Assertion Engine Hardening', () => {
     document.body.innerHTML = `
       <input id="reactive-input" aria-invalid="true" value="invalid-value" />
     `;
-    inPageDOMPruner();
-    const coords = inPageGetElementCoordinates('1');
+    const snapshot = inPageDOMPruner();
+    const inputRef = snapshot.indexedElements!.find(
+      (el) => el.attributes?.id === 'reactive-input',
+    )!.index;
+    const coords = inPageGetElementCoordinates(inputRef);
     expect(coords.validity?.valid).toBe(false);
     expect(coords.invalidReason).toBe('aria-invalid');
 
@@ -506,7 +515,9 @@ describe('Phase 3: Inline Network Capture & CDP Hardening', () => {
     expect(isTelemetryUrl('https://ad.doubleclick.net/ddm/adj/N123', '*/api/*')).toBe(true);
 
     // If user explicitly asks for sentry
-    expect(isTelemetryUrl('https://o1234.ingest.sentry.io/api/45/envelope/', '*sentry.io*')).toBe(false);
+    expect(isTelemetryUrl('https://o1234.ingest.sentry.io/api/45/envelope/', '*sentry.io*')).toBe(
+      false,
+    );
 
     // Normal business API
     expect(isTelemetryUrl('https://example.com/api/v1/orders/submit', '*/api/*')).toBe(false);
@@ -612,10 +623,12 @@ describe('Phase 3: Inline Network Capture & CDP Hardening', () => {
       },
     };
 
-    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) => fn());
+    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _label, fn) =>
+      fn(),
+    );
 
     vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target, fnName) => {
-      if (fnName === 'inPageGetElementCoordinates') {
+      if (fnName === 'inPageGetElementCoordinates' || fnName === 'inPageWaitForActionable') {
         return [
           {
             result: {

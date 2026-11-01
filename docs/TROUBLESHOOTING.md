@@ -6,7 +6,7 @@ BrowserPaw consists of three locally coordinated tiers:
 
 1. **Chrome Extension (MV3)**: Runs inside your everyday Google Chrome, executing CDP commands and DOM indexing.
 2. **Native Messaging Host (Node.js)**: Launched automatically by Chrome via Native Messaging, bridging protocol calls.
-3. **MCP Endpoint (127.0.0.1:12306 / Stdio)**: High-speed Fastify MCP server communicating with your AI agent (Cursor, Claude Code, Windsurf, Cline, Codex, Antigravity).
+3. **MCP Endpoint (127.0.0.1:12306 / Stdio)**: Local Fastify MCP server communicating with your AI agent (Cursor, Claude Code, Windsurf, Cline, Codex, Antigravity).
 
 This guide provides definitive diagnostics, root cause explanations, and verified fixes for all known runtime and build issues.
 
@@ -18,16 +18,16 @@ Before manual troubleshooting, run the automated diagnostic script from the repo
 
 ```bash
 # Run read-only health checks via doctor script or CLI
-node skill/config/doctor.mjs
+node skills/browserpaw/scripts/doctor.mjs
 # or via CLI entry point:
 node bin/browserpaw.cjs doctor
 # (or if globally installed: npx browserpaw doctor)
 
 # Run automated diagnosis and self-healing (recreates tokens, repairs registry, syncs build artifacts)
-node skill/config/doctor.mjs --fix
+node skills/browserpaw/scripts/doctor.mjs --fix
 ```
 
-Windows users can also double-click [`skill/config/repair.bat`](../skill/config/repair.bat) or execute [`skill/config/repair.ps1`](../skill/config/repair.ps1).
+Windows users can also double-click [`skills/browserpaw/scripts/repair.bat`](../skills/browserpaw/scripts/repair.bat) or execute [`skills/browserpaw/scripts/repair.ps1`](../skills/browserpaw/scripts/repair.ps1).
 
 ---
 
@@ -73,7 +73,7 @@ Clicking the BrowserPaw extension icon displays a grey or yellow indicator, warn
 1. **Unregistered Native Messaging Host**:
    Chrome cannot find the native messaging manifest in the OS registry. Run:
    ```bash
-   node skill/config/doctor.mjs --fix
+   node skills/browserpaw/scripts/doctor.mjs --fix
    # Or manually register:
    node app/native-server/dist/scripts/register.js
    ```
@@ -127,7 +127,7 @@ To protect your active browser sessions from untrusted local websites or process
    }
    ```
 3. **Auto-Generate Missing Token**:
-   If the file does not exist, run `node skill/config/doctor.mjs --fix` to generate a fresh cryptographic token.
+   If the file does not exist, run `node skills/browserpaw/scripts/doctor.mjs --fix` to generate a fresh cryptographic token.
 
 ---
 
@@ -242,7 +242,7 @@ For background tabs (`active: false`), BrowserPaw strictly dispatches CDP `Page.
 
 ### Use Case
 
-When running in restricted profiles (`core` 14 tools or `crawl` 12 tools), an agent can dynamically request access to advanced tools (e.g. `manage`, `diagnose`, `network`) without restarting the server process.
+When running in a restricted `core` or `crawl` profile, an agent can dynamically request access to advanced tool categories without restarting the server process.
 
 ### Method
 
@@ -287,14 +287,16 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
           isolate_modal: false
   ```
 
-### 2. Tool Availability: 50+ Standard Tools vs 16 Plugin Wrappers
+### 2. Tool Availability: Standard MCP Tool Surface vs Hermes Wrappers
 
 - **Symptom**:
   An agent requests advanced tools (such as `chrome_click_coordinate`, `chrome_debugger`, or `chrome_performance_start`) while in Hermes plugin mode and receives a tool-not-found error.
 - **Root Cause**:
-  The optional Hermes plugin provides 16 curated high-frequency automation tools (`browserpaw_*`). Any tool outside these 16 is **not available in the Hermes plugin; use standard MCP**.
+  The optional Hermes plugin exposes only its declared curated `browserpaw_*`
+  wrappers. Any tool outside that declaration is **not available through the
+  Hermes plugin; use standard MCP**.
 - **Resolution**:
-  Configure BrowserPaw as a standard MCP server in Hermes (`mcp_servers.browserpaw`) using default stdio. Standard stdio defaults to the `core` profile with dynamic unlocking via `chrome_tool_docs({ activateForSession: true })`; to statically expose the full 50 toolset from launch, configure `env: { CHROME_MCP_TOOL_PROFILE: "full" }`.
+  Configure BrowserPaw as a standard MCP server in Hermes (`mcp_servers.browserpaw`) using default stdio. Standard stdio defaults to the `core` profile with dynamic unlocking via `chrome_tool_docs({ activateForSession: true })`; the bridge emits the standard list-changed notification. Use `chrome_tool_docs` for the live list. To statically expose the full canonical tool set from launch, configure `env: { CHROME_MCP_TOOL_PROFILE: "full" }`.
 
 ### 3. Zero Plugin Tokens / Credentials Required
 
@@ -317,7 +319,7 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
 | `CDP_DISPATCH_TIMEOUT`                                     | Background tab execution timed out under heavy system throttling.          | Retry action or briefly switch tab to foreground.                         |
 | `Security check failed: Domain changed`                    | Navigation occurred between screenshot capture and coordinate action.      | Call `chrome_read_dom` or `chrome_take_screenshot` to re-align state.     |
 | `Tool X is not exposed under the ... profile`              | Tool is hidden under active profile (`core`/`crawl`).                      | Call `chrome_tool_docs({ category: "<cat>", activateForSession: true })`. |
-| `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` (50 canonical tools available).                      |
+| `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` or `chrome_tool_docs` for the live tool surface.     |
 | `captureScreenshot returned empty data for background tab` | Background tab was closed or discarded by Chrome memory saver.             | Re-open or navigate to target URL.                                        |
 | `Failed to ... index [X] in cross-origin frame`            | Child iframe was unmounted or restricted by sandbox permissions.           | Inspect frame status using `chrome_read_dom({ filter: "interactive" })`.  |
 | `Message sender rejected / unauthenticated content script` | Security guard blocked unauthorized message sender (`_sender.tab`).        | Ensure requests originate from authentic native bridge channels.          |
@@ -365,5 +367,5 @@ pnpm build
 | :----------------------- | :----------------------------- | :------------------------------------------------------ |
 | **Chrome MV3 Extension** | `app/chrome-extension/`        | `app/chrome-extension/.output/chrome-mv3`               |
 | **Native Bridge Server** | `app/native-server/`           | `127.0.0.1:12306` (Token: `~/.chrome-mcp/bridge-token`) |
-| **Shared Tool Schemas**  | `packages/shared/src/tools.ts` | 50 canonical MCP tool definitions                       |
-| **Diagnostics & Repair** | `skill/config/`                | `doctor.mjs`, `mcp-config.json`, `repair.bat`           |
+| **Shared Tool Schemas**  | `packages/shared/src/tools.ts` | Canonical MCP tool definitions                          |
+| **Diagnostics & Repair** | `skills/browserpaw/scripts/`   | `doctor.mjs`, `repair.bat`, `repair.ps1`                |

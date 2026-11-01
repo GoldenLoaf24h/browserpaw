@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { closeTabsTool } from '../entrypoints/background/tools/browser/common';
 import { sessionTabAffinity } from '../utils/session-tab-affinity';
+import { tabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';
+import * as browserIdentity from '../utils/browser-identity';
 
 describe('CloseTabsTool (chrome_close_tabs)', () => {
   beforeEach(() => {
@@ -70,6 +72,45 @@ describe('CloseTabsTool (chrome_close_tabs)', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.closedTabIds).toEqual([303]);
     expect(mockTabsRemove).toHaveBeenCalledWith([303]);
+  });
+
+  it('closes task-owned tabs only when document and browser identities still match', async () => {
+    const mockTabsGet = vi.fn().mockResolvedValue({ id: 304, url: 'https://owned.example/' });
+    const mockTabsRemove = vi.fn().mockResolvedValue(undefined);
+    (chrome.tabs as any).get = mockTabsGet;
+    (chrome.tabs as any).remove = mockTabsRemove;
+    (chrome.webNavigation as any).getFrame = vi.fn().mockResolvedValue({ documentId: 'doc-304' });
+    vi.spyOn(tabGroupManager, 'ensureStorageLoaded').mockResolvedValue(undefined);
+    vi.spyOn(tabGroupManager, 'isAgentTab').mockReturnValue(true);
+    vi.spyOn(browserIdentity, 'getBrowserInstanceId').mockResolvedValue('browser-1');
+
+    const expectedTabs = [{ tabId: 304, documentId: 'doc-304', browserInstanceId: 'browser-1' }];
+    const res = await closeTabsTool.execute({ tabIds: [304], expectedTabs });
+
+    expect(res.isError).toBe(false);
+    expect(mockTabsRemove).toHaveBeenCalledWith([304]);
+  });
+
+  it('refuses task-owned tab cleanup when the document identity changed', async () => {
+    const mockTabsGet = vi.fn().mockResolvedValue({ id: 305, url: 'https://new-page.example/' });
+    const mockTabsRemove = vi.fn().mockResolvedValue(undefined);
+    (chrome.tabs as any).get = mockTabsGet;
+    (chrome.tabs as any).remove = mockTabsRemove;
+    (chrome.webNavigation as any).getFrame = vi
+      .fn()
+      .mockResolvedValue({ documentId: 'doc-after-navigation' });
+    vi.spyOn(tabGroupManager, 'ensureStorageLoaded').mockResolvedValue(undefined);
+    vi.spyOn(tabGroupManager, 'isAgentTab').mockReturnValue(true);
+    vi.spyOn(browserIdentity, 'getBrowserInstanceId').mockResolvedValue('browser-1');
+
+    const res = await closeTabsTool.execute({
+      tabIds: [305],
+      expectedTabs: [{ tabId: 305, documentId: 'doc-305', browserInstanceId: 'browser-1' }],
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('document identity changed');
+    expect(mockTabsRemove).not.toHaveBeenCalled();
   });
 
   it('safely handles fallback tab filtering without matching unrelated tabs containing URL in query string', async () => {

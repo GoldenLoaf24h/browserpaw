@@ -48,7 +48,10 @@ describe('Scoped Read DOM (selector & exclude)', () => {
     const res = inPageDOMPruner({ selector: '#main-cart' });
     expect(res.selectorMatched).toBe(true);
     expect(res.elementCount).toBe(2);
-    expect(res.indexedElements?.map((e) => e.attributes?.id)).toEqual(['btn-clean', 'btn-checkout']);
+    expect(res.indexedElements?.map((e) => e.attributes?.id)).toEqual([
+      'btn-clean',
+      'btn-checkout',
+    ]);
     expect(res.treeString).toContain('清理购物车');
     expect(res.treeString).toContain('结算');
     expect(res.treeString).not.toContain('Login');
@@ -160,6 +163,104 @@ describe('Scoped Read DOM (selector & exclude)', () => {
     expect(payload.message).toContain('No elements matching selector');
   });
 
+  it('resolves selectorMatched: true and omits no-elements message when child frame matches selector even if main frame does not', async () => {
+    vi.spyOn(engine, 'executeInPage').mockResolvedValue([
+      {
+        frameId: 0,
+        result: {
+          treeString: '',
+          elementCount: 0,
+          interactiveCount: 0,
+          compressionRatio: 1,
+          indexMap: {},
+          indexedElements: [],
+          selectorMatched: false,
+        },
+      },
+      {
+        frameId: 101,
+        result: {
+          treeString: '[1] <button id="iframe-submit">Submit</button>',
+          elementCount: 1,
+          interactiveCount: 1,
+          compressionRatio: 1,
+          indexMap: {
+            1: { selector: '#iframe-submit', tagName: 'button' },
+          },
+          indexedElements: [
+            {
+              index: 1,
+              tagName: 'button',
+              isInteractive: true,
+              attributes: { id: 'iframe-submit' },
+              text: 'Submit',
+            },
+          ],
+          selectorMatched: true,
+        },
+      },
+    ] as any);
+
+    (readDOMTool as any).resolveAffinityTab = async () => ({
+      id: 99,
+      url: 'https://example.com/checkout',
+      title: 'Checkout',
+    });
+
+    const response = await readDOMTool.execute({ selector: '#iframe-submit' });
+    const payload = JSON.parse(response.content[0].text);
+
+    expect(payload.selector).toBe('#iframe-submit');
+    expect(payload.selectorMatched).toBe(true);
+    expect(payload.message).toBeUndefined();
+    expect(payload.elementCount).toBe(1);
+    expect(payload.treeString).toContain('iframe-submit');
+  });
+
+  it('resolves selectorMatched: false and reports no-elements message when all frames fail to match selector', async () => {
+    vi.spyOn(engine, 'executeInPage').mockResolvedValue([
+      {
+        frameId: 0,
+        result: {
+          treeString: '',
+          elementCount: 0,
+          interactiveCount: 0,
+          compressionRatio: 1,
+          indexMap: {},
+          indexedElements: [],
+          selectorMatched: false,
+        },
+      },
+      {
+        frameId: 101,
+        result: {
+          treeString: '',
+          elementCount: 0,
+          interactiveCount: 0,
+          compressionRatio: 1,
+          indexMap: {},
+          indexedElements: [],
+          selectorMatched: false,
+        },
+      },
+    ] as any);
+
+    (readDOMTool as any).resolveAffinityTab = async () => ({
+      id: 99,
+      url: 'https://example.com/checkout',
+      title: 'Checkout',
+    });
+
+    const response = await readDOMTool.execute({ selector: '#missing-everywhere' });
+    const payload = JSON.parse(response.content[0].text);
+
+    expect(payload.selector).toBe('#missing-everywhere');
+    expect(payload.selectorMatched).toBe(false);
+    expect(payload.message).toContain(
+      'No elements matching selector "#missing-everywhere" found on page.',
+    );
+  });
+
   it('filters out nested matching containers to prevent duplicate element indexing', () => {
     document.body.innerHTML = `
       <div class="card-box">
@@ -212,4 +313,3 @@ describe('Scoped Read DOM (selector & exclude)', () => {
     expect(ids).not.toContain('btn-ad');
   });
 });
-

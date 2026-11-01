@@ -116,7 +116,7 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 
 #### Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)
 
-Configure Hermes with native Stdio transport in `config.yaml` to expose all 50 standard MCP tools (49 extension-executed + 1 native-server tool):
+Configure Hermes with native Stdio transport in `config.yaml` to expose BrowserPaw's current tool surface:
 
 ```yaml
 mcp_servers:
@@ -128,12 +128,12 @@ mcp_servers:
       CHROME_MCP_TOOL_PROFILE: full
 ```
 
-#### Option B: Optional Legacy 16-Tool Plugin
+#### Option B: Native Hermes Plugin
 
-If legacy 16-tool names are specifically required, install the optional plugin with explicit allowlist authorization in `config.yaml` (`plugins.entries.browserpaw.mcp_allowlist: ["browserpaw"]`, Hermes `>=0.21.5`, optional `settings.isolate_modal: false`). Recommended migration strategy is to leave the optional plugin disabled to avoid duplicate tools:
+The optional `browserpaw_*` wrapper surface is provided by the native Hermes plugin. Install it with explicit allowlist authorization in `config.yaml` (`plugins.entries.browserpaw.mcp_allowlist: ["browserpaw"]`, Hermes `>=0.21.5`, optional `settings.isolate_modal: false`). Leave the plugin disabled only when the full stdio MCP surface is already registered, to avoid duplicate tools:
 
 ```bash
-hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw
+hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw-hermes
 hermes plugins enable browserpaw
 ```
 
@@ -149,9 +149,9 @@ hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 
 ### 3.6 OpenAI Codex Plugin Integration
 
-BrowserPaw provides an official Codex plugin under `plugins/browserpaw/`:
+BrowserPaw provides an official portable ChatGPT/Codex plugin under `plugins/browserpaw/`:
 
-- **Metadata Manifest**: `plugins/browserpaw/.codex-plugin/plugin.json` explicitly declares the MCP transport mapping via `"mcpServers": "./.mcp.json"`.
+- **Metadata Manifest**: `plugins/browserpaw/plugin.json` follows Agent Plugins v1. Skills are discovered from the fixed `skills/` directory and MCP servers from the fixed root `mcp.json`; the portable manifest intentionally has no `skills` or `mcpServers` fields.
 - **Transport & Authentication**: Stdio mode (`node <ABSOLUTE_PATH>/mcp-server-stdio.js`) is the zero-config default. When manually connecting over HTTP (`http://127.0.0.1:12306/mcp` or `/sse`), pass `Authorization: Bearer <token>` using the high-entropy token generated in `~/.chrome-mcp/bridge-token` (with non-bypassable loopback, Host, and Origin guards).
 
 ---
@@ -160,13 +160,13 @@ BrowserPaw provides an official Codex plugin under `plugins/browserpaw/`:
 
 To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
 
-| Profile              | Tool Count | Estimated Prompt Footprint (chars/4) | Best For                                                           |
-| :------------------- | :--------- | :----------------------------------- | :----------------------------------------------------------------- |
-| **`core`** (default) | 14         | ~9.2k                                | Daily semantic navigation, 1-based clicks, form fills, screenshots |
-| **`crawl`**          | 12         | ~6.1k                                | High-throughput content extraction, markdown, links                |
-| **`full`**           | 50         | ~20.4k                               | Full low-level CDP access, diagnostics, tab groups, and storage    |
+| Profile              | Best For                                                                                              |
+| :------------------- | :---------------------------------------------------------------------------------------------------- |
+| **`core`** (default) | Daily semantic navigation, 1-based clicks, form fills, screenshots, durable tasks and verified skills |
+| **`crawl`**          | High-throughput content extraction, markdown and links                                                |
+| **`full`**           | Full low-level CDP access, diagnostics, tab groups and storage                                        |
 
-Profile counts are Core 14 / Crawl 12 / Full 50, where the 50 canonical tools are 49 extension-executed tools plus the single native-server tool `chrome_act_toward_goal`. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
+The current canonical surface includes extension-executed tools plus the native-server task, skill, and on-page autonomy tools. Exact profile counts and schema footprints are generated from the shared schemas rather than duplicated in this guide.
 
 ### Dynamic Tool Activation Without Restart
 
@@ -188,11 +188,11 @@ Supported categories: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagn
 
 Once connected, your agent will have access to high-precision browser automation tools:
 
-- `chrome_read_dom`: Retrieve 1-based pruned DOM index tree (>= 85% DOM tree pruning on complex 1000+ node pages).
+- `chrome_read_dom`: Retrieve a pruned DOM tree with document-scoped references and explicit coverage.
 - `chrome_interact_index`: Dispatch native click, hover, or drag (`isTrusted: true`).
 - `chrome_fill_index`: Fill form inputs with automatic old text clearing.
-- `chrome_batch_actions`: Pipeline multiple actions, assertions, and extractions with zero roundtrip latency.
-- `chrome_grep`: Millisecond regex/text query across nested iframes with index remapping.
+- `chrome_batch_actions`: Pipeline multiple actions, assertions, and extractions within one MCP call.
+- `chrome_grep`: Regex/text query across nested frames with reference remapping.
 - `chrome_screenshot`: Capture viewport with optional 1:1 CSS coordinate grid overlay or offscreen background tab isolation.
 - `chrome_close_tabs`: Safe tab closure with active-tab confirmation protection (`confirm: true`).
 - `chrome_javascript`: Execute JavaScript with top-level await and automatic single-expression `return (...)`.

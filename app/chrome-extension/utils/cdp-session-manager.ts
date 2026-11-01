@@ -2,19 +2,47 @@ import { TOOL_NAMES } from 'chrome-mcp-shared';
 
 type OwnerTag = string;
 
-export type CdpEventObserver = (tabId: number, method: string, params: any) => void;
+export type CdpEventObserver = (
+  tabId: number,
+  method: string,
+  params: any,
+  source?: chrome.debugger.Debuggee & { sessionId?: string },
+) => void;
+
+export interface FrameSessionInfo {
+  sessionId: string;
+  targetId: string;
+  parentSessionId?: string;
+}
+
+interface FrameSessionState extends FrameSessionInfo {
+  initialized: boolean;
+  setup?: Promise<void>;
+}
 
 export interface PendingDialogInfo {
+  dialogId: string;
   type: string;
   message: string;
   defaultPrompt: string;
   openedAtMs: number;
+  sessionId?: string;
 }
 
 interface TabSessionState {
   refCount: number;
   owners: Map<OwnerTag, number>;
   attachedByUs: boolean;
+}
+
+type DialogSource = string | undefined;
+
+interface PendingDialogEntry extends PendingDialogInfo {
+  sequence: number;
+}
+
+interface DialogBucket {
+  dialogs: PendingDialogEntry[];
 }
 
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
@@ -50,12 +78,18 @@ class CDPSessionManager {
   private tabQueues = new Map<number, Promise<void>>();
   private idleTimers = new Map<number, any>();
   private eventObservers = new Set<CdpEventObserver>();
-  private dialogStates = new Map<number, PendingDialogInfo>();
+  private dialogStates = new Map<number, Map<DialogSource, DialogBucket>>();
+  private dialogSequence = 0;
   private inFlightRequests = new Map<number, Map<string, number>>();
   private domainRefCounts = new Map<number, Map<string, number>>();
   private domainEnablesInFlight = new Map<string, Promise<void>>();
   private activeCommands = new Map<number, number>();
   private tabEpochs = new Map<number, number>();
+  private frameSessions = new Map<number, Map<string, FrameSessionState>>();
+  private autoAttachEnabledTabs = new Set<number>();
+  private autoAttachInFlight = new Map<number, Promise<void>>();
+  private pendingChildSetups = new Map<number, Set<Promise<void>>>();
+  private childSetupErrors = new Map<number, Error>();
 
   private getTabEpoch(tabId: number): number {
     return this.tabEpochs.get(tabId) || 0;
@@ -74,44 +108,33 @@ class CDPSessionManager {
     }
   }
 
+  private clearFrameSessions(tabId: number): void {
+    this.frameSessions.delete(tabId);
+    this.autoAttachEnabledTabs.delete(tabId);
+    this.autoAttachInFlight.delete(tabId);
+    this.pendingChildSetups.delete(tabId);
+    this.childSetupErrors.delete(tabId);
+  }
+
+  private trackChildSetup(tabId: number, setupPromise: Promise<void>): void {
+    let setups = this.pendingChildSetups.get(tabId);
+    if (!setups) {
+      setups = new Set<Promise<void>>();
+      this.pendingChildSetups.set(tabId, setups);
+    }
+    setups.add(setupPromise);
+    // Suppress unhandled rejection warning while pending child setups are being drained by ensureFrameSessions
+    setupPromise.catch(() => {});
+    setupPromise.finally(() => {
+      setups?.delete(setupPromise);
+    });
+  }
+
   constructor() {
     if (typeof chrome !== 'undefined') {
       if (chrome.debugger?.onEvent?.addListener) {
         chrome.debugger.onEvent.addListener((source, method, params: any) => {
-          const tabId = source?.tabId;
-          if (typeof tabId !== 'number') return;
-          if (method === 'Page.javascriptDialogOpening') {
-            this.dialogStates.set(tabId, {
-              type: String(params?.type || 'alert'),
-              message: String(params?.message || ''),
-              defaultPrompt: String(params?.defaultPrompt || ''),
-              openedAtMs: Date.now(),
-            });
-          } else if (method === 'Page.javascriptDialogClosed') {
-            this.dialogStates.delete(tabId);
-          } else if (method === 'Network.requestWillBeSent') {
-            const reqId = params?.requestId;
-            if (reqId) {
-              let reqMap = this.inFlightRequests.get(tabId);
-              if (!reqMap) {
-                reqMap = new Map<string, number>();
-                this.inFlightRequests.set(tabId, reqMap);
-              }
-              reqMap.set(String(reqId), Date.now());
-            }
-          } else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') {
-            const reqId = params?.requestId;
-            if (reqId) {
-              this.inFlightRequests.get(tabId)?.delete(String(reqId));
-            }
-          } else if (method === 'Page.frameNavigated' && !params?.frame?.parentId) {
-            this.inFlightRequests.delete(tabId);
-          }
-          for (const observer of this.eventObservers) {
-            try {
-              observer(tabId, method, params);
-            } catch {}
-          }
+          this.handleCdpEvent(source, method, params);
         });
       }
       if (chrome.debugger?.onDetach) {
@@ -139,8 +162,123 @@ class CDPSessionManager {
   /**
    * Observe raw CDP events (e.g. Input.dragIntercepted) for tabs attached by this manager.
    */
+  /**
+   * Internal / listener handler for incoming CDP instrumentation events
+   */
+  handleCdpEvent(source: any, method: string, params: any): void {
+    const tabId = source?.tabId;
+    if (typeof tabId !== 'number') return;
+    if (method === 'Page.javascriptDialogOpening') {
+      const sessionId = source?.sessionId || undefined;
+      let tabDialogs = this.dialogStates.get(tabId);
+      if (!tabDialogs) {
+        tabDialogs = new Map();
+        this.dialogStates.set(tabId, tabDialogs);
+      }
+      let bucket = tabDialogs.get(sessionId);
+      if (!bucket) {
+        bucket = { dialogs: [] };
+        tabDialogs.set(sessionId, bucket);
+      }
+      const sequence = ++this.dialogSequence;
+      bucket.dialogs.push({
+        dialogId: `dialog-${tabId}-${sequence}`,
+        sequence,
+        type: String(params?.type || 'alert'),
+        message: String(params?.message || ''),
+        defaultPrompt: String(params?.defaultPrompt || ''),
+        openedAtMs: Date.now(),
+        sessionId,
+      });
+    } else if (method === 'Page.javascriptDialogClosed') {
+      const eventSessionId = source?.sessionId || undefined;
+      const tabDialogs = this.dialogStates.get(tabId);
+      const bucket = tabDialogs?.get(eventSessionId);
+      if (bucket?.dialogs.length) {
+        bucket.dialogs.shift();
+      }
+      if (bucket?.dialogs.length === 0) {
+        tabDialogs?.delete(eventSessionId);
+      }
+      if (tabDialogs?.size === 0) {
+        this.dialogStates.delete(tabId);
+      }
+    } else if (method === 'Network.requestWillBeSent' && !source?.sessionId) {
+      const reqId = params?.requestId;
+      if (reqId) {
+        let reqMap = this.inFlightRequests.get(tabId);
+        if (!reqMap) {
+          reqMap = new Map<string, number>();
+          this.inFlightRequests.set(tabId, reqMap);
+        }
+        reqMap.set(String(reqId), Date.now());
+      }
+    } else if (
+      (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') &&
+      !source?.sessionId
+    ) {
+      const reqId = params?.requestId;
+      if (reqId) {
+        this.inFlightRequests.get(tabId)?.delete(String(reqId));
+      }
+    } else if (method === 'Page.frameNavigated' && !source?.sessionId && !params?.frame?.parentId) {
+      this.inFlightRequests.delete(tabId);
+    } else if (method === 'Target.attachedToTarget') {
+      const childSessionId = params?.sessionId;
+      const targetInfo = params?.targetInfo;
+      const parentSessionId = source?.sessionId || undefined;
+      const currentEpoch = this.getTabEpoch(tabId);
+
+      const isRootDirect = !parentSessionId;
+      const rootAllowed =
+        isRootDirect &&
+        (this.autoAttachEnabledTabs.has(tabId) || this.autoAttachInFlight.has(tabId));
+      const childAllowed =
+        !isRootDirect && Boolean(this.frameSessions.get(tabId)?.has(parentSessionId));
+
+      if (childSessionId && targetInfo && this.isAttached(tabId) && (rootAllowed || childAllowed)) {
+        this.recordFrameSession(tabId, {
+          sessionId: childSessionId,
+          targetId: targetInfo.targetId,
+          parentSessionId,
+        });
+
+        if (targetInfo.type === 'iframe')
+          this.initializeFrameSession(tabId, childSessionId, currentEpoch);
+        else this.frameSessions.get(tabId)!.get(childSessionId)!.initialized = true;
+      }
+    } else if (method === 'Target.detachedFromTarget') {
+      const detachedSessionId = params?.sessionId;
+      const detachedSessions = new Set<string>();
+      if (detachedSessionId && this.frameSessions.get(tabId)?.has(detachedSessionId)) {
+        for (const sessionId of this.removeFrameSessionRecursively(tabId, detachedSessionId)) {
+          detachedSessions.add(sessionId);
+        }
+      }
+      if (detachedSessionId) {
+        detachedSessions.add(detachedSessionId);
+        const tabDialogs = this.dialogStates.get(tabId);
+        for (const sessionId of detachedSessions) {
+          tabDialogs?.delete(sessionId);
+        }
+        if (tabDialogs?.size === 0) this.dialogStates.delete(tabId);
+      }
+    }
+    for (const observer of this.eventObservers) {
+      try {
+        observer(tabId, method, params, source);
+      } catch {}
+    }
+  }
+
   addCdpEventObserver(observer: CdpEventObserver): void {
     this.eventObservers.add(observer);
+  }
+
+  getKnownFrameSessions(tabId: number): FrameSessionInfo[] {
+    return Array.from(this.frameSessions.get(tabId)?.values() || []).map(
+      ({ sessionId, targetId, parentSessionId }) => ({ sessionId, targetId, parentSessionId }),
+    );
   }
 
   removeCdpEventObserver(observer: CdpEventObserver): void {
@@ -148,11 +286,31 @@ class CDPSessionManager {
   }
 
   getPendingDialog(tabId: number): PendingDialogInfo | undefined {
-    return this.dialogStates.get(tabId);
+    const dialogs = this.getPendingDialogs(tabId);
+    return dialogs[dialogs.length - 1];
   }
 
-  clearPendingDialog(tabId: number): void {
-    this.dialogStates.delete(tabId);
+  getPendingDialogs(tabId: number): PendingDialogInfo[] {
+    const tabDialogs = this.dialogStates.get(tabId);
+    if (!tabDialogs) return [];
+    return Array.from(tabDialogs.values())
+      .flatMap((bucket) => bucket.dialogs)
+      .sort((a, b) => a.sequence - b.sequence)
+      .map(({ sequence: _sequence, ...dialog }) => dialog);
+  }
+
+  clearPendingDialog(tabId: number, dialogId?: string): void {
+    const tabDialogs = this.dialogStates.get(tabId);
+    if (!tabDialogs) return;
+    if (!dialogId) {
+      this.dialogStates.delete(tabId);
+      return;
+    }
+    for (const [sessionId, bucket] of tabDialogs) {
+      bucket.dialogs = bucket.dialogs.filter((dialog) => dialog.dialogId !== dialogId);
+      if (bucket.dialogs.length === 0) tabDialogs.delete(sessionId);
+    }
+    if (tabDialogs.size === 0) this.dialogStates.delete(tabId);
   }
 
   getInFlightRequests(tabId: number): Set<string> {
@@ -177,7 +335,7 @@ class CDPSessionManager {
   }
 
   describePendingDialog(tabId: number): string {
-    const d = this.dialogStates.get(tabId);
+    const d = this.getPendingDialog(tabId);
     if (!d) return '';
     return ` [dialog open: ${d.type} "${d.message}"]`;
   }
@@ -225,6 +383,7 @@ class CDPSessionManager {
   private handleDetachOrRemoved(tabId: number, reason: string) {
     this.bumpTabEpoch(tabId);
     this.clearFlightEnables(tabId);
+    this.clearFrameSessions(tabId);
     if (this.idleTimers.has(tabId)) {
       clearTimeout(this.idleTimers.get(tabId));
       this.idleTimers.delete(tabId);
@@ -239,6 +398,70 @@ class CDPSessionManager {
       );
       this.sessions.delete(tabId);
     }
+  }
+
+  private recordFrameSession(tabId: number, info: FrameSessionInfo): void {
+    if (!this.isAttached(tabId)) return;
+    let tabSessions = this.frameSessions.get(tabId);
+    if (!tabSessions) {
+      tabSessions = new Map<string, FrameSessionState>();
+      this.frameSessions.set(tabId, tabSessions);
+    }
+    tabSessions.set(info.sessionId, { ...info, initialized: false });
+  }
+
+  private initializeFrameSession(tabId: number, sessionId: string, epoch: number): void {
+    const state = this.frameSessions.get(tabId)?.get(sessionId);
+    if (!state || state.initialized || state.setup) return;
+    const isCurrent = () =>
+      this.getTabEpoch(tabId) === epoch && this.frameSessions.get(tabId)?.get(sessionId) === state;
+    const setup = (async () => {
+      try {
+        await this.sendFrameCommandRaw(tabId, sessionId, 'Page.enable', {}, 3000);
+        if (!isCurrent()) return;
+        await this.sendFrameCommandRaw(
+          tabId,
+          sessionId,
+          'Target.setAutoAttach',
+          {
+            autoAttach: true,
+            waitForDebuggerOnStart: false,
+            flatten: true,
+            filter: [{ type: 'iframe', exclude: false }],
+          },
+          3000,
+        );
+        if (isCurrent()) state.initialized = true;
+      } catch (error: any) {
+        // Keep the attached child available for a later discovery attempt.
+        if (isCurrent()) this.childSetupErrors.set(tabId, error);
+      } finally {
+        state.setup = undefined;
+      }
+    })();
+    state.setup = setup;
+    this.trackChildSetup(tabId, setup);
+  }
+
+  private removeFrameSessionRecursively(tabId: number, rootSessionId: string): Set<string> {
+    const tabSessions = this.frameSessions.get(tabId);
+    if (!tabSessions) return new Set();
+
+    const toRemove = new Set<string>([rootSessionId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const [sId, info] of tabSessions.entries()) {
+        if (!toRemove.has(sId) && info.parentSessionId && toRemove.has(info.parentSessionId)) {
+          toRemove.add(sId);
+          added = true;
+        }
+      }
+    }
+    for (const sId of toRemove) {
+      tabSessions.delete(sId);
+    }
+    return toRemove;
   }
 
   private getState(tabId: number): TabSessionState | undefined {
@@ -294,15 +517,11 @@ class CDPSessionManager {
       const targets = Array.isArray(rawTargets) ? rawTargets : [];
       const existing = targets.find((t) => t.tabId === tabId && t.attached);
       if (existing) {
-        if (existing.extensionId === chrome.runtime.id) {
-          // Already attached by us (e.g., previous tool). Adopt and refcount.
-          const adoptedOwners = state?.owners || new Map<OwnerTag, number>();
-          adoptedOwners.set(owner, (adoptedOwners.get(owner) || 0) + 1);
-          this.setState(tabId, {
-            refCount: state ? state.refCount + 1 : 1,
-            owners: adoptedOwners,
-            attachedByUs: true,
-          });
+        const adoptedOwners = new Map<OwnerTag, number>(state?.owners);
+        adoptedOwners.set(owner, (adoptedOwners.get(owner) || 0) + 1);
+        const totalRefs = state ? state.refCount + 1 : 1;
+        const adopted = await this.probeAndAdoptExistingSession(tabId, adoptedOwners, totalRefs);
+        if (adopted) {
           return;
         }
         // Another client (DevTools/other extension) is attached
@@ -316,7 +535,9 @@ class CDPSessionManager {
       this.setState(tabId, { refCount: 1, owners: new Map([[owner, 1]]), attachedByUs: true });
       try {
         await Promise.resolve(
-          chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }),
+          chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', {
+            enabled: true,
+          }),
         ).catch(() => {});
         await this.enablePageDomain(tabId);
         await this.enableNetworkDomain(tabId);
@@ -331,6 +552,48 @@ class CDPSessionManager {
         throw initErr;
       }
     });
+  }
+
+  /**
+   * Probe whether an existing attached target belongs to our extension session.
+   * Uses a bounded (1000ms) read-only probe ('Page.getLayoutMetrics').
+   * Never detaches or forcibly steals from other clients (DevTools/extensions).
+   */
+  private async probeAndAdoptExistingSession(
+    tabId: number,
+    resolvedOwners: Map<OwnerTag, number>,
+    totalRefs: number,
+  ): Promise<boolean> {
+    try {
+      await this.sendDebuggerCommand(tabId, 'Page.getLayoutMetrics', {}, 1000);
+    } catch (err: any) {
+      if (String(err?.message || '').includes('CDP_SEND_TIMEOUT')) {
+        throw err;
+      }
+      return false; // Probe failed: attached by another client (DevTools/extension) or dead
+    }
+
+    // Probe succeeded: this tab is attached by our extension. Adopt session and restore domains.
+    this.setState(tabId, {
+      refCount: totalRefs,
+      owners: resolvedOwners,
+      attachedByUs: true,
+    });
+
+    try {
+      await Promise.resolve(
+        chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', {
+          enabled: true,
+        }),
+      ).catch(() => {});
+
+      await this.restoreActiveDomains(tabId);
+      return true;
+    } catch (restoreErr) {
+      // Clean up adopted manager state on restore failure without detaching the underlying physical session
+      this.sessions.delete(tabId);
+      throw restoreErr;
+    }
   }
 
   getDomainRefCount(tabId: number, domain: string): number {
@@ -470,6 +733,8 @@ class CDPSessionManager {
         // Anti-hang guard: immediately detach physical debugger and clear session without refCount underflow
         this.bumpTabEpoch(tabId);
         this.clearFlightEnables(tabId);
+        this.clearFrameSessions(tabId);
+        this.dialogStates.delete(tabId);
         if (this.idleTimers.has(tabId)) {
           clearTimeout(this.idleTimers.get(tabId));
           this.idleTimers.delete(tabId);
@@ -532,6 +797,8 @@ class CDPSessionManager {
             } finally {
               this.bumpTabEpoch(tabId);
               this.clearFlightEnables(tabId);
+              this.clearFrameSessions(tabId);
+              this.dialogStates.delete(tabId);
               this.sessions.delete(tabId);
               this.domainRefCounts.delete(tabId);
             }
@@ -570,6 +837,10 @@ class CDPSessionManager {
       try {
         await chrome.debugger.detach({ tabId });
       } catch {}
+      this.bumpTabEpoch(tabId);
+      this.clearFlightEnables(tabId);
+      this.clearFrameSessions(tabId);
+      this.dialogStates.delete(tabId);
       this.sessions.delete(tabId);
       this.domainRefCounts.delete(tabId);
     });
@@ -660,13 +931,12 @@ class CDPSessionManager {
             const targets = Array.isArray(rawTargets) ? rawTargets : [];
             const existing = targets.find((t: any) => t.tabId === tabId && t.attached);
             if (existing) {
-              if (existing.extensionId === chrome.runtime?.id) {
-                this.setState(tabId, {
-                  refCount: totalRefs,
-                  owners: resolvedOwners,
-                  attachedByUs: true,
-                });
-                await this.restoreActiveDomains(tabId);
+              const adopted = await this.probeAndAdoptExistingSession(
+                tabId,
+                resolvedOwners,
+                totalRefs,
+              ).catch(() => false);
+              if (adopted) {
                 return true;
               }
               return false; // attached by another client
@@ -687,7 +957,9 @@ class CDPSessionManager {
           // Short settle delay for transient navigation to stabilize
           await new Promise((r) => setTimeout(r, 100));
           await Promise.resolve(
-            chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }),
+            chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', {
+              enabled: true,
+            }),
           ).catch(() => {});
           await this.restoreActiveDomains(tabId);
           return true;
@@ -768,6 +1040,161 @@ class CDPSessionManager {
         throw err;
       }
     });
+  }
+  /**
+   * Ensure root debugger and recursive flat child sessions auto-attach are enabled.
+   * Returns list of confirmed child sessions (root is omitted; undefined parentSessionId means direct child of root).
+   */
+  private async sendFrameCommandRaw<T = any>(
+    tabId: number,
+    sessionId: string,
+    method: string,
+    params?: object,
+    timeoutMs = 1000,
+  ): Promise<T> {
+    const activeCount = (this.activeCommands.get(tabId) || 0) + 1;
+    this.activeCommands.set(tabId, activeCount);
+    let timer: any;
+    try {
+      return await Promise.race([
+        chrome.debugger.sendCommand({ tabId, sessionId }, method, params as any) as Promise<T>,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `CDP_FRAME_SEND_TIMEOUT: ${method} (session ${sessionId}) no ack within ${timeoutMs}ms`,
+                ),
+              ),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      const remaining = (this.activeCommands.get(tabId) || 1) - 1;
+      if (remaining <= 0) {
+        this.activeCommands.delete(tabId);
+      } else {
+        this.activeCommands.set(tabId, remaining);
+      }
+    }
+  }
+
+  /**
+   * Ensure root debugger and recursive flat child sessions auto-attach are enabled.
+   * Drains all pending child setups within the current epoch and rejects on any partial failure.
+   * Uses withSession so ownership refCount is balanced and retains 10-minute idle retention without leak.
+   */
+  async ensureFrameSessions(tabId: number): Promise<
+    Array<{
+      sessionId: string;
+      targetId: string;
+      parentSessionId?: string;
+    }>
+  > {
+    return this.withSession(tabId, 'frame-sessions', async () => {
+      const startEpoch = this.getTabEpoch(tabId);
+
+      if (!this.autoAttachEnabledTabs.has(tabId)) {
+        let inflight = this.autoAttachInFlight.get(tabId);
+        if (!inflight) {
+          inflight = (async () => {
+            await this.sendDebuggerCommand(
+              tabId,
+              'Target.setAutoAttach',
+              {
+                autoAttach: true,
+                waitForDebuggerOnStart: false,
+                flatten: true,
+                filter: [{ type: 'iframe', exclude: false }],
+              },
+              3000,
+            );
+            if (this.getTabEpoch(tabId) === startEpoch) {
+              this.autoAttachEnabledTabs.add(tabId);
+            }
+          })().finally(() => {
+            this.autoAttachInFlight.delete(tabId);
+          });
+          this.autoAttachInFlight.set(tabId, inflight);
+        }
+        await inflight;
+      }
+
+      if (!this.childSetupErrors.has(tabId)) {
+        for (const session of this.frameSessions.get(tabId)?.values() || []) {
+          this.initializeFrameSession(tabId, session.sessionId, startEpoch);
+        }
+      }
+
+      // Drain all pending child setups recursively within this epoch
+      while (true) {
+        if (this.getTabEpoch(tabId) !== startEpoch) {
+          throw new Error(`Tab ${tabId} detached or restarted during ensureFrameSessions`);
+        }
+        if (this.childSetupErrors.has(tabId)) {
+          const err = this.childSetupErrors.get(tabId)!;
+          this.childSetupErrors.delete(tabId);
+          throw err;
+        }
+        const pending = Array.from(this.pendingChildSetups.get(tabId) || []);
+        if (pending.length === 0) {
+          await Promise.resolve();
+          if (this.childSetupErrors.has(tabId)) {
+            const err = this.childSetupErrors.get(tabId)!;
+            this.childSetupErrors.delete(tabId);
+            throw err;
+          }
+          const recheck = Array.from(this.pendingChildSetups.get(tabId) || []);
+          if (recheck.length === 0) break;
+          continue;
+        }
+        // Fail-fast on any partial setup failure (no incomplete success)
+        await Promise.all(pending);
+      }
+
+      const tabSessions = this.frameSessions.get(tabId);
+      if (!tabSessions || tabSessions.size === 0) return [];
+      return Array.from(tabSessions.values()).map(({ sessionId, targetId, parentSessionId }) => ({
+        sessionId,
+        targetId,
+        parentSessionId,
+      }));
+    });
+  }
+
+  /**
+   * Send command to a specific frame session or root (when sessionId is undefined).
+   * Reuses sendCommand for root with standard 20s timeout, bounded timeout for child sessions,
+   * tracks activeCommands against idleDetach, and enforces strict outcome unknown error on mutation failure.
+   */
+  async sendFrameCommand<T = any>(
+    tabId: number,
+    sessionId: string | undefined,
+    method: string,
+    params?: object,
+    timeoutMs = 1000,
+  ): Promise<T> {
+    if (!sessionId) {
+      return this.sendCommand<T>(tabId, method, params);
+    }
+
+    const tabSessions = this.frameSessions.get(tabId);
+    if (!tabSessions?.has(sessionId)) {
+      throw new Error(`Child session ${sessionId} not found or detached on tab ${tabId}`);
+    }
+
+    try {
+      return await this.sendFrameCommandRaw<T>(tabId, sessionId, method, params, timeoutMs);
+    } catch (err: any) {
+      if (!isReadOnlyCdpMethod(method)) {
+        throw new Error(
+          `CDP ${method} outcome unknown: connection lost after dispatch (${err?.message || err}). The command may have executed; inspect page state before retrying.`,
+        );
+      }
+      throw err;
+    }
   }
 }
 

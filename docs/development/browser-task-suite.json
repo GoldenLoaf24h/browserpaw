@@ -1,0 +1,1522 @@
+{
+  "version": 1,
+  "name": "BrowserPaw M7 browser task suite",
+  "note": "Fixed inputs only. This suite defines tasks and record contracts; it does not execute agents or synthesize measurements.",
+  "products": [
+    {
+      "id": "browserpaw",
+      "label": "BrowserPaw candidate"
+    },
+    {
+      "id": "ego",
+      "label": "Ego baseline"
+    },
+    {
+      "id": "aside",
+      "label": "Aside baseline"
+    }
+  ],
+  "comparison": {
+    "candidateProduct": "browserpaw",
+    "baselineProducts": ["ego", "aside"]
+  },
+  "thresholds": {
+    "minFamilyTrials": 20,
+    "minBatches": 3,
+    "successRate": 0.95,
+    "wallTimeReduction": 0.2,
+    "inputTokenReduction": 0.3,
+    "reuseAgentToolCallReduction": 0.5,
+    "seriousFailures": 0
+  },
+  "recordSchema": {
+    "recordVersion": 1,
+    "kind": ["mechanism", "agent_e2e"],
+    "requiredIdentity": [
+      "product",
+      "build",
+      "model",
+      "reasoning",
+      "session",
+      "login",
+      "viewport",
+      "cache"
+    ],
+    "conditionIssues": "Optional array of nonempty audit reasons. Known mid-trial condition changes or setup defects exclude the record from pairing and efficiency gates, while preserving its actual business outcome and measurements.",
+    "viewport": {
+      "newRecords": ["width", "height", "dpr"],
+      "successfulRecords": "positive integer width/height and finite positive dpr read back from the same owned page; dpr is not a requested target value",
+      "unobservedFailures": "agent_e2e blocked/failure records may store width/height/dpr as null individually; these records never pair or enter speed rankings",
+      "invalidValues": "zero, negative, NaN, and Infinity remain invalid",
+      "legacy": "records without dpr remain readable but are never pairable"
+    },
+    "requiredRun": [
+      "trialId",
+      "pairId",
+      "batch",
+      "inputId",
+      "startedAt",
+      "mode",
+      "explorationPairId?"
+    ],
+    "outcome": ["success", "partial", "blocked", "failure"],
+    "evidence": ["businessEvidence.summary", "businessEvidence.sources"],
+    "timing": ["timing.wallMs", "timing.toolMs", "timing.modelMs|null", "timing.unattributedMs?"],
+    "counters": ["roundTrips", "agentToolCalls", "agentToolCallsProvenance"],
+    "counterSemantics": {
+      "roundTrips": "raw backend MCP tool-call or CLI-process count; never an Agent model round-trip",
+      "agentToolCalls": "unique response_item function_call/custom_tool_call call_id count from one Agent session"
+    },
+    "skillReuse": {
+      "taskLink": "each reuse task's explorationInputId names one distinct earlier cold task in the same family",
+      "recordPair": "candidate cold and reuse records share an explorationPairId; reuse must start later",
+      "threshold": 0.5
+    },
+    "actualTokens": {
+      "fields": ["actualTokens.input|null", "actualTokens.output|null"],
+      "input": "Codex-reported cumulative input_tokens from the fresh single Agent turn; includes cached input tokens and image tokens when present",
+      "output": "Codex-reported output_tokens from the same turn",
+      "gate": "The formal 30% reduction gate compares paired successful actualTokens.input values; null never falls back to an estimate"
+    },
+    "estimatedTokens": {
+      "fields": ["estimatedTextTokens", "estimatedInputTokens", "tokenizer"],
+      "role": "Backend cl100k_base text estimates are diagnostic summary fields only; they are not an Agent-context measurement or a formal gate"
+    },
+    "images": {
+      "fields": ["images.input", "images.output"],
+      "scope": "Counts backend returned image blocks only, not images passed to the Agent. Zero does not establish image-free model input; report cumulative Agent input tokens without claiming a text-only split"
+    },
+    "seriousFailures": "string[]",
+    "neutrality": "Records must come from real executions. Partial is not success and is excluded from paired speed rankings."
+  },
+  "batches": [
+    {
+      "batch": 1,
+      "productOrder": ["browserpaw", "ego", "aside"],
+      "taskIds": [
+        "mdn-search-01",
+        "mdn-search-02",
+        "mdn-search-03",
+        "mdn-search-04",
+        "mdn-search-05",
+        "mdn-search-06",
+        "mdn-search-07",
+        "github-repo-release-01",
+        "github-repo-release-02",
+        "github-repo-release-03",
+        "github-repo-release-04",
+        "github-repo-release-05",
+        "github-repo-release-06",
+        "github-repo-release-07",
+        "npm-compare-01",
+        "npm-compare-02",
+        "npm-compare-03",
+        "npm-compare-04",
+        "npm-compare-05",
+        "npm-compare-06",
+        "npm-compare-07",
+        "x-search-thread-01",
+        "x-search-thread-02",
+        "x-search-thread-03",
+        "x-search-thread-04",
+        "x-search-thread-05",
+        "x-search-thread-06",
+        "x-search-thread-07"
+      ]
+    },
+    {
+      "batch": 2,
+      "productOrder": ["ego", "aside", "browserpaw"],
+      "taskIds": [
+        "mdn-search-08",
+        "mdn-search-09",
+        "mdn-search-10",
+        "mdn-search-11",
+        "mdn-search-12",
+        "mdn-search-13",
+        "mdn-search-14",
+        "github-repo-release-08",
+        "github-repo-release-09",
+        "github-repo-release-10",
+        "github-repo-release-11",
+        "github-repo-release-12",
+        "github-repo-release-13",
+        "github-repo-release-14",
+        "npm-compare-08",
+        "npm-compare-09",
+        "npm-compare-10",
+        "npm-compare-11",
+        "npm-compare-12",
+        "npm-compare-13",
+        "npm-compare-14",
+        "x-search-thread-08",
+        "x-search-thread-09",
+        "x-search-thread-10",
+        "x-search-thread-11",
+        "x-search-thread-12",
+        "x-search-thread-13",
+        "x-search-thread-14"
+      ]
+    },
+    {
+      "batch": 3,
+      "productOrder": ["aside", "browserpaw", "ego"],
+      "taskIds": [
+        "mdn-search-15",
+        "mdn-search-16",
+        "mdn-search-17",
+        "mdn-search-18",
+        "mdn-search-19",
+        "mdn-search-20",
+        "github-repo-release-15",
+        "github-repo-release-16",
+        "github-repo-release-17",
+        "github-repo-release-18",
+        "github-repo-release-19",
+        "github-repo-release-20",
+        "npm-compare-15",
+        "npm-compare-16",
+        "npm-compare-17",
+        "npm-compare-18",
+        "npm-compare-19",
+        "npm-compare-20",
+        "x-search-thread-15",
+        "x-search-thread-16",
+        "x-search-thread-17",
+        "x-search-thread-18",
+        "x-search-thread-19",
+        "x-search-thread-20"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "inputId": "mdn-search-01",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Array.prototype.map\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-02",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-01",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Promise.all\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-03",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Fetch API\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-04",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"AbortController\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-05",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-04",
+      "requiresLogin": false,
+      "input": "Search MDN for \"URLSearchParams\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-06",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"structuredClone\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-07",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Intl.DateTimeFormat\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "github-repo-release-01",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository microsoft/playwright, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-02",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-01",
+      "requiresLogin": false,
+      "input": "Open GitHub repository puppeteer/puppeteer, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-03",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository ChromeDevTools/devtools-frontend, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-04",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository SeleniumHQ/selenium, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-05",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-04",
+      "requiresLogin": false,
+      "input": "Open GitHub repository cypress-io/cypress, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-06",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository webdriverio/webdriverio, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-07",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository remotion-dev/remotion, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "npm-compare-01",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages playwright and puppeteer: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-02",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-01",
+      "requiresLogin": false,
+      "input": "Compare npm packages cypress and playwright: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-03",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages webdriverio and selenium-webdriver: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-04",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages vite and webpack: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-05",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-04",
+      "requiresLogin": false,
+      "input": "Compare npm packages rollup and esbuild: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-06",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages pnpm and npm: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-07",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages yarn and pnpm: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-01",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"browser automation\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-02",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-01",
+      "requiresLogin": true,
+      "input": "Search X for \"Playwright\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-03",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"Puppeteer\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-04",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"Chrome DevTools Protocol\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-05",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-04",
+      "requiresLogin": true,
+      "input": "Search X for \"MCP server\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-06",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"AI browser agent\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-07",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 1,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"headless Chrome\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "mdn-search-08",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-07",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Web Crypto SubtleCrypto\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-09",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"EventTarget.addEventListener\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-10",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"DOMParser\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-11",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-10",
+      "requiresLogin": false,
+      "input": "Search MDN for \"MutationObserver\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-12",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"ResizeObserver\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-13",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"CSS.escape\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-14",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-13",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Window.localStorage\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "github-repo-release-08",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-07",
+      "requiresLogin": false,
+      "input": "Open GitHub repository vitejs/vite, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-09",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository nodejs/node, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-10",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository microsoft/TypeScript, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-11",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-10",
+      "requiresLogin": false,
+      "input": "Open GitHub repository eslint/eslint, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-12",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository npm/cli, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-13",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository pnpm/pnpm, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-14",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-13",
+      "requiresLogin": false,
+      "input": "Open GitHub repository denoland/deno, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "npm-compare-08",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-07",
+      "requiresLogin": false,
+      "input": "Compare npm packages react and vue: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-09",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages next and nuxt: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-10",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages express and fastify: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-11",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-10",
+      "requiresLogin": false,
+      "input": "Compare npm packages axios and ky: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-12",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages zod and yup: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-13",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages jest and vitest: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-14",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-13",
+      "requiresLogin": false,
+      "input": "Compare npm packages mocha and ava: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-08",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-07",
+      "requiresLogin": true,
+      "input": "Search X for \"WebDriver BiDi\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-09",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"web scraping\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-10",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"browser extension automation\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-11",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-10",
+      "requiresLogin": true,
+      "input": "Search X for \"OpenAI Codex\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-12",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"Claude computer use\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-13",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"DOM snapshot\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-14",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 2,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-13",
+      "requiresLogin": true,
+      "input": "Search X for \"accessibility tree\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "mdn-search-15",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"IndexedDB\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-16",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Web Workers\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-17",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-16",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Content-Security-Policy\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-18",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Search MDN for \"SameSite cookies\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-19",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Search MDN for \"Element.attachShadow\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "mdn-search-20",
+      "family": "mdn_search",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "mdn-search-19",
+      "requiresLogin": false,
+      "input": "Search MDN for \"HTMLDialogElement.showModal\", open the matching reference page, and capture its H1 and a relevant section heading.",
+      "successCriteria": [
+        "Open the matching MDN reference page",
+        "Capture the page H1 and final URL"
+      ],
+      "evidenceRequirements": ["final URL", "H1 text", "one relevant section heading"]
+    },
+    {
+      "inputId": "github-repo-release-15",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository oven-sh/bun, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-16",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository rust-lang/rust, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-17",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-16",
+      "requiresLogin": false,
+      "input": "Open GitHub repository golang/go, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-18",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Open GitHub repository facebook/react, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-19",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Open GitHub repository vuejs/core, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "github-repo-release-20",
+      "family": "github_repo_release",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "github-repo-release-19",
+      "requiresLogin": false,
+      "input": "Open GitHub repository sveltejs/svelte, inspect Releases, and identify the latest stable release tag.",
+      "successCriteria": [
+        "Open the repository page",
+        "Open Releases and identify the latest stable release tag"
+      ],
+      "evidenceRequirements": ["repository URL", "release tag", "release page URL"]
+    },
+    {
+      "inputId": "npm-compare-15",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages eslint and biome: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-16",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages prettier and dprint: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-17",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-16",
+      "requiresLogin": false,
+      "input": "Compare npm packages dayjs and date-fns: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-18",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": false,
+      "input": "Compare npm packages lodash and ramda: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-19",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": false,
+      "input": "Compare npm packages rxjs and effect: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "npm-compare-20",
+      "family": "npm_compare",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "npm-compare-19",
+      "requiresLogin": false,
+      "input": "Compare npm packages chalk and picocolors: open both pages, capture latest versions, and summarize the stated capability difference.",
+      "successCriteria": [
+        "Open both npm package pages",
+        "Capture latest versions and compare stated capabilities"
+      ],
+      "evidenceRequirements": [
+        "two package URLs",
+        "latest version for each package",
+        "comparison summary"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-15",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"computer use agent\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-16",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"browser benchmark\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-17",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-16",
+      "requiresLogin": true,
+      "input": "Search X for \"Chrome extension Manifest V3\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-18",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "recovery",
+      "requiresLogin": true,
+      "input": "Search X for \"session affinity\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-19",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "cold",
+      "requiresLogin": true,
+      "input": "Search X for \"viewport emulation\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    },
+    {
+      "inputId": "x-search-thread-20",
+      "family": "x_search_thread",
+      "kind": "agent_e2e",
+      "batch": 3,
+      "mode": "reuse",
+      "explorationInputId": "x-search-thread-19",
+      "requiresLogin": true,
+      "input": "Search X for \"local LLM browser agent\", open a relevant post thread, and capture the thread URL plus visible author and post excerpts.",
+      "successCriteria": [
+        "Search X for the query",
+        "Open a relevant post thread and capture its visible posts"
+      ],
+      "evidenceRequirements": [
+        "search URL",
+        "thread URL",
+        "author handles",
+        "visible post excerpts"
+      ]
+    }
+  ]
+}

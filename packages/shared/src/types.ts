@@ -9,6 +9,9 @@ export enum NativeMessageType {
   PROCESS_DATA = 'process_data',
   PROCESS_DATA_RESPONSE = 'process_data_response',
   CALL_TOOL = 'call_tool',
+  CANCEL_TOOL = 'cancel_tool',
+  TASK_PAGE_CONTROL = 'task_page_control',
+  RELEASE_SESSION_AFFINITY = 'release_session_affinity',
   CALL_TOOL_RESPONSE = 'call_tool_response',
   // Additional message types used in Chrome extension
   SERVER_STARTED = 'server_started',
@@ -32,6 +35,7 @@ export interface NativeMessage<P = any, E = any> {
 // ============================================================
 
 export interface IndexedElement {
+  withinFocusScope?: boolean;
   index: number;
   tagName: string;
   role?: string;
@@ -127,6 +131,7 @@ export interface SessionTabAffinityContext {
 }
 
 export interface BatchActionItem {
+  frameId?: number;
   type:
     | 'click'
     | 'double_click'
@@ -319,6 +324,10 @@ export interface FillFormParams {
 }
 
 export interface UnifiedLocatorOptions {
+  /** Native task scope for process-local semantic judgments. */
+  taskId?: string;
+  operation?: 'click' | 'fill' | 'press' | 'locate';
+  frameId?: number;
   ref?: string | number;
   index?: number;
   selector?: string;
@@ -330,15 +339,23 @@ export interface UnifiedLocatorOptions {
   coordinates?: { x: number; y: number };
   /** Coordinate space of coordinate/coordinates: "viewport" (default) or "screenshot" (scale via last screenshot context) */
   coordinateSpace?: 'viewport' | 'screenshot';
+  /** Screenshot identity required for screenshot-space coordinate fallback. */
+  captureId?: string;
   /** Prioritize rich composer/editor elements over generic search inputs when resolving role=textbox or fill targets */
   preferComposer?: boolean;
+  /** Optional deadline timestamp in milliseconds */
+  deadlineAt?: number;
+  /** Optional abort signal for task cancellation */
+  signal?: AbortSignal;
+  label?: string;
+  exact?: boolean;
 }
 
 export interface UnifiedLocatorResult {
   success: boolean;
   x: number;
   y: number;
-  resolutionPath: 'ref' | 'selector' | 'text' | 'role' | 'coordinate';
+  resolutionPath: 'ref' | 'selector' | 'text' | 'role' | 'label' | 'coordinate' | 'semantic';
   index?: number;
   tagName?: string;
   inputType?: string;
@@ -357,6 +374,16 @@ export interface UnifiedLocatorResult {
   warning?: string;
   isSelectOption?: boolean;
   scopeHash?: string;
+  /** Semantic matching diagnostic metadata */
+  semanticConfidence?: number;
+  semanticCacheHit?: boolean;
+  semanticModel?: string;
+  semanticStatus?: 'matched' | 'none' | 'ambiguous' | 'unavailable' | 'cancelled';
+  semanticProbabilities?: Record<string, number>;
+  semanticBackend?: 'off' | 'local' | 'remote';
+  semanticLatencyMs?: number;
+  semanticUsage?: { inputTokens: number | null; outputTokens: number | null };
+  semanticAttempts?: number;
 }
 
 export interface ScrollUntilFoundOptions {
@@ -382,4 +409,22 @@ export interface ScrollUntilFoundResult {
   scrolledPx: number;
   coordinates?: { x: number; y: number };
   message: string;
+}
+
+export interface DownloadObservation {
+  guid: string;
+  tabId: number;
+  /** CDP frame identity, not a chrome.webNavigation frame ID. */
+  frameId: string;
+  sessionId?: string;
+  url: string;
+  suggestedFilename: string;
+  state: 'inProgress' | 'completed' | 'canceled' | 'unknown';
+  receivedBytes: number;
+  totalBytes: number;
+  startedAt: number;
+  updatedAt: number;
+  epoch: string;
+  sequence: number;
+  reason?: string;
 }

@@ -1,19 +1,25 @@
 import { cdpSessionManager } from './cdp-session-manager.ts';
 
 export interface DialogInfo {
+  dialogId?: string;
   type: string;
   message: string;
   defaultPrompt: string;
+  sessionId?: string;
 }
+
+export type DialogDispatchStage = 'before' | 'after' | 'unknown';
 
 export class DialogOpenedError extends Error {
   dialog: DialogInfo;
-  constructor(dialog: DialogInfo) {
+  dispatchStage: DialogDispatchStage;
+  constructor(dialog: DialogInfo, dispatchStage: DialogDispatchStage = 'unknown') {
     super(
       `A native JavaScript dialog (${dialog.type}: "${dialog.message}") opened and paused execution.`,
     );
     this.name = 'DialogOpenedError';
     this.dialog = dialog;
+    this.dispatchStage = dispatchStage;
   }
 }
 
@@ -48,11 +54,18 @@ export function isCdpDispatchTimeoutError(err: unknown): boolean {
 /**
  * True when a CDP dispatch may have executed but its outcome is unknown - either
  * it was not acked inside the race window, or the connection dropped after it
- * was sent. Such a result must never be followed by a blind retry.
+ * was sent, or a dialog opened after the command was dispatched. Such a result
+ * must never be followed by a blind retry.
  */
 export function isCdpOutcomeUncertainError(err: unknown): boolean {
+  const dialogShape = err as { name?: unknown; dispatchStage?: unknown } | null | undefined;
+  const dialogDispatchedOrUnknown =
+    dialogShape?.name === 'DialogOpenedError' &&
+    (dialogShape.dispatchStage === 'after' || dialogShape.dispatchStage === 'unknown');
   return (
     isCdpDispatchTimeoutError(err) ||
+    dialogDispatchedOrUnknown ||
+    String((err as Error)?.message || '').startsWith('CDP_SEND_TIMEOUT') ||
     String((err as Error)?.message || '').includes('outcome unknown')
   );
 }
@@ -135,18 +148,24 @@ export async function dispatchMousePressRelease(
 
 export function createDialogInterruptResponse(err: DialogOpenedError | DialogInfo) {
   const dialog = err instanceof DialogOpenedError ? err.dialog : err;
+  const dispatchUnknown = !(err instanceof DialogOpenedError) || err.dispatchStage !== 'before';
   return {
     content: [
       {
         type: 'text' as const,
         text: JSON.stringify({
           success: false,
+          status: dispatchUnknown ? 'unknown' : 'blocked',
+          retry: !dispatchUnknown,
           requiresDialogAction: true,
           dialog: {
+            ...(dialog.dialogId ? { dialogId: dialog.dialogId } : {}),
             type: dialog.type,
             message: dialog.message,
             defaultPrompt: dialog.defaultPrompt,
+            ...(dialog.sessionId ? { sessionId: dialog.sessionId } : {}),
           },
+          ...((err as any).receipt?.hasReceipt ? { receipt: (err as any).receipt } : {}),
         }),
       },
     ],
@@ -166,22 +185,34 @@ export async function raceCdp<T>(
 ): Promise<T> {
   const pending = cdpSessionManager.getPendingDialog(tabId);
   if (pending) {
-    throw new DialogOpenedError(pending);
+    throw new DialogOpenedError(pending, 'before');
   }
 
   let timer: any;
-  let observer: ((eventTabId: number, method: string, params: any) => void) | null = null;
+  let observer:
+    | ((eventTabId: number, method: string, params: any, source?: { sessionId?: string }) => void)
+    | null = null;
 
   try {
     const racePromise = new Promise<never>((_, reject) => {
-      observer = (eventTabId: number, eventMethod: string, eventParams: any) => {
+      observer = (
+        eventTabId: number,
+        eventMethod: string,
+        eventParams: any,
+        eventSource?: { sessionId?: string },
+      ) => {
         if (eventTabId === tabId && eventMethod === 'Page.javascriptDialogOpening') {
+          const pendingDialog = cdpSessionManager.getPendingDialog(tabId);
           reject(
-            new DialogOpenedError({
-              type: String(eventParams?.type || 'alert'),
-              message: String(eventParams?.message || ''),
-              defaultPrompt: String(eventParams?.defaultPrompt || ''),
-            }),
+            new DialogOpenedError(
+              pendingDialog || {
+                type: String(eventParams?.type || 'alert'),
+                message: String(eventParams?.message || ''),
+                defaultPrompt: String(eventParams?.defaultPrompt || ''),
+                sessionId: eventSource?.sessionId,
+              },
+              'after',
+            ),
           );
         }
       };
@@ -190,7 +221,7 @@ export async function raceCdp<T>(
       timer = setTimeout(() => {
         const currentPending = cdpSessionManager.getPendingDialog(tabId);
         if (currentPending) {
-          reject(new DialogOpenedError(currentPending));
+          reject(new DialogOpenedError(currentPending, 'after'));
         } else {
           reject(new CdpDispatchTimeoutError(method));
         }

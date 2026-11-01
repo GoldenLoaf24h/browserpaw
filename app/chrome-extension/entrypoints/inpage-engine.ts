@@ -18,10 +18,11 @@
 
 import {
   inPageDOMPruner,
-  inPageReindexFrame,
+  inPageSetIndexNamespace,
   inPageRealignHighlights,
   inPageScrollToIndex,
   inPageGetElementCoordinates,
+  inPageWaitForActionable,
   inPageArmDeliveryProbe,
   inPageReadDeliveryProbe,
   inPageGetFrameOrigin,
@@ -32,10 +33,13 @@ import {
   inPageInteractIndex,
   inPageFocusIndex,
   inPageFillIndex,
+  inPagePrepareAppend,
   inPageExtractDropdownOptions,
   inPageExtractMarkdown,
   inPageLocateBySelector,
   inPageLocateByText,
+  inPageLocateByLabel,
+  inPageLocateByRole,
   inPageFindSmartScrollTarget,
   inPagePerformSmartScroll,
   inPageCheckInterception,
@@ -44,7 +48,6 @@ import {
   detectEditorSemantics,
   getStickyOcclusionMargins,
   inPageDetectConfirmationTrap,
-  inPageDeepResetElement,
   inPageVerifyInputCommitment,
   inPageDetectPerceptiveSignature,
   inPageQueryChoiceCandidates,
@@ -62,14 +65,17 @@ import {
   inPageSelectCustomCombobox,
   inPageScrollUntilFound,
   inPageEnsureModalFocus,
-  inPageDispatchInputEvents,
+  getShadowRoot,
 } from './background/tools/browser/dom-indexer';
+import { DocumentObservationCache } from '../utils/document-observation-cache';
 import { inPageWaitForDOMSettle } from '../utils/action-watchdog';
 import {
   fastSnapshot,
   inPageCheckOcclusion,
   getNativeValueSetter,
   getClawFastCache,
+  clearFastSnapshotMetrics,
+  inPageValidateObservedGuard,
 } from './background/tools/browser/fast-snapshot';
 
 export default defineUnlistedScript(() => {
@@ -82,23 +88,37 @@ export default defineUnlistedScript(() => {
   // namespace only when the version string differs, so a stale page-side
   // engine (surviving extension reloads in the same tab) would otherwise keep
   // missing newly registered entrypoints.
-  const ENGINE_VERSION = '2026-10-17.1';
+  const ENGINE_VERSION = '2026-11-01.2';
   const g = globalThis as any;
   if (g.__MCP_INPAGE__ && g.__MCP_INPAGE_VERSION__ === ENGINE_VERSION) {
     return;
   }
+  g.__MCP_OBSERVATION_DISPOSE__?.();
   g.__MCP_INPAGE_VERSION__ = ENGINE_VERSION;
+
+  const observations = new DocumentObservationCache(document, getShadowRoot);
+  g.__MCP_OBSERVATION_DISPOSE__ = () => observations.dispose();
+  const standard = (options?: Parameters<typeof inPageDOMPruner>[0]) => {
+    const result = observations.read('standard', options, () => inPageDOMPruner(options));
+    return { ...result, observationReused: observations.reused };
+  };
+  const fast = (options?: Parameters<typeof fastSnapshot>[0]) => {
+    clearFastSnapshotMetrics();
+    const result = observations.read('fast', options, () => fastSnapshot(options));
+    return result && { ...result, observationReused: observations.reused };
+  };
 
   // Initialize single-point global window.__pawFast & window.__clawFast
   const pawFast = getClawFastCache();
-  pawFast.snapshot = fastSnapshot;
+  pawFast.snapshot = fast;
 
   (globalThis as any).__MCP_INPAGE__ = {
-    inPageDOMPruner,
-    inPageReindexFrame,
+    inPageDOMPruner: standard,
+    inPageSetIndexNamespace,
     inPageRealignHighlights,
     inPageScrollToIndex,
     inPageGetElementCoordinates,
+    inPageWaitForActionable,
     inPageArmDeliveryProbe,
     inPageReadDeliveryProbe,
     inPageGetFrameOrigin,
@@ -108,11 +128,15 @@ export default defineUnlistedScript(() => {
     inPagePointerDragMove,
     inPageInteractIndex,
     inPageFocusIndex,
+    inPageValidateObservedGuard,
     inPageFillIndex,
+    inPagePrepareAppend,
     inPageExtractDropdownOptions,
     inPageExtractMarkdown,
     inPageLocateBySelector,
     inPageLocateByText,
+    inPageLocateByLabel,
+    inPageLocateByRole,
     inPageFindSmartScrollTarget,
     inPagePerformSmartScroll,
     inPageCheckInterception,
@@ -122,7 +146,6 @@ export default defineUnlistedScript(() => {
     detectEditorSemantics,
     getStickyOcclusionMargins,
     inPageDetectConfirmationTrap,
-    inPageDeepResetElement,
     inPageVerifyInputCommitment,
     inPageDetectPerceptiveSignature,
     inPageQueryChoiceCandidates,
@@ -140,9 +163,8 @@ export default defineUnlistedScript(() => {
     inPageSelectCustomCombobox,
     inPageScrollUntilFound,
     inPageEnsureModalFocus,
-    inPageDispatchInputEvents,
-    inPageFastSnapshot: fastSnapshot,
-    snapshot: fastSnapshot,
+    inPageFastSnapshot: fast,
+    snapshot: fast,
     inPageCheckOcclusion,
     getNativeValueSetter,
   };

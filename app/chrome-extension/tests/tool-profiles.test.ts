@@ -11,7 +11,7 @@ import {
 
 /**
  * The full tool list costs ~70KB / ~18k tokens of fixed schema overhead in every
- * session. The streamlined core profile trims down to 14 high-frequency primary
+ * session. The streamlined core profile trims down to 16 primary
  * tools to eliminate decision paralysis and cut token overhead by >65%.
  */
 describe('tool profiles', () => {
@@ -59,7 +59,7 @@ describe('tool profiles', () => {
 
   it('keeps the 14 hyper-focused tools a browsing session needs', () => {
     const core = new Set(filterToolSchemas(TOOL_SCHEMAS, 'core').map((t: any) => t.name));
-    expect(core.size).toBe(14);
+    expect(core.size).toBe(16);
 
     for (const required of [
       'chrome_read_dom',

@@ -66,6 +66,38 @@ const SKILL_EXAMPLES: Array<[string, Record<string, unknown>]> = [
 describe('SKILL.md parameter examples match the tool schemas', () => {
   const schemas = new Map(TOOL_SCHEMAS.map((t: any) => [t.name, t]));
 
+  it('keeps canonical and Hermes table arguments within the actual schema', async () => {
+    const fs = await import('node:fs');
+    const tables = [
+      ['../../skills/browserpaw/references/tool-cheatsheet.md', 4],
+      ['../../plugins/browserpaw-hermes/skill-template/references/tool-matrix.md', 3],
+    ] as const;
+    const invalid: string[] = [];
+    for (const [file, column] of tables) {
+      let rows = 0;
+      for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+        // Unescaped pipes inside inline code belong to the parameter cell.
+        const cells = line.split(/(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)/);
+        const name = cells[1]?.trim().match(/^`([a-z_]+)`$/)?.[1];
+        if (!name) continue;
+        rows++;
+        const canonical =
+          name === 'browserpaw_get_windows_and_tabs'
+            ? 'get_windows_and_tabs'
+            : name.replace(/^browserpaw_/, 'chrome_');
+        const schema = schemas.get(canonical);
+        expect(schema, name).toBeTruthy();
+        for (const match of cells[column]?.matchAll(/`([a-zA-Z_]+)(?::[^`]*)?`/g) || []) {
+          if (!(match[1] in (schema!.inputSchema?.properties || {}))) {
+            invalid.push(`${name}.${match[1]}`);
+          }
+        }
+      }
+      expect(rows, file).toBeGreaterThan(0);
+    }
+    expect(invalid).toEqual([]);
+  });
+
   it.each(SKILL_EXAMPLES)('%s accepts its documented arguments', (name, args) => {
     const schema = schemas.get(name);
     expect(schema, `${name} must exist in TOOL_SCHEMAS`).toBeTruthy();
@@ -81,10 +113,10 @@ describe('SKILL.md parameter examples match the tool schemas', () => {
   it('no longer documents the removed or invalid parameter names across skill docs', async () => {
     const fs = await import('node:fs');
     const files = [
-      '../../skill/SKILL.md',
-      '../../skill/references/batch-pipeline.md',
-      '../../skill/references/visual-fallback.md',
-      '../../skill/references/dual-brain-jev.md',
+      '../../skills/browserpaw/SKILL.md',
+      '../../skills/browserpaw/references/batch-pipeline.md',
+      '../../skills/browserpaw/references/visual-fallback.md',
+      '../../skills/browserpaw/references/dual-brain-jev.md',
     ];
 
     const ghosts = [
@@ -110,10 +142,9 @@ describe('SKILL.md parameter examples match the tool schemas', () => {
 
   it('verifies mcp-config.json autoApprove contains only valid canonical tools', async () => {
     const fs = await import('node:fs');
-    const config = JSON.parse(fs.readFileSync('../../skill/config/mcp-config.json', 'utf-8'));
+    const config = JSON.parse(fs.readFileSync('../../docs/examples/mcp-config.json', 'utf-8'));
     const autoApprove: string[] =
-      config.configurations.cline_and_roo_code.config.mcpServers.browserpaw?.autoApprove ||
-      config.configurations.cline_and_roo_code.config.mcpServers.browserclaw?.autoApprove;
+      config.configurations.cline_and_roo_code.config.mcpServers.browserpaw.autoApprove;
     for (const tool of autoApprove) {
       expect(
         schemas.has(tool),

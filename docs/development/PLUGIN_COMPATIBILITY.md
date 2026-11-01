@@ -1,12 +1,20 @@
-# Plugin Compatibility Specification: Hermes Agent, DeepSeek Harness (DSH), and Claude Code
+# Plugin Compatibility Specification: ChatGPT/Codex, Hermes Agent, DeepSeek Harness (DSH), and Claude Code
 
-- **Verification Date**: 2026-10-15 (Hermes/DSH), 2026-10-18 (Claude Code)
+- **Verification Date**: 2026-10-31 (current package and host-format checks)
 - **Verified Upstream Commits**:
   - Hermes Agent: [`NousResearch/hermes-agent@db44c46208f1b421b4ecb7e56bf9d68b0423906f`](https://github.com/NousResearch/hermes-agent/commit/db44c46208f1b421b4ecb7e56bf9d68b0423906f) (main branch)
-  - Hermes Agent PR #136034: BrowserPaw companion reviewed pin [`66a73495`](https://github.com/NousResearch/hermes-agent/pull/136034)
   - DeepSeek Harness: [`deepseek-ai/deepseek-harness@571902028a75c64c1d767f4ae5fd099485f0ddf0`](https://github.com/deepseek-ai/deepseek-harness/commit/571902028a75c64c1d767f4ae5fd099485f0ddf0) (master branch)
-  - DeepSeek Harness Discussion: [#8287](https://github.com/deepseek-ai/deepseek-harness/discussions/8287) ("Duplicate in-box @deepseek-ai/* package in a profile silently breaks every tool call")
-  - Claude Code: `2.1.299` (local CLI used for plugin validation and loading)
+  - Claude Code: `2.1.309` (local CLI validation)
+  - Hermes Agent: `0.22.5` (local host validation)
+  - DeepSeek Harness: `0.2.1-rc.3` (local packaging/install/config validation)
+
+Official development references:
+
+- ChatGPT/Codex: <https://developers.openai.com/plugins/build/plugins>
+- Hermes Agent: <https://hermes-agent.nousresearch.com/docs/developer-guide/plugins>
+- DeepSeek Harness: <https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish>
+- Claude Code manifest: <https://code.claude.com/docs/en/plugins/manifest-reference>
+- Claude Code marketplace: <https://code.claude.com/docs/en/plugins/marketplace-reference>
 
 ---
 
@@ -37,7 +45,7 @@ def call_mcp(
 - **No Private Secret Scope**: Do not invoke `ctx.secret_scope` (non-existent on official host).
 - **No Ambient Credential Harvesting**: Do not read host environment variables or local token files in the Python plugin.
 - **Zero Import-Time Side Effects**: Do not alter `sys.stdin`/`sys.stdout` during module import.
-- **Tool Name Parity**: Tool names registered via `ctx.register_tool` must match the 16 browser tools referenced in the bundled skill documentation.
+- **Tool Name Parity**: Tool names registered via `ctx.register_tool` must match the 18 browserpaw_* wrappers declared by `plugin.yaml` and documented in the Hermes-specific skill.
 - **No Unsafe Companion Endpoints**: Do not expose unauthenticated `/token` or `x-local-trust` bypasses.
 
 ---
@@ -102,30 +110,49 @@ From upstream `deepseek-ai/deepseek-harness`:
 
 ---
 
-## 3. Claude Code Plugin Compatibility
+## 3. ChatGPT/Codex Portable Agent Plugins
 
-- **Host**: Claude Code `2.1.299` (desktop, Windows). Manifest, catalog, and component inventory were checked with the real CLI's `claude plugin validate` and `claude plugin details`.
-- **Layout**: The plugin lives in `plugins/browserpaw-claude/`, deliberately separate from `plugins/browserpaw/`. A plugin manifest's `skills` key _appends_ to the default `skills/` scan rather than replacing it, so reusing the Hermes manifest would have loaded its 16-tool `browserpaw_*` skill alongside the canonical one, while the stdio bridge advertises `chrome_*`.
+- **Official layout**: A portable plugin uses a root `plugin.json`, a root `mcp.json`, a root `skills/` directory, and repository marketplace metadata in `.agents/plugins/marketplace.json`.
+- **Manifest**: `plugins/browserpaw/plugin.json` uses the Agent Plugins v1 schema. OpenAI presentation metadata belongs under `extensions.com.openai`; there is no second `.codex-plugin/plugin.json`.
+- **MCP server**: `plugins/browserpaw/mcp.json` declares the `browserpaw` stdio server and starts `mcp-chrome-stdio` from `PATH`.
+- **Skill**: `plugins/browserpaw/skills/browserpaw` is synchronized from `skills/browserpaw/`. Client-specific installation text stays outside the canonical skill.
+- **Regression Coverage**: [`scripts/browserpaw-portable-plugin.test.mjs`](../../scripts/browserpaw-portable-plugin.test.mjs) pins the closed manifest shape, stdio declaration, skill path, and marketplace entry.
+
+## 4. Claude Code Plugin Compatibility
+
+- **Host**: Claude Code `2.1.309` (Windows). Manifest, catalog, and component inventory were checked with the real CLI's `claude plugin validate` and `claude plugin details`.
+- **Current Validation**: `claude plugin validate plugins/browserpaw-claude --strict`, `claude plugin validate . --strict`, and `claude --plugin-dir plugins/browserpaw-claude plugin details browserpaw` pass. The component inventory reports one skill and one MCP server, and the bundled 512×512 icon satisfies the strict validator.
+- **Layout**: The plugin lives in `plugins/browserpaw-claude/`, deliberately separate from both the portable ChatGPT/Codex package and the Hermes native package. Reusing the Hermes skill would expose a `browserpaw_*` wrapper matrix while the stdio bridge advertises canonical `chrome_*` names.
 - **Manifest & Catalog**: `plugins/browserpaw-claude/.claude-plugin/plugin.json` and the repository-root `.claude-plugin/marketplace.json`. The catalog entry `name` equals the manifest `name` (`browserpaw`), and its relative `source` (`./plugins/browserpaw-claude`) resolves from the marketplace root without traversal.
 - **Command Surface**: Manifest name `browserpaw` plus skill name `browserpaw` yields the namespaced `/browserpaw:browserpaw`. The bare `/browserpaw` resolves to the same skill unless another command claims the name. `claude plugin details` reports one skill and one MCP server.
 - **MCP Server**: `.mcp.json` declares a stdio server named `browserpaw` running the `mcp-chrome-stdio` bin from `PATH`. Plugin-scoped servers start when the plugin is enabled and need no separate approval prompt. Tools surface as `mcp__plugin_browserpaw_browserpaw__<tool>`, where `<tool>` is the canonical `chrome_*` name.
-- **Skill Mirror**: Generated by `scripts/sync-skills.mjs` as the fifth target and kept byte-identical to `skill/`, with no `browserpaw_` prefix rewriting and no Hermes scope banner, because Claude Code speaks canonical names over stdio.
+- **Skill Mirror**: Generated by `scripts/sync-skills.mjs` from `skills/browserpaw/` and kept byte-identical, with no `browserpaw_` prefix rewriting and no Hermes scope banner, because Claude Code speaks canonical names over stdio.
 - **Regression Coverage**: [`scripts/browserpaw-claude-plugin.test.mjs`](../../scripts/browserpaw-claude-plugin.test.mjs) pins the manifest/catalog agreement, the stdio entry, the `/browserpaw` naming, and byte parity of the mirror.
 
 ---
 
-## 4. Host Credential Boundaries
+## 5. Host Credential Boundaries
 
 - **DeepSeek Harness (DSH)**: Operates against a local HTTP bridge. The plugin resolves the local bridge token from `process.env.CHROME_MCP_TOKEN` or `~/.chrome-mcp/bridge-token` and passes `headers: { 'x-mcp-token': token }`.
 - **Hermes Agent**: Operates credential-free in plugin code. Access control is enforced host-side via `plugins.entries.browserpaw.mcp_allowlist` in `config.yaml`.
 
 ---
 
-## 5. Verification Commands & Scope Limitations
+## 6. Verification Commands & Scope Limitations
 
 - **Unit Test Command**:
   ```bash
-  node --test scripts/browserpaw-dsh-plugin.test.mjs scripts/browserpaw-claude-plugin.test.mjs
+  node --test scripts/browserpaw-portable-plugin.test.mjs scripts/browserpaw-dsh-plugin.test.mjs scripts/browserpaw-claude-plugin.test.mjs scripts/sync-skills.test.mjs
+  ```
+- **Hermes Validation Commands**:
+  ```bash
+  hermes plugins validate plugins/browserpaw-hermes
+  hermes plugins doctor plugins/browserpaw-hermes
+  ```
+- **DSH Packaging Command**:
+  ```bash
+  cd plugins/browserpaw-dsh
+  npm pack --dry-run --json
   ```
 - **Claude Code Validation Commands**:
   ```bash
@@ -136,8 +163,8 @@ From upstream `deepseek-ai/deepseek-harness`:
 - **Scope Limitations**:
   - Static review uses the pinned upstream sources above. The root unit tests use a context test double; they do not establish full host compatibility.
   - An isolated Hermes component test used the real `PluginContext.call_mcp`, `MCPServerTask`, and official Python MCP SDK 2.3.0 against a controlled Streamable HTTP server. A 130.5-second response completed in 130.673 seconds with exactly one upstream tool call. Plugin-manager configuration was a test fixture; the SDK was loaded from a scratch directory, without changing the user's Hermes environment.
-  - Installed DSH 0.2.0-rc.2 packages were exercised in an isolated Cordis context for tool registration, skill retrieval, parameter projection, and output rendering. The system-prompt service was a fixture. That run alone did not establish a live browser MCP session.
-  - Host-level validation was completed on 2026-10-18 against a real DSH `0.2.1-rc.1` runtime launched in an isolated profile whose bundle list links `dsh-browserpaw`. That run established: the package loads as a profile layer (its `cordis.patch.yml` applies and `apply()` executes), the `browserpaw` skill registers through the runtime provider, the `browserpaw_session` tool registers, `action: "open"` connects to the live bridge at `http://127.0.0.1:12306/mcp` and injects the MCP tools, and `action: "close"` unloads them. The native host and `~/.chrome-mcp/bridge-token` were both in place.
-  - **Tool-profile boundary**: the native host announces only its `core` profile by default (14 tools) while the bundled skill body references the wider canonical set. `chrome_tool_docs` with `activateForSession: true` widens the server-side list, but DSH never observes it — the host does not declare the `tools.listChanged` capability, so the in-box client installs no list-changed handler and its tool table never refreshes. Tools outside the announced profile stay uncallable until the native host is restarted with `CHROME_MCP_TOOL_PROFILE=full`, which a plugin cannot reach from its own process. Under `full` the skill body and the registered tool set reconcile completely; under the default `core` profile the difference is a product-side profile choice, not a naming defect.
+  - Current DSH `0.2.1-rc.3` validation covers `npm pack`, isolated package installation, Cordis skill/tool registration, parameter projection, output rendering, and `dsh --profile <PROFILE> --dump-config`. The dump contains the `# == dsh-browserpaw` layer and its `browserpaw-skill` entry.
+  - The 2026-10-18 DSH `0.2.1-rc.1` bridge run remains historical evidence for the live open/close path. A fresh live headless model session against the current package was not completed, so the current package is not claimed as live-session verified.
+  - **Tool-profile boundary**: the native host announces the `core` profile by default, while the bundled skill body references the wider canonical set. `chrome_tool_docs` with `activateForSession: true` widens the server-side list. BrowserPaw advertises `tools.listChanged` and forwards the notification through its bridge; clients that implement the standard refresh can update their tool table. Clients that cannot should use `CHROME_MCP_TOOL_PROFILE=full`.
   - **Remaining boundary**: the `desktop` profile is owned exclusively by the Electron host and was not exercised; this evidence does not claim readiness under it. Local audit evidence is retained under `docs/analysis/audit-2026-10-14/runtime-acceptance/`; that ignored archive is not part of the distributed plugin.
   - The Claude Code plugin was loaded with the real CLI's `--plugin-dir` flag; validation, enablement, component inventory, and token projections came from the CLI itself. This establishes that the plugin loads and surfaces its skill and server, not that a live tool call reached Chrome from this plugin mount.

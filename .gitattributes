@@ -1,4 +1,5 @@
 *.onnx filter=lfs diff=lfs merge=lfs -text
 
-skill/** text eol=lf
+skills/** text eol=lf
 plugins/**/skills/** text eol=lf
+plugins/browserpaw-hermes/skill-template/** text eol=lf

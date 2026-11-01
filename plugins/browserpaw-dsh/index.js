@@ -48,13 +48,9 @@ export async function apply(ctx) {
   // out of the skill directory, which scripts/sync-skills.mjs regenerates, and interpolates
   // the real server name instead of restating it.
   //
-  // The trailing sentence must not advertise `chrome_tool_docs` as an unlock path. The native
-  // host only announces the `core` profile by default, and although `activateForSession: true`
-  // widens that set server-side, the in-box MCP client never learns about it: the server does
-  // not declare the `tools.listChanged` capability, so the client's list-changed handler is
-  // never installed and its tool table never refreshes. A tool outside the announced profile
-  // therefore stays unregistered in DSH until the native host is restarted with a wider
-  // `CHROME_MCP_TOOL_PROFILE`, which the plugin cannot reach from inside its own process.
+  // BrowserPaw now advertises tools.listChanged and forwards the notification. Clients that
+  // implement the standard refresh can update after chrome_tool_docs activates a category;
+  // clients that do not should start with a wider CHROME_MCP_TOOL_PROFILE.
   const toolNamingNote =
     `> **DSH tool names**: DSH exposes every BrowserPaw tool as \`mcp__${SERVER_NAME}__<raw name>\`, ` +
     `and the MCP client passes each raw name through unchanged — so the \`chrome_*\`, ` +
@@ -62,8 +58,9 @@ export async function apply(ctx) {
     `\`mcp__${SERVER_NAME}__chrome_<name>\`, \`mcp__${SERVER_NAME}__performance_<name>\` and ` +
     `\`mcp__${SERVER_NAME}__get_windows_and_tabs\`. Open the tool set first with ` +
     `\`browserpaw_session\` (\`action: "open"\`). The active tool profile announces only a ` +
-    `subset of these names, so a tool that is not listed yet is not callable until the ` +
-    `native host is restarted with \`CHROME_MCP_TOOL_PROFILE=full\`.`;
+    `subset of these names. On clients that handle the standard list-changed notification, ` +
+    `call \`mcp__${SERVER_NAME}__chrome_tool_docs\` with \`activateForSession: true\` to ` +
+    `widen the visible set; otherwise restart with \`CHROME_MCP_TOOL_PROFILE=full\`.`;
   ctx.skills.register({
     name: SERVER_NAME,
     source: 'runtime',

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "browserpaw": {
-      "type": "stdio",
-      "command": "mcp-chrome-stdio"
-    }
-  }
-}

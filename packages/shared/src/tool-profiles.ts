@@ -23,6 +23,9 @@ export type ToolProfile = 'core' | 'crawl' | 'full';
  * tab), history/bookmarks, performance tracing, and the chrome_network_* pair.
  */
 export const CORE_TOOL_NAMES: Set<string> = new Set([
+  // Durable tasks and verified skills are the default code-first workflow.
+  'chrome_task',
+  'chrome_skill',
   // Navigate (4)
   'chrome_navigate',
   'chrome_switch_tab',
@@ -51,7 +54,7 @@ CORE_TOOL_NAMES.add('chrome_tool_docs');
  * pass process.env.CHROME_MCP_TOOL_PROFILE directly.
  *
  * Default is now "core" to drastically reduce token overhead and avoid decision paralysis.
- * Set CHROME_MCP_TOOL_PROFILE=full to expose all 50 tools, or crawl for crawl workflows.
+ * Set CHROME_MCP_TOOL_PROFILE=full to expose all canonical tools, or crawl for crawl workflows.
  * Aliases "compact" and "minimal" are safely mapped to "core".
  */
 export function resolveToolProfile(raw?: string | null): ToolProfile {
@@ -139,6 +142,7 @@ export const TOOL_CATEGORIES: Record<string, string> = {
     'chrome_tab_group_ungroup',
     'chrome_tab_group_close',
   ].join(' '),
+  workflow: ['chrome_task', 'chrome_skill'].join(' '),
   diagnose: [
     'chrome_doctor',
     'chrome_javascript',

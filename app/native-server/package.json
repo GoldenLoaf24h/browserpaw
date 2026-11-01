@@ -1,6 +1,6 @@
 {
   "name": "mcp-chrome-bridge",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Chrome Native-Messaging host (Node)",
   "author": "hangye",
   "repository": {
@@ -14,8 +14,7 @@
     "mcp-chrome-bridge": "./dist/cli.js",
     "chrome-mcp-bridge": "./dist/cli.js",
     "mcp-chrome-stdio": "./dist/mcp/mcp-server-stdio.js",
-    "browserpaw": "./dist/cli.js",
-    "browserclaw": "./dist/cli.js"
+    "browserpaw": "./dist/cli.js"
   },
   "scripts": {
     "clean": "rimraf \"dist\"",

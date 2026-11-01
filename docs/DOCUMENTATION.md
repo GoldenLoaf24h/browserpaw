@@ -8,6 +8,20 @@ This document defines the governance rules, directory ownership, lifecycle bound
 
 BrowserPaw maintains a centralized, single-source documentation model centered around the Documentation Hub at [`docs/README.md`](./README.md).
 
+### Ownership and update boundaries
+
+| Document                                               | Owns                                                             | Avoid duplicating                                           |
+| ------------------------------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| Root `AGENTS.md` Manual Notes                          | Enforceable contributor/Agent rules                              | Runtime logs and milestone chronology                       |
+| [PROJECT.md](../PROJECT.md) and its Chinese mirror     | Package responsibilities and skill storage                       | Parameter tables, transient counts and performance promises |
+| [Development boundaries](./development/DEVELOPMENT.md) | Cross-layer change checklist, cleanup policy and current handoff | Complete historical benchmark logs                          |
+| [QUALITY.md](./QUALITY.md)                             | Verification and delivery gates                                  | Per-build pass counts or declarations of runtime readiness  |
+| README and INSTALL                                     | User capabilities and supported installation paths               | Internal research diaries                                   |
+| [TOOLS.md](./TOOLS.md) and static skill mirrors        | Generated contracts                                              | Hand-edited generated parameter tables                      |
+| Release and comparison records                         | Dated implementation and acceptance evidence                     | Undated claims of current stability                         |
+
+Generated `AGENTS.md` files are navigation aids. Put human rules under the exact `## Manual Notes` heading; the generator preserves that section and accepts directory arguments for targeted regeneration. Keep development instructions out of installable skill/plugin trees. New documentation must be linked from its relevant hub; prefer updating an existing owner over creating a parallel rulebook.
+
 ```text
 mcp-chrome-master/
 ├── README.md                      # Primary repository entry point (English canonical)
@@ -23,7 +37,7 @@ mcp-chrome-master/
 │   ├── DOCUMENTATION.md           # This document: governance, ownership, lifecycle & standards
 │   ├── ARCHITECTURE.md            # Technical architecture and CDP engine specification
 │   ├── MAP.md                     # Repository symbol mapping, dataflows & code topology
-│   ├── TOOLS.md                   # Auto-generated 50 canonical tool schemas and profiles
+│   ├── TOOLS.md                   # Auto-generated canonical tool schemas and profiles
 │   ├── TROUBLESHOOTING.md         # Operational diagnostic guide
 │   ├── TROUBLESHOOTING.zh-CN.md   # Simplified Chinese translation of TROUBLESHOOTING.md
 │   ├── CONTRIBUTING.md            # Contributor workflows and pull request protocols
@@ -33,6 +47,15 @@ mcp-chrome-master/
 │   │   ├── unreleased.md          # In-flight changes and upcoming milestone tracker
 │   │   └── v*.md                  # Individual release records mapped to git tags
 │   └── archive/                   # Isolated historical archives (handoffs, audits, tests)
+├── skills/browserpaw/             # Canonical client-neutral Agent Skill
+│   ├── references/                # On-demand operating knowledge
+│   ├── scripts/                   # Diagnostics and repair helpers
+│   └── assets/recipes/            # Static recipes copied into Native dist
+└── plugins/
+    ├── browserpaw/                # ChatGPT/Codex portable plugin
+    ├── browserpaw-hermes/         # Hermes native plugin
+    ├── browserpaw-claude/         # Claude Code plugin
+    └── browserpaw-dsh/            # DeepSeek Harness bundle
 ```
 
 ---
@@ -52,14 +75,25 @@ To prevent cognitive drift and ensure agents always read current contracts, docu
    - Isolated from active navigation paths to avoid conflicting guidance.
    - Archive index links must remain valid, but internal historical drafts are not subject to forward-evolution changes.
 
+3. **Skill and Client Package Documentation**:
+   - `skills/browserpaw/` is the only canonical client-neutral skill. It must not
+     contain Hermes, Claude, Codex, ChatGPT, or DSH installation instructions.
+   - Client-specific manifests, setup text, and tool wrappers belong in their
+     matching package under `plugins/`.
+   - Package READMEs must follow their harness's official layout and installation
+     contract. Cross-client compatibility is summarized in
+     [`development/PLUGIN_COMPATIBILITY.md`](./development/PLUGIN_COMPATIBILITY.md).
+   - `$BROWSERPAW_HOME/skills` is runtime learning data, not repository
+     documentation and not a mirror target for `scripts/sync-skills.mjs`.
+
 ---
 
 ## 🌐 3. Language & Translation Policy
 
 1. **Canonical Language**: English (`*.md`) is the primary canonical source of truth for all technical documentation, schemas, and API contracts. English documents carry no non-English prose.
-2. **Complete Chinese Mirrors**: Every `*.zh-CN.md` path (`README.zh-CN.md`, `PROJECT.zh-CN.md`, `AGENT_CONFIG_GUIDE.zh-CN.md`, `TROUBLESHOOTING.zh-CN.md`, `test/*.zh-CN.md`, and the skill/plugin copies generated by `scripts/sync-skills.mjs`) holds a full Simplified Chinese translation of its English source. Placeholder or redirect-stub content is not permitted; a translation must mirror the source's sections, tables, code blocks, and links.
+2. **Complete Chinese Mirrors**: Every `*.zh-CN.md` path (`README.zh-CN.md`, `PROJECT.zh-CN.md`, `AGENT_CONFIG_GUIDE.zh-CN.md`, `TROUBLESHOOTING.zh-CN.md`, `test/*.zh-CN.md`, and the skills/browserpaw/plugin copies generated by `scripts/sync-skills.mjs`) holds a full Simplified Chinese translation of its English source. Placeholder or redirect-stub content is not permitted; a translation must mirror the source's sections, tables, code blocks, and links.
 3. **Translation Currency**: A change to an English document must be reflected in its Chinese mirror in the same change set. When the two disagree, the English document wins and the mirror is corrected.
-4. **Mirror Generation**: Skill and plugin copies are never edited in place; translate `skill/config/TROUBLESHOOTING.zh-CN.md` and regenerate the mirrors with `node scripts/sync-skills.mjs`.
+4. **Mirror Generation**: Skill and plugin copies are never edited in place; translate `skills/browserpaw/references/TROUBLESHOOTING.zh-CN.md` and regenerate the mirrors with `node scripts/sync-skills.mjs`. Do not edit installed client caches or client-specific plugin directories as a synchronization mechanism.
 5. **No Forcible Deletion**: Chinese mirrors must never be deleted while inbound links exist. Historical archives under `docs/archive/**` are frozen and keep their original translated content.
 
 ---

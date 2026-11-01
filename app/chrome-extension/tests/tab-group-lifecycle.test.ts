@@ -230,6 +230,7 @@ describe('TabGroupManager (Industrial Grouping, Zero-Orphan Cleanup & User Tab I
   });
 
   it('safely preserves user tabs when closing managed groups (ungroups user tab, closes agent tab)', async () => {
+    manager.registerAgentTab(1);
     const gid = await manager.ensureAgentTabGroup(1, { title: 'Test Task' });
     expect(gid).toBeDefined();
 
@@ -264,5 +265,24 @@ describe('TabGroupManager (Industrial Grouping, Zero-Orphan Cleanup & User Tab I
 
     expect(manager.isAgentTab(1)).toBe(true);
     expect(manager.isAgentTab(9999)).toBe(false);
+  });
+
+  it('releaseAgentTab removes group ownership without closing the page', async () => {
+    manager.registerAgentTab(1);
+    expect(manager.isAgentTab(1)).toBe(true);
+
+    await manager.releaseAgentTab(1);
+
+    expect(manager.isAgentTab(1)).toBe(false);
+    expect(chrome.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('releaseAgentTab rolls back when ownership persistence fails', async () => {
+    manager.registerAgentTab(1);
+    vi.spyOn(manager, 'saveToStorage').mockRejectedValueOnce(new Error('quota exceeded'));
+
+    await expect(manager.releaseAgentTab(1)).rejects.toThrow('quota exceeded');
+
+    expect(manager.isAgentTab(1)).toBe(true);
   });
 });

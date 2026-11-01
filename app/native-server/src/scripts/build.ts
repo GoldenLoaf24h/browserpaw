@@ -18,6 +18,71 @@ export function copyHostWrapperScripts(srcDir: string, destDir: string): void {
   fs.copyFileSync(winSrc, path.join(destDir, 'run_host.bat'));
 }
 
+export function copyRecipeDataFiles(canonicalDir: string, destDir: string): void {
+  if (!fs.existsSync(canonicalDir)) {
+    return;
+  }
+  const ignored = new Set(['AGENTS.md', 'README.md', 'template.md']);
+  const entries = fs.readdirSync(canonicalDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (
+      !entry.isFile() ||
+      (!entry.name.endsWith('.md') && !entry.name.endsWith('.json')) ||
+      ignored.has(entry.name)
+    ) {
+      continue;
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(path.join(canonicalDir, entry.name), path.join(destDir, entry.name));
+  }
+}
+
+export function copyPortableSkill(canonicalDir: string, destDir: string): void {
+  const skillFile = path.join(canonicalDir, 'SKILL.md');
+  if (!fs.existsSync(skillFile) || !fs.statSync(skillFile).isFile()) {
+    throw new Error(`[SKILL] Canonical BrowserPaw skill is missing: ${skillFile}`);
+  }
+  const ignored = new Set(['AGENTS.md', 'HERMES_PLUGIN_SKILL.md', '.DS_Store']);
+  fs.rmSync(destDir, { recursive: true, force: true });
+  const copy = (source: string, destination: string) => {
+    for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+      if (ignored.has(entry.name)) continue;
+      const from = path.join(source, entry.name);
+      const to = path.join(destination, entry.name);
+      const stat = fs.lstatSync(from);
+      if (stat.isSymbolicLink()) throw new Error(`[SKILL] Symlink forbidden: ${from}`);
+      if (stat.isDirectory()) {
+        fs.mkdirSync(to, { recursive: true });
+        copy(from, to);
+      } else if (stat.isFile()) {
+        fs.mkdirSync(destination, { recursive: true });
+        fs.copyFileSync(from, to);
+      } else {
+        throw new Error(`[SKILL] Unsupported file type: ${from}`);
+      }
+    }
+  };
+  fs.mkdirSync(destDir, { recursive: true });
+  copy(canonicalDir, destDir);
+}
+
+export function assertRequiredRecipeFiles(canonicalDir: string): void {
+  const required = [
+    'developer.mozilla.org.md',
+    'mdn-search.json',
+    'github-releases.json',
+    'npm-compare.json',
+    'x-search-thread.json',
+    'x-visible-thread.json',
+  ];
+  for (const filename of required) {
+    const filePath = path.join(canonicalDir, filename);
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      throw new Error(`[RECIPES] Required bundled recipe missing: ${filePath}`);
+    }
+  }
+}
+
 export function cleanDistDir(targetDir: string): void {
   if (!fs.existsSync(targetDir)) {
     return;
@@ -75,6 +140,39 @@ export function runBuild(): void {
   const pkgReadme = path.join(__dirname, '..', '..', 'README.md');
   if (fs.existsSync(pkgReadme)) {
     fs.copyFileSync(pkgReadme, path.join(distDir, 'README.md'));
+  }
+
+  console.log('复制内置站点recipes...');
+  const canonicalRecipesDir = path.join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    '..',
+    'skills',
+    'browserpaw',
+    'assets',
+    'recipes',
+  );
+  const distRecipesDir = path.join(distDir, 'recipes');
+  try {
+    assertRequiredRecipeFiles(canonicalRecipesDir);
+    copyRecipeDataFiles(canonicalRecipesDir, distRecipesDir);
+    console.log(`Copied recipe data files to ${distRecipesDir}`);
+  } catch (error) {
+    console.error('复制内置站点recipes时出错:', error);
+    throw error;
+  }
+
+  console.log('复制客户端中立的 Agent Skill...');
+  const canonicalSkillDir = path.join(__dirname, '..', '..', '..', '..', 'skills', 'browserpaw');
+  const distSkillDir = path.join(distDir, 'skill', 'browserpaw');
+  try {
+    copyPortableSkill(canonicalSkillDir, distSkillDir);
+    console.log(`Copied portable Agent Skill to ${distSkillDir}`);
+  } catch (error) {
+    console.error('复制 Agent Skill 时出错:', error);
+    throw error;
   }
 
   console.log('复制包装脚本...');

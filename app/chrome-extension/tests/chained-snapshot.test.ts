@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { captureChainedSnapshotSummary, type ChainedSnapshotSummary } from '../utils/delta-helper';
+import {
+  captureChainedSnapshot,
+  captureChainedSnapshotSummary,
+  type ChainedSnapshotSummary,
+} from '../utils/delta-helper';
 import { snapshotCacheManager } from '../utils/snapshot-cache-manager';
 
 vi.mock('../entrypoints/background/tools/browser/in-page-engine', () => ({
@@ -16,6 +20,7 @@ describe('Chained Snapshot Enhancement (v3.4.0)', () => {
     vi.clearAllMocks();
     snapshotCacheManager.clear();
     (globalThis as any).chrome = {
+      webNavigation: { getAllFrames: vi.fn(async () => [{ frameId: 0 }]) },
       tabs: {
         get: vi.fn().mockResolvedValue({ id: testTabId, url: testUrl }),
       },
@@ -114,5 +119,88 @@ describe('Chained Snapshot Enhancement (v3.4.0)', () => {
 
     expect(summary.deltaSummary.added).toBe(25);
     expect(summary.keyChanges.length).toBe(10); // Capped at 10
+  });
+
+  it('reuses one DOM capture for both chained summary and the full delta', async () => {
+    (executeInPage as any).mockImplementation((target: any, fnName: string) => {
+      if (fnName === 'inPageGetActiveElementSummary') {
+        return Promise.resolve([{ result: { tagName: 'body' } }]);
+      }
+      if (fnName === 'inPageDOMPruner') {
+        return Promise.resolve([
+          {
+            frameId: 0,
+            result: {
+              indexedElements: [
+                { index: 1, tagName: 'input', text: 'search' },
+                { index: 2, tagName: 'button', text: 'Search' },
+                { index: 3, tagName: 'div', text: 'Result 1' },
+              ],
+            },
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    snapshotCacheManager.setSnapshot(testTabId, {
+      url: testUrl,
+      elementCount: 2,
+      elements: [
+        { index: 1, tagName: 'input', text: 'search' },
+        { index: 2, tagName: 'button', text: 'Search' },
+      ],
+    });
+
+    const result = await captureChainedSnapshot(testTabId, testUrl, {
+      maxItems: 5,
+      delayMs: 0,
+    });
+
+    expect(result.summary.deltaSummary.added).toBe(1);
+    expect(result.delta?.added).toHaveLength(1);
+    expect(
+      (executeInPage as any).mock.calls.filter((call: any[]) => call[1] === 'inPageDOMPruner'),
+    ).toHaveLength(1);
+  });
+
+  it('keeps one capture when callers request both summary and full delta', async () => {
+    (executeInPage as any).mockImplementation((target: any, fnName: string) => {
+      if (fnName === 'inPageGetActiveElementSummary') {
+        return Promise.resolve([{ result: { tagName: 'body' } }]);
+      }
+      if (fnName === 'inPageDOMPruner') {
+        return Promise.resolve([
+          {
+            frameId: 0,
+            result: {
+              indexedElements: [
+                { index: 1, tagName: 'button', text: 'Before' },
+                { index: 2, tagName: 'div', text: 'Popup' },
+              ],
+            },
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    snapshotCacheManager.setSnapshot(testTabId, {
+      url: testUrl,
+      elementCount: 1,
+      elements: [{ index: 1, tagName: 'button', text: 'Before' }],
+    });
+
+    const result = await captureChainedSnapshot(testTabId, testUrl, {
+      maxItems: 5,
+      delayMs: 0,
+    });
+
+    expect(result.summary.deltaSummary).toEqual({ added: 1, modified: 0, removed: 0 });
+    expect(result.delta?.isDelta).toBe(true);
+    expect(result.delta?.added).toHaveLength(1);
+    expect(
+      (executeInPage as any).mock.calls.filter((call: any[]) => call[1] === 'inPageDOMPruner'),
+    ).toHaveLength(1);
   });
 });

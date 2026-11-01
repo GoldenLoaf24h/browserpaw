@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   animateAgentCursor,
+  formatAgentCursorAction,
   hideAgentCursor,
 } from '../entrypoints/background/tools/browser/agent-cursor';
 import fs from 'node:fs';
@@ -9,6 +10,66 @@ import path from 'node:path';
 describe('Agent Cursor (Virtual Mouse) Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('formats action notes with the visible target instead of a numeric ref', () => {
+    expect(
+      formatAgentCursorAction('click', {
+        tagName: 'button',
+        text: '  Sign\n in  ',
+      }),
+    ).toBe('Clicking button "Sign in"');
+    expect(
+      formatAgentCursorAction('hover', {
+        tagName: 'a',
+        attributes: { 'aria-label': 'Documentation' },
+      }),
+    ).toBe('Hovering over link "Documentation"');
+    expect(
+      formatAgentCursorAction('double_click', {
+        tagName: 'input',
+        inputType: 'search',
+        attributes: { placeholder: 'Search BrowserPaw' },
+      }),
+    ).toBe('Double-clicking search box "Search BrowserPaw"');
+    expect(
+      formatAgentCursorAction('click', {
+        tagName: 'button',
+        text: 'Visible label',
+        attributes: { 'aria-label': 'ARIA label' },
+      }),
+    ).toBe('Clicking button "ARIA label"');
+    expect(
+      formatAgentCursorAction('click', {
+        tagName: 'input',
+        text: '   ',
+        attributes: { placeholder: 'Email address' },
+      }),
+    ).toBe('Clicking input "Email address"');
+    expect(
+      formatAgentCursorAction('click', {
+        tagName: 'span',
+        role: 'presentation',
+        text: 'Open menu',
+      }),
+    ).toBe('Clicking "Open menu"');
+    expect(
+      formatAgentCursorAction('click', {
+        tagName: 'div',
+        role: 'generic',
+      }),
+    ).toBe('Clicking');
+    expect(formatAgentCursorAction('click', { tagName: 'visual_target' })).toBe('Clicking');
+    expect(formatAgentCursorAction('right_click')).toBe('Right-clicking');
+    expect(formatAgentCursorAction('click', { tagName: 'button', text: 'x'.repeat(80) })).toMatch(
+      /^Clicking button "x{41}\.\.\."$/,
+    );
+    expect(formatAgentCursorAction('click', { tagName: 'button', text: '[654]' })).toBe(
+      'Clicking button',
+    );
+    expect(formatAgentCursorAction('click', { tagName: 'button', text: '2' })).toBe(
+      'Clicking button "2"',
+    );
   });
 
   it('verifies cursor asset cursor-chat.png exists and has valid PNG header', () => {
@@ -295,9 +356,8 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
     );
     const formSrc = fs.readFileSync(formPath, 'utf-8');
     expect(formSrc).not.toMatch(/void animateAgentCursorClick\(/);
-    expect(formSrc).toContain(
-      'await animateAgentCursorClick(tabId, coords.x, coords.y, clickNote);',
-    );
+    expect(formSrc).toMatch(/await interactIndexTool\.execute\(\s*\{/);
+    expect(formSrc).not.toContain('Input.dispatchMouseEvent');
 
     // 5. computer.ts
     const computerPath = path.resolve(
@@ -380,10 +440,8 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
       '../entrypoints/background/tools/browser/interaction.ts',
     );
     const interactionSrc = fs.readFileSync(interactionPath, 'utf-8').replace(/\r\n/g, '\n');
-    // Inside ClickTool click loop, animateAgentCursorClick is called before each mousePressed
-    expect(interactionSrc).toContain(
-      'for (let i = 1; i <= clickCount; i++) {\n              await animateAgentCursorClick(tabId, loc.x, loc.y, clickNote);',
-    );
+    // Legacy click delegates physical dispatch to the shared interact-index executor.
+    expect(interactionSrc).toMatch(/await interactIndexTool\.execute\(\s*\{/);
 
     // 4. computer.ts double_click / triple_click
     const computerPath = path.resolve(

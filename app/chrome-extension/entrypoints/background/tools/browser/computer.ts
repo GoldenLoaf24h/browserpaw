@@ -9,6 +9,10 @@ import { clickTool, fillTool } from './interaction';
 import { keyboardTool } from './keyboard';
 import { screenshotTool, normalizeImageToCssDimensions } from './screenshot';
 import { screenshotContextManager, scaleCoordinates } from '@/utils/screenshot-context';
+import {
+  SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
+  validateScreenshotCoordinateBinding,
+} from '@/utils/screenshot-validity';
 import { screenshotOriginViolation, dwell } from '@/utils/screenshot-guard';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
@@ -77,6 +81,7 @@ interface ComputerParams {
   duration?: number; // seconds for wait
   dwellMs?: number; // mouse-pressed dwell before release (anti-instant-click targets, 0-2000)
   coordinateSpace?: 'viewport' | 'screenshot'; // space of coordinates (default: viewport)
+  captureId?: string; // screenshot-bound identity; validates document/viewport/dpr/scroll before dispatch
   // For fill
   selector?: string;
   selectorType?: 'css' | 'xpath'; // Type of selector (default: 'css')
@@ -310,7 +315,21 @@ class ComputerTool extends BaseBrowserToolExecutor {
     const targetSessionId = params.sessionId || params.sessionContext;
     const targetWindowId = tab.windowId;
 
-    const isScreenshotSpace = params.coordinateSpace === 'screenshot';
+    const activeCaptureId =
+      typeof params.captureId === 'string' && params.captureId.trim()
+        ? params.captureId.trim()
+        : undefined;
+    const isScreenshotSpace =
+      params.coordinateSpace === 'screenshot' || activeCaptureId !== undefined;
+    let captureBindingValidated = false;
+    const captureValidationMetadata = () =>
+      activeCaptureId && captureBindingValidated
+        ? {
+            captureId: activeCaptureId,
+            captureValidated: true,
+            captureValidationBoundary: SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
+          }
+        : {};
 
     // Single unified helper to project and viewport-align coordinates
     const projectCoords = async (
@@ -325,6 +344,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
 
       let screenshotCtx: any;
       if (isScreenshotSpace) {
+        const binding = await validateScreenshotCoordinateBinding({
+          tabId,
+          captureId: activeCaptureId,
+          coordinateSpace: params.coordinateSpace,
+        });
+        if (binding.error) return { error: binding.error };
+        captureBindingValidated = Boolean(binding.captureId);
         screenshotCtx = screenshotContextManager.getContext(tabId);
         if (!screenshotCtx) {
           return {
@@ -480,9 +506,27 @@ class ComputerTool extends BaseBrowserToolExecutor {
           };
         }
 
+        if (isScreenshotSpace) {
+          const binding = await validateScreenshotCoordinateBinding({
+            tabId,
+            captureId: activeCaptureId,
+            coordinateSpace: params.coordinateSpace,
+          });
+          if (binding.error) return { error: binding.error };
+          captureBindingValidated = Boolean(binding.captureId);
+        }
         return { p1: p1 ?? undefined, p2: p2 ?? undefined };
       }
 
+      if (isScreenshotSpace) {
+        const binding = await validateScreenshotCoordinateBinding({
+          tabId,
+          captureId: activeCaptureId,
+          coordinateSpace: params.coordinateSpace,
+        });
+        if (binding.error) return { error: binding.error };
+        captureBindingValidated = Boolean(binding.captureId);
+      }
       return {
         p1: res1 ? { x: res1.x, y: res1.y } : undefined,
         p2: res2 ? { x: res2.x, y: res2.y } : undefined,
@@ -497,39 +541,58 @@ class ComputerTool extends BaseBrowserToolExecutor {
       return { x: parsed.x, y: parsed.y };
     };
 
+    const validateCaptureBeforeDispatch = async (): Promise<string | undefined> => {
+      if (!isScreenshotSpace) return undefined;
+      const binding = await validateScreenshotCoordinateBinding({
+        tabId,
+        captureId: activeCaptureId,
+        coordinateSpace: params.coordinateSpace,
+      });
+      if (binding.error) return binding.error;
+      captureBindingValidated = Boolean(binding.captureId);
+      return undefined;
+    };
+
     switch (params.action) {
       case 'resize_page': {
         const width = Number((params as any).coordinates?.x || (params as any).text);
         const height = Number((params as any).coordinates?.y || (params as any).value);
-        const w = Number((params as any).width ?? width);
-        const h = Number((params as any).height ?? height);
+        const w = Math.round(Number((params as any).width ?? width));
+        const h = Math.round(Number((params as any).height ?? height));
         if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
           return createErrorResponse('Provide width and height for resize_page (positive numbers)');
         }
         try {
-          // Prefer precise CDP emulation
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
             await CDPHelper.send(tabId, 'Emulation.setDeviceMetricsOverride', {
-              width: Math.round(w),
-              height: Math.round(h),
+              width: w,
+              height: h,
               deviceScaleFactor: 0,
               mobile: false,
-              screenWidth: Math.round(w),
-              screenHeight: Math.round(h),
+              screenWidth: w,
+              screenHeight: h,
             });
           });
         } catch (e) {
-          // Fallback: window resize
-          if (tab.windowId !== undefined) {
-            await chrome.windows.update(tab.windowId, {
-              width: Math.round(w),
-              height: Math.round(h),
-            });
-          } else {
-            return createErrorResponse(
-              `Failed to resize via CDP and cannot determine windowId: ${e instanceof Error ? e.message : String(e)}`,
-            );
+          const error = `Page viewport resize failed: ${e instanceof Error ? e.message : String(e)}`;
+          if (isCdpOutcomeUncertainError(e)) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    success: false,
+                    action: 'resize_page',
+                    status: 'unknown',
+                    retry: false,
+                    error,
+                  }),
+                },
+              ],
+              isError: true,
+            };
           }
+          return createErrorResponse(error);
         }
         return {
           content: [
@@ -639,6 +702,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
             actionNote: 'Hovering',
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
+            const captureError = await validateCaptureBeforeDispatch();
+            if (captureError) throw new Error(captureError);
             // Move pointer to target. We can dispatch a single mouseMoved; browsers will generate mouseover/mouseenter as needed.
             await CDPHelper.dispatchMouseEvent(tabId, {
               type: 'mouseMoved',
@@ -672,6 +737,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
             isError: false,
           };
         } catch (error) {
+          if (activeCaptureId) {
+            return createErrorResponse(
+              `CDP hover failed for screenshot captureId ${activeCaptureId}: ${
+                error instanceof Error ? error.message : String(error)
+              }. The capture-bound action was not replayed through the synthetic DOM fallback; inspect page state before retrying.`,
+            );
+          }
           console.warn('[ComputerTool] CDP hover failed, attempting DOM fallback', error);
           return await this.domHoverFallback(tab.id, coord, resolvedBy, params.ref);
         }
@@ -751,6 +823,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
             actionNote: clickNote,
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
+            const captureError = await validateCaptureBeforeDispatch();
+            if (captureError) throw new Error(captureError);
             const button: MouseButton = params.action === 'right_click' ? 'right' : 'left';
             const clickCount = 1;
             await CDPHelper.dispatchMouseEvent(tabId, {
@@ -800,6 +874,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                   success: true,
                   action: params.action,
                   coordinates: coord,
+                  ...captureValidationMetadata(),
                   ...(autoSnapResult ? { autoSnap: autoSnapResult } : {}),
                 }),
               },
@@ -904,6 +979,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
             actionNote: clickNote,
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
+            const captureError = await validateCaptureBeforeDispatch();
+            if (captureError) throw new Error(captureError);
             const button: MouseButton = 'left';
             const clickCount = params.action === 'double_click' ? 2 : 3;
             await CDPHelper.dispatchMouseEvent(tabId, {
@@ -956,6 +1033,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                   success: true,
                   action: params.action,
                   coordinates: coord,
+                  ...captureValidationMetadata(),
                   ...(doubleSnapResult ? { autoSnap: doubleSnapResult } : {}),
                 }),
               },
@@ -1027,6 +1105,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
             actionNote: dragNote,
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
+            const captureError = await validateCaptureBeforeDispatch();
+            if (captureError) throw new Error(captureError);
             // 1. Move to start position
             await CDPHelper.dispatchMouseEvent(tabId, {
               type: 'mouseMoved',
@@ -1101,7 +1181,13 @@ class ComputerTool extends BaseBrowserToolExecutor {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify({ success: true, action: 'left_click_drag', start, end }),
+                text: JSON.stringify({
+                  success: true,
+                  action: 'left_click_drag',
+                  start,
+                  end,
+                  ...captureValidationMetadata(),
+                }),
               },
             ],
             isError: false,
@@ -1157,6 +1243,8 @@ class ComputerTool extends BaseBrowserToolExecutor {
             actionNote: `Scrolling ${direction}`,
           });
           await cdpSessionManager.withSession(tabId, 'computer', async () => {
+            const captureError = await validateCaptureBeforeDispatch();
+            if (captureError) throw new Error(captureError);
             const STEPS = 8;
             let lastRatio = 0;
             for (let s = 1; s <= STEPS; s++) {

@@ -7,6 +7,7 @@ export interface ElementFingerprint {
   isInteractive: boolean;
   value?: string;
   scopeHash?: string;
+  attributes?: Record<string, string>;
 }
 
 export function computeScopeHash(text: string): string {
@@ -20,6 +21,23 @@ export function computeScopeHash(text: string): string {
 }
 
 export type SnapshotRepresentation = 'standard' | 'fast';
+
+export function snapshotObservationKey(options: Record<string, unknown> = {}): string {
+  const selector = options.scope || options.selector || null;
+  return JSON.stringify([
+    selector,
+    options.exclude ?? null,
+    options.viewportThreshold ?? 1000,
+    options.viewportOnly ?? false,
+    options.activeViewportOnly ?? false,
+    typeof options.maxTextLength === 'number' && options.maxTextLength > 0
+      ? options.maxTextLength
+      : 120,
+    options.isolateModal !== false,
+    options.virtualizeViewport ?? !selector,
+    options.flattenCards !== false,
+  ]);
+}
 
 export interface AssetRoute {
   frameId: number;
@@ -37,7 +55,9 @@ export interface CachedSnapshot {
   invalidationReason?: string;
   fingerprints?: Map<number, ElementFingerprint>;
   representation?: SnapshotRepresentation;
+  observationKey?: string;
   assetRoutes?: Map<number, AssetRoute>;
+  coverage?: DomDiffResult['coverage'];
 }
 
 export interface DomDiffResult {
@@ -54,6 +74,19 @@ export interface DomDiffResult {
   totalRemoved?: number;
   summary?: string;
   message?: string;
+  error?: string;
+  coverage?: {
+    status: 'complete' | 'failed' | 'incomplete';
+    attemptedFrames: 'all';
+    reportedFrames?: number;
+    successfulFrames?: number;
+    failedFrameCount?: number;
+    expectedFrames?: number;
+    missingFrameIds?: number[];
+    changedFrameIds?: number[];
+    failedFrames?: Array<{ frameId: number; documentId?: string; reason: string }>;
+    verificationError?: string;
+  };
 }
 
 export const DEFAULT_MAX_DELTA_CHANGES = 25;
@@ -62,6 +95,7 @@ export interface DiffOptions {
   maxDelta?: number;
   filterNoise?: boolean;
   representation?: SnapshotRepresentation;
+  observationKey?: string;
 }
 
 const COUNTDOWN_TIMER_REGEX =
@@ -80,6 +114,64 @@ export function isClockOrTimerNoise(oldText?: string, newText?: string): boolean
 
 const NOISE_ATTR_REGEX =
   /(adsbygoogle|google[-_]?ads?|ad[-_]?banner|taboola|outbrain|sponsored|recommend|guess[-_]?you[-_]?like|feed[-_]?item|elevator|shortcut)/i;
+
+const DELTA_STATE_ATTRIBUTE_KEYS = [
+  'focused',
+  'label',
+  'description',
+  'errormessage',
+  'parentTable',
+  'parentRow',
+  'row',
+  'column',
+  'rowspan',
+  'colspan',
+  'rowHeader',
+  'columnHeader',
+  'headerRefs',
+  'aria-sort',
+  'checked',
+  'selected',
+  'disabled',
+  'aria-checked',
+  'aria-selected',
+  'aria-expanded',
+  'aria-disabled',
+  'aria-pressed',
+  'aria-invalid',
+  'aria-required',
+  'required',
+  'invalid',
+  'valid',
+  'invalidReason',
+  'validationMessage',
+] as const;
+
+function fingerprintAttributes(
+  attributes: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!attributes) return undefined;
+
+  const state: Record<string, string> = {};
+  for (const key of DELTA_STATE_ATTRIBUTE_KEYS) {
+    if (attributes[key] !== undefined) {
+      state[key] = String(attributes[key]);
+    }
+  }
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
+function attributesChanged(
+  previous: Record<string, string> | undefined,
+  current: Record<string, string> | undefined,
+): boolean {
+  const previousEntries = Object.entries(previous || {});
+  const currentEntries = Object.entries(current || {});
+  return (
+    previousEntries.length !== currentEntries.length ||
+    previousEntries.some(([key, value]) => current?.[key] !== value)
+  );
+}
 
 export function isNoiseElement(el: any): boolean {
   if (!el) return false;
@@ -100,17 +192,11 @@ export function compactDeltaElement(el: any): any {
       'type',
       'role',
       'placeholder',
-      'checked',
-      'selected',
-      'disabled',
-      'aria-checked',
-      'aria-selected',
-      'aria-expanded',
-      'aria-disabled',
       'href',
       'title',
       'class',
       'value',
+      ...DELTA_STATE_ATTRIBUTE_KEYS,
     ];
     for (const k of keepKeys) {
       if (el.attributes[k] !== undefined) {
@@ -139,6 +225,7 @@ export function compactDeltaElement(el: any): any {
 
 export class SnapshotCacheManager {
   private cache = new Map<number, CachedSnapshot>();
+  private baselines = new Map<number, CachedSnapshot>();
   private tabRevisions = new Map<number, number>();
 
   constructor() {
@@ -152,6 +239,7 @@ export class SnapshotCacheManager {
       if (chrome.tabs?.onRemoved?.addListener) {
         chrome.tabs.onRemoved.addListener((tabId: number) => {
           this.cache.delete(tabId);
+          this.baselines.delete(tabId);
           this.tabRevisions.delete(tabId);
         });
       }
@@ -190,7 +278,9 @@ export class SnapshotCacheManager {
       elementCount: number;
       elements?: any[];
       representation?: SnapshotRepresentation;
+      observationKey?: string;
       assetRoutes?: Map<number, AssetRoute>;
+      coverage?: DomDiffResult['coverage'];
     },
   ): CachedSnapshot {
     const currentRev = (this.tabRevisions.get(tabId) ?? 0) + 1;
@@ -210,6 +300,7 @@ export class SnapshotCacheManager {
               el.scopeHash ||
               el.attributes?.['data-scope-hash'] ||
               (el.scopeText ? computeScopeHash(el.scopeText) : undefined),
+            attributes: fingerprintAttributes(el.attributes),
           });
         }
       }
@@ -225,9 +316,14 @@ export class SnapshotCacheManager {
       valid: true,
       fingerprints,
       representation: data.representation || 'standard',
+      observationKey: data.observationKey ?? snapshotObservationKey(),
       assetRoutes: data.assetRoutes,
+      coverage: data.coverage,
     };
     this.cache.set(tabId, snapshot);
+    if (!data.coverage || data.coverage.status === 'complete') {
+      this.baselines.set(tabId, snapshot);
+    }
     return snapshot;
   }
 
@@ -236,7 +332,7 @@ export class SnapshotCacheManager {
     currentElements: any[],
     options?: DiffOptions,
   ): DomDiffResult {
-    const prev = this.cache.get(tabId);
+    const prev = this.baselines.get(tabId);
     const currentRev = (this.tabRevisions.get(tabId) ?? 0) + 1;
     const maxDelta = options?.maxDelta ?? DEFAULT_MAX_DELTA_CHANGES;
     const filterNoise = options?.filterNoise ?? true;
@@ -246,9 +342,12 @@ export class SnapshotCacheManager {
     if (
       !prev ||
       !prev.valid ||
+      (prev.coverage && prev.coverage.status !== 'complete') ||
       !prev.fingerprints ||
       prev.fingerprints.size === 0 ||
-      prevRep !== currentRep
+      prevRep !== currentRep ||
+      (prev.observationKey ?? snapshotObservationKey()) !==
+        (options?.observationKey ?? snapshotObservationKey())
     ) {
       // First snapshot on this page or invalidated, no prior baseline to diff
       const isTruncated = currentElements.length > maxDelta;
@@ -293,6 +392,8 @@ export class SnapshotCacheManager {
         const roleChanged = (el.role || '') !== (old.role || '');
         const interactiveChanged = Boolean(el.isInteractive) !== old.isInteractive;
         const valChanged = (el.value || '') !== (old.value || '');
+        const currentAttributes = fingerprintAttributes(el.attributes);
+        const stateChanged = attributesChanged(old.attributes, currentAttributes);
 
         const isTimerNoise =
           filterNoise &&
@@ -300,14 +401,19 @@ export class SnapshotCacheManager {
           !roleChanged &&
           !interactiveChanged &&
           !valChanged &&
+          !stateChanged &&
           isClockOrTimerNoise(old.text, el.text);
 
-        if (!isTimerNoise && (textChanged || roleChanged || interactiveChanged || valChanged)) {
+        if (
+          !isTimerNoise &&
+          (textChanged || roleChanged || interactiveChanged || valChanged || stateChanged)
+        ) {
           modified.push({
             ...el,
             diffHints: {
               oldText: textChanged ? old.text : undefined,
               oldValue: valChanged ? old.value : undefined,
+              oldAttributes: stateChanged && old.attributes ? { ...old.attributes } : undefined,
             },
           });
         }
@@ -359,9 +465,20 @@ export class SnapshotCacheManager {
     return this.cache.get(tabId);
   }
 
-  public isSnapshotValid(tabId: number): boolean {
-    const s = this.cache.get(tabId);
-    return s !== undefined && s.valid === true;
+  public isSnapshotValid(
+    tabId: number,
+    options?: Pick<DiffOptions, 'representation' | 'observationKey'>,
+  ): boolean {
+    const s = this.baselines.get(tabId);
+    return (
+      s !== undefined &&
+      s.valid === true &&
+      (!s.coverage || s.coverage.status === 'complete') &&
+      (!options ||
+        ((s.representation ?? 'standard') === (options.representation ?? 'standard') &&
+          (s.observationKey ?? snapshotObservationKey()) ===
+            (options.observationKey ?? snapshotObservationKey())))
+    );
   }
 
   public isScopeValid(tabId: number, index: number, currentScopeHash?: string): boolean {
@@ -376,10 +493,11 @@ export class SnapshotCacheManager {
   }
 
   public invalidate(tabId: number, reason = 'DOM or URL mutated'): void {
-    const s = this.cache.get(tabId);
-    if (s) {
-      s.valid = false;
-      s.invalidationReason = reason;
+    for (const snapshot of [this.cache.get(tabId), this.baselines.get(tabId)]) {
+      if (snapshot) {
+        snapshot.valid = false;
+        snapshot.invalidationReason = reason;
+      }
     }
   }
 
@@ -392,9 +510,11 @@ export class SnapshotCacheManager {
   public clear(tabId?: number): void {
     if (typeof tabId === 'number') {
       this.cache.delete(tabId);
+      this.baselines.delete(tabId);
       this.tabRevisions.delete(tabId);
     } else {
       this.cache.clear();
+      this.baselines.clear();
       this.tabRevisions.clear();
     }
   }

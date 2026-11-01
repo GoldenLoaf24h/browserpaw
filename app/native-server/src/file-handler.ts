@@ -10,6 +10,7 @@ import fetch from 'node-fetch';
 import * as dns from 'dns';
 import { mediaAssetStore } from './media-asset-store';
 import { getChromeMcpPort, SERVER_CONFIG } from './constant';
+import { FileLeaseStore } from './file-lease-store';
 
 /**
  * Parses IPv6 address into 8 16-bit numeric blocks, supporting compression (::)
@@ -340,24 +341,40 @@ export function getSafeAgent(parsedUrl: URL): http.Agent | https.Agent {
   return parsedUrl.protocol === 'https:' ? safeHttpsAgent : safeHttpAgent;
 }
 
+export interface FileHandlerOptions {
+  tempDir?: string;
+  now?: () => number;
+}
+
 /**
  * File handler for managing file uploads through the native messaging host
  */
 export class FileHandler {
   private tempDir: string;
+  private leaseStore: FileLeaseStore;
+  private now: () => number;
 
-  constructor() {
+  constructor(options: FileHandlerOptions = {}) {
     // Create a temp directory for file operations
-    this.tempDir = path.join(os.tmpdir(), 'chrome-mcp-uploads');
+    this.tempDir = path.resolve(options.tempDir || path.join(os.tmpdir(), 'chrome-mcp-uploads'));
+    this.now = options.now || Date.now;
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
+    this.leaseStore = new FileLeaseStore({
+      rootDir: this.tempDir,
+      now: this.now,
+    });
     // Clean up old temporary files upon startup and schedule periodic cleanup
     try {
       this.cleanupOldFiles();
     } catch {}
     const cleanupTimer = setInterval(() => this.cleanupOldFiles(), 30 * 60 * 1000);
     cleanupTimer.unref();
+  }
+
+  getLeaseRecoveryError(): string | null {
+    return this.leaseStore.getMetadataError();
   }
 
   /**
@@ -402,19 +419,40 @@ export class FileHandler {
    * Handle file preparation request from the extension
    */
   async handleFileRequest(request: any): Promise<any> {
-    const { action, fileUrl, base64Data, fileName, filePath, traceFilePath, insightName } = request;
+    const {
+      action,
+      fileUrl,
+      base64Data,
+      fileName,
+      filePath,
+      traceFilePath,
+      insightName,
+      assetId,
+      leaseId,
+      delivery,
+      keep,
+      consumer,
+      tabId,
+      documentId,
+      leases,
+      leaseIds,
+    } = request;
 
     try {
       switch (action) {
-        case 'prepareFile':
+        case 'prepareFile': {
+          let prepared: any;
           if (fileUrl) {
-            return await this.downloadFile(fileUrl, fileName);
-          } else if (base64Data) {
-            return await this.saveBase64File(base64Data, fileName);
+            prepared = await this.downloadFile(fileUrl, fileName);
+          } else if (typeof base64Data === 'string') {
+            prepared = await this.saveBase64File(base64Data, fileName);
           } else if (filePath) {
-            return await this.verifyFile(filePath);
+            prepared = await this.verifyFile(filePath);
           }
-          break;
+          return prepared
+            ? this.attachLease(prepared, fileName)
+            : { success: false, error: 'No file source provided' };
+        }
 
         case 'readBase64File': {
           if (!filePath) return { success: false, error: 'filePath is required' };
@@ -428,6 +466,31 @@ export class FileHandler {
 
         case 'cleanupFile':
           return await this.cleanupFile(filePath);
+
+        case 'retainFileLease':
+        case 'retain':
+          return this.leaseStore.retain({
+            assetId,
+            leaseId,
+            delivery,
+            keep: keep || consumer?.keep,
+            consumer: consumer || { tabId, documentId, keep },
+          });
+
+        case 'renewFileLease':
+        case 'renew':
+          return this.leaseStore.renew({ assetId, leaseId });
+
+        case 'releaseFileLease':
+        case 'release':
+          return this.leaseStore.release({ assetId, leaseId });
+
+        case 'reconcileFileLeases':
+        case 'reconcile':
+          return this.leaseStore.reconcile({
+            leases,
+            leaseIds,
+          });
 
         case 'analyzeTrace': {
           const targetPath = traceFilePath || filePath;
@@ -463,6 +526,41 @@ export class FileHandler {
           };
       }
     } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private attachLease(prepared: any, requestedName?: string): any {
+    if (!prepared?.success || !prepared.filePath || !this.leaseStore.contains(prepared.filePath)) {
+      return prepared;
+    }
+    try {
+      const lease = this.leaseStore.create(
+        prepared.filePath,
+        prepared.fileName || requestedName || path.basename(prepared.filePath),
+        Number(prepared.size) || 0,
+      );
+      return {
+        ...prepared,
+        assetId: lease.assetId,
+        leaseId: lease.leaseId,
+        handle: {
+          assetId: lease.assetId,
+          leaseId: lease.leaseId,
+          filePath: lease.filePath,
+          fileName: lease.fileName,
+          size: lease.size,
+        },
+      };
+    } catch (error) {
+      try {
+        fs.unlinkSync(prepared.filePath);
+        const parent = path.dirname(path.resolve(prepared.filePath));
+        if (parent !== path.resolve(this.tempDir)) fs.rmdirSync(parent);
+      } catch {}
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -814,6 +912,12 @@ export class FileHandler {
           error: 'Can only cleanup files strictly within temp directory',
         };
       }
+      if (this.leaseStore.isMetadataPath(resolvedPath)) {
+        return { success: false, error: 'Cannot clean up lease metadata directly' };
+      }
+
+      const released = this.leaseStore.releaseByPath(resolvedPath);
+      if (!released.success) return released;
 
       if (fs.existsSync(resolvedPath)) {
         await fs.promises.unlink(resolvedPath);
@@ -869,13 +973,28 @@ export class FileHandler {
    */
   cleanupOldFiles(): void {
     try {
-      const now = Date.now();
+      const metadataError = this.leaseStore.getMetadataError();
+      if (metadataError) {
+        console.error(
+          'Automatic file cleanup skipped because lease metadata is unavailable:',
+          metadataError,
+        );
+        return;
+      }
+      this.leaseStore.cleanupExpired();
+      const now = this.now();
       const oneHour = 60 * 60 * 1000;
+      const activeDirectories = new Set(
+        this.leaseStore.list().map((lease) => path.dirname(path.resolve(lease.filePath))),
+      );
 
       const entries = fs.readdirSync(this.tempDir);
       for (const entry of entries) {
         const entryPath = path.join(this.tempDir, entry);
         try {
+          if (this.leaseStore.isMetadataPath(entryPath) || activeDirectories.has(entryPath)) {
+            continue;
+          }
           const lstats = fs.lstatSync(entryPath);
           if (lstats.isSymbolicLink()) {
             continue;

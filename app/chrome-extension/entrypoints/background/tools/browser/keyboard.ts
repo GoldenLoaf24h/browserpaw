@@ -1,12 +1,43 @@
 import { tabFaviconManager } from './tab-favicon';
-import { createErrorResponse, ToolResult } from '@/common/tool-handler';
+import { createErrorResponse, type ToolCallContext, ToolResult } from '@/common/tool-handler';
+import { throwIfAborted, waitWithAbort } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
 import { executeInPage } from './in-page-engine';
+import { resolveTargetLocation } from './unified-locator';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
-import { setAgentCursorNote } from './agent-cursor';
+import { formatAgentCursorAction, setAgentCursorNote } from './agent-cursor';
+import { withActionReceipt, attachActionReceipt } from '@/utils/action-receipt';
+import {
+  DialogOpenedError,
+  createDialogInterruptResponse,
+  isCdpOutcomeUncertainError,
+  raceCdp,
+} from '@/utils/race-cdp';
+
+function createUnknownOutcomeResponse(error: unknown, acknowledgedEvents?: number): ToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          status: 'unknown',
+          retry: false,
+          ...(acknowledgedEvents !== undefined
+            ? { dispatched: acknowledgedEvents > 0, acknowledgedEvents }
+            : {}),
+          error: `Keyboard CDP outcome unknown: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }),
+      },
+    ],
+    isError: true,
+  };
+}
 
 /**
  * Keys that the content-script simulator understands as a single named key.
@@ -159,6 +190,57 @@ for (let i = 1; i <= 12; i++) {
   };
 }
 
+const SHIFTED_DIGITS = ')!@#$%^&*(';
+
+function characterKeyDefinition(token: string, modifiers: number): CdpKeyDef | null {
+  const chars = Array.from(token);
+  const codePoint = chars[0]?.codePointAt(0) ?? 0;
+  if (chars.length !== 1 || codePoint < 0x20 || codePoint === 0x7f) return null;
+
+  // Shortcut modifiers must not carry text, or the browser inserts the shortcut letter.
+  const commandModifiers = (modifiers & (1 | 2 | 4)) !== 0;
+  const shifted = (modifiers & 8) !== 0;
+  if (/^[a-z]$/i.test(token)) {
+    const upper = token.toUpperCase();
+    const key = shifted ? upper : token;
+    const text = commandModifiers ? undefined : key;
+    return {
+      key,
+      code: `Key${upper}`,
+      windowsVirtualKeyCode: upper.charCodeAt(0),
+      text,
+      unmodifiedText: shifted ? upper : token,
+    };
+  }
+
+  if (/^[0-9]$/.test(token)) {
+    const key = shifted ? SHIFTED_DIGITS[Number(token)] : token;
+    const text = commandModifiers ? undefined : key;
+    return {
+      key,
+      code: `Digit${token}`,
+      windowsVirtualKeyCode: 48 + Number(token),
+      text,
+      unmodifiedText: key,
+    };
+  }
+
+  // No keyboard-layout guess for punctuation/Unicode: text-only dispatch is safe with code/VK 0.
+  if (shifted) return null;
+  const text = commandModifiers ? undefined : token;
+  return {
+    key: token,
+    code: '',
+    windowsVirtualKeyCode: 0,
+    text,
+    unmodifiedText: token,
+  };
+}
+
+function cdpKeyDefinition(token: string, modifiers: number): CdpKeyDef | undefined {
+  return CDP_KEY_DEFINITIONS[keyToken(token)] ?? characterKeyDefinition(token, modifiers);
+}
+
 /**
  * The content-script simulator separates key combinations with ','; accept the
  * space-separated form too so "ArrowDown ArrowDown Enter" works like it does
@@ -210,19 +292,21 @@ export function splitKeySequence(str: string): string[] {
   return results.filter(Boolean);
 }
 
-function parseCdpTargetCombinations(rawKeys: string): Array<{ def: CdpKeyDef; modifiers: number }> {
+export function parseCdpTargetCombinations(
+  rawKeys: string,
+): Array<{ def: CdpKeyDef; modifiers: number }> {
   const trimmed = rawKeys.trim();
   if (!trimmed) return [];
 
   // Check direct single key definition first (e.g. "Page Down", "Arrow Down", "Enter")
-  const singleDef = CDP_KEY_DEFINITIONS[keyToken(trimmed)];
+  const singleDef = cdpKeyDefinition(trimmed, 0);
   if (singleDef) {
     return [{ def: singleDef, modifiers: 0 }];
   }
 
   // Normalize key sequence (collapses "Page Down" -> "PageDown", space-separated sequence -> comma-separated)
   const normalized = normalizeKeySequence(trimmed);
-  const normalizedSingleDef = CDP_KEY_DEFINITIONS[keyToken(normalized)];
+  const normalizedSingleDef = cdpKeyDefinition(normalized, 0);
   if (normalizedSingleDef) {
     return [{ def: normalizedSingleDef, modifiers: 0 }];
   }
@@ -285,7 +369,7 @@ function parseCdpTargetCombinations(rawKeys: string): Array<{ def: CdpKeyDef; mo
     }
 
     if (!mainKey) return [];
-    const def = CDP_KEY_DEFINITIONS[keyToken(mainKey)];
+    const def = cdpKeyDefinition(mainKey, modMask);
     if (!def) return [];
     targets.push({ def, modifiers: modMask });
   }
@@ -298,6 +382,10 @@ interface KeyboardToolParams {
   index?: number; // Optional: 1-based element index from chrome_read_dom to focus before typing
   selector?: string; // Optional: CSS selector or XPath for target element to send keyboard events to
   selectorType?: 'css' | 'xpath'; // Type of selector (default: 'css')
+  text?: string;
+  role?: string;
+  label?: string;
+  exact?: boolean;
   delay?: number; // Optional: delay between keystrokes in milliseconds
   tabId?: number; // target existing tab id
   windowId?: number; // when no tabId, pick active tab from this window
@@ -315,10 +403,8 @@ class KeyboardTool extends BaseBrowserToolExecutor {
   /**
    * Execute keyboard operation
    */
-  async execute(args: KeyboardToolParams): Promise<ToolResult> {
+  async execute(args: KeyboardToolParams, context?: ToolCallContext): Promise<ToolResult> {
     const { keys, selector, selectorType = 'css', delay = TIMEOUTS.KEYBOARD_DELAY } = args;
-
-    console.log(`Starting keyboard operation with options:`, args);
 
     if (!keys) {
       return createErrorResponse(
@@ -326,7 +412,8 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       );
     }
 
-    try {
+    const run = async (): Promise<ToolResult> => {
+      throwIfAborted(context?.signal, 'before keyboard');
       const tab = await this.resolveAffinityTab({
         tabId: args.tabId,
         windowId: args.windowId,
@@ -336,15 +423,61 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
       }
       tabFaviconManager.markTabActive(tab.id);
+      let cursorTarget:
+        | {
+            tagName?: string;
+            text?: string;
+            role?: string;
+            inputType?: string;
+            attributes?: Record<string, string>;
+          }
+        | undefined;
 
-      // If 1-based index is specified, scroll element into view and focus before typing.
-      // Uses the dedicated focus entrypoint: the old path routed through
-      // inPageInteractIndex(index,'click'), which fired the target's click handlers
-      // and left focus on document.activeElement, so keys went to the wrong element.
+      if (args.text || args.role || args.label) {
+        const located = await resolveTargetLocation(tab.id, {
+          text: args.text,
+          role: args.role,
+          label: args.label,
+          exact: args.exact,
+          frameId: args.frameId,
+          operation: 'press',
+          taskId: context?.taskId,
+          signal: context?.signal,
+          deadlineAt: (args as any)?.deadlineAt ?? (args as any)?.deadline,
+        });
+        if (!located.success) {
+          return createErrorResponse(
+            located.error ||
+              `Failed to resolve keyboard target. ${ERROR_MESSAGES.INVALID_PARAMETERS}`,
+          );
+        }
+        if (typeof located.index !== 'number') {
+          return createErrorResponse('Keyboard target resolved without a stable element index');
+        }
+        args.index = located.index;
+        if (typeof located.frameId === 'number') {
+          args.frameId = located.frameId;
+        }
+        cursorTarget = {
+          tagName: located.tagName,
+          text: located.text,
+          role: located.role,
+          inputType: located.inputType,
+          attributes: located.attributes,
+        };
+      }
+
+      // Step 1: Target Focus & Resolution (Common for index and selector)
       if (typeof args.index === 'number' && args.index > 0) {
-        const focusRes = await executeInPage({ tabId: tab.id }, 'inPageFocusIndex', [args.index]);
+        const focusRes = await executeInPage(
+          typeof args.frameId === 'number'
+            ? { tabId: tab.id, frameIds: [args.frameId] }
+            : { tabId: tab.id },
+          'inPageFocusIndex',
+          [args.index],
+        );
         let focusTarget = focusRes?.[0]?.result;
-        if (!focusTarget?.success) {
+        if (!focusTarget?.success && args.frameId === undefined) {
           const frameResults = await executeInPage(
             { tabId: tab.id, allFrames: true },
             'inPageFocusIndex',
@@ -364,71 +497,161 @@ class KeyboardTool extends BaseBrowserToolExecutor {
               `Failed to resolve index [${args.index}] for ${resolveToolName('keyboard')}. Call ${resolveToolName('read_dom')} to refresh the index tree.`,
           );
         }
-        // The element may exist yet still refuse focus (disabled, inert, or an
-        // SVG node). Reporting success then would type into whatever currently
-        // holds focus — potentially the address bar or an unrelated search box.
         if (focusTarget.focused === false) {
           return createErrorResponse(
             `Index [${args.index}] resolved to <${focusTarget.tagName}> but could not take focus; refusing to type into an unknown element. Focus it explicitly (${resolveToolName('interact_index')}) or pass a selector.`,
           );
         }
-      }
-
-      // Clipboard chords (Ctrl+C / Ctrl+V) require the real system clipboard; synthetic
-      // KeyboardEvents cannot trigger browser edit commands, so route them natively.
-      const clipboardChord = /^(?:ctrl|control|meta|cmd)\+([cvxa])$/i.exec(String(keys).trim());
-      if (clipboardChord) {
-        const kind = clipboardChord[1].toLowerCase();
-        try {
-          await setAgentCursorNote(
-            tab.id,
-            kind === 'c' ? 'Copying to clipboard' : 'Pasting clipboard',
-          );
-          await this.injectContentScript(tab.id, ['inject-scripts/keyboard-helper.js']);
-          const resp = await this.sendMessageToTab(tab.id, {
-            action:
-              kind === 'c'
-                ? 'clipboardCopy'
-                : kind === 'x'
-                  ? 'clipboardCut'
-                  : kind === 'a'
-                    ? 'selectAll'
-                    : 'clipboardPaste',
-          });
-          if (!resp || resp.success !== true) {
-            return createErrorResponse(
-              `Clipboard ${kind === 'c' ? 'copy' : 'paste'} failed: ${resp?.error || 'unknown error'}`,
-            );
-          }
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message:
-                    kind === 'c'
-                      ? `Copied ${resp.copied} char(s) to system clipboard`
-                      : `Pasted ${resp.pasted} char(s) from system clipboard`,
-                  targetElement: resp.targetElement,
-                  text: resp.text,
-                }),
-              },
-            ],
-            isError: false,
-          };
-        } catch (error) {
-          return createErrorResponse(
-            `Clipboard operation failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        if (!cursorTarget && focusTarget.tagName) {
+          cursorTarget = { tagName: focusTarget.tagName };
         }
       }
 
-      // Literal text (e.g. "AGENT-OK"): type it through CDP Input.insertText so the
-      // page sees trusted input, instead of failing key-combination parsing.
+      let finalSelector = selector;
+      let refForFocus: string | undefined = undefined;
+      const targetFrameId = args.frameId ?? 0;
+      const frameIds = [targetFrameId];
+
+      if (selector) {
+        // Ensure accessibility-tree-helper is loaded for selector/XPath resolution and focus
+        await this.injectContentScript(
+          tab.id,
+          ['inject-scripts/accessibility-tree-helper.js'],
+          false,
+          'ISOLATED',
+          false,
+          frameIds,
+        );
+
+        try {
+          const ensured = await this.sendMessageToTab(
+            tab.id,
+            {
+              action: TOOL_MESSAGE_TYPES.ENSURE_REF_FOR_SELECTOR,
+              selector,
+              isXPath: selectorType === 'xpath',
+            },
+            targetFrameId,
+          );
+          if (!ensured || !ensured.success || !ensured.ref) {
+            return createErrorResponse(
+              `Failed to resolve selector: ${ensured?.error || 'unknown error'}`,
+            );
+          }
+          refForFocus = ensured.ref;
+
+          if (selectorType === 'xpath') {
+            finalSelector = undefined;
+            const resolved = await this.sendMessageToTab(
+              tab.id,
+              {
+                action: TOOL_MESSAGE_TYPES.RESOLVE_REF,
+                ref: ensured.ref,
+              },
+              targetFrameId,
+            );
+            if (resolved && resolved.success && resolved.selector) {
+              finalSelector = resolved.selector;
+            }
+          }
+        } catch (error) {
+          return createErrorResponse(
+            `Error resolving selector: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        if (refForFocus) {
+          const focusResult = await this.sendMessageToTab(
+            tab.id,
+            {
+              action: 'focusByRef',
+              ref: refForFocus,
+            },
+            targetFrameId,
+          );
+          if (!focusResult || !focusResult.success) {
+            return createErrorResponse(
+              `Failed to focus element: ${focusResult?.error || 'unknown error'}`,
+            );
+          }
+        }
+      } else if (typeof args.index !== 'number' || args.index <= 0) {
+        // Modal Focus Trap: if a modal blocker is active, pull focus into the modal so Tab/Enter don't hit background DOM
+        await executeInPage({ tabId: tab.id, frameIds }, 'inPageEnsureModalFocus', []).catch(
+          () => {},
+        );
+      }
+
+      // Step 2: Native edit chords (Ctrl+A, Ctrl+X, Ctrl+C, Ctrl+V) dispatched via CDP
+      // Preserves explicit modifier semantics: 'cmd'/'meta' -> 4 (Meta), 'ctrl'/'control' -> 2 (Ctrl).
+      const editChordMatch = /^(ctrl|control|meta|cmd)\+([acxv])$/i.exec(String(keys).trim());
+      if (editChordMatch) {
+        const modStr = editChordMatch[1].toLowerCase();
+        const kind = editChordMatch[2].toLowerCase();
+        const chordDef = NATIVE_EDIT_CHORDS[kind];
+        if (chordDef) {
+          try {
+            throwIfAborted(context?.signal, 'before keyboard edit chord');
+            await setAgentCursorNote(tab.id, chordDef.note);
+            // Strict modifier semantics: Meta (4) for cmd/meta; Ctrl (2) for ctrl/control
+            const modifierMask = modStr === 'cmd' || modStr === 'meta' ? 4 : 2;
+
+            await cdpSessionManager.withSession(tab.id, 'keyboard-edit-chord', async () => {
+              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                type: 'rawKeyDown',
+                key: chordDef.key,
+                code: chordDef.code,
+                windowsVirtualKeyCode: chordDef.vk,
+                nativeVirtualKeyCode: chordDef.vk,
+                modifiers: modifierMask,
+                commands: [chordDef.command],
+              });
+              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                type: 'keyUp',
+                key: chordDef.key,
+                code: chordDef.code,
+                windowsVirtualKeyCode: chordDef.vk,
+                nativeVirtualKeyCode: chordDef.vk,
+                modifiers: modifierMask,
+              });
+            });
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    success: true,
+                    message: `Dispatched native edit chord: ${keys.trim()} (${chordDef.command})`,
+                    method: 'cdp_native_edit_chord',
+                    chord: keys.trim(),
+                    command: chordDef.command,
+                  }),
+                },
+              ],
+              isError: false,
+            };
+          } catch (error) {
+            if (error instanceof DialogOpenedError) {
+              throw error;
+            }
+            if (isCdpOutcomeUncertainError(error)) {
+              return createUnknownOutcomeResponse(error);
+            }
+            return createErrorResponse(
+              `Edit chord operation failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      }
+
+      // Step 3: Literal text input typed through CDP Input.insertText
       if (isLiteralText(keys)) {
         try {
-          const typeNote = `Typing "${keys.length > 18 ? keys.slice(0, 15) + '...' : keys}"`;
+          throwIfAborted(context?.signal, 'before keyboard text insert');
+          const typeNote = cursorTarget
+            ? formatAgentCursorAction('Typing', cursorTarget)
+            : 'Typing';
           await setAgentCursorNote(tab.id, typeNote);
           await cdpSessionManager.withSession(tab.id, 'keyboard-type', async () => {
             await cdpSessionManager.sendCommand(tab.id!, 'Input.insertText', { text: keys });
@@ -449,69 +672,94 @@ class KeyboardTool extends BaseBrowserToolExecutor {
             isError: false,
           };
         } catch (typeErr) {
+          if (typeErr instanceof DialogOpenedError) {
+            throw typeErr;
+          }
+          if (isCdpOutcomeUncertainError(typeErr)) {
+            return createUnknownOutcomeResponse(typeErr);
+          }
           return createErrorResponse(
             `Failed to type literal text: ${typeErr instanceof Error ? typeErr.message : String(typeErr)}`,
           );
         }
       }
 
-      let finalSelector = selector;
-      let refForFocus: string | undefined = undefined;
-
-      // Ensure helper is loaded for XPath or potential focus operations
-      await this.injectContentScript(tab.id, ['inject-scripts/accessibility-tree-helper.js']);
-
-      // If selector is XPath, convert to ref then try to get CSS selector
-      if (selector && selectorType === 'xpath') {
+      // Step 4: Fully parsed keys go directly to native CDP. The synthetic helper is
+      // only for inputs the CDP parser does not own, and never receives a CDP replay.
+      const targetCombos = parseCdpTargetCombinations(keys.trim());
+      if (targetCombos.length > 0) {
+        let acknowledgedEvents = 0;
         try {
-          // First convert XPath to ref
-          const ensured = await this.sendMessageToTab(tab.id, {
-            action: TOOL_MESSAGE_TYPES.ENSURE_REF_FOR_SELECTOR,
-            selector,
-            isXPath: true,
+          throwIfAborted(context?.signal, 'before keyboard key event');
+          await cdpSessionManager.withSession(tab.id, 'keyboard', async () => {
+            for (const combo of targetCombos) {
+              throwIfAborted(context?.signal, 'before dispatching key event');
+              const def = combo.def;
+              const suppressText = (combo.modifiers & (1 | 2 | 4)) !== 0;
+              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                type: 'keyDown',
+                key: def.key,
+                code: def.code,
+                text: suppressText ? undefined : def.text,
+                unmodifiedText: def.unmodifiedText,
+                windowsVirtualKeyCode: def.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                modifiers: combo.modifiers || undefined,
+              });
+              acknowledgedEvents++;
+              await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
+                type: 'keyUp',
+                key: def.key,
+                code: def.code,
+                windowsVirtualKeyCode: def.windowsVirtualKeyCode,
+                nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+                modifiers: combo.modifiers || undefined,
+              });
+              acknowledgedEvents++;
+              if (targetCombos.length > 1) {
+                await waitWithAbort(
+                  Math.min(50, Math.max(10, delay)),
+                  context?.signal,
+                  'during keyboard delay',
+                );
+              }
+            }
           });
-          if (!ensured || !ensured.success || !ensured.ref) {
-            return createErrorResponse(
-              `Failed to resolve XPath selector: ${ensured?.error || 'unknown error'}`,
+          const keyNames = targetCombos.map((c) => c.def.key).join(', ');
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  message: `Dispatched native CDP key(s): ${keyNames}`,
+                  method: 'cdp_dispatch_key_event',
+                  isTrusted: true,
+                  keys: keyNames,
+                }),
+              },
+            ],
+            isError: false,
+          };
+        } catch (cdpErr) {
+          if (cdpErr instanceof DialogOpenedError) {
+            throw cdpErr;
+          }
+          if (acknowledgedEvents > 0 || isCdpOutcomeUncertainError(cdpErr)) {
+            return createUnknownOutcomeResponse(
+              cdpErr,
+              acknowledgedEvents > 0 ? acknowledgedEvents : undefined,
             );
           }
-          refForFocus = ensured.ref;
-          // Try to resolve ref to CSS selector
-          const resolved = await this.sendMessageToTab(tab.id, {
-            action: TOOL_MESSAGE_TYPES.RESOLVE_REF,
-            ref: ensured.ref,
-          });
-          if (resolved && resolved.success && resolved.selector) {
-            finalSelector = resolved.selector;
-            refForFocus = undefined; // Prefer CSS selector if available
-          }
-          // If no CSS selector available, we'll use ref to focus below
-        } catch (error) {
           return createErrorResponse(
-            `Error resolving XPath: ${error instanceof Error ? error.message : String(error)}`,
+            `Keyboard CDP dispatch failed: ${
+              cdpErr instanceof Error ? cdpErr.message : String(cdpErr)
+            }`,
           );
         }
       }
 
-      // If we have a ref but no CSS selector, focus the element via helper
-      if (refForFocus) {
-        const focusResult = await this.sendMessageToTab(tab.id, {
-          action: 'focusByRef',
-          ref: refForFocus,
-        });
-        if (focusResult && !focusResult.success) {
-          return createErrorResponse(
-            `Failed to focus element by ref: ${focusResult.error || 'unknown error'}`,
-          );
-        }
-        // Clear selector so keyboard events go to the focused element
-        finalSelector = undefined;
-      } else if (!finalSelector) {
-        // Modal Focus Trap: if a modal blocker is active, pull focus into the modal so Tab/Enter don't hit background DOM
-        await executeInPage({ tabId: tab.id }, 'inPageEnsureModalFocus', []).catch(() => {});
-      }
-
-      const frameIds = typeof args.frameId === 'number' ? [args.frameId] : undefined;
+      // Helper-only path: one message, no synthetic-to-CDP fallback.
       await this.injectContentScript(
         tab.id,
         ['inject-scripts/keyboard-helper.js'],
@@ -522,70 +770,60 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       );
 
       // Send keyboard simulation message to content script
-      const result = await this.sendMessageToTab(
-        tab.id,
-        {
-          action: TOOL_MESSAGE_TYPES.SIMULATE_KEYBOARD,
-          keys: normalizeKeySequence(keys),
-          selector: finalSelector,
-          delay,
-        },
-        args.frameId,
-      );
+      let result: any;
+      try {
+        throwIfAborted(context?.signal, 'before keyboard helper simulate');
+        result = await this.sendMessageToTab(
+          tab.id,
+          {
+            action: TOOL_MESSAGE_TYPES.SIMULATE_KEYBOARD,
+            keys: normalizeKeySequence(keys),
+            selector: finalSelector,
+            delay,
+          },
+          targetFrameId,
+        );
+      } catch (messageError) {
+        if (messageError instanceof DialogOpenedError) {
+          throw messageError;
+        }
+        return createUnknownOutcomeResponse(messageError);
+      }
 
-      if (!result || result.error) {
-        try {
-          const rawKeys = keys.trim();
-          const targetCombos = parseCdpTargetCombinations(rawKeys);
+      if (result?.dispatched === false) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                status: 'blocked',
+                retry: true,
+                dispatched: false,
+                error: result.error || 'Keyboard helper rejected the sequence before dispatching',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
 
-          if (targetCombos.length > 0) {
-            await cdpSessionManager.withSession(tab.id, 'keyboard', async () => {
-              for (const combo of targetCombos) {
-                const def = combo.def;
-                await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
-                  type: 'keyDown',
-                  key: def.key,
-                  code: def.code,
-                  text: def.text,
-                  unmodifiedText: def.unmodifiedText,
-                  windowsVirtualKeyCode: def.windowsVirtualKeyCode,
-                  nativeVirtualKeyCode: def.windowsVirtualKeyCode,
-                  modifiers: combo.modifiers || undefined,
-                });
-                await cdpSessionManager.sendCommand(tab.id!, 'Input.dispatchKeyEvent', {
-                  type: 'keyUp',
-                  key: def.key,
-                  code: def.code,
-                  windowsVirtualKeyCode: def.windowsVirtualKeyCode,
-                  nativeVirtualKeyCode: def.windowsVirtualKeyCode,
-                  modifiers: combo.modifiers || undefined,
-                });
-                if (targetCombos.length > 1) {
-                  await new Promise((r) => setTimeout(r, Math.min(50, Math.max(10, delay))));
-                }
-              }
-            });
-            const keyNames = targetCombos.map((c) => c.def.key).join(', ');
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    success: true,
-                    message: `Dispatched native CDP key(s): ${keyNames}`,
-                    method: 'cdp_dispatch_key_event',
-                    isTrusted: true,
-                    keys: keyNames,
-                  }),
-                },
-              ],
-              isError: false,
-            };
-          }
-        } catch {}
+      if (!result) {
+        return createUnknownOutcomeResponse(
+          new Error('Keyboard helper response missing after send'),
+        );
+      }
 
+      if (result.error || result.success !== true) {
         if (result?.error) {
-          return createErrorResponse(result.error);
+          return createUnknownOutcomeResponse(
+            new Error(`Keyboard simulation outcome unknown: ${result.error}`),
+          );
+        }
+        if (result?.success === false) {
+          return createUnknownOutcomeResponse(
+            new Error('Keyboard simulation reported a failed key combination'),
+          );
         }
         return createErrorResponse('Keyboard simulation timed out or failed to receive response');
       }
@@ -604,14 +842,45 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         ],
         isError: false,
       };
+    };
+
+    try {
+      const tab = await this.resolveAffinityTab({
+        tabId: args.tabId,
+        windowId: args.windowId,
+        sessionId: args.sessionId || (args as any).sessionContext,
+      });
+      if (!tab.id) {
+        return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+      }
+      return await withActionReceipt(tab.id, run);
     } catch (error) {
+      if (error instanceof DialogOpenedError) {
+        return createDialogInterruptResponse(error);
+      }
       console.error('Error in keyboard operation:', error);
-      return createErrorResponse(
-        `Error simulating keyboard events: ${error instanceof Error ? error.message : String(error)}`,
+      if (isCdpOutcomeUncertainError(error)) {
+        return attachActionReceipt(createUnknownOutcomeResponse(error), (error as any)?.receipt);
+      }
+      return attachActionReceipt(
+        createErrorResponse(
+          `Error simulating keyboard events: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+        (error as any)?.receipt,
       );
     }
   }
 }
+
+const NATIVE_EDIT_CHORDS: Record<
+  string,
+  { key: string; code: string; vk: number; command: string; note: string }
+> = {
+  a: { key: 'a', code: 'KeyA', vk: 65, command: 'SelectAll', note: 'Selecting all' },
+  c: { key: 'c', code: 'KeyC', vk: 67, command: 'Copy', note: 'Copying to clipboard' },
+  x: { key: 'x', code: 'KeyX', vk: 88, command: 'Cut', note: 'Cutting to clipboard' },
+  v: { key: 'v', code: 'KeyV', vk: 86, command: 'Paste', note: 'Pasting clipboard' },
+};
 
 export const keyboardTool = new KeyboardTool();
 
@@ -620,29 +889,39 @@ export const keyboardTool = new KeyboardTool();
  * Modeled after Browser-Harness (BH: src/browser_harness/helpers.py:221-248) and
  * JEV (jev_ultrafast/browser.py:170-180).
  */
-export async function dispatchNativeSelectAll(tabId: number): Promise<void> {
+export async function dispatchNativeSelectAll(tabId: number, timeoutMs?: number): Promise<void> {
   const isMac =
     typeof navigator !== 'undefined' &&
     /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent);
   const modifierMask = isMac ? 4 : 2; // Meta (Mac: 4) vs Ctrl (Win/Linux: 2)
 
   await cdpSessionManager.withSession(tabId, 'keyboard-select-all', async () => {
-    await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-      type: 'rawKeyDown',
-      key: 'a',
-      code: 'KeyA',
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      modifiers: modifierMask,
-      commands: ['SelectAll'],
-    });
-    await cdpSessionManager.sendCommand(tabId, 'Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: 'a',
-      code: 'KeyA',
-      windowsVirtualKeyCode: 65,
-      nativeVirtualKeyCode: 65,
-      modifiers: modifierMask,
-    });
+    await raceCdp(
+      tabId,
+      'Input.dispatchKeyEvent',
+      {
+        type: 'rawKeyDown',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        nativeVirtualKeyCode: 65,
+        modifiers: modifierMask,
+        commands: ['SelectAll'],
+      },
+      timeoutMs,
+    );
+    await raceCdp(
+      tabId,
+      'Input.dispatchKeyEvent',
+      {
+        type: 'keyUp',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        nativeVirtualKeyCode: 65,
+        modifiers: modifierMask,
+      },
+      timeoutMs,
+    );
   });
 }

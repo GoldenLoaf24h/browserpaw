@@ -2,11 +2,13 @@
 
 The authoritative acceptance contract is [docs/QUALITY.md](./docs/QUALITY.md), executed with `pnpm verify`. This document describes test infrastructure; the current `test/e2e/runner.ts` suite uses simulated CDP and does not prove live Chrome behavior.
 
+The tier counts and original feature matrix below are historical design context, not the current discovered test inventory. Read actual runner output for counts and [development boundaries](./docs/development/DEVELOPMENT.md) for current work. Do not turn this specification into a requirement to rerun the stopped M7 comparison.
+
 ## 1. Overview & Objectives
 
 This document specifies the architecture, test harness, oracle derivation methodology, and execution framework for the modern, opaque-box End-to-End (E2E) test suite of the **mcp-chrome** system.
 
-The test suite validates the modernization and browser-use engine integration specified in `PROJECT.md` and `ORIGINAL_REQUEST.md`. It provides comprehensive, requirement-driven verification across all 13 core features, organized into 4 distinct verification tiers:
+The original suite design covered 13 feature groups in four tiers. Current package responsibilities are documented in [PROJECT.md](./PROJECT.md); executable tests define the implemented coverage:
 
 - **Tier 1: Feature Coverage (>=5 tests per feature)**: Validates functional correctness, core behavior, and protocol conformance across all 13 features (65 tests).
 - **Tier 2: Boundary & Corner Cases (>=5 tests per feature)**: Exercises zero/extreme inputs, race conditions, disconnects, network anomalies, and format limits across all 13 features (67 tests; F07 and F10 include specialized subframe synchronization and table extraction boundary coverage).
@@ -362,37 +364,22 @@ pnpm test:e2e
 
 ---
 
-## 6. Interactive DOM Challenge Testbed (NEXUS LAB)
+## 6. Live Website Acceptance
 
-In addition to the opaque mock E2E suite, the repository includes a standalone React 19 + Vite 7 challenge testbed at `test/complex-html-testing/` (NEXUS LAB) featuring 12 interactive DOM obstacle challenges designed to benchmark AI agent browser automation:
+The former NEXUS LAB challenge application is retired as an acceptance benchmark.
+Synthetic unit and simulated E2E tests remain useful regression checks, but their
+pass counts do not establish reliability on daily-use websites.
 
-| Challenge | Module            | Obstacle & Validation Focus                                                 |
-| :-------- | :---------------- | :-------------------------------------------------------------------------- |
-| **C01**   | `C01Click.tsx`    | Click precision, event listeners, dynamic button states                     |
-| **C02**   | `C02Shadow.tsx`   | Open & closed Shadow DOM boundaries, nested component penetration           |
-| **C03**   | `C03Form.tsx`     | Complex forms, validation states, custom dropdowns, token boundary matching |
-| **C04**   | `C04Timing.tsx`   | Debounced buttons, delayed render elements, async animation settle          |
-| **C05**   | `C05Scroll.tsx`   | Infinite scroll feeds, virtualized list rendering, `scroll_until_found`     |
-| **C06**   | `C06Keyboard.tsx` | Keydown streams, modifier chords, platform shortcuts                        |
-| **C07**   | `C07Drag.tsx`     | HTML5 Drag-and-Drop interactions and dropzone boundaries                    |
-| **C08**   | `C08Modal.tsx`    | Modal dialog backdrop traps, modal auto-isolation, z-index overlays         |
-| **C09**   | `C09Visual.tsx`   | Canvas element rendering, visual fallback PCIE, icon recognition            |
-| **C10**   | `C10State.tsx`    | React state transitions, optimistic updates, async data fetching            |
-| **C11**   | `C11Grid.tsx`     | Responsive CSS Grid, dense auto-flow layout alignments                      |
-| **C12**   | `C12Omega.tsx`    | Multi-step combined omega scenario requiring all skills                     |
+Live acceptance uses the same search, filter, navigation, and reading tasks on
+GitHub, Wikipedia, MDN, Google, and npm. Record the browser/runtime build, final
+visible result, browser API calls, agent orchestration rounds, observation bytes,
+elapsed time, and recovery attempts separately. A script containing several API
+calls counts as one orchestration round, not one browser action. Report network,
+login, and challenge blocks separately from completed tasks, and preserve failed
+attempts rather than reporting only successful retries.
 
-### Running the Challenge Testbed
-
-```bash
-# Option A: Fast static server (zero external build dependencies)
-node test/complex-html-testing/serve.mjs
-
-# Option B: Interactive Vite dev server with Hot Module Reload
-cd test/complex-html-testing
-pnpm install
-pnpm dev
-# Opens at http://localhost:5173
-```
+Use task-owned tabs and close them when finished. Retain the observed outputs
+needed to reproduce a finding; exclude credentials and unrelated user context.
 
 ---
 

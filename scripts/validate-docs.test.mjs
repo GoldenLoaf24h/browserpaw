@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
 import test from 'node:test';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import {
   stripCodeBlocks,
   extractLocalLinks,
@@ -10,8 +12,33 @@ import {
   checkTagReleaseRecords,
   checkDocsIndexCoverage,
   checkTextIntegrity,
+  getActiveMarkdownFiles,
   validateDocs,
 } from './validate-docs.mjs';
+
+test('repository-owned files use the current product name', () => {
+  const retiredName = new RegExp(['browser', 'claw'].join('[-_ ]?'), 'i');
+  const files = execSync('git ls-files -z --cached --others --exclude-standard', {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter(Boolean);
+  const violations = [...new Set(files)].filter((file) => {
+    if (file.startsWith('research/') || !fs.existsSync(file) || !fs.statSync(file).isFile())
+      return false;
+    return (
+      retiredName.test(file) ||
+      (/\.(?:[cm]?js|ts|vue|md|json|toml|ya?ml|html|css|bat|ps1|sh)$/i.test(file) &&
+        retiredName.test(fs.readFileSync(file, 'utf8')))
+    );
+  });
+  assert.deepEqual(
+    violations,
+    [],
+    'Retired product names must not reappear in repository-owned files',
+  );
+});
 
 test('stripCodeBlocks removes fenced code and inline code', () => {
   const md = [
@@ -83,13 +110,14 @@ test('checkPackageVersions verifies consistency across monorepo packages', () =>
   const repoRoot = process.cwd();
   const res = checkPackageVersions(repoRoot);
   assert.equal(res.matched, true);
-  assert.equal(res.canonicalVersion, '4.0.0');
-  assert.equal(res.versions.root, '4.0.0');
-  assert.equal(res.versions['native-server'], '4.0.0');
-  assert.equal(res.versions.shared, '4.0.0');
-  assert.equal(res.versions['chrome-extension'], '4.0.0');
-  assert.equal(res.versions['codex-plugin'], '4.0.0');
-  assert.equal(res.versions['claude-plugin'], '4.0.0');
+  assert.equal(res.canonicalVersion, '4.1.0');
+  assert.equal(res.versions.root, '4.1.0');
+  assert.equal(res.versions['native-server'], '4.1.0');
+  assert.equal(res.versions.shared, '4.1.0');
+  assert.equal(res.versions['chrome-extension'], '4.1.0');
+  assert.equal(res.versions['portable-plugin'], '4.1.0');
+  assert.equal(res.versions['hermes-plugin'], '4.1.0');
+  assert.equal(res.versions['claude-plugin'], '4.1.0');
 });
 
 test('checkTagReleaseRecords asserts all local git tags have release notes', () => {
@@ -108,6 +136,21 @@ test('checkDocsIndexCoverage verifies canonical documents in docs/README.md', ()
   const res = checkDocsIndexCoverage(repoRoot);
   assert.equal(res.valid, true);
   assert.equal(res.missingEntries.length, 0);
+});
+
+test('getActiveMarkdownFiles excludes tracked files deleted without staging', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-doc-files-'));
+  try {
+    execSync('git init --quiet', { cwd: root });
+    fs.writeFileSync(path.join(root, 'removed.md'), '# Removed\n');
+    execSync('git add -- removed.md', { cwd: root });
+    fs.unlinkSync(path.join(root, 'removed.md'));
+    fs.writeFileSync(path.join(root, 'active.md'), '# Active\n');
+
+    assert.deepEqual(getActiveMarkdownFiles(root), ['active.md']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('validateDocs full run on current repository succeeds', () => {

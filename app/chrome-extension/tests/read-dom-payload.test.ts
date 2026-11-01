@@ -26,11 +26,11 @@ const SAMPLE = {
   scrollInfo: { pages_up: 0, pages_down: 0 },
 };
 
-async function runReadDom(args: Record<string, unknown> = {}) {
+async function runReadDom(args: Record<string, unknown> = {}, sample: object = SAMPLE) {
   const mod = await import('../entrypoints/background/tools/browser/read-dom');
   const engine = await import('../entrypoints/background/tools/browser/in-page-engine');
   const spy = vi.spyOn(engine, 'executeInPage');
-  spy.mockResolvedValue([{ frameId: 0, result: { ...SAMPLE } }] as any);
+  spy.mockResolvedValue([{ frameId: 0, result: { ...sample } }] as any);
   (mod.readDOMTool as any).resolveAffinityTab = async () => ({
     id: 1,
     url: 'https://x.test',
@@ -43,6 +43,50 @@ async function runReadDom(args: Record<string, unknown> = {}) {
 }
 
 describe('chrome_read_dom payload shape', () => {
+  const fastSample = {
+    url: 'https://x.test',
+    title: 'Document',
+    w: 1280,
+    h: 720,
+    text: 'Article introduction',
+    scroll: { y: 0, height: 2000 },
+    actions: [
+      {
+        id: 'e16777217',
+        node: 1,
+        kind: 'click',
+        role: 'link',
+        label: 'Examples',
+        rect: { x: 10, y: 20, w: 90, h: 30 },
+      },
+      { id: 'scroll_down', kind: 'scroll', label: 'Scroll down', delta: 560 },
+      { id: 'wait', kind: 'wait', label: 'Wait' },
+    ],
+    guards: { 1: ['internal validation data'] },
+    marker: ['Article introduction', 'Examples'],
+    page_key: ['internal page state'],
+    omitted_actions: 3,
+  };
+
+  it('keeps fast page context and live refs without duplicating internal action state', async () => {
+    const payload = await runReadDom({ format: 'fast' }, fastSample);
+    expect(payload.text).toBe('Article introduction');
+    expect(payload.treeString).toContain('[16777217] link "Examples"');
+    expect(payload.scroll).toEqual({ y: 0, height: 2000 });
+    expect(payload.elementCount).toBe(1);
+    expect(payload.omitted_actions).toBe(3);
+    for (const key of ['actions', 'guards', 'marker', 'page_key']) {
+      expect(payload).not.toHaveProperty(key);
+    }
+  });
+
+  it('lets internal fast consumers explicitly request the complete action metadata', async () => {
+    const payload = await runReadDom({ fast: true, includeDetails: true }, fastSample);
+    expect(payload.actions).toEqual(fastSample.actions);
+    expect(payload.guards).toEqual(fastSample.guards);
+    expect(payload.marker).toEqual(fastSample.marker);
+  });
+
   it('omits the bulky detail blocks by default', async () => {
     const payload = await runReadDom();
 
@@ -128,7 +172,6 @@ describe('chrome_read_dom payload shape', () => {
     };
 
     spy.mockImplementation(async (_target, funcName) => {
-      if (funcName === 'inPageReindexFrame') return [{ result: { success: true } }];
       return [
         { frameId: 0, result: mainResult },
         { frameId: 99, result: subframeResult },

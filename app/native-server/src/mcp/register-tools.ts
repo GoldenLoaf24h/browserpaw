@@ -33,6 +33,19 @@ import { getChromeMcpPort, SERVER_CONFIG } from '../constant';
 import { FastDecisionEngine } from '../jev';
 import { jevModelManager } from '../server/jev-model-manager';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { createBrowserServices } from '../browser-services';
+import {
+  assertSourceDownloadRequest,
+  tryParseCallResult,
+  verifySourceDownloadResult,
+} from '../browser-tasks';
+
+let browserServices: ReturnType<typeof createBrowserServices> | undefined;
+function getBrowserServices() {
+  return (browserServices ||= createBrowserServices((name, args, sessionId, signal) =>
+    dispatchExtensionCall(name, args, sessionId, 120000, signal),
+  ));
+}
 
 export async function prepareMediaArgsIfNeeded(name: string, args: any): Promise<void> {
   if (name !== 'chrome_insert_media' || !args) return;
@@ -113,9 +126,26 @@ let updateCheckStarted = false;
 
 export const clearSessionExtraTools = (sessionId: string): void => {
   sessionExtraTools.delete(sessionId);
+  if (nativeMessagingHostInstance.isConnected) {
+    void nativeMessagingHostInstance
+      .sendRequestToExtensionAndWait(
+        { sessionId },
+        NativeMessageType.RELEASE_SESSION_AFFINITY,
+        1500,
+      )
+      .catch(() => {});
+  }
 };
 
 export const setupTools = (server: Server, serverSessionId?: string) => {
+  const stopModeNotifications = jevModelManager.onModeStateChanged(() => {
+    void server.sendToolListChanged().catch(() => {});
+  });
+  const previousClose = server.onclose;
+  server.onclose = () => {
+    stopModeNotifications();
+    previousClose?.();
+  };
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const effectiveSessionId = serverSessionId || 'default';
@@ -135,7 +165,7 @@ export const setupTools = (server: Server, serverSessionId?: string) => {
   });
 
   // Call tool handler
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const rawArgs = (request.params.arguments || {}) as any;
     const args = {
       ...rawArgs,
@@ -150,7 +180,8 @@ export const setupTools = (server: Server, serverSessionId?: string) => {
         args.sessionContext = serverSessionId;
       }
     }
-    return handleToolCall(request.params.name, args, sessionId, server);
+    // A disconnected request must not permanently cancel its recoverable task.
+    return handleToolCall(request.params.name, args, sessionId, server, extra?.signal);
   });
 
   // List resources handler - REQUIRED BY MCP PROTOCOL
@@ -165,8 +196,24 @@ const handleToolCallInner = async (
   args: any,
   sessionId?: string,
   server?: Server,
+  signal?: AbortSignal,
 ): Promise<CallToolResult> => {
   try {
+    if (signal?.aborted)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: false,
+              status: 'cancelled',
+              retry: false,
+              dispatched: false,
+            }),
+          },
+        ],
+        isError: true,
+      };
     const effectiveSessionId = sessionId || 'default';
     const normalized = normalizeIncomingToolName(name);
     const backendName = normalized.canonicalBackendName;
@@ -208,19 +255,29 @@ const handleToolCallInner = async (
         };
       }
     }
+    if (backendName === 'chrome_task' || backendName === 'chrome_skill') {
+      return await getBrowserServices().execute(backendName, args, sessionId, signal);
+    }
+
     if (!nativeMessagingHostInstance.isConnected) {
+      const failure = {
+        success: false,
+        status: 'blocked',
+        retry: false,
+        dispatched: false,
+        error:
+          'Chrome extension is not connected to the native bridge host. Please open Chrome and ensure BrowserPaw is loaded.',
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error calling tool: Chrome extension is not connected to the native bridge host. Please open Chrome and ensure the Chrome MCP extension is loaded.',
-          },
-        ],
+        content: [{ type: 'text', text: JSON.stringify(failure) }],
+        structuredContent: failure,
         isError: true,
       };
     }
 
     const alignResult = (res: CallToolResult): CallToolResult => {
+      // Page data and source URLs are opaque; only generated tool documentation uses aliases.
+      if (backendName !== 'chrome_tool_docs') return res;
       if (!res || !Array.isArray(res.content)) return res;
       for (const item of res.content) {
         if (item && item.type === 'text' && typeof item.text === 'string') {
@@ -232,7 +289,24 @@ const handleToolCallInner = async (
 
     // Autonomous semantic micro-loop tool runs locally on Native Server
     if (backendName === 'chrome_act_toward_goal') {
-      const activeMode = args?.mode || jevModelManager.getActiveMode();
+      const activeMode = jevModelManager.getActiveMode();
+      if (args?.mode && args.mode !== activeMode) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                status: 'blocked',
+                dispatched: false,
+                retry: false,
+                reason: 'Requested model mode differs from the enabled backend',
+              }),
+            },
+          ],
+        };
+      }
 
       // 1. If Jev mode is off, intercept and prompt that explicit user authorization is required
       if (activeMode === 'off') {
@@ -253,8 +327,13 @@ const handleToolCallInner = async (
       }
 
       // 2. Validate configuration (local weights downloaded or remote API key configured)
+      const modeToken = jevModelManager.captureModeToken();
       const configValidation = await jevModelManager.validateConfiguration(activeMode);
       if (!configValidation.valid) {
+        jevModelManager.disableIfCurrent(
+          modeToken,
+          configValidation.reason || 'invalid_configuration',
+        );
         return {
           content: [
             {
@@ -276,30 +355,22 @@ const handleToolCallInner = async (
 
       const actResult = await fastDecisionEngine.run(
         args,
-        async (toolName: string, toolArgs: any) => {
-          return callToolInternal(toolName, toolArgs, sessionId);
+        async (
+          toolName: string,
+          toolArgs: any,
+          execution?: { signal?: AbortSignal; timeoutMs?: number },
+        ) => {
+          return callToolInternal(
+            toolName,
+            { ...toolArgs, ...(args.taskId ? { taskId: args.taskId } : {}) },
+            sessionId,
+            Math.min(120000, execution?.timeoutMs ?? 120000),
+            execution?.signal ?? signal,
+          );
         },
         server,
+        { signal },
       );
-
-      let guidanceNote: string | undefined;
-      if (actResult.fallbackReason === 'no_api_key' || actResult.engine === 'heuristic') {
-        if (actResult.status === 'escalate') {
-          const topCandidates = (actResult.currentElements || []).slice(0, 6).join('\n  ');
-          guidanceNote = [
-            `[System Guidance: Jev API Key not configured (running in local Heuristic fallback mode)]`,
-            `The heuristic rule engine recommends handing over to deterministic execution.`,
-            `Goal: "${args.goal || ''}"`,
-            `Status: ${actResult.status} (Reason: ${actResult.reason || 'Heuristic rules require manual confirmation'})`,
-            topCandidates
-              ? `Current page interactive candidates are ready below — proceed directly without calling ${resolveToolName('read_dom')}:\n  ${topCandidates}`
-              : `Current page elements are ready in the payload.`,
-            `Next Step: Call ${resolveToolName('interact_index')}({ index: <N>, action: "click" }) or ${resolveToolName('fill_index')}({ index: <N>, text: "..." }) to continue.`,
-          ].join('\n');
-        } else if (actResult.status === 'done') {
-          guidanceNote = `[System Guidance: Jev API Key not configured. Goal successfully completed via local Heuristic rule engine.]`;
-        }
-      }
 
       const result: CallToolResult = {
         content: [
@@ -310,12 +381,6 @@ const handleToolCallInner = async (
         ],
         isError: false,
       };
-      if (guidanceNote && result && Array.isArray(result.content)) {
-        result.content.unshift({
-          type: 'text',
-          text: guidanceNote,
-        });
-      }
       if (autoActivatedCategory && result && Array.isArray(result.content)) {
         result.content.unshift({
           type: 'text',
@@ -350,36 +415,30 @@ const handleToolCallInner = async (
       }
     }
 
-    const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
-      {
-        name: backendName,
-        args,
-        sessionId,
-      },
-      NativeMessageType.CALL_TOOL,
-      120000, // Extended to 120 seconds to prevent timeouts on long-running tasks like performance profiling
-    );
-    if (response.status === 'success') {
-      const result = response.data;
-      if (autoActivatedCategory && result && Array.isArray(result.content)) {
-        result.content.unshift({
-          type: 'text',
-          text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
-        });
-      }
-      return alignResult(result);
-    } else {
+    const result = await callToolInternal(backendName, args, sessionId, 120000, signal);
+    if (autoActivatedCategory && result && Array.isArray(result.content)) {
+      result.content.unshift({
+        type: 'text',
+        text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
+      });
+    }
+    return alignResult(result);
+  } catch (error: any) {
+    if (typeof error?.requestDispatched === 'boolean') {
+      const failure = {
+        success: false,
+        status: error.requestDispatched ? 'unknown' : 'blocked',
+        retry: false,
+        requestDispatched: error.requestDispatched,
+        ...(error.requestDispatched ? {} : { dispatched: false }),
+        error: alignToolReferences(formatErrorForAgent(error, { context: 'Error calling tool' })),
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: alignToolReferences(`Error calling tool: ${response.error}`, requestedPrefix),
-          },
-        ],
+        content: [{ type: 'text', text: JSON.stringify(failure) }],
+        structuredContent: failure,
         isError: true,
       };
     }
-  } catch (error: any) {
     return {
       content: [
         {
@@ -397,6 +456,7 @@ export const handleToolCall = async (
   args: any,
   sessionId?: string,
   server?: Server,
+  signal?: AbortSignal,
 ): Promise<CallToolResult> => {
   // Preload local model and touch activity timer on any MCP tool invocation
   jevModelManager.onToolInvocation();
@@ -420,7 +480,7 @@ export const handleToolCall = async (
   }
 
   // Execute tool call immediately without awaiting update check
-  const result = await handleToolCallInner(name, args, sessionId, server);
+  const result = await handleToolCallInner(name, args, sessionId, server, signal);
 
   // If a cached update notice is ready, attach it without blocking
   if (cachedUpdateNotice && result && Array.isArray(result.content)) {
@@ -434,12 +494,28 @@ export const handleToolCall = async (
   return result;
 };
 
-export const callToolInternal = async (
+const dispatchExtensionCall = async (
   name: string,
   args: any,
   sessionId?: string,
   timeoutMs = 120000,
+  signal?: AbortSignal,
 ): Promise<any> => {
+  if (name === 'browserpaw_set_owned_viewport' || name === 'browserpaw_release_owned_page') {
+    const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
+      {
+        ...args,
+        ownership: 'owned',
+        action: name === 'browserpaw_set_owned_viewport' ? 'viewport' : 'release',
+      },
+      NativeMessageType.TASK_PAGE_CONTROL,
+      15000,
+      signal,
+    );
+    if (response.status !== 'success')
+      throw new Error(response.error || 'Task page control failed');
+    return { content: [{ type: 'text', text: JSON.stringify(response.data) }] };
+  }
   jevModelManager.onToolInvocation();
   await prepareMediaArgsIfNeeded(name, args);
   // ARCH-03: Consistently inject resolved principal into args in all internal caller paths
@@ -456,10 +532,46 @@ export const callToolInternal = async (
       sessionId,
     },
     NativeMessageType.CALL_TOOL,
-    timeoutMs,
+    name === 'chrome_handle_download'
+      ? Math.max(timeoutMs, Math.min(Number(args.timeoutMs) || 60000, 300000) + 30000)
+      : timeoutMs,
+    signal,
   );
   if (response.status === 'success') {
     return response.data;
   }
   throw new Error(response.error || `Error calling internal tool: ${name}`);
+};
+
+export const callToolInternal = async (
+  name: string,
+  args: any,
+  sessionId?: string,
+  timeoutMs = 120000,
+  signal?: AbortSignal,
+): Promise<CallToolResult> => {
+  if (typeof args?.taskId === 'string') {
+    return getBrowserServices().tasks.callTool(args.taskId, name, args, sessionId, signal);
+  }
+  const sourceDownload =
+    name === 'chrome_handle_download' &&
+    ['tabId', 'guid', 'clickTargetIndex', 'frameId'].some((key) => args?.[key] !== undefined);
+  if (sourceDownload) {
+    const observation = await dispatchExtensionCall(
+      'get_windows_and_tabs',
+      {},
+      sessionId,
+      timeoutMs,
+      signal,
+    );
+    if (observation.isError)
+      throw Object.assign(new Error('Cannot verify download source capability'), {
+        requestDispatched: false,
+      });
+    const inventory = tryParseCallResult(observation);
+    const capabilities = inventory?.capabilities as { sourceDownloads?: boolean } | undefined;
+    assertSourceDownloadRequest(args, capabilities?.sourceDownloads === true);
+  }
+  const result = await dispatchExtensionCall(name, args, sessionId, timeoutMs, signal);
+  return sourceDownload ? verifySourceDownloadResult(args, result) : result;
 };
