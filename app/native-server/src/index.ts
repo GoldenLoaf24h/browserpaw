@@ -1,7 +1,10 @@
 #!/usr/bin/env node
+import { reserveStdoutForProtocol } from './stdout-guard';
 import serverInstance from './server';
 import nativeMessagingHostInstance from './native-messaging-host';
 import { getChromeMcpPort, registerRuntimeExtensionId } from './constant';
+
+reserveStdoutForProtocol();
 
 // Chrome launches the native host with the calling extension origin as the first
 // argument (for example `chrome-extension://<id>/`) after checking allowed_origins.

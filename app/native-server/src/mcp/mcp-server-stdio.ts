@@ -23,6 +23,7 @@ import {
   getBaseToolName,
 } from 'chrome-mcp-shared';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { reserveStdoutForProtocol } from '../stdout-guard';
 import {
   StreamableHTTPClientTransport,
   StreamableHTTPError,
@@ -511,6 +512,7 @@ export function startParentWatchdog(parentPid: number): void {
 }
 
 async function main() {
+  reserveStdoutForProtocol();
   // Listen for stdin EOF and close
   process.stdin.on('end', () => triggerCleanExit(0));
   process.stdin.on('close', () => triggerCleanExit(0));
