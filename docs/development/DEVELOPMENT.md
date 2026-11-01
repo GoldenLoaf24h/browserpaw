@@ -4,7 +4,7 @@ Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps respons
 
 ## Current release work
 
-The working version is 4.1.0, prepared locally and not published. The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
+The current stable release is 4.1.0, tagged `v4.1.0`. The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
 
 Current work integrates bounded Jev judgments into the shared locator, task and skill execution paths. Deterministic targeting stays first, transient model failures pause inference while retaining the user's backend choice, and unknown browser dispatch is never replayed. Source checks, real-model evaluation and loaded-runtime acceptance remain separate gates; implementation tests do not establish model accuracy or production readiness.
 

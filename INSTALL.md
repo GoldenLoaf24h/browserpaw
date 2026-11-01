@@ -247,14 +247,73 @@ Config file paths:
 
 ### 3.5 Claude Code (`/browserpaw` Marketplace Plugin)
 
-Claude Code installs BrowserPaw from this repository's plugin marketplace. The plugin bundles the operating skill and the stdio MCP server, so one install provides both the `/browserpaw` command and the browser tools:
+Claude Code installs BrowserPaw through its official plugin marketplace flow. The plugin bundles the operating skill and the stdio MCP server, so one install provides both the `/browserpaw` command and the browser tools. Official references: [install and manage plugins](https://code.claude.com/docs/en/plugins/install) and [plugin commands](https://code.claude.com/docs/en/plugins/cli-reference).
+
+**Prerequisites**: complete Steps 1-2, keep Chrome running with the BrowserPaw extension loaded, and make the bundled stdio command reachable. `mcp-chrome-stdio` is a bin exported by this repository's `mcp-chrome-bridge` package. From a built checkout:
+
+```bash
+pnpm build
+npm install -g ./app/native-server
+```
+
+**Install from a session**:
 
 ```text
 /plugin marketplace add GoldenLoaf24h/browserpaw
 /plugin install browserpaw@browserpaw
 ```
 
-For a local checkout, add the repository root instead: `/plugin marketplace add <ABSOLUTE_PATH_TO_REPO>`. The plugin's MCP entry runs `mcp-chrome-stdio` from `PATH`, a bin exported by this repository's `mcp-chrome-bridge` package. Where that shim is unavailable, either install it from the checkout after building (`pnpm build`, then `npm install -g ./app/native-server`) or register the server manually with `claude mcp add browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`. After installation, type `/browserpaw` to load the operating guide. Chrome must be running with the extension loaded and the native host registered (Steps 1-2).
+`/plugin install` opens the plugin details in the `/plugin` panel. Review them and choose:
+
+- **User scope**: every project on this machine.
+- **Project scope**: everyone who works in this repository; recorded in `.claude/settings.json`.
+- **Local scope**: this repository only, for your user.
+
+The panel reloads the plugin automatically. If it warns that the reload would invalidate the prompt cache, run `/reload-plugins --force`.
+
+For a local checkout, point the marketplace at the repository root instead: `/plugin marketplace add <ABSOLUTE_PATH_TO_REPO>`.
+
+**Install from a shell**:
+
+```bash
+claude plugin marketplace add GoldenLoaf24h/browserpaw
+claude plugin install browserpaw@browserpaw --scope user
+```
+
+Installed plugins load at the next Claude Code session, or after `/reload-plugins` in a running session. Use `claude plugin install --help` for the flags supported by the installed Claude Code version.
+
+**Verify**:
+
+- `claude plugin list` shows `browserpaw@browserpaw` with its scope and enabled status.
+- `/mcp` lists the `browserpaw` server as connected.
+- Tools are exposed as `mcp__plugin_browserpaw_browserpaw__chrome_*`. The bundled server starts the full 52-tool profile; Core exposes 16 tools and Crawl exposes 12.
+
+Type `/browserpaw` to load the operating guide. Its namespaced form is `/browserpaw:browserpaw`.
+
+**Without the plugin**: register the same stdio server directly without mounting the plugin:
+
+```bash
+claude mcp add --scope user --transport stdio --env CHROME_MCP_TOOL_PROFILE=full browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js
+browserpaw skill install --target ~/.claude/skills
+```
+
+Use either the plugin or the direct server entry, not both; registering both exposes two copies of every tool.
+
+**Troubleshooting**:
+
+- Open the **Errors** tab in `/plugin` if the plugin or server does not load. A missing `mcp-chrome-stdio` is usually a `PATH` problem.
+- Confirm the shim resolves in the environment that launched Claude Code: `where mcp-chrome-stdio` on Windows, `which mcp-chrome-stdio` elsewhere.
+- `claude --debug` records server startup errors in `~/.claude/debug/<session-id>.txt`.
+- `claude plugin validate <ABSOLUTE_PATH_TO_REPO>/plugins/browserpaw-claude --strict` checks the manifest, `.mcp.json` and bundled skill.
+
+**Update or remove**:
+
+```bash
+claude plugin update browserpaw@browserpaw
+claude plugin uninstall browserpaw@browserpaw
+```
+
+Marketplaces added manually do not auto-update by default. Refresh the catalog with `claude plugin marketplace update browserpaw`, or enable auto-update from the **Marketplaces** tab in `/plugin`.
 
 ---
 

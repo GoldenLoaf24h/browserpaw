@@ -109,14 +109,16 @@ BrowserPaw 强制执行本地 Token 认证，防止未授权的回环访问：
 
 #### 方式 C：Claude Code 插件（`/browserpaw`）
 
-Claude Code 从本仓库自带的插件市场安装 BrowserPaw，一步即可打包操作技能与 stdio MCP 服务器：
+Claude Code 通过官方插件市场流程安装 BrowserPaw。插件同时打包操作技能与 stdio MCP 服务器：
 
 ```text
 /plugin marketplace add GoldenLoaf24h/browserpaw
 /plugin install browserpaw@browserpaw
 ```
 
-然后输入 `/browserpaw` 加载技能；工具以 `mcp__plugin_browserpaw_browserpaw__chrome_*` 形式出现。随附的服务器从 `PATH` 运行 `mcp-chrome-stdio`，因此仍需要原生宿主和已加载扩展的运行中 Chrome。
+`/plugin install` 会在 `/plugin` 面板中打开插件详情，由你选择 user、project 或 local 安装范围。面板会自行重载插件；若提示重载会使 prompt cache 失效，运行 `/reload-plugins --force`。在 shell 中可改用 `claude plugin marketplace add GoldenLoaf24h/browserpaw` 与 `claude plugin install browserpaw@browserpaw --scope user`。
+
+然后输入 `/browserpaw` 加载技能；工具以 `mcp__plugin_browserpaw_browserpaw__chrome_*` 形式出现。随附的服务器从 `PATH` 运行 `mcp-chrome-stdio`（`mcp-chrome-bridge` 包导出的 bin），因此仍需要原生宿主和已加载扩展的运行中 Chrome。前置条件、本地仓库、故障排查和卸载命令见 [INSTALL.md](./INSTALL.md#35-claude-code-browserpaw-marketplace-plugin)。
 
 ---
 

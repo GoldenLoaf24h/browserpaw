@@ -167,6 +167,27 @@ browserpaw doctor
 node skills/browserpaw/scripts/doctor.mjs
 ```
 
+### Claude Code 插件
+
+BrowserPaw 还提供 Claude Code 插件，同时打包操作技能与 stdio MCP 服务器。
+在 Chrome 与扩展已运行的前提下：
+
+```text
+/plugin marketplace add GoldenLoaf24h/browserpaw
+/plugin install browserpaw@browserpaw
+```
+
+在 `/plugin` 面板中选择 user、project 或 local 安装范围。工具以
+`mcp__plugin_browserpaw_browserpaw__chrome_*` 形式出现；`/browserpaw` 加载操作
+指南。插件从 `PATH` 运行 `mcp-chrome-stdio`，若该 shim 缺失，请先全局安装桥接：
+
+```bash
+npm install -g ./app/native-server
+```
+
+shell 安装、本地仓库与故障排查见
+[INSTALL.md](./INSTALL.md#35-claude-code-browserpaw-marketplace-plugin)。
+
 ---
 
 ## 🛠️ 工具范围
@@ -274,7 +295,7 @@ _Google Chrome_ 是 Google LLC 的商标。_Microsoft Edge_ 是 Microsoft Corpor
 运行 `pnpm verify` 执行完整的静态质量与构建审计。
 
 4.1.0 包含逐文档观察、原生输入守卫、任务资源归属、持久代码会话与多客户端插件包。
-验证范围和限制见[版本记录](./docs/releases/v4.1.0.md)。4.1.0 已在本机准备，尚未对外发布。已复现的 Native 空闲协议故障完成修复，并通过同一连接超过十一分钟的实测；这属于有界运行证据，不能推成所有长时间工作负载的保证。后续工作见[开发边界](./docs/development/DEVELOPMENT.md)。
+验证范围和限制见[版本记录](./docs/releases/v4.1.0.md)。BrowserPaw 4.1.0 是当前稳定版，已标记为 `v4.1.0`。已复现的 Native 空闲协议故障完成修复，并通过同一连接超过十一分钟的实测；这属于有界运行证据，不能推成所有长时间工作负载的保证。后续工作见[开发边界](./docs/development/DEVELOPMENT.md)。
 
 320 条 M7 对标采样已停止，历史证据保留；规划中的 95% 任务成功率、20% 墙钟耗时、30% 输入 token 和 50%
 技能复用门槛尚未证明。性能只根据同版本、同条件的配对运行报告。

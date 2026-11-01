@@ -19,6 +19,16 @@ The plugin is published by this repository's own marketplace. From Claude Code:
 /plugin install browserpaw@browserpaw
 ```
 
+`/plugin install` opens the plugin details in the `/plugin` panel so you can
+choose user, project or local scope. The panel reloads the plugin automatically;
+if it warns that the reload would invalidate the prompt cache, run
+`/reload-plugins --force`. From a shell:
+
+```bash
+claude plugin marketplace add GoldenLoaf24h/browserpaw
+claude plugin install browserpaw@browserpaw --scope user
+```
+
 For a local checkout, point the marketplace at the repository root instead of GitHub:
 
 ```text
@@ -50,7 +60,7 @@ The skill documents the canonical `chrome_*` tool names, which are exactly what 
 ## Prerequisites
 
 1. **Native messaging host**: run the registration script described in [INSTALL.md](../../INSTALL.md) so Chrome can launch the bridge.
-2. **`mcp-chrome-stdio` on `PATH`**: installed by `npm install -g ./app/native-server` after `pnpm build`. Without it, register the server yourself: `claude mcp add browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`.
+2. **`mcp-chrome-stdio` on `PATH`**: installed by `npm install -g ./app/native-server` after `pnpm build`. Without it, register the server yourself: `claude mcp add --scope user --transport stdio --env CHROME_MCP_TOOL_PROFILE=full browserpaw -- node <ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js`.
 3. **Chrome open with the BrowserPaw extension loaded**: the bridge is only reachable while the browser is running.
    The bundled server sets `CHROME_MCP_TOOL_PROFILE: full`. Remove that `env` entry in `.mcp.json` if the host should start with the default profile. Use `chrome_tool_docs` for the live tool list rather than relying on a version-specific count.
 

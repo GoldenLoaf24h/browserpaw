@@ -181,6 +181,28 @@ browserpaw doctor
 node skills/browserpaw/scripts/doctor.mjs
 ```
 
+### Claude Code plugin
+
+BrowserPaw also ships a Claude Code plugin that bundles the operating skill and
+the stdio MCP server. With Chrome and the extension already running:
+
+```text
+/plugin marketplace add GoldenLoaf24h/browserpaw
+/plugin install browserpaw@browserpaw
+```
+
+Choose user, project or local scope in the `/plugin` panel. The tools appear as
+`mcp__plugin_browserpaw_browserpaw__chrome_*`; `/browserpaw` loads the operating
+guide. The plugin runs `mcp-chrome-stdio` from `PATH`, so install the bridge
+globally if the shim is missing:
+
+```bash
+npm install -g ./app/native-server
+```
+
+See [INSTALL.md](./INSTALL.md#35-claude-code-browserpaw-marketplace-plugin) for
+shell installation, local checkouts and troubleshooting.
+
 ---
 
 ## 🛠️ Tool surface
@@ -294,7 +316,10 @@ Run `pnpm verify` to execute full static quality and build audits.
 Version 4.1.0 brings document-scoped observations, guarded native input,
 task-owned resources, persistent code sessions and client-specific plugin packages.
 See the [release record](./docs/releases/v4.1.0.md) for validation and limitations.
-4.1.0 is prepared locally and has not been published. The reproduced Native idle protocol failure was repaired and verified on an unchanged connection for more than eleven minutes; this is bounded runtime evidence, not a guarantee for every long-running workload. See [current development work](./docs/development/DEVELOPMENT.md).
+BrowserPaw 4.1.0 is the current stable release, tagged `v4.1.0`. The reproduced
+Native idle protocol failure was repaired and verified on an unchanged connection
+for more than eleven minutes; this is bounded runtime evidence, not a guarantee
+for every long-running workload. See [current development work](./docs/development/DEVELOPMENT.md).
 The 320-run M7 comparison has stopped; its historical evidence remains available.
 The planned 95% task success and 20%/30%/50% efficiency thresholds are unproven.
 Report performance only from matched, versioned runs.
