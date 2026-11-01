@@ -2,6 +2,18 @@
 
 This document tracks in-progress architectural updates, fixes, and documentation improvements queued for future releases.
 
+## 2026-11-01: Adaptive viewport and resolution-aware screenshots
+
+- Owned task pages no longer apply a fixed 1440x900 / DPR 1 emulation. BrowserPaw clears stale device metrics, measures the real window's CSS viewport and DPR, and preserves both for task reporting and coordinate mapping. Explicit `resize_page` remains available when a caller intentionally needs a fixed size.
+- Model-facing screenshots now fit an aspect-ratio-preserving budget: 1568px long edge and 1.15MP by default, with `maxDimension`, `maxPixels`, `maxWidth`, `highClarity`, and `region` available for task-specific clarity/token tradeoffs. The default JPEG quality is 85.
+- `savePng`/`saveToDisk` saves a full physical-pixel lossless PNG through the existing chunked Native path; preview downsampling and inline transport compression never replace the saved file. Screenshot output is restricted to PNG/JPEG, and legacy `format: "webp"` requests map to JPEG.
+- Background-tab viewport captures now use a bounded 1.5s warm-up and same-session retry instead of waiting 20s for the first compositor acknowledgement. The retry does not bring the page to the foreground or capture another tab. Model previews are decoded directly into their final vision budget, and black-bar detection samples a 48x48 thumbnail rather than allocating a full-size canvas.
+- Canonical skills and every client mirror now describe the actual bounded semantic form path and Jev pause/recovery contract, include screenshot budget controls and full-resolution delivery, and avoid unverified token-compression claims.
+- Scale metadata now reports the real image-to-viewport/crop ratio rather than a default 1.0, and grid overlays use the same budget scale. Targeted runtime acceptance still must cover portrait, ultrawide, DPR 1.5/2, saved-file dimensions, and user-facing delivery.
+- Installed Agent Skills now run runtime-only diagnostics without assuming a source checkout. Source build and standalone-directory repair remain available only when a checkout marker or explicit `BROWSERPAW_REPO_ROOT` is present.
+- Skill synchronization now fails when the entire bundled Native skill directory is missing, instead of skipping that target during `--check`.
+- Generated AGENTS indexes no longer hardcode drifting Core/Crawl/Full tool counts.
+
 ## 2026-11-01: Bounded semantic interaction and verified goal execution
 
 - Confirmed micro-loop steps check the caller's independent completion assertions before another model decision. This prevents repeated filling when private field values are deliberately absent from model state. Unmet assertions permit progress; verification errors, cancellation and unknown results stop execution, and read-only timeouts retain their status.

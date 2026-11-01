@@ -1,13 +1,13 @@
 # BrowserPaw Troubleshooting
 
-Run the generic diagnostics from `../scripts/doctor.mjs` when the bridge is unhealthy:
+Run the generic diagnostics from the installed skill root when the bridge is unhealthy:
 
 ```powershell
 node scripts/doctor.mjs
-node scripts/doctor.mjs --fix
 ```
 
-Windows users can also run `scripts/repair.bat`.
+`--fix` is available only in a BrowserPaw source checkout or when `BROWSERPAW_REPO_ROOT`
+points to one. Installed skills check the live Native/MCP runtime instead of source build files.
 
 ## Common Causes
 
@@ -18,7 +18,7 @@ Windows users can also run `scripts/repair.bat`.
 - A strict locator matched more than one element; provide a more specific selector, role, label, or frame.
 - A screenshot coordinate is stale; capture a fresh screenshot and use its returned capture identity.
 - A dialog, download, popup, or upload has multiple sources; select an explicit source before proceeding.
-- Jev semantic assistance is `off` or persistently disabled following a service/transport failure; Native owns the authoritative state and will not automatically switch backends. Re-enablement requires explicit user action in the extension popup or config.
+- Jev semantic assistance can be temporarily paused after a network, timeout or rate-limit failure. The saved user preference remains Remote or Local, and the same backend may resume after 30 seconds on the next use. Authentication or configuration faults wait for correction; saving corrected settings restores the requested mode. A deliberate Off choice remains off.
 - A semantic query returned `none` or `ambiguous`: `none` indicates no candidate satisfied the criteria (a valid business outcome, not a failure), while confidence < 0.85, top margin < 0.20, candidate count > 32, or a timeout beyond 1500ms halts execution safely without guessing.
 - Deterministic locator failed: deterministic matching requires zero inference; ensure exact text, selectors, or refs are current rather than relying on semantic guessing.
 - Skill execution failure: `chrome_skill` find only recommends candidates; `run` requires a matching verified version and immutable definition hash.

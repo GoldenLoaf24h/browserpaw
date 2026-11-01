@@ -77,6 +77,11 @@ compatibility.
   silently replayed.
 - **Coordinate fallback** – When DOM indexing fails (canvas, WebGL, unknown
   custom UI), screenshots and `chrome_computer` provide a documented visual path.
+- **Adaptive viewport and screenshot budget** – Owned pages follow the real
+  Chrome window size and device pixel ratio instead of a forced 1440×900 frame.
+  Inline screenshots default to an aspect-preserving 1568px/1.15MP JPEG budget
+  for OCR and token balance; `savePng` writes a full physical-resolution PNG.
+  Screenshot output is PNG/JPEG only, never WebP.
 - **Human handoff** – `chrome_request_human_intervention` dims the page, shows a banner, and parks the cursor so the user can complete 2FA or captchas; automation resumes afterward.
 - **Task ownership and learning** – Durable tasks track borrowed, newly opened,
   handed-off, and temporary pages. Verified site skills are stored in the Native

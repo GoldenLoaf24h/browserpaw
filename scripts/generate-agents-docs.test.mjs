@@ -30,3 +30,14 @@ test('regeneration preserves manual development rules and remains idempotent', (
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('tool profile descriptions do not hardcode drifting schema counts', () => {
+  const source = fs.readFileSync(
+    fileURLToPath(new URL('./generate-agents-docs.mjs', import.meta.url)),
+    'utf8',
+  );
+  assert.doesNotMatch(
+    source,
+    /all 50 canonical tools|Core \(14\).*Full \(50\)|all 50 BrowserPaw tools/,
+  );
+});

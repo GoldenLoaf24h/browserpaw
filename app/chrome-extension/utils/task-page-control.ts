@@ -25,7 +25,7 @@ export interface TaskPageControlResult {
   warnings?: string[];
   viewportRestored?: boolean;
   viewport?: {
-    status: 'applied' | 'limited';
+    status: 'native' | 'limited';
     width: number;
     height: number;
     dpr?: number;
@@ -242,24 +242,24 @@ async function applyViewport(payload: TaskPageControlPayload): Promise<TaskPageC
 
     const identityError = await verifyOwnedPage(payload);
     if (identityError) throw new Error(identityError);
-    await cdpSessionManager.sendCommand(payload.tabId, 'Emulation.setDeviceMetricsOverride', {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
+    // Follow the real window. A fixed emulated viewport makes wide/portrait
+    // windows look wrong and hides the user's actual DPR.
+    await cdpSessionManager.sendCommand(payload.tabId, 'Emulation.clearDeviceMetricsOverride', {});
     const measured = await cdpSessionManager.sendCommand(payload.tabId, 'Runtime.evaluate', {
       expression: '({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio })',
       returnByValue: true,
     });
     const value = measured?.result?.value;
     if (
-      value?.width !== 1440 ||
-      value?.height !== 900 ||
-      Math.abs(Number(value?.dpr) - 1) > 0.001
+      !Number.isFinite(value?.width) ||
+      value.width <= 0 ||
+      !Number.isFinite(value?.height) ||
+      value.height <= 0 ||
+      !Number.isFinite(value?.dpr) ||
+      value.dpr <= 0
     ) {
       throw new Error(
-        `Viewport verification failed (${value?.width ?? 'unknown'}x${value?.height ?? 'unknown'} @ ${value?.dpr ?? 'unknown'}x)`,
+        `Native viewport measurement failed (${value?.width ?? 'unknown'}x${value?.height ?? 'unknown'} @ ${value?.dpr ?? 'unknown'}x)`,
       );
     }
     const finalIdentityError = await verifyOwnedPage(payload);
@@ -270,10 +270,10 @@ async function applyViewport(payload: TaskPageControlPayload): Promise<TaskPageC
       success: true,
       action: 'viewport',
       viewport: {
-        status: 'applied',
-        width: value.width,
-        height: value.height,
-        dpr: value.dpr,
+        status: 'native',
+        width: Math.round(value.width),
+        height: Math.round(value.height),
+        dpr: Number(value.dpr),
       },
     };
   } catch (error) {

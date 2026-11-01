@@ -88,6 +88,12 @@ try {
   assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Content drift/);
   assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Orphan/);
   assert.deepEqual(syncSkills(root).problems, []);
+  fs.rmSync(nativeSkill, { recursive: true, force: true });
+  assert.match(
+    syncSkills(root, { check: true }).problems.join('\n'),
+    /native: Missing: SKILL\.md/,
+  );
+  assert.deepEqual(syncSkills(root).problems, []);
 
   const portableSkill = path.join(root, 'plugins/browserpaw/skills/browserpaw/SKILL.md');
   fs.appendFileSync(portableSkill, 'drift\n');

@@ -97,7 +97,7 @@ interface ComputerParams {
   highClarity?: boolean;
   crop?: any;
   quality?: number;
-  format?: 'png' | 'jpeg' | 'webp';
+  format?: 'png' | 'jpeg';
   groupTitle?: string;
   groupColor?: 'grey' | 'blue' | 'red' | 'yellow' | 'green' | 'pink' | 'purple' | 'cyan' | 'orange';
   autoGroup?: boolean;
@@ -1834,7 +1834,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
                 `data:image/png;base64,${finalBase64}`,
                 {
                   maxBytes: 450 * 1024,
-                  preferredFormat: 'image/webp',
+                  preferredFormat: 'image/jpeg',
                   quality: 0.82,
                 },
               );
@@ -1843,7 +1843,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
               if (compressed.wasDownscaled) {
                 isThumbnail = true;
                 warning =
-                  'Zoom screenshot payload exceeded 450KB safety budget. Full image saved to disk. High-quality preview thumbnail returned to maintain visual perception.';
+                  'Zoom preview exceeded the inline budget; a high-quality JPEG thumbnail was returned. Use chrome_screenshot with savePng for a full-resolution PNG.';
                 screenshotContextManager.setContext(tabId, {
                   screenshotWidth: compressed.width,
                   screenshotHeight: compressed.height,
@@ -1896,8 +1896,10 @@ class ComputerTool extends BaseBrowserToolExecutor {
           region: (params as any).region,
           crop: (params as any).crop,
           highClarity: (params as any).highClarity,
+          maxDimension: (params as any).maxDimension,
+          maxPixels: (params as any).maxPixels,
           quality: (params as any).quality,
-          format: (params as any).format || 'webp',
+          format: (params as any).format === 'png' ? 'png' : 'jpeg',
           sessionId: params.sessionId || params.sessionContext,
         });
         return result;

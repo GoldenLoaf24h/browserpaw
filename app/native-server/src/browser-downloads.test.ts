@@ -44,7 +44,10 @@ async function setup(sourceDownloads = true, otherManaged = true) {
         tabId: 31,
       });
     if (name === 'browserpaw_set_owned_viewport')
-      return result({ success: true, viewport: { status: 'applied', width: 1440, height: 900 } });
+      return result({
+        success: true,
+        viewport: { status: 'native', width: 1280, height: 720, dpr: 2 },
+      });
     if (name === 'get_windows_and_tabs')
       return result({
         browserInstanceId: 'browser-1',

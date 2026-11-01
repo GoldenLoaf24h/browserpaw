@@ -206,8 +206,8 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
           return await fn();
         });
       const sendCommandSpy = vi.spyOn(cdpMod.cdpSessionManager, 'sendCommand').mockResolvedValue({
-        data: 'UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoBAAEAAkA4JaQAA3AA/vsGAAA=',
-        mimeType: 'image/webp',
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        mimeType: 'image/png',
       });
 
       const res = await screenshotTool.execute({ name: 'phone_results' });
@@ -219,15 +219,46 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       expect(payload.fileSaved).toBe(false);
       expect(payload.downloadId).toBeUndefined();
       expect(payload.fullPath).toBeUndefined();
+      expect(payload.format).toBe('jpeg');
 
       // Ensure chrome.downloads.download was NEVER called
       expect((chrome as any).downloads.download).not.toHaveBeenCalled();
 
       // Ensure MCP image content block is returned directly in-memory
-      expect(res.content.some((c: any) => c.type === 'image')).toBe(true);
+      const image = res.content.find((c: any) => c.type === 'image') as any;
+      expect(image).toBeDefined();
+      expect(image.mimeType).toBe('image/jpeg');
+      expect(JSON.stringify(res.content)).not.toContain('image/webp');
 
       withSessionSpy.mockRestore();
       sendCommandSpy.mockRestore();
+    });
+
+    it('maps a legacy WebP request to JPEG without returning WebP', async () => {
+      const { screenshotTool } = await import('../entrypoints/background/tools/browser/screenshot');
+      (screenshotTool as any).resolveAffinityTab = async () => ({
+        id: 1,
+        url: 'https://example.com',
+        title: 'Example',
+      });
+
+      const cdpMod = await import('@/utils/cdp-session-manager');
+      vi.spyOn(cdpMod.cdpSessionManager, 'withSession').mockImplementation(
+        async (_tabId: any, _owner: any, fn: any) => await fn(),
+      );
+      vi.spyOn(cdpMod.cdpSessionManager, 'sendCommand').mockResolvedValue({
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        mimeType: 'image/png',
+      });
+
+      const res = await screenshotTool.execute({ name: 'legacy_webp', format: 'webp' as any });
+
+      expect(res.isError).toBe(false);
+      const payload = JSON.parse(res.content[0].text as string);
+      expect(payload.format).toBe('jpeg');
+      const image = res.content.find((c: any) => c.type === 'image') as any;
+      expect(image.mimeType).toBe('image/jpeg');
+      expect(JSON.stringify(res.content)).not.toContain('image/webp');
     });
 
     it('routes disk save to system temporary directory via native host when savePng is true', async () => {
@@ -245,21 +276,23 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
           return await fn();
         });
       const sendCommandSpy = vi.spyOn(cdpMod.cdpSessionManager, 'sendCommand').mockResolvedValue({
-        data: 'UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoBAAEAAkA4JaQAA3AA/vsGAAA=',
-        mimeType: 'image/webp',
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        mimeType: 'image/png',
       });
 
       const nativeHostMod = await import('../entrypoints/background/native-host');
       const ensureSpy = vi.spyOn(nativeHostMod, 'ensureNativeConnected').mockResolvedValue(true);
       const sendSpy = vi.spyOn(nativeHostMod, 'sendFileOperationToNative');
+      let sentPayload: any;
       sendSpy.mockImplementation((msg: any, cb?: any) => {
         if (msg.type === 'file_operation' && msg.payload.action === 'prepareFile') {
+          sentPayload = msg.payload;
           setTimeout(() => {
             cb?.({
               payload: {
                 success: true,
                 filePath:
-                  'C:\\Users\\User\\AppData\\Local\\Temp\\chrome-mcp-uploads\\phone_results_test.webp',
+                  'C:\\Users\\User\\AppData\\Local\\Temp\\chrome-mcp-uploads\\phone_results_test.png',
               },
             });
           }, 5);
@@ -275,6 +308,10 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       expect(payload.fileSaved).toBe(true);
       expect(payload.savedTo).toBe('system_temp');
       expect(payload.fullPath).toContain('chrome-mcp-uploads');
+      expect(sentPayload.fileName).toMatch(/\.png$/);
+      expect(sentPayload.base64Data).toBe(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      );
       // Verify downloads.download was NOT invoked because native host handled temp storage
       expect((chrome as any).downloads.download).not.toHaveBeenCalled();
 
@@ -318,7 +355,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
                 payload: {
                   success: true,
                   filePath:
-                    'C:\\Users\\User\\AppData\\Local\\Temp\\chrome-mcp-uploads\\phone_results_large.webp',
+                    'C:\\Users\\User\\AppData\\Local\\Temp\\chrome-mcp-uploads\\phone_results_large.png',
                 },
               });
             }, 5);
@@ -333,6 +370,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       const payload = JSON.parse(res.content[0].text as string);
       expect(payload.fileSaved).toBe(true);
       expect(payload.savedTo).toBe('system_temp');
+      expect(capturedPayloadSize).toBe(800 * 1024);
       expect((chrome as any).downloads.download).not.toHaveBeenCalled();
 
       withSessionSpy.mockRestore();

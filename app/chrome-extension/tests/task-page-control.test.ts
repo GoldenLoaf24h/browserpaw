@@ -101,7 +101,7 @@ describe('task page control', () => {
       .mockImplementation(async (_tabId: number, method: string) => {
         if (method === 'Runtime.evaluate') {
           return {
-            result: { value: { width: 1440, height: 900, dpr: 1 } },
+            result: { value: { width: 1280, height: 720, dpr: 1.5 } },
           };
         }
         return {};
@@ -143,23 +143,23 @@ describe('task page control', () => {
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
-  it('holds one CDP reference and verifies the applied viewport', async () => {
+  it('holds one CDP reference and follows the native viewport', async () => {
     const first = await handleTaskPageControl(payload());
     const second = await handleTaskPageControl(payload());
 
     expect(first).toMatchObject({
       success: true,
-      viewport: { status: 'applied', width: 1440, height: 900, dpr: 1 },
+      viewport: { status: 'native', width: 1280, height: 720, dpr: 1.5 },
     });
-    expect(second).toMatchObject({ success: true, viewport: { status: 'applied' } });
+    expect(second).toMatchObject({ success: true, viewport: { status: 'native' } });
     expect(attach).toHaveBeenCalledTimes(1);
     expect(attach).toHaveBeenCalledWith(42, 'task-viewport:task-1');
-    expect(sendCommand).toHaveBeenCalledWith(42, 'Emulation.setDeviceMetricsOverride', {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
+    expect(sendCommand).not.toHaveBeenCalledWith(
+      42,
+      'Emulation.setDeviceMetricsOverride',
+      expect.anything(),
+    );
+    expect(sendCommand).toHaveBeenCalledWith(42, 'Emulation.clearDeviceMetricsOverride', {});
     expect(sendCommand).toHaveBeenCalledWith(
       42,
       'Runtime.evaluate',
@@ -173,8 +173,26 @@ describe('task page control', () => {
       handleTaskPageControl(payload()),
     ]);
 
-    expect(results.every((result) => result.viewport?.status === 'applied')).toBe(true);
+    expect(results.every((result) => result.viewport?.status === 'native')).toBe(true);
     expect(attach).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps arbitrary portrait dimensions and DPR unchanged', async () => {
+    sendCommand.mockImplementation(async (_tabId: number, method: string) => {
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: { width: 900, height: 1600, dpr: 2 } } };
+      }
+      return {};
+    });
+
+    const result = await handleTaskPageControl(payload());
+
+    expect(result.viewport).toMatchObject({
+      status: 'native',
+      width: 900,
+      height: 1600,
+      dpr: 2,
+    });
   });
 
   it('applies and releases two pages owned by the same task independently', async () => {
@@ -187,7 +205,7 @@ describe('task page control', () => {
       handleTaskPageControl(second),
     ]);
 
-    expect(applied.every((result) => result.viewport?.status === 'applied')).toBe(true);
+    expect(applied.every((result) => result.viewport?.status === 'native')).toBe(true);
     expect(attach).toHaveBeenCalledWith(42, 'task-viewport:task-1');
     expect(attach).toHaveBeenCalledWith(43, 'task-viewport:task-1');
     expect((stored[STORAGE_KEY] as any[]).map((entry) => entry.tabId).sort()).toEqual([42, 43]);
@@ -251,7 +269,7 @@ describe('task page control', () => {
 
     const result = await handleTaskPageControl(payload({ documentId: 'document-42-next' }));
 
-    expect(result.viewport?.status).toBe('applied');
+    expect(result.viewport?.status).toBe('native');
     expect(attach).toHaveBeenCalledTimes(1);
     expect(stored[STORAGE_KEY]).toEqual([
       expect.objectContaining({
@@ -285,16 +303,16 @@ describe('task page control', () => {
 
     const result = await handleTaskPageControl(payload());
 
-    expect(result.viewport?.status).toBe('applied');
+    expect(result.viewport?.status).toBe('native');
     expect(detach).toHaveBeenCalledWith(42, 'task-viewport:task-1');
     expect(attach).toHaveBeenCalledTimes(1);
     expect(detach.mock.invocationCallOrder[0]).toBeLessThan(attach.mock.invocationCallOrder[0]);
   });
 
-  it('returns limited instead of claiming a mismatched viewport', async () => {
+  it('returns limited when Chrome cannot provide a positive native viewport', async () => {
     sendCommand.mockImplementation(async (_tabId: number, method: string) => {
       if (method === 'Runtime.evaluate') {
-        return { result: { value: { width: 1200, height: 800, dpr: 2 } } };
+        return { result: { value: { width: 0, height: 800, dpr: 2 } } };
       }
       return {};
     });
@@ -303,13 +321,13 @@ describe('task page control', () => {
 
     expect(result.success).toBe(true);
     expect(result.viewport).toMatchObject({ status: 'limited', width: 0, height: 0 });
-    expect(result.viewport?.reason).toContain('Viewport verification failed');
+    expect(result.viewport?.reason).toContain('Native viewport measurement failed');
     expect(sendCommand).toHaveBeenCalledWith(42, 'Emulation.clearDeviceMetricsOverride', {});
     expect(detach).toHaveBeenCalledWith(42, 'task-viewport:task-1');
     expect((stored[STORAGE_KEY] as unknown[]) || []).toHaveLength(0);
   });
 
-  it('does not report applied when the document changes after the metrics command', async () => {
+  it('does not report native when the document changes after measurement', async () => {
     let documentReads = 0;
     (chrome.webNavigation.getFrame as any).mockImplementation(async () => ({
       documentId: documentReads++ < 3 ? 'document-42' : 'document-after-navigation',
@@ -377,7 +395,7 @@ describe('task page control', () => {
         throw new Error('clear rejected');
       }
       if (method === 'Runtime.evaluate') {
-        return { result: { value: { width: 1440, height: 900, dpr: 1 } } };
+        return { result: { value: { width: 1280, height: 720, dpr: 1.5 } } };
       }
       return {};
     });

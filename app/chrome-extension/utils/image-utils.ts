@@ -295,8 +295,8 @@ export async function normalizeImageToCssDimensions(
   dataUrl: string,
   targetWidthCss: number,
   targetHeightCss: number,
-  mimeType: string = 'image/webp',
-  quality: number = 0.8,
+  mimeType: string = 'image/jpeg',
+  quality: number = 0.85,
 ): Promise<string> {
   const img = await createImageBitmapFromUrl(dataUrl);
   try {
@@ -342,7 +342,7 @@ export async function smartCompressForTransport(
   imageDataUrl: string,
   options?: {
     maxBytes?: number;
-    preferredFormat?: 'image/webp' | 'image/jpeg' | 'image/png';
+    preferredFormat?: 'image/jpeg' | 'image/png';
     allowDimensionScaling?: boolean;
     quality?: number;
   },
@@ -359,7 +359,7 @@ export async function smartCompressForTransport(
   };
 
   const initialLen = getBase64Len(imageDataUrl);
-  const preferredFormat = options?.preferredFormat || 'image/webp';
+  const preferredFormat = options?.preferredFormat || 'image/jpeg';
 
   // If already within budget and matches preferred format, return untouched
   if (
@@ -379,8 +379,10 @@ export async function smartCompressForTransport(
   }
 
   // Phase 1: High-Clarity Optimization at Scale 1.0 (Zero downsampling blur)
-  const targetFormat = preferredFormat === 'image/png' ? 'image/webp' : preferredFormat;
-  const qualitySteps = [options?.quality ?? 0.82, 0.72, 0.6, 0.48];
+  // PNG can exceed the inline preview budget; use JPEG for transport instead
+  // of silently changing the caller's requested format to WebP.
+  const targetFormat = 'image/jpeg' as const;
+  const qualitySteps = [options?.quality ?? 0.85, 0.72, 0.6, 0.48];
   let bestCandidate: { dataUrl: string; mimeType: string } | null = null;
   let bestCandidateLen = Infinity;
 

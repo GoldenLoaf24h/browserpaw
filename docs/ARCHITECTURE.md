@@ -203,9 +203,9 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Decision**:
   1. Return CDP `Page.captureScreenshot` directly as Base64 image payloads in the MCP response (`type: 'image'`).
   2. Maintain an in-memory `ScreenshotRingBuffer` with a fixed capacity of 1 per tab, automatically evicting stale frames.
-  3. Default compression to JPEG ≤ 1280px. Disk writes (`savePng: true`) are strictly opt-in for manual debugging.
+  3. Fit the model-facing preview into a 1568px long-edge / 1.15MP JPEG budget while preserving the aspect ratio. `savePng: true` writes the full physical-pixel PNG; screenshot output is PNG/JPEG only.
   4. For background tabs (`active: false`), strictly use CDP `Page.captureScreenshot` (`fromSurface: true`) instead of `chrome.tabs.captureVisibleTab`, preventing active-window screen leaks and `requestAnimationFrame` hangs.
-- **Consequences**: Zero disk writes, sub-100ms screenshot round-trips, zero visual leaks across background tabs, and zero memory leaks in the MV3 service worker.
+- **Consequences**: Zero disk writes by default, bounded vision payloads across arbitrary aspect ratios, and explicit full-resolution output when the user requests a saved image.
 
 ### ADR-003: Unified Locator Degradation Chain & Visual Fallback
 

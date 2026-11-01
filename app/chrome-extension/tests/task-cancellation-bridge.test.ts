@@ -151,7 +151,7 @@ describe('task cancellation bridge', () => {
       if (name === 'browserpaw_set_owned_viewport') {
         return result({
           success: true,
-          viewport: { status: 'applied', width: 1440, height: 900 },
+          viewport: { status: 'native', width: 1280, height: 720, dpr: 1.5 },
         });
       }
       if (name === 'chrome_batch_actions') {

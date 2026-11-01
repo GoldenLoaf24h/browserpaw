@@ -76,7 +76,7 @@ export const FILE_TYPES = {
     '.ttf',
   ],
   FILTERED_MIME_TYPES: ['text/html', 'text/css', 'text/javascript', 'application/javascript'],
-  IMAGE_FORMATS: ['png', 'jpeg', 'webp'] as const,
+  IMAGE_FORMATS: ['png', 'jpeg'] as const,
 } as const;
 
 // Network Filtering

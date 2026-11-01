@@ -33,8 +33,8 @@ Screenshot dimensions can differ from CSS viewport dimensions because of scaling
 ```json
 {
   "grid": true,
-  "format": "webp",
-  "quality": 80
+  "format": "jpeg",
+  "quality": 85
 }
 ```
 
@@ -45,7 +45,7 @@ Screenshot dimensions can differ from CSS viewport dimensions because of scaling
 ```json
 {
   "som": true,
-  "format": "webp"
+  "format": "jpeg"
 }
 ```
 
@@ -73,6 +73,23 @@ Screenshot dimensions can differ from CSS viewport dimensions because of scaling
 ```
 
 - Requests a region for closer inspection of icons, text or tables. Read the returned scaling and validation metadata; a crop is not automatically a supported coordinate source.
+
+The default model-facing image is fitted to a 1568px long edge and 1.15MP while preserving the viewport aspect ratio. Lower `maxDimension` or `maxPixels` to save tokens; raise them, use `highClarity`, or capture a `region` for fine text. Screenshots are emitted as JPEG or PNG, never WebP.
+
+For routine visual checks, start with the default JPEG budget. Use a smaller `maxDimension` for layout confirmation, and reserve `highClarity` or a tight `region` for OCR and fine details. If a background-tab capture is slow, let BrowserPaw's bounded retry finish; do not issue a burst of duplicate screenshots.
+
+### E. User-Facing or Saved Screenshots
+
+```json
+{
+  "fullPage": true,
+  "savePng": true
+}
+```
+
+- `savePng: true` writes a full-resolution, lossless PNG at the capture's physical-pixel size to the system temporary directory and returns `fullPath`.
+- Use it whenever the user asks to view or keep a screenshot. The inline preview may be JPEG for model token efficiency; the saved file remains the clear original.
+- The task page follows the real Chrome window size and DPR. Do not assume 1440x900 or DPR 1; read `imageWidth`, `imageHeight`, `viewportWidth`, `viewportHeight`, and the capture metadata before mapping coordinates.
 
 ---
 

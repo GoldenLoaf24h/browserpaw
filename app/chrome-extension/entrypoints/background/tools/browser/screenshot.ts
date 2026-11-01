@@ -31,6 +31,10 @@ import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 // Screenshot-specific constants
 export const MAX_CANVAS_DIM = 16384;
 export const MAX_CANVAS_AREA = 268435456;
+export const DEFAULT_SCREENSHOT_MAX_DIMENSION = 1568;
+export const DEFAULT_SCREENSHOT_MAX_PIXELS = 1_150_000;
+const BACKGROUND_CAPTURE_WARMUP_TIMEOUT_MS = 1500;
+const BACKGROUND_CAPTURE_RETRY_TIMEOUT_MS = 5000;
 
 export function clampCanvasDimensions(
   width: number,
@@ -48,6 +52,55 @@ export function clampCanvasDimensions(
     h = Math.max(1, Math.floor(h * scale));
   }
   return { width: w, height: h };
+}
+
+export interface ScreenshotSizeBudget {
+  maxWidth?: number;
+  maxDimension?: number;
+  maxPixels?: number;
+  highClarity?: boolean;
+}
+
+/**
+ * Fit screenshots to a vision-model budget while preserving aspect ratio.
+ * The defaults track the conservative long-edge and total-pixel limits used by
+ * current computer-use models; callers can request a larger or smaller budget.
+ */
+export function fitScreenshotToBudget(
+  width: number,
+  height: number,
+  options: ScreenshotSizeBudget = {},
+): { width: number; height: number; scale: number } {
+  const sourceWidth = Number.isFinite(width) && width > 0 ? width : 1;
+  const sourceHeight = Number.isFinite(height) && height > 0 ? height : 1;
+  const positive = (value: number | undefined): number | undefined =>
+    Number.isFinite(value) && (value as number) > 0 ? value : undefined;
+  const maxWidth = positive(options.maxWidth);
+  const maxDimension =
+    positive(options.maxDimension) ??
+    (options.highClarity === true ? undefined : DEFAULT_SCREENSHOT_MAX_DIMENSION);
+  const maxPixels =
+    positive(options.maxPixels) ??
+    (options.highClarity === true ? undefined : DEFAULT_SCREENSHOT_MAX_PIXELS);
+
+  let scale = 1;
+  if (maxWidth !== undefined) scale = Math.min(scale, maxWidth / sourceWidth);
+  if (maxDimension !== undefined) {
+    scale = Math.min(scale, maxDimension / Math.max(sourceWidth, sourceHeight));
+  }
+  if (maxPixels !== undefined) {
+    scale = Math.min(scale, Math.sqrt(maxPixels / (sourceWidth * sourceHeight)));
+  }
+  scale = Math.max(0.0001, Math.min(1, scale));
+
+  // Floor rounding keeps every result at or below the requested pixel budget.
+  const targetWidth = Math.max(1, Math.floor(sourceWidth * scale));
+  const targetHeight = Math.max(1, Math.floor(sourceHeight * scale));
+  return {
+    width: targetWidth,
+    height: targetHeight,
+    scale: Math.min(1, targetWidth / sourceWidth, targetHeight / sourceHeight),
+  };
 }
 
 const SCREENSHOT_CONSTANTS = {
@@ -87,7 +140,7 @@ interface ScreenshotToolParams {
   targetIndex?: number;
   index?: number; // Alias for targetIndex
   padding?: number;
-  format?: 'png' | 'jpeg' | 'webp';
+  format?: 'png' | 'jpeg';
   quality?: number; // 0-100
   tabId?: number;
   background?: boolean;
@@ -100,6 +153,8 @@ interface ScreenshotToolParams {
   saveToDisk?: boolean;
   maxHeight?: number; // Maximum height to capture in pixels (for infinite scroll pages)
   maxWidth?: number; // Maximum width to capture in pixels
+  maxDimension?: number; // Maximum long edge in pixels for vision output
+  maxPixels?: number; // Maximum total pixels for vision output
   zoom?: number; // Super-sampling / zoom factor for element crop
   grid?: boolean | string; // Overlay coordinate reference grid ('ruler' | 'crosshair' | 'classic' | '1000' | true)
   enableGrid?: boolean | string; // Alias for grid
@@ -198,8 +253,8 @@ export async function normalizeImageToCssDimensions(
   dataUrl: string,
   targetWidthCss: number,
   targetHeightCss: number,
-  mimeType: string = 'image/webp',
-  quality: number = 0.8,
+  mimeType: string = 'image/jpeg',
+  quality: number = 0.85,
 ): Promise<string> {
   if (typeof createImageBitmap === 'undefined' || typeof OffscreenCanvas === 'undefined') {
     return dataUrl;
@@ -233,32 +288,32 @@ export async function normalizeImageToCssDimensions(
  * after activation means the compositor had not presented the real frame.
  */
 async function hasBlackBars(dataUrl: string): Promise<boolean> {
+  let img: ImageBitmap | undefined;
   try {
-    const img = await createImageBitmapFromUrl(dataUrl);
-    const w = img.width,
-      h = img.height;
-    if (w < 64 || h < 64) return false;
-    const { width: bw, height: bh } = clampCanvasDimensions(w, h);
-    const canvas = new OffscreenCanvas(bw, bh);
+    img = await createImageBitmapFromUrl(dataUrl);
+    if (img.width < 64 || img.height < 64) return false;
+    const samples = 48;
+    const canvas = new OffscreenCanvas(samples, samples);
     const ctx = canvas.getContext('2d');
     if (!ctx) return false;
-    ctx.drawImage(img, 0, 0, bw, bh);
-    const sample = (edge: 'right' | 'bottom'): number => {
-      const count = edge === 'right' ? 48 : 48;
-      let black = 0;
-      for (let i = 0; i < count; i++) {
-        const x = edge === 'right' ? bw - 1 : Math.floor((i / count) * bw);
-        const y = edge === 'bottom' ? bh - 1 : Math.floor((i / count) * bh);
-        const d = ctx.getImageData(x, y, 1, 1).data;
-        if (d[0] + d[1] + d[2] < 18) black++;
-      }
-      return black / count;
+    ctx.drawImage(img, 0, 0, samples, samples);
+    const data = ctx.getImageData(0, 0, samples, samples).data;
+    if (data.length < samples * samples * 4) return false;
+    const isBlack = (x: number, y: number): boolean => {
+      const offset = (y * samples + x) * 4;
+      return data[offset] + data[offset + 1] + data[offset + 2] < 18;
     };
-    const right = sample('right');
-    const bottom = sample('bottom');
-    return right > 0.92 || bottom > 0.92;
+    let right = 0;
+    let bottom = 0;
+    for (let i = 0; i < samples; i++) {
+      if (isBlack(samples - 1, i)) right++;
+      if (isBlack(i, samples - 1)) bottom++;
+    }
+    return right / samples > 0.92 || bottom / samples > 0.92;
   } catch {
     return false;
+  } finally {
+    if (typeof (img as any)?.close === 'function') (img as any).close();
   }
 }
 
@@ -271,7 +326,6 @@ async function hasBlackBars(dataUrl: string): Promise<boolean> {
 async function saveScreenshotToNativeTemp(
   base64Data: string,
   filename: string,
-  fullDataUrl?: string,
 ): Promise<{ filename?: string; fullPath?: string } | undefined> {
   try {
     const { sendFileOperationToNative, cancelFileOperation, ensureNativeConnected } =
@@ -279,27 +333,11 @@ async function saveScreenshotToNativeTemp(
     if (typeof ensureNativeConnected === 'function') {
       await ensureNativeConnected('save_screenshot').catch(() => false);
     }
-    let cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
-    // If base64 payload exceeds 600KB, compress using smartCompressForTransport so it comfortably fits within the 1MB Native Messaging ceiling
-    const sourceDataUrl =
-      fullDataUrl ||
-      (base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${cleanBase64}`);
-    if (cleanBase64.length > 600 * 1024 && typeof OffscreenCanvas !== 'undefined') {
-      try {
-        const compressed = await smartCompressForTransport(sourceDataUrl, {
-          maxBytes: 550 * 1024,
-          preferredFormat: 'image/webp',
-          allowDimensionScaling: true,
-        });
-        cleanBase64 = compressed.dataUrl.replace(/^data:[^;]+;base64,/, '');
-        filename = filename.replace(/\.[a-z0-9]+$/i, '.webp');
-      } catch (compressErr) {
-        console.warn('saveScreenshotToNativeTemp compression fallback failed:', compressErr);
-      }
-    }
+    const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
 
     const requestId = `screenshot-temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const timeoutMs = 20000;
+    // Full-page PNGs can be tens of megabytes; Native messaging is chunked.
+    const timeoutMs = 60000;
     const resp = await new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         cancelFileOperation(requestId);
@@ -335,6 +373,38 @@ async function saveScreenshotToNativeTemp(
     console.warn('saveScreenshotToNativeTemp failed, falling back:', err);
   }
   return undefined;
+}
+
+async function convertImageToPng(
+  dataUrl: string,
+  targetWidth?: number,
+  targetHeight?: number,
+): Promise<string | undefined> {
+  const sourceMime = dataUrl.match(/^data:(image\/[^;]+);base64,/)?.[1];
+  // Preserve captured PNG bytes exactly instead of needlessly re-encoding them.
+  if (sourceMime === 'image/png') {
+    return dataUrl;
+  }
+  if (typeof createImageBitmap === 'undefined' || typeof OffscreenCanvas === 'undefined') {
+    return sourceMime === 'image/png' ? dataUrl : undefined;
+  }
+  try {
+    const bitmap = await createImageBitmapFromUrl(dataUrl);
+    try {
+      const width = targetWidth ?? bitmap.width;
+      const height = targetHeight ?? bitmap.height;
+      const bounded = clampCanvasDimensions(width, height);
+      const canvas = new OffscreenCanvas(bounded.width, bounded.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+      ctx.drawImage(bitmap, 0, 0, bounded.width, bounded.height);
+      return await canvasToDataURL(canvas, 'image/png');
+    } finally {
+      if (typeof (bitmap as any).close === 'function') (bitmap as any).close();
+    }
+  } catch {
+    return sourceMime === 'image/png' ? dataUrl : undefined;
+  }
 }
 
 /**
@@ -382,8 +452,15 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       fullPage = false,
       savePng = false,
       saveToDisk = false,
-      format = args.format || 'webp',
     } = args;
+    // Legacy clients may still send "webp"; screenshots now only emit PNG/JPEG.
+    const format: 'png' | 'jpeg' = args.format === 'png' ? 'png' : 'jpeg';
+    args.format = format;
+    const saveRequested =
+      !isJevVision &&
+      (savePng === true || saveToDisk === true || (args as any).saveToDisk === true) &&
+      args.savePng !== false &&
+      (args as any).saveToDisk !== false;
 
     console.log(`Starting screenshot with options:`, args);
 
@@ -402,6 +479,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     }
 
     let finalImageDataUrl: string | undefined;
+    let fullResolutionPngDataUrl: string | undefined;
     let finalImageWidthCss: number | undefined;
     let finalImageHeightCss: number | undefined;
     let jevVisionFrame: { id: string; width: number; height: number } | undefined = undefined;
@@ -418,6 +496,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let coordinateValidationSupported = false;
     let coordinateValidationUnsupportedReason: string | undefined;
     let pageStateProbeAvailable = true;
+    let viewportScale = 1;
     let captureMetadata:
       | {
           captureId: string;
@@ -438,7 +517,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let elementCropOrigin: { x: number; y: number } | undefined;
     let elementOriginalCrop: { width: number; height: number } | undefined;
     const qualityFraction =
-      typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.8;
+      typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.85;
 
     try {
       let preUrl: string = '';
@@ -538,8 +617,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       }
 
       const background = args.background === true;
-      const targetMimeType =
-        format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
+      const targetMimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
 
       // === Path 0: named asset (from chrome_read_dom assets[]) ===
       // Primary: fetch real bytes in page (canvas toDataURL / img+bg fetch).
@@ -566,10 +644,24 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           );
         }
         if (asset.dataUrl && asset.dataUrl.startsWith('data:')) {
-          finalImageDataUrl = asset.dataUrl;
           const img = await createImageBitmapFromUrl(asset.dataUrl);
           finalImageWidthCss = img.width;
           finalImageHeightCss = img.height;
+          if (saveRequested) {
+            fullResolutionPngDataUrl = await convertImageToPng(
+              asset.dataUrl,
+              img.width,
+              img.height,
+            );
+          }
+          finalImageDataUrl = await normalizeImageToCssDimensions(
+            asset.dataUrl,
+            img.width,
+            img.height,
+            targetMimeType,
+            qualityFraction,
+          );
+          if (typeof (img as any).close === 'function') (img as any).close();
           assetHandled = true;
           results.assetKind = asset.kind;
           results.assetSrc = scrubUrl(asset.src || '');
@@ -635,12 +727,34 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             cropW,
             cropH,
           );
-          if (typeof (raw as any).close === 'function') (raw as any).close();
           finalImageDataUrl = await canvasToDataURL(
             cropped,
             targetMimeType as any,
             qualityFraction,
           );
+          if (saveRequested) {
+            const fullCrop = clampCanvasDimensions(
+              Math.round(crop.w * scaleX),
+              Math.round(crop.h * scaleY),
+            );
+            const fullCanvas = new OffscreenCanvas(fullCrop.width, fullCrop.height);
+            const fullCtx = fullCanvas.getContext('2d');
+            if (fullCtx) {
+              fullCtx.drawImage(
+                raw,
+                crop.x * scaleX,
+                crop.y * scaleY,
+                crop.w * scaleX,
+                crop.h * scaleY,
+                0,
+                0,
+                fullCrop.width,
+                fullCrop.height,
+              );
+              fullResolutionPngDataUrl = await canvasToDataURL(fullCanvas, 'image/png');
+            }
+          }
+          if (typeof (raw as any).close === 'function') (raw as any).close();
           finalImageWidthCss = cropW;
           finalImageHeightCss = cropH;
           elementCropOrigin = {
@@ -738,9 +852,9 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             const w = rx1 - rx0;
             const h = ry1 - ry0;
 
-            const cdpFormat = format === 'webp' ? 'webp' : format === 'png' ? 'png' : 'jpeg';
+            const cdpFormat = saveRequested || format === 'png' ? 'png' : 'jpeg';
             const cdpQuality =
-              (cdpFormat === 'jpeg' || cdpFormat === 'webp') && typeof args.quality === 'number'
+              cdpFormat === 'jpeg' && typeof args.quality === 'number'
                 ? Math.max(0, Math.min(100, Math.round(args.quality)))
                 : 85;
 
@@ -759,6 +873,9 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             });
             if (shot?.data) {
               const rawDataUrl = `data:${shot.mimeType || targetMimeType};base64,${shot.data}`;
+              if (saveRequested) {
+                fullResolutionPngDataUrl = await convertImageToPng(rawDataUrl);
+              }
               finalImageDataUrl = await normalizeImageToCssDimensions(
                 rawDataUrl,
                 w,
@@ -826,17 +943,23 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                 pageX: 0,
                 pageY: 0,
               };
-            const cdpFormat = format === 'webp' ? 'webp' : format === 'png' ? 'png' : 'jpeg';
+            const cdpFormat = saveRequested || format === 'png' ? 'png' : 'jpeg';
             const cdpQuality =
-              (cdpFormat === 'jpeg' || cdpFormat === 'webp') && typeof args.quality === 'number'
+              cdpFormat === 'jpeg' && typeof args.quality === 'number'
                 ? Math.max(0, Math.min(100, Math.round(args.quality)))
-                : cdpFormat === 'jpeg' || cdpFormat === 'webp'
+                : cdpFormat === 'jpeg'
                   ? 80
                   : undefined;
 
             const clientWidth = Math.round(viewport.clientWidth || 800);
             const clientHeight = Math.round(viewport.clientHeight || 600);
             originalScroll = { x: viewport.pageX || 0, y: viewport.pageY || 0 };
+            const previewSize = fitScreenshotToBudget(clientWidth, clientHeight, {
+              maxWidth: args.maxWidth,
+              maxDimension: args.maxDimension,
+              maxPixels: args.maxPixels,
+              highClarity: args.highClarity === true,
+            });
 
             const captureParams = {
               format: cdpFormat,
@@ -852,29 +975,60 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
               },
             };
             // A clipped compositor capture can stall; Jev must reach the existing fallback promptly.
-            const shot: any = isJevVision
-              ? await cdpSessionManager.sendDebuggerCommand(
+            let shot: any;
+            if (isJevVision) {
+              shot = await cdpSessionManager.sendDebuggerCommand(
+                tabId,
+                'Page.captureScreenshot',
+                captureParams,
+                1500,
+              );
+            } else if (tab.active === false) {
+              try {
+                shot = await cdpSessionManager.sendDebuggerCommand(
                   tabId,
                   'Page.captureScreenshot',
                   captureParams,
-                  1500,
-                )
-              : await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', captureParams);
+                  BACKGROUND_CAPTURE_WARMUP_TIMEOUT_MS,
+                );
+              } catch (warmupError) {
+                const message =
+                  warmupError instanceof Error ? warmupError.message : String(warmupError);
+                if (!message.includes('CDP_SEND_TIMEOUT')) throw warmupError;
+                results.cdpCaptureWarmupRetry = true;
+                shot = await cdpSessionManager.sendDebuggerCommand(
+                  tabId,
+                  'Page.captureScreenshot',
+                  captureParams,
+                  BACKGROUND_CAPTURE_RETRY_TIMEOUT_MS,
+                );
+              }
+            } else {
+              shot = await cdpSessionManager.sendCommand(
+                tabId,
+                'Page.captureScreenshot',
+                captureParams,
+              );
+            }
             const base64Data = typeof shot?.data === 'string' ? shot.data : '';
             if (!base64Data) {
               throw new Error('CDP Page.captureScreenshot returned empty data');
             }
             const rawDataUrl = `data:${shot.mimeType || targetMimeType};base64,${base64Data}`;
-            // Enforce DPR 1:1 normalization via OffscreenCanvas
+            if (saveRequested) {
+              fullResolutionPngDataUrl = await convertImageToPng(rawDataUrl);
+            }
+            // Decode once into the final vision budget instead of CSS size and then scaling again.
             finalImageDataUrl = await normalizeImageToCssDimensions(
               rawDataUrl,
-              clientWidth,
-              clientHeight,
+              previewSize.width,
+              previewSize.height,
               targetMimeType,
               qualityFraction,
             );
-            finalImageWidthCss = clientWidth;
-            finalImageHeightCss = clientHeight;
+            finalImageWidthCss = previewSize.width;
+            finalImageHeightCss = previewSize.height;
+            viewportScale = previewSize.scale;
             captureViewport = { viewportWidth: clientWidth, viewportHeight: clientHeight };
             if (await hasBlackBars(finalImageDataUrl)) {
               // Window-transition frame: wait two more presented frames and
@@ -926,8 +1080,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
               if (retryData) {
                 finalImageDataUrl = await normalizeImageToCssDimensions(
                   `data:${retry.mimeType || targetMimeType};base64,${retryData}`,
-                  clientWidth,
-                  clientHeight,
+                  previewSize.width,
+                  previewSize.height,
                   targetMimeType,
                   qualityFraction,
                 );
@@ -982,6 +1136,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           finalImageHeightCss = fullCapture.heightCss;
           capturedDocWidth = fullCapture.originalCaptureWidth;
           capturedDocHeight = fullCapture.originalCaptureHeight;
+          fullResolutionPngDataUrl = fullCapture.fullResolutionDataUrl;
         } else if (selector || typeof args.targetIndex === 'number') {
           this.logInfo(`Capturing element (selector=${selector}, targetIndex=${args.targetIndex})`);
           const elementCapture = await this._captureElement(
@@ -998,11 +1153,15 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             width: (elementCapture as any).originalCropWidth,
             height: (elementCapture as any).originalCropHeight,
           };
+          fullResolutionPngDataUrl = elementCapture.fullResolutionDataUrl;
         } else {
           // Visible area only
           this.logInfo('Capturing visible area...');
           const rawVisibleDataUrl = await this.captureTabPngWithRetry(tab);
           if (!rawVisibleDataUrl) throw new Error('captureVisibleTab returned empty image');
+          if (saveRequested) {
+            fullResolutionPngDataUrl = await convertImageToPng(rawVisibleDataUrl);
+          }
           // Enforce DPR 1:1 Normalization: resample from physical pixels to exact CSS viewport dimensions
           finalImageDataUrl = await normalizeImageToCssDimensions(
             rawVisibleDataUrl,
@@ -1020,41 +1179,34 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         throw new Error('Failed to capture image data');
       }
 
-      // TOOL01: Clamp to maxWidth before grid overlay, caching, and disk saving
-      let viewportScale = 1;
-      const effectiveMaxWidth =
-        typeof args.maxWidth === 'number' && Number.isFinite(args.maxWidth) && args.maxWidth > 0
-          ? Math.max(1, Math.round(args.maxWidth))
-          : args.highClarity === true || results.roi
-            ? Infinity
-            : 1280;
-      if (finalImageWidthCss && finalImageWidthCss > effectiveMaxWidth && finalImageDataUrl) {
-        const targetW = effectiveMaxWidth;
-        const scale = targetW / finalImageWidthCss;
-        const targetH = Math.max(1, Math.round(finalImageHeightCss! * scale));
-        try {
-          const scaledUrl = await normalizeImageToCssDimensions(
-            finalImageDataUrl,
-            targetW,
-            targetH,
-            targetMimeType,
-            qualityFraction,
-          );
-          if (scaledUrl && scaledUrl !== finalImageDataUrl) {
-            finalImageDataUrl = scaledUrl;
-            viewportScale = scale;
-            try {
-              const bmp = await createImageBitmapFromUrl(scaledUrl);
-              finalImageWidthCss = bmp.width;
-              finalImageHeightCss = bmp.height;
-              if (typeof (bmp as any).close === 'function') (bmp as any).close();
-            } catch {
+      // Fit the model-facing preview to an aspect-ratio-preserving vision budget.
+      if (finalImageWidthCss && finalImageHeightCss && finalImageDataUrl) {
+        const fitted = fitScreenshotToBudget(finalImageWidthCss, finalImageHeightCss, {
+          maxWidth: args.maxWidth,
+          maxDimension: args.maxDimension,
+          maxPixels: args.maxPixels,
+          highClarity: args.highClarity === true,
+        });
+        if (fitted.width !== finalImageWidthCss || fitted.height !== finalImageHeightCss) {
+          const targetW = fitted.width;
+          const targetH = fitted.height;
+          try {
+            const scaledUrl = await normalizeImageToCssDimensions(
+              finalImageDataUrl,
+              targetW,
+              targetH,
+              targetMimeType,
+              qualityFraction,
+            );
+            if (scaledUrl && scaledUrl !== finalImageDataUrl) {
+              finalImageDataUrl = scaledUrl;
+              viewportScale = fitted.scale;
               finalImageWidthCss = targetW;
               finalImageHeightCss = targetH;
             }
+          } catch (maxWErr) {
+            console.warn('Failed to fit screenshot to vision budget:', maxWErr);
           }
-        } catch (maxWErr) {
-          console.warn('Failed to clamp screenshot to maxWidth:', maxWErr);
         }
       }
 
@@ -1293,41 +1445,33 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         }
       }
 
-      const shouldSaveDisk =
-        !isJevVision &&
-        (savePng === true || saveToDisk === true || (args as any).saveToDisk === true) &&
-        args.savePng !== false &&
-        (args as any).saveToDisk !== false;
-      if (shouldSaveDisk) {
-        this.logInfo(`Saving ${format.toUpperCase()} to temporary storage...`);
+      if (saveRequested) {
+        this.logInfo('Saving full-resolution PNG to temporary storage...');
         try {
-          const actualMime =
-            finalImageDataUrl?.match(/^data:(image\/[^;]+);base64,/)?.[1] || targetMimeType;
-          const ext =
-            actualMime === 'image/webp' ? 'webp' : actualMime === 'image/jpeg' ? 'jpg' : 'png';
+          const outputPng =
+            fullResolutionPngDataUrl ??
+            (finalImageDataUrl ? await convertImageToPng(finalImageDataUrl) : undefined);
+          if (!outputPng) {
+            throw new Error('Could not encode a full-resolution PNG for saving');
+          }
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
           const safeName = (name || 'screenshot').replace(/[^a-z0-9_-]/gi, '_');
-          const filename = `${safeName}_${timestamp}.${ext}`;
-          const rawBase64 = finalImageDataUrl
-            ? finalImageDataUrl.replace(/^data:[^;]+;base64,/, '')
-            : '';
+          const filename = `${safeName}_${timestamp}.png`;
+          const rawBase64 = outputPng.replace(/^data:[^;]+;base64,/, '');
 
           // Primary: save to system temporary directory via native messaging host (zero Downloads pollution)
-          const tempSaved = await saveScreenshotToNativeTemp(
-            rawBase64,
-            filename,
-            finalImageDataUrl,
-          );
+          const tempSaved = await saveScreenshotToNativeTemp(rawBase64, filename);
 
           if (tempSaved && tempSaved.fullPath) {
             results.filename = tempSaved.filename;
             results.fullPath = tempSaved.fullPath;
             results.fileSaved = true;
             results.savedTo = 'system_temp';
+            results.savedMimeType = 'image/png';
           } else if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
             // Secondary fallback: only if native host is unreachable and user explicitly requested disk save
             const downloadId = await chrome.downloads.download({
-              url: finalImageDataUrl,
+              url: outputPng,
               filename: filename,
               saveAs: false,
               conflictAction: 'uniquify',
@@ -1338,6 +1482,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             results.filename = filename;
             results.fileSaved = true;
             results.savedTo = 'downloads';
+            results.savedMimeType = 'image/png';
 
             try {
               await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1396,15 +1541,13 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalBase64 =
       results.base64 ||
       (finalImageDataUrl ? finalImageDataUrl.replace(/^data:[^;]+;base64,/, '') : undefined);
-    let finalMime: 'image/webp' | 'image/png' | 'image/jpeg' = isJevVision
+    let finalMime: 'image/png' | 'image/jpeg' = isJevVision
       ? args.format === 'png'
         ? 'image/png'
         : 'image/jpeg'
-      : format === 'webp'
-        ? 'image/webp'
-        : format === 'png'
-          ? 'image/png'
-          : 'image/jpeg';
+      : format === 'png'
+        ? 'image/png'
+        : 'image/jpeg';
     let isThumbnailFinal = false;
 
     if (!isJevVision && finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
@@ -1457,7 +1600,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           const thumbBase64 = thumb.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
           if (thumbBase64.length < 800 * 1024) {
             finalBase64 = thumbBase64;
-            finalMime = thumb.mimeType as 'image/png' | 'image/jpeg' | 'image/webp';
+            finalMime = thumb.mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
             isThumbnailFinal = true;
           }
         } catch (thumbErr) {
@@ -1524,8 +1667,9 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           tabId: tab.id,
           url: scrubUrl(tab.url || ''),
           name: name,
-          format,
-          quality: args.quality ?? (format === 'png' ? undefined : 80),
+          format: finalMime === 'image/png' ? 'png' : 'jpeg',
+          requestedFormat: format,
+          quality: args.quality ?? (finalMime === 'image/jpeg' ? 85 : undefined),
           imageWidth: finalImageWidthCss,
           imageHeight: finalImageHeightCss,
           viewportWidth:
@@ -1534,10 +1678,19 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             pageDetails?.viewportHeight ?? captureViewport?.viewportHeight ?? finalImageHeightCss,
           originX: elementCropOrigin?.x ?? 0,
           originY: elementCropOrigin?.y ?? 0,
-          scaleFactor:
-            isThumbnailFinal && pageDetails?.viewportWidth
-              ? finalImageWidthCss! / pageDetails.viewportWidth
-              : 1.0,
+          scaleFactor: (() => {
+            const baseWidth =
+              elementCropOrigin?.x !== undefined
+                ? (elementOriginalCrop?.width ?? finalImageWidthCss ?? 1)
+                : (pageDetails?.viewportWidth ??
+                  captureViewport?.viewportWidth ??
+                  captureState?.width ??
+                  finalImageWidthCss ??
+                  1);
+            return Number.isFinite(baseWidth) && baseWidth > 0
+              ? (finalImageWidthCss ?? baseWidth) / baseWidth
+              : 1;
+          })(),
           targetIndex: args.targetIndex,
           padding: args.padding,
           selector: args.selector,
@@ -1728,6 +1881,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     originY: number;
     originalCropWidth?: number;
     originalCropHeight?: number;
+    fullResolutionDataUrl?: string;
   }> {
     let cropRectPx: { x: number; y: number; width: number; height: number };
     let dpr = pageDpr || 1;
@@ -1811,34 +1965,60 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     if (!ctx) throw new Error('Failed to get 2D context from OffscreenCanvas');
 
     const rawImg = await createImageBitmapFromUrl(visibleCaptureDataUrl);
-    ctx.drawImage(
-      rawImg,
-      cropRectPx.x,
-      cropRectPx.y,
-      cropRectPx.width,
-      cropRectPx.height,
-      0,
-      0,
-      finalWidthCss,
-      finalHeightCss,
-    );
+    try {
+      ctx.drawImage(
+        rawImg,
+        cropRectPx.x,
+        cropRectPx.y,
+        cropRectPx.width,
+        cropRectPx.height,
+        0,
+        0,
+        finalWidthCss,
+        finalHeightCss,
+      );
 
-    const format = options.format ?? 'webp';
-    const mimeType =
-      format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
-    const qualityFraction =
-      typeof options.quality === 'number' ? Math.max(0, Math.min(1, options.quality / 100)) : 0.8;
+      const format = options.format === 'png' ? 'png' : 'jpeg';
+      const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+      const qualityFraction =
+        typeof options.quality === 'number'
+          ? Math.max(0, Math.min(1, options.quality / 100))
+          : 0.85;
 
-    const dataUrl = await canvasToDataURL(croppedCanvas, mimeType, qualityFraction);
-    return {
-      dataUrl,
-      widthCss: finalWidthCss,
-      heightCss: finalHeightCss,
-      originX: Math.round(cropRectPx.x / dpr),
-      originY: Math.round(cropRectPx.y / dpr),
-      originalCropWidth: baseWidth,
-      originalCropHeight: baseHeight,
-    };
+      const dataUrl = await canvasToDataURL(croppedCanvas, mimeType, qualityFraction);
+      let fullResolutionDataUrl: string | undefined;
+      if (options.savePng === true || options.saveToDisk === true) {
+        const fullCrop = clampCanvasDimensions(cropRectPx.width, cropRectPx.height);
+        const fullCanvas = new OffscreenCanvas(fullCrop.width, fullCrop.height);
+        const fullCtx = fullCanvas.getContext('2d');
+        if (fullCtx) {
+          fullCtx.drawImage(
+            rawImg,
+            cropRectPx.x,
+            cropRectPx.y,
+            cropRectPx.width,
+            cropRectPx.height,
+            0,
+            0,
+            fullCrop.width,
+            fullCrop.height,
+          );
+          fullResolutionDataUrl = await canvasToDataURL(fullCanvas, 'image/png');
+        }
+      }
+      return {
+        dataUrl,
+        widthCss: finalWidthCss,
+        heightCss: finalHeightCss,
+        originX: Math.round(cropRectPx.x / dpr),
+        originY: Math.round(cropRectPx.y / dpr),
+        originalCropWidth: baseWidth,
+        originalCropHeight: baseHeight,
+        ...(fullResolutionDataUrl ? { fullResolutionDataUrl } : {}),
+      };
+    } finally {
+      if (typeof (rawImg as any).close === 'function') (rawImg as any).close();
+    }
   }
 
   /**
@@ -1861,6 +2041,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     heightCss: number;
     originalCaptureWidth: number;
     originalCaptureHeight: number;
+    fullResolutionDataUrl?: string;
   }> {
     // 1. Warmup page: quick down-and-up scroll to trigger lazy loading, IntersectionObserver & skeleton screens
     try {
@@ -2065,12 +2246,15 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       outputCanvas = finalCanvas;
     }
 
-    const format = options.format || 'webp';
-    const targetMime =
-      format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const format = options.format === 'png' ? 'png' : 'jpeg';
+    const targetMime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
     const qualityFraction =
-      typeof options.quality === 'number' ? Math.max(0, Math.min(1, options.quality / 100)) : 0.8;
+      typeof options.quality === 'number' ? Math.max(0, Math.min(1, options.quality / 100)) : 0.85;
     const finalDataUrl = await canvasToDataURL(outputCanvas, targetMime, qualityFraction);
+    let fullResolutionDataUrl: string | undefined;
+    if (options.savePng === true || options.saveToDisk === true) {
+      fullResolutionDataUrl = await canvasToDataURL(finalCanvas, 'image/png');
+    }
 
     return {
       dataUrl: finalDataUrl,
@@ -2078,6 +2262,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       heightCss: targetHeightCss,
       originalCaptureWidth: capturedWidthCss,
       originalCaptureHeight: capturedHeightCss,
+      ...(fullResolutionDataUrl ? { fullResolutionDataUrl } : {}),
     };
   }
 }

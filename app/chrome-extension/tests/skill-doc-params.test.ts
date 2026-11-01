@@ -16,7 +16,7 @@ const SKILL_EXAMPLES: Array<[string, Record<string, unknown>]> = [
   ['chrome_interact_index', { index: 1, action: 'click' }],
   ['chrome_fill_index', { index: 2, text: 'developer@example.com', clear: true }],
   ['chrome_fill_index', { index: 2, text: 'developer@example.com', clear: true, pressEnter: true }],
-  ['chrome_screenshot', { grid: true, format: 'webp' }],
+  ['chrome_screenshot', { grid: true, format: 'jpeg', maxDimension: 1568 }],
   ['chrome_screenshot', { fullPage: true, format: 'png' }],
   ['chrome_screenshot', { region: { x0: 300, y0: 200, x1: 700, y1: 500 }, highClarity: true }],
   ['chrome_upload_file', { index: 5, filePath: 'D:/data/document.pdf' }],

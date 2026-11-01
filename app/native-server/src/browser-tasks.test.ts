@@ -78,14 +78,15 @@ function expectedTabs(tabIds: number[]) {
 }
 
 function viewport(
-  status: 'applied' | 'limited' = 'applied',
-  width = 1440,
-  height = 900,
+  status: 'native' | 'limited' = 'native',
+  width = 1280,
+  height = 720,
+  dpr = 1.5,
   reason?: string,
 ) {
   return result({
     success: true,
-    viewport: { status, width, height, ...(reason ? { reason } : {}) },
+    viewport: { status, width, height, dpr, ...(reason ? { reason } : {}) },
   });
 }
 
@@ -471,7 +472,7 @@ describe('BrowserTaskManager', () => {
 
   it('records applied/limited viewport capability and reapplies it without closing the page', async () => {
     const storageDir = testDir('viewport-capability');
-    let viewportResult = viewport('applied');
+    let viewportResult = viewport('native');
     let viewportCalls = 0;
     let closeCalls = 0;
     const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
@@ -497,19 +498,21 @@ describe('BrowserTaskManager', () => {
       url: 'https://viewport.example/',
     });
     expect(openedTask.task?.pages[0]?.viewport).toEqual({
-      status: 'applied',
-      width: 1440,
-      height: 900,
+      status: 'native',
+      width: 1280,
+      height: 720,
+      dpr: 1.5,
     });
 
-    viewportResult = viewport('limited', 1200, 800, 'Chrome minimum width');
+    viewportResult = viewport('limited', 1200, 800, 1, 'Window is minimized');
     const resumed = await manager.execute({ action: 'resume', taskId: task!.id });
     expect(resumed.ok).toBe(true);
     expect(resumed.task?.pages[0]?.viewport).toEqual({
       status: 'limited',
       width: 1200,
       height: 800,
-      reason: 'Chrome minimum width',
+      dpr: 1,
+      reason: 'Window is minimized',
     });
     expect(viewportCalls).toBe(2);
     expect(closeCalls).toBe(0);

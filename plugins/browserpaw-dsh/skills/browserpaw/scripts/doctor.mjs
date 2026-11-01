@@ -7,7 +7,7 @@
  * 1. Bridge Token (~/.chrome-mcp/bridge-token)
  * 2. Fastify Native Bridge HTTP connectivity (http://127.0.0.1:12306/ping)
  * 3. Token Authentication & Security Guard
- * 4. Chrome Extension Build Output & Synchronization (D:\workspace\browserpaw)
+ * 4. Chrome Extension Build Output & Synchronization (source checkout only)
  * 5. Chrome Native Messaging Host Registration (Windows Registry / Host Manifest)
  * 6. Live MCP JSON-RPC Handshake (initialize & tools/list)
  *
@@ -53,14 +53,18 @@ function findRepoRoot(start) {
     if (parent === dir) break;
     dir = parent;
   }
-  // Not inside a checkout (for example a plugin installed outside the repo): keep the
-  // historical two-level assumption so the build check still reports the missing output.
-  return join(start, '..', '..');
+  return null;
 }
-const REPO_ROOT = resolve(
-  process.env.BROWSERPAW_REPO_ROOT || findRepoRoot(dirname(fileURLToPath(import.meta.url))),
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const configuredRepoRoot = process.env.BROWSERPAW_REPO_ROOT?.trim();
+const REPO_ROOT = configuredRepoRoot ? resolve(configuredRepoRoot) : findRepoRoot(scriptDir);
+const CHECKOUT_MODE = Boolean(
+  REPO_ROOT && existsSync(join(REPO_ROOT, 'app', 'chrome-extension', 'package.json')),
 );
-const EXT_SRC_OUTPUT = join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3');
+const REPAIR_MODE = AUTO_FIX && CHECKOUT_MODE;
+const EXT_SRC_OUTPUT = CHECKOUT_MODE
+  ? join(REPO_ROOT, 'app', 'chrome-extension', '.output', 'chrome-mv3')
+  : null;
 // Resolve standalone load directories from environment or explicit arguments instead of hardcoded paths
 const STANDALONE_EXT_DIRS = process.env.BROWSERPAW_STANDALONE_DIRS
   ? process.env.BROWSERPAW_STANDALONE_DIRS.split(delimiter)
@@ -71,6 +75,15 @@ const STANDALONE_EXT_DIRS = process.env.BROWSERPAW_STANDALONE_DIRS
 console.log('\n================================================================');
 console.log('         BrowserPaw System Healthcheck & Repair');
 console.log('================================================================\n');
+console.log(
+  CHECKOUT_MODE
+    ? `Mode: source checkout (${REPO_ROOT})`
+    : 'Mode: installed skill (source checkout checks skipped)',
+);
+if (AUTO_FIX && !CHECKOUT_MODE) {
+  console.log('       --fix is unavailable without a BrowserPaw source checkout.');
+}
+console.log('');
 
 let passCount = 0;
 let failCount = 0;
@@ -134,7 +147,7 @@ try {
   }
 } catch (e) {
   report(false, `Native Bridge Server is NOT reachable on ${BASE_URL}`, e.message);
-  if (AUTO_FIX && platform() === 'win32') {
+  if (REPAIR_MODE && platform() === 'win32') {
     try {
       const netstat = execSync(`netstat -ano | findstr :${PORT}`, { encoding: 'utf8' });
       console.log('       Active listeners found on port:', netstat.trim());
@@ -203,7 +216,9 @@ if (httpOnline && token) {
 
 // 5. Chrome Extension Build Output & Synchronization
 let buildOk = false;
-if (
+if (!CHECKOUT_MODE) {
+  console.log('[INFO] Installed skill mode: source build and standalone-directory checks are skipped.');
+} else if (
   existsSync(join(EXT_SRC_OUTPUT, 'manifest.json')) &&
   existsSync(join(EXT_SRC_OUTPUT, 'background.js'))
 ) {
@@ -289,9 +304,9 @@ function replaceTree(src, dest) {
 
 // Check Standalone Load Directories. Each directory reports exactly once, so a repair
 // that succeeds does not leave the earlier failure counted against the final status.
-for (const dir of STANDALONE_EXT_DIRS) {
+for (const dir of CHECKOUT_MODE ? STANDALONE_EXT_DIRS : []) {
   if (!existsSync(dir)) {
-    if (AUTO_FIX && buildOk) {
+    if (REPAIR_MODE && buildOk) {
       try {
         replaceTree(EXT_SRC_OUTPUT, dir);
         report(true, `Created and Synced Standalone Directory: ${dir}`);
@@ -330,7 +345,7 @@ for (const dir of STANDALONE_EXT_DIRS) {
     report(true, `Standalone Directory Synced: ${dir}`, `All build files matched.`);
     continue;
   }
-  if (!(AUTO_FIX && buildOk)) {
+  if (!(REPAIR_MODE && buildOk)) {
     report(false, `Standalone Directory Out of Sync: ${dir}`);
     continue;
   }
@@ -362,9 +377,11 @@ if (platform() === 'win32') {
     report(
       false,
       `Native Messaging Host Registry Key Missing`,
-      'Run: node app/native-server/dist/scripts/register.js',
+      CHECKOUT_MODE
+        ? 'Run: node app/native-server/dist/scripts/register.js'
+        : 'Reinstall the BrowserPaw Native Messaging Host registration.',
     );
-    if (AUTO_FIX) {
+    if (REPAIR_MODE) {
       try {
         const regScript = join(REPO_ROOT, 'app', 'native-server', 'dist', 'scripts', 'register.js');
         if (existsSync(regScript)) {
@@ -405,6 +422,9 @@ if (modelDownloaded) {
 }
 
 // Check local port 8009 service
+const localServiceHint = CHECKOUT_MODE
+  ? 'Run scripts/decider/start-local-service.bat'
+  : 'Start it from the BrowserPaw local model configuration';
 try {
   const localRes = await fetch('http://127.0.0.1:8009/ping', { signal: AbortSignal.timeout(800) });
   if (localRes.ok || localRes.status === 404) {
@@ -416,13 +436,13 @@ try {
   } else {
     report(
       true,
-      `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`,
+      `Local Jev Decider Service (Port 8009): Standby / Offline (${localServiceHint})`,
     );
   }
 } catch {
   report(
     true,
-    `Local Jev Decider Service (Port 8009): Standby / Offline (Run scripts/decider/start-local-service.bat)`,
+    `Local Jev Decider Service (Port 8009): Standby / Offline (${localServiceHint})`,
   );
 }
 
@@ -432,6 +452,10 @@ if (failCount === 0) {
   console.log('STATUS: [HEALTHY] All BrowserPaw layers are operating normally!\n');
 } else {
   console.log('STATUS: [ACTION REQUIRED] Please review the failed items above.');
-  console.log('TIP: Run `node skills/browserpaw/scripts/doctor.mjs --fix` for automatic repair.\n');
+  console.log(
+    CHECKOUT_MODE
+      ? 'TIP: Run `node skills/browserpaw/scripts/doctor.mjs --fix` for source-checkout repair.\n'
+      : 'TIP: Resolve the failed runtime layer or reinstall BrowserPaw. Source-checkout --fix is unavailable for an installed skill.\n',
+  );
   process.exitCode = 1;
 }

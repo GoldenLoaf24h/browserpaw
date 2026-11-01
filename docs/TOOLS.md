@@ -4,9 +4,9 @@
 
 | Profile            | Tool Count | Estimated Prompt Footprint (chars/4) | Description                                                                           |
 | :----------------- | :--------: | :----------------------------------: | :------------------------------------------------------------------------------------ |
-| **core** (default) |     16     |                ~11.0k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
-| **full**           |     52     |                ~24.1k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
-| **crawl**          |     12     |                ~6.5k                 | High-throughput web extraction, markdown summarization, and media inspection          |
+| **core** (default) |     16     |                ~11.1k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
+| **full**           |     52     |                ~24.3k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
+| **crawl**          |     12     |                ~6.6k                 | High-throughput web extraction, markdown summarization, and media inspection          |
 
 Canonical surface: 52 tools = 49 extension-executed tools + 3 native-server tools (`chrome_task`, `chrome_skill`, `chrome_act_toward_goal`). Profile counts are Core 16 / Crawl 12 / Full 52. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 
@@ -187,7 +187,7 @@ Run a bounded semantic micro-loop toward a natural-language page goal. The loop 
 - `pauseBeforeKeywords` — List of keywords (e.g. ["Post", "Submit", "Pay"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status "paused" with target element context for System 2 confirmation.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
-- `pressEnter` — Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.
+- `pressEnter` — Whether the caller authorizes Enter after filling. Automatic submission still requires a clearly requested search goal and a verified search control; generic forms and external writes pause for the caller.
 - `mode:off|local|remote` — Requested Jev mode. Must match the globally enabled backend; cannot override off or switch backends.
 - `verification` — Read-only independent observations required to declare the goal complete. Without these, completion remains unverified.
 - `taskId` — Optional durable task identity; restricts this operation to its verified pages.
@@ -365,8 +365,10 @@ Use a mouse and keyboard to interact with a web browser, and take screenshots.
 - `crop` — Alias for region: { x, y, width, height } or { x0, y0, x1, y1 }.
 - `grid` — For action=zoom or action=screenshot: overlay coordinate reference grid or reticle crosshairs.
 - `highClarity` — For action=screenshot or action=zoom: preserve 100% full-resolution sharpness without downsampling.
-- `format:png|jpeg|webp` — Image format for action=screenshot or action=zoom.
-- `quality` — Image compression quality from 0 to 100.
+- `maxDimension` — For action=screenshot: maximum long edge in pixels for the model-facing image. Default 1568.
+- `maxPixels` — For action=screenshot: maximum total pixels for the model-facing image. Default 1,150,000.
+- `format:png|jpeg` — Image format for action=screenshot or action=zoom.
+- `quality` — JPEG compression quality from 0 to 100 (default: 85).
 - `selector` — CSS selector for fill (alternative to ref).
 - `value` — Value to set for action=fill (string | boolean | number)
 - `elements` — For action=fill_form: list of elements to fill (ref + value)
@@ -436,7 +438,7 @@ Fast 1-step dismissal for visible high-z-index marketing popups, coupon dialogs,
 
 ### `chrome_screenshot`
 
-[Prefer browserpaw_read_dom over taking a screenshot] Take a screenshot of the current page or a specific element. Returns base64 image directly in MCP image content block without writing to disk. By default, output is compressed JPEG with maxWidth <= 1280px. Debug disk save is available via savePng/saveToDisk into system temporary directory.
+[Prefer browserpaw_read_dom over taking a screenshot] Capture the page, a region, or an element as PNG/JPEG. The default inline JPEG is fitted to a 1568px long edge and 1.15MP for a practical OCR/token balance. Tune sharpness with maxWidth, maxDimension, maxPixels, highClarity, or region. savePng writes the full-resolution physical-pixel PNG for user-facing delivery.
 
 - `name` — Name or label for the screenshot. Purely in-memory by default; only written to disk if savePng/saveToDisk is explicitly set to true.
 - `selector` — CSS selector for element to screenshot
@@ -446,25 +448,27 @@ Fast 1-step dismissal for visible high-z-index marketing popups, coupon dialogs,
 - `background` — Attempt capture without bringing tab/window to foreground. CDP-based capture is used for viewport captures. Default: true
 - `width` — Width in pixels (default: 800)
 - `height` — Height in pixels (default: 600)
-- `maxWidth` — Maximum width in pixels for compression (default: 1280)
+- `maxWidth` — Optional hard cap on image width in pixels, applied together with the vision budget.
+- `maxDimension` — Maximum long edge in pixels for the model-facing image (default: 1568). Lower it to reduce tokens; raise it for fine text.
+- `maxPixels` — Maximum total pixels for the model-facing image (default: 1,150,000). Lower it to reduce tokens; raise it for dense pages.
 - `storeBase64` — Return screenshot in base64 format in text content (image content is always returned directly)
 - `fullPage` — Capture a full-page scroll screenshot with GoFullPage-grade industrial stitching: automatic StyleStack fixed/sticky header de-duplication, page warmup for lazy-loading/skeletons, dynamic height change recovery, and captureVisibleTab quota backoff retry (default: false).
 - `maxHeight` — Maximum height in pixels to capture for full-page screenshots (default: 50000, protects against infinite scroll runaway).
-- `savePng` — Save screenshot to system temporary directory for debugging (default: false, zero disk write by default)
+- `savePng` — Save a full-resolution, lossless PNG at the capture physical-pixel size to the system temporary directory. Use this for screenshots the user asked to view or keep.
 - `saveToDisk` — Deprecated alias for savePng (default: false, zero disk write by default; saves to system temp, not Downloads). Prefer savePng.
 - `som` — Overlay Set-of-Mark numbered badges on interactive elements before capturing the screenshot
 - `highlight` — Deprecated alias for som; still accepted but hidden from the schema to keep it small. Prefer som.
 - `targetIndex` — Compact 1-based numeric index of target element from browserpaw_read_dom to crop and capture only this specific region of interest
 - `index` — Alias for targetIndex: compact 1-based numeric index of target element from browserpaw_read_dom to crop and capture
 - `padding` — Padding in pixels to expand around targetIndex crop area (default: 0)
-- `region` — Lossless high-density ROI crop: capture only a specific sub-region { x0, y0, x1, y1 } in CSS pixels or polymorphic [ymin, xmin, ymax, xmax]. Completely avoids downscaling and preserves full pixel clarity for fine details like small text or dice dots.
+- `region` — High-density ROI crop: capture only a specific sub-region { x0, y0, x1, y1 } in CSS pixels or polymorphic [ymin, xmin, ymax, xmax]. Use it to inspect fine text without paying for the full page.
 - `crop` — Alias for region: { x, y, width, height } or { x0, y0, x1, y1 }.
 - `grid` — Overlay semi-transparent coordinate reference grid with perimeter tape measure rulers (20/50/100px ticks) and interior reticle crosshairs (+) to eliminate visual estimation hallucination (default: false)
 - `enableGrid` — Alias for grid: overlay semi-transparent coordinate reference grid with perimeter tape measure rulers and crosshairs
 - `expandSearchArea` — For small elements (< 100x100), adaptively expand the crop bounding box to preserve surrounding headers and text context (default: true)
-- `format:png|jpeg|webp` — Image output format: webp (default, high compression for LLM), jpeg, or png
-- `quality` — Image compression quality from 0 to 100 for webp/jpeg formats (default: 80)
-- `highClarity` — Prioritize 100% full-resolution clarity without downsampling (disables dimension scaling, keeps 1:1 CSS pixel sharpness for reading fine details or dice dots).
+- `format:png|jpeg` — Output format: jpeg (default, compact for model inspection) or png (lossless). Saved screenshots are always PNG.
+- `quality` — JPEG compression quality from 0 to 100 (default: 85)
+- `highClarity` — Disable the default vision budget and keep the native CSS-pixel image, unless maxDimension/maxPixels/maxWidth is explicitly set.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `taskId` — Optional durable task identity; restricts this operation to its verified pages.
 

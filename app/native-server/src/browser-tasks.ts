@@ -17,9 +17,10 @@ type PageOwnership = 'owned' | 'borrowed' | 'user';
 type PageState = 'active' | 'handedOff' | 'closed';
 
 export interface BrowserTaskViewport {
-  status: 'applied' | 'limited';
+  status: 'native' | 'limited';
   width: number;
   height: number;
+  dpr?: number;
   reason?: string;
 }
 
@@ -1550,8 +1551,10 @@ export class BrowserTaskManager {
         ok: true,
         action: 'open',
         message:
-          viewport.status === 'applied'
-            ? `Opened owned page ${tabId} with task viewport`
+          viewport.status === 'native'
+            ? `Opened owned page ${tabId} with native viewport ${viewport.width}x${viewport.height}${
+                viewport.dpr ? ` @ ${viewport.dpr}x` : ''
+              }`
             : `Opened owned page ${tabId}; viewport capability is limited`,
         task: viewportCommit.task,
       };
@@ -2816,18 +2819,21 @@ export class BrowserTaskManager {
       if (
         payload.success === true &&
         viewport &&
-        (viewport.status === 'applied' || viewport.status === 'limited') &&
+        (viewport.status === 'native' || viewport.status === 'limited') &&
         typeof viewport.width === 'number' &&
         Number.isFinite(viewport.width) &&
         viewport.width >= 0 &&
         typeof viewport.height === 'number' &&
         Number.isFinite(viewport.height) &&
-        viewport.height >= 0
+        viewport.height >= 0 &&
+        (viewport.dpr === undefined ||
+          (typeof viewport.dpr === 'number' && Number.isFinite(viewport.dpr) && viewport.dpr > 0))
       ) {
         return {
           status: viewport.status,
           width: viewport.width,
           height: viewport.height,
+          ...(typeof viewport.dpr === 'number' ? { dpr: viewport.dpr } : {}),
           ...(optionalString(viewport.reason) ? { reason: optionalString(viewport.reason) } : {}),
         };
       }

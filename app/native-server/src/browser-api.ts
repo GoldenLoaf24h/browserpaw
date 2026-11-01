@@ -84,6 +84,8 @@ export interface ScreenshotOptions {
   width?: number;
   height?: number;
   maxWidth?: number;
+  maxDimension?: number;
+  maxPixels?: number;
   storeBase64?: boolean;
   fullPage?: boolean;
   maxHeight?: number;
@@ -99,7 +101,7 @@ export interface ScreenshotOptions {
   grid?: boolean;
   enableGrid?: boolean;
   expandSearchArea?: boolean;
-  format?: 'png' | 'jpeg' | 'webp';
+  format?: 'png' | 'jpeg';
   quality?: number;
   highClarity?: boolean;
 }

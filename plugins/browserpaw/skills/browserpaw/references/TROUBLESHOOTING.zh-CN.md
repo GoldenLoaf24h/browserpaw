@@ -1,13 +1,13 @@
 # BrowserPaw 故障排查
 
-连接异常时先运行通用诊断脚本：
+连接异常时，在已安装技能的根目录运行通用诊断脚本：
 
 ```powershell
 node scripts/doctor.mjs
-node scripts/doctor.mjs --fix
 ```
 
-Windows 用户也可以运行 `scripts/repair.bat`。
+`--fix` 只适用于 BrowserPaw 源码 checkout，或 `BROWSERPAW_REPO_ROOT`
+显式指向源码仓库的情况。已安装技能会检查正在运行的 Native/MCP 状态，而不是源码构建文件。
 
 ## 常见原因
 
@@ -18,6 +18,7 @@ Windows 用户也可以运行 `scripts/repair.bat`。
 - 严格定位匹配到多个元素；改用更具体的选择器、角色、标签或 frame。
 - 截图坐标过期；重新截图并使用新的 capture 身份。
 - 同时出现多个 dialog、下载、popup 或上传来源；先明确来源再操作。
+- Jev 在网络、超时或限流故障后会临时暂停，并保留用户选择的 Remote/Local；下一次使用时可在 30 秒后恢复同一后端。认证或配置错误需先修正配置，修正后恢复原选择；用户主动关闭则保持关闭。
 
 ## 恢复顺序
 
@@ -26,6 +27,7 @@ Windows 用户也可以运行 `scripts/repair.bat`。
 3. 对读操作重新观察准确的 tab/document。
 4. 写操作结果未知时先观察当前状态，不要重放请求。
 5. 遇到 CAPTCHA、2FA、付款或登录墙时交给用户处理。
+6. 查看 `chrome_doctor` 中已确认的模式、用户请求模式、关闭原因和重试时间；不要通过切换后端或重复原动作绕过暂停。
 
 ## 组件位置
 

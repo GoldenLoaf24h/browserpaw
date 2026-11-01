@@ -224,7 +224,7 @@ export function syncSkills(root = repoRoot, { check = false } = {}) {
   const nativeTarget = 'app/native-server/dist/skill/browserpaw';
   assertNoLinks(absoluteRoot, path.join(absoluteRoot, nativeTarget));
   const activeTargets = { ...targets };
-  if (fs.existsSync(path.join(absoluteRoot, check ? nativeTarget : 'app/native-server/dist'))) {
+  if (fs.existsSync(path.join(absoluteRoot, 'app/native-server/dist'))) {
     activeTargets.native = nativeTarget;
   }
 

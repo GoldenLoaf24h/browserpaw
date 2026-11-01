@@ -603,14 +603,24 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           description:
             'For action=screenshot or action=zoom: preserve 100% full-resolution sharpness without downsampling.',
         },
+        maxDimension: {
+          type: 'number',
+          description:
+            'For action=screenshot: maximum long edge in pixels for the model-facing image. Default 1568.',
+        },
+        maxPixels: {
+          type: 'number',
+          description:
+            'For action=screenshot: maximum total pixels for the model-facing image. Default 1,150,000.',
+        },
         format: {
           type: 'string',
-          enum: ['png', 'jpeg', 'webp'],
+          enum: ['png', 'jpeg'],
           description: 'Image format for action=screenshot or action=zoom.',
         },
         quality: {
           type: 'number',
-          description: 'Image compression quality from 0 to 100.',
+          description: 'JPEG compression quality from 0 to 100 (default: 85).',
         },
         // For action=fill
         selector: {
@@ -759,7 +769,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      '[Prefer chrome_read_dom over taking a screenshot] Take a screenshot of the current page or a specific element. Returns base64 image directly in MCP image content block without writing to disk. By default, output is compressed JPEG with maxWidth <= 1280px. Debug disk save is available via savePng/saveToDisk into system temporary directory.',
+      '[Prefer chrome_read_dom over taking a screenshot] Capture the page, a region, or an element as PNG/JPEG. The default inline JPEG is fitted to a 1568px long edge and 1.15MP for a practical OCR/token balance. Tune sharpness with maxWidth, maxDimension, maxPixels, highClarity, or region. savePng writes the full-resolution physical-pixel PNG for user-facing delivery.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -791,7 +801,18 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         height: { type: 'number', description: 'Height in pixels (default: 600)' },
         maxWidth: {
           type: 'number',
-          description: 'Maximum width in pixels for compression (default: 1280)',
+          description:
+            'Optional hard cap on image width in pixels, applied together with the vision budget.',
+        },
+        maxDimension: {
+          type: 'number',
+          description:
+            'Maximum long edge in pixels for the model-facing image (default: 1568). Lower it to reduce tokens; raise it for fine text.',
+        },
+        maxPixels: {
+          type: 'number',
+          description:
+            'Maximum total pixels for the model-facing image (default: 1,150,000). Lower it to reduce tokens; raise it for dense pages.',
         },
         storeBase64: {
           type: 'boolean',
@@ -811,7 +832,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         savePng: {
           type: 'boolean',
           description:
-            'Save screenshot to system temporary directory for debugging (default: false, zero disk write by default)',
+            'Save a full-resolution, lossless PNG at the capture physical-pixel size to the system temporary directory. Use this for screenshots the user asked to view or keep.',
         },
         saveToDisk: {
           type: 'boolean',
@@ -845,7 +866,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         region: {
           type: 'object',
           description:
-            'Lossless high-density ROI crop: capture only a specific sub-region { x0, y0, x1, y1 } in CSS pixels or polymorphic [ymin, xmin, ymax, xmax]. Completely avoids downscaling and preserves full pixel clarity for fine details like small text or dice dots.',
+            'High-density ROI crop: capture only a specific sub-region { x0, y0, x1, y1 } in CSS pixels or polymorphic [ymin, xmin, ymax, xmax]. Use it to inspect fine text without paying for the full page.',
           properties: {
             x0: { type: 'number' },
             y0: { type: 'number' },
@@ -874,19 +895,18 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         },
         format: {
           type: 'string',
-          enum: ['png', 'jpeg', 'webp'],
+          enum: ['png', 'jpeg'],
           description:
-            'Image output format: webp (default, high compression for LLM), jpeg, or png',
+            'Output format: jpeg (default, compact for model inspection) or png (lossless). Saved screenshots are always PNG.',
         },
         quality: {
           type: 'number',
-          description:
-            'Image compression quality from 0 to 100 for webp/jpeg formats (default: 80)',
+          description: 'JPEG compression quality from 0 to 100 (default: 85)',
         },
         highClarity: {
           type: 'boolean',
           description:
-            'Prioritize 100% full-resolution clarity without downsampling (disables dimension scaling, keeps 1:1 CSS pixel sharpness for reading fine details or dice dots).',
+            'Disable the default vision budget and keep the native CSS-pixel image, unless maxDimension/maxPixels/maxWidth is explicitly set.',
         },
         sessionId: {
           type: 'string',
@@ -3495,7 +3515,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         pressEnter: {
           type: 'boolean',
           description:
-            'Whether to press Enter after filling text into an input field. When omitted, Jev judges from the task whether to fill only, fill and submit, or is unclear; an unclear answer pauses for the caller rather than submitting. An explicit value always wins.',
+            'Whether the caller authorizes Enter after filling. Automatic submission still requires a clearly requested search goal and a verified search control; generic forms and external writes pause for the caller.',
         },
         mode: {
           type: 'string',

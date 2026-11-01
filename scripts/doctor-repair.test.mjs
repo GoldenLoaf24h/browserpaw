@@ -123,6 +123,26 @@ describe('doctor.mjs repair behaviour', () => {
     assert.ok(!output.includes(path.join('skills', 'app')), output);
   });
 
+  it('uses runtime-only diagnostics for an installed skill without a source checkout', () => {
+    fs.rmSync(path.join(sandbox.root, 'app/chrome-extension/package.json'));
+    const standalone = path.join(sandbox.root, 'installed-load-dir');
+    const proc = runDoctor(sandbox, ['--fix'], {
+      BROWSERPAW_REPO_ROOT: '',
+      BROWSERPAW_STANDALONE_DIRS: standalone,
+    });
+    const output = (proc.stdout || '') + (proc.stderr || '');
+
+    assert.match(output, /Mode: installed skill/, output);
+    assert.match(output, /--fix is unavailable without a BrowserPaw source checkout/, output);
+    assert.doesNotMatch(output, /Extension Build Missing/, output);
+    assert.doesNotMatch(output, /node skills\/browserpaw\/scripts\/doctor\.mjs --fix/, output);
+    assert.equal(
+      fs.existsSync(standalone),
+      false,
+      'installed mode must not perform source repairs',
+    );
+  });
+
   it('--fix creates a missing standalone directory instead of reporting a ReferenceError', () => {
     const standalone = path.join(sandbox.root, 'load-dir');
     const proc = runDoctor(sandbox, ['--fix'], { BROWSERPAW_STANDALONE_DIRS: standalone });
