@@ -2,9 +2,14 @@
 
 This document tracks in-progress architectural updates, fixes, and documentation improvements queued for future releases.
 
-## 2026-11-02: BrowserPaw 4.1.1 interaction convergence
+## 2026-11-02: BrowserPaw 4.1.2 page-restriction reliability patch
 
+- Chromium native error pages (`chrome-error://chromewebdata/`) are now rejected as non-injectable pages before scripting. If Chrome switches to an error page before the tab URL reflects it, the injection exception is converted to one actionable tool error without writing expected failures to the extension error panel.
+- Expected page restrictions now use one shared error type and logger path. Browser internal pages, error pages and cloud-metadata guards do not write `console.error` entries, while unexpected tool failures remain visible for diagnosis.
 - Standard, fast, chained and action-preflight observations now share one interaction-scope calculation for modal state, Portal inclusion and scroll-container ownership. Explicit background reads remain possible, but modal and occlusion checks still block background actions.
+- Modal scope discovery is now structural rather than site-specific: it follows native dialog/top-layer semantics, ARIA ownership (`aria-controls`, `aria-owns`, `popovertarget`, `commandfor`), composed Shadow DOM ancestry, and visible sibling controls in the same overlay host. Fixed framework selectors remain discovery hints only and cannot grant interaction by themselves. Scroll discovery also pierces Shadow DOM.
+- Fast observation supports `isolateModal:true/false` with the same active-modal reporting as standard observation. Options that fast cannot implement, currently `flattenCards` and `virtualizeViewport`, fail closed with `unsupported_fast_options` before an in-page observation instead of returning a successful degraded or empty snapshot.
+- A delayed page-creation identity can now be recovered only through explicit `resume({adopt:true})` after the same browser instance, agent ownership, tab, and a concrete document identity are observed. Known pending tabs and tab-less receipts can be explicitly retained by `finish({keepUnknownPages:true,confirm:true})`; neither path closes an unidentified page or claims cleanup.
 - Field verification is independent from nearby submit controls. `chrome_fill_index` verifies the field value only; `pressEnter` records an explicit key step, while `submit:true` requires a caller-provided `submitTarget` and rejects the request before field mutation when it is missing. Enter plus an explicit submit click is rejected as a conflicting double submission.
 - `chrome_form_pipeline` fills the fields exposed by the current form step and no longer guesses Next/Submit controls or falls back to Enter. It reports `completionScope:"current_step_actions"`, `businessOutcome:"not_verified"` and retains verified fields before a later error. `autoAdvance:true` returns `migration_required`; multi-step work must list explicit click, key and assertion steps in `chrome_batch_actions`.
 - Public click, fill, interact, keyboard, batch and form results expose the same execution/verification outcome contract. Dispatch-unknown mutations remain `retry:false`; earlier completed fields and original receipts survive later failures.
@@ -13,7 +18,9 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - The Jev goal loop reuses the same action-target candidates and outcome states. It may navigate, expand, toggle local views, scroll and fill within an explicit goal, but submit/send/publish/delete actions require caller-listed steps. Model confidence does not replace authorization.
 - Skills, schema help, generated tool documentation and release migration notes are updated together. Old scripts that depended on implicit form advancement or Enter-based submission require migration.
 
-This section is queued for the 4.1.1 release record and remains unverified until the complete gate and real-browser acceptance in the release plan pass.
+The error-page and expected-page-restriction items are queued for the 4.1.2
+release record. The remaining interaction-convergence items describe the
+already published 4.1.1 behavior and are retained here as the source ledger.
 
 ## 2026-11-01: Adaptive viewport and resolution-aware screenshots
 
@@ -97,7 +104,7 @@ This section is queued for the 4.1.1 release record and remains unverified until
 
 - Native transport failures distinguish a request rejected before sending from a request whose response was lost. Raw MCP and task/skill wrappers retain machine-readable state; uncertain requests do not claim physical delivery or permit automatic replay.
 - Task guards and cancellation retain structured refusal states. Task and skill errors preserve original receipts, diagnostic text, and image content instead of reducing them to a stack trace.
-- Unidentified page creation remains pending across restart and blocks another open and default cleanup. Explicit `finish({keepUnknownPages:true,confirm:true})` retains potential pages for the user and returns warnings and receipts; it never claims they were closed. Skill cleanup does not enable this option automatically.
+- Pending page creation remains unresolved across restart. A known late tab can be adopted only by explicit `resume({adopt:true})` after the same browser instance, agent ownership, and a concrete document identity are all observed; URL alone is never identity. Explicit `finish({keepUnknownPages:true,confirm:true})` can retain either known late tabs or receipts without a `tabId`, and returns warnings and receipts without claiming they were closed. Skill cleanup does not enable this option automatically.
 - Budget and pending-creation rejections report blocked delivery without navigating. Invalid navigation responses retain an unidentified creation receipt. Finish and handoff preserve transport failures and attached content; preflight inventory failures do not imply that a cleanup action was sent.
 - Hermes task and skill wrappers read the packaged schema snapshot; the existing tool-reference generator refreshes that snapshot from shared schemas. The curated tool set is unchanged.
 - These corrections require a new complete verification and runtime acceptance. Prior frozen builds and M7 records do not establish delivery of this change.
@@ -130,7 +137,7 @@ This section is queued for the 4.1.1 release record and remains unverified until
 ## 🎯 Version Invariants & Release Rules
 
 1. **No Untagged Release Claims**: Features in progress must remain recorded here or in draft files. No release may be documented as published without an active git tag.
-2. **Current Monorepo Version**: Working version is `4.1.1` across core packages; the DSH adapter keeps its independent package version.
+2. **Current Monorepo Version**: Working version is `4.1.2` across core packages; the DSH adapter keeps its independent package version.
 3. **Pending Validation**: All delivered items must pass the complete verification suite defined in [`docs/QUALITY.md`](../QUALITY.md).
 
 ---

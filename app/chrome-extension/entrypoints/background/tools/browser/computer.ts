@@ -26,6 +26,7 @@ import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { animateAgentCursor, animateAgentCursorClick, setAgentCursorNote } from './agent-cursor';
 import { executeInPage } from './in-page-engine';
 import { createMousePressGuard, isCdpOutcomeUncertainError } from '@/utils/race-cdp';
+import { logUnexpectedToolError } from '@/utils/restricted-url';
 
 type MouseButton = 'left' | 'right' | 'middle';
 
@@ -300,7 +301,7 @@ class ComputerTool extends BaseBrowserToolExecutor {
 
       return result;
     } catch (error) {
-      console.error('Error in computer tool:', error);
+      logUnexpectedToolError('Error in computer tool:', error);
       return createErrorResponse(
         `Failed to execute action: ${error instanceof Error ? error.message : String(error)}`,
       );

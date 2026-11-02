@@ -11,7 +11,9 @@ If the host also exposes BrowserPaw's persistent JavaScript facade, the same ope
 - Action `status` exposes pending creations, document identity, downloads, and page ownership.
 - Action `takeOver` with `confirm:true` transfers task control to the current authorized client.
 - Action `resume` with `adopt:true` adopts a known pending document only after fresh inventory verifies browser, tab, document, and URL.
+- A pending receipt with a known tab is never adopted from URL alone: explicit `resume({adopt:true})` requires the same browser instance, an agent-managed tab, and a concrete `documentId`.
 - Action `handOff` gives an owned page to the user. Action `finish` with `keep:[tabId]` does the same during finalization.
+- Action `finish` with `keepUnknownPages:true,confirm:true` retains unresolved known or tab-less creation receipts without closing them; it never claims cleanup.
 - Action `cancel` stops later task work. It does not roll back a mutation already dispatched and does not conceal unknown state.
 
 With the persistent facade, request cancellation uses `mcp.call(name,args,{signal})`. A page creation or handoff confirmed before cancellation remains in the ledger.

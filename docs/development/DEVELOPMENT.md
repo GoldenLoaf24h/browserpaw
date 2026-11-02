@@ -4,7 +4,7 @@ Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps respons
 
 ## Current release work
 
-The current stable release is 4.1.1. It converges observation scope, explicit submit boundaries and interaction-result semantics across atomic tools, batch, form, REPL and Jev. Its complete gate, real-browser acceptance, production deployment and matching Linux/Windows CI passed before the tag was published.
+The latest published tag is 4.1.1. The current 4.1.2 release candidate adds unified expected-page restriction handling and Chromium error-page injection recovery without changing successful tool contracts. Its complete local gate, deployment verification and loaded-runtime probe have passed; publication still requires a commit, new tag, matching Linux/Windows CI and release-asset verification.
 
 The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
 

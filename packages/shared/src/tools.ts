@@ -243,7 +243,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unidentified creation receipts without closing them or claiming cleanup. Default finish stays unverified while those receipts exist.',
+      'Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unresolved page-creation receipts, including known tabs and receipts without a tabId, without closing them or claiming cleanup. Default finish stays unverified while those receipts still resolve to pages.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -275,7 +275,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         keepUnknownPages: {
           type: 'boolean',
           description:
-            'Finish while retaining every unidentified page-creation receipt. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts exist.',
+            'Finish while retaining every unresolved page-creation receipt, including known tabs and receipts without a tabId. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts still resolve to pages.',
         },
         adopt: {
           type: 'boolean',
@@ -1964,7 +1964,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         isolateModal: {
           type: 'boolean',
           description:
-            'When true and an active modal dialog is detected, restricts indexing to the active modal while strictly protecting portals, dropdowns, and alert containers.',
+            'When true and an active modal dialog is detected, restricts indexing to the active interaction surface. Standalone modal/portal roots are included through standard dialog/top-layer/popover semantics and explicit ARIA ownership relationships, not a fixed framework class list. Set false to observe background content while still reporting the active modal.',
         },
         exclude: {
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
@@ -2024,7 +2024,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         fast: {
           type: 'boolean',
           description:
-            'When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit.',
+            'When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit. flattenCards and virtualizeViewport are rejected before observation because fast does not implement them; isolateModal true/false is supported.',
         },
         legacyVisibility: {
           type: 'boolean',

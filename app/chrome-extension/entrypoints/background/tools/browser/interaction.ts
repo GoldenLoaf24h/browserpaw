@@ -14,6 +14,7 @@ import {
 } from '@/utils/interaction-outcome';
 import { interactIndexTool } from './interact-index';
 import { performPhysicalFill } from './fill-core';
+import { logUnexpectedToolError } from '@/utils/restricted-url';
 
 /**
  * D3 (TESTING-NOTES #19): resolveAffinityTab falls back to the user's ACTIVE
@@ -276,7 +277,7 @@ class ClickTool extends BaseBrowserToolExecutor {
       );
       return addResultWarning(delegated, clickAffinityWarning, loc);
     } catch (error) {
-      console.error('Error in click operation:', error);
+      logUnexpectedToolError('Error in click operation:', error);
       const status = actionAttempted ? 'unknown' : 'blocked';
       return attachActionReceipt(
         createInteractionErrorResponse(
@@ -503,7 +504,7 @@ class FillTool extends BaseBrowserToolExecutor {
         isError: false,
       };
     } catch (error) {
-      console.error('Error in fill operation:', error);
+      logUnexpectedToolError('Error in fill operation:', error);
       const status = actionAttempted ? 'unknown' : 'blocked';
       return attachActionReceipt(
         createInteractionErrorResponse(

@@ -1,7 +1,7 @@
 {
   "name": "browserpaw",
   "displayName": "BrowserPaw",
-  "version": "4.1.1",
+  "version": "4.1.2",
   "icon": "./.claude-plugin/icon.png",
   "description": "Control your own Chrome browser from Claude with BrowserPaw MCP tools for navigation, DOM perception, form filling, screenshots, and autonomous on-page micro-loops, reusing existing logins, cookies, and extensions.",
   "author": {

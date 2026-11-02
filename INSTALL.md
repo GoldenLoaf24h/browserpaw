@@ -371,7 +371,7 @@ Use the Desktop CLI shim with the same tarball or local-path commands shown belo
 ```bash
 cd plugins/browserpaw-dsh
 npm pack
-dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.1.tgz
+dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.2.tgz
 
 # Or from a local checkout:
 dsh plugin --profile <PROFILE> add "<ABSOLUTE_PATH_TO_REPO>/plugins/browserpaw-dsh"

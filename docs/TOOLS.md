@@ -4,9 +4,9 @@
 
 | Profile            | Tool Count | Estimated Prompt Footprint (chars/4) | Description                                                                           |
 | :----------------- | :--------: | :----------------------------------: | :------------------------------------------------------------------------------------ |
-| **core** (default) |     16     |                ~11.5k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
-| **full**           |     52     |                ~24.7k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
-| **crawl**          |     12     |                ~6.6k                 | High-throughput web extraction, markdown summarization, and media inspection          |
+| **core** (default) |     16     |                ~11.6k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
+| **full**           |     52     |                ~24.8k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
+| **crawl**          |     12     |                ~6.7k                 | High-throughput web extraction, markdown summarization, and media inspection          |
 
 Canonical surface: 52 tools = 49 extension-executed tools + 3 native-server tools (`chrome_task`, `chrome_skill`, `chrome_act_toward_goal`). Profile counts are Core 16 / Crawl 12 / Full 52. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
 
@@ -95,7 +95,7 @@ Extract and prune interactive DOM tree with compact 1-based index assignment, vi
 
 - `selector` — CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.
 - `scope` — Alias for selector. CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.
-- `isolateModal` — When true and an active modal dialog is detected, restricts indexing to the active modal while strictly protecting portals, dropdowns, and alert containers.
+- `isolateModal` — When true and an active modal dialog is detected, restricts indexing to the active interaction surface. Standalone modal/portal roots are included through standard dialog/top-layer/popover semantics and explicit ARIA ownership relationships, not a fixed framework class list. Set false to observe background content while still reporting the active modal.
 - `exclude` — CSS selector(s) to exclude from parsing (e.g. "#footer, #recommendations, .ad-banner"). Matching elements and their entire subtrees are pruned.
 - `viewportThreshold` — Vertical threshold in pixels for viewport boundary checking (default 1000)
 - `tabId` — Target tab ID (optional)
@@ -109,7 +109,7 @@ Extract and prune interactive DOM tree with compact 1-based index assignment, vi
 - `viewportOnly` — When true, only index elements inside or immediately near the visible viewport (default: false)
 - `activeViewportOnly` — When true, strictly constrains indexing to elements currently visible within the active viewport (threshold = 0) with horizontal/vertical frustum clipping, eliminating ghost elements from SPA wizards, carousels, and multi-step forms.
 - `format:compact|html|fast` — Output format for treeString. "compact" (default) uses a concise accessibility-inspired tree without closing tags. "html" returns pseudo-HTML tags. "fast" returns a budgeted snapshot; latency and total bytes depend on the page and frames.
-- `fast` — When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit.
+- `fast` — When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit. flattenCards and virtualizeViewport are rejected before observation because fast does not implement them; isolateModal true/false is supported.
 - `legacyVisibility` — When true, uses legacy visibility fallback (computedStyle display/visibility/opacity) instead of element.checkVisibility.
 - `deltaOnly` — When true, returns changes compared to the previous compatible snapshot. A missing or incompatible baseline returns a full snapshot; fast mode uses the standard representation for delta requests.
 - `dismissOverlays` — When true, automatically detects and dismisses visible marketing popups, coupon modals, and promotional overlays before indexing DOM nodes, preventing modal overlays from polluting the DOM tree (default: false)
@@ -621,7 +621,7 @@ Close all tabs in a tab group and delete the group.
 
 ### `chrome_task`
 
-Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unidentified creation receipts without closing them or claiming cleanup. Default finish stays unverified while those receipts exist.
+Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unresolved page-creation receipts, including known tabs and receipts without a tabId, without closing them or claiming cleanup. Default finish stays unverified while those receipts still resolve to pages.
 
 - `action:start|list|status|resume|takeOver|open|borrow|handOff|finish|cancel` (required)
 - `taskId` — Optional durable task identity; restricts this operation to its verified pages.
@@ -630,7 +630,7 @@ Manage durable browser tasks and owned pages. Connections do not own tasks. Defa
 - `url`
 - `tabId`
 - `keep` — Owned tab IDs to hand back to the user when finishing.
-- `keepUnknownPages` — Finish while retaining every unidentified page-creation receipt. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts exist.
+- `keepUnknownPages` — Finish while retaining every unresolved page-creation receipt, including known tabs and receipts without a tabId. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts still resolve to pages.
 - `adopt` — On resume, explicitly accept only the new document identity observed after this task's own navigation-producing action.
 - `confirm` — Required by takeOver to transfer a durable task from a disconnected or different MCP session. Also required with keepUnknownPages: true on finish.
 

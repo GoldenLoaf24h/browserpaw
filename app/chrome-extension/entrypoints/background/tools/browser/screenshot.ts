@@ -24,7 +24,7 @@ import {
 import { diffPerceptiveSignatures } from '@/utils/screenshot-guard';
 import { executeInPage } from './in-page-engine';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
-import { isRestrictedChromeUrl } from '@/utils/restricted-url';
+import { isRestrictedChromeUrl, logUnexpectedToolError } from '@/utils/restricted-url';
 import { scrubUrl } from '@/utils/url-sanitizer';
 import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 
@@ -1500,7 +1500,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         }
       }
     } catch (error) {
-      console.error('Error during screenshot execution:', error);
+      logUnexpectedToolError('Error during screenshot execution:', error);
       return createErrorResponse(
         `Screenshot error: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
       );

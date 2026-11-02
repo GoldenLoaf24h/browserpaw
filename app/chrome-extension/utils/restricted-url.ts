@@ -29,10 +29,55 @@ export function isCloudMetadataUrl(url: string | undefined | null): boolean {
   }
 }
 
+const CHROMIUM_ERROR_PAGE_URL = /^[a-z][a-z0-9+.-]*-error:\/\/chromewebdata(?:[/:?#]|$)/i;
+
+export function isChromiumErrorPageUrl(url: string | undefined | null): boolean {
+  return typeof url === 'string' && CHROMIUM_ERROR_PAGE_URL.test(url.trim());
+}
+
+export function isErrorPageInjectionError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return /is showing error page/i.test(message);
+}
+
+export class ExpectedPageRestrictionError extends Error {
+  readonly code = 'page_restriction';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExpectedPageRestrictionError';
+  }
+}
+
+export function isExpectedPageRestrictionError(error: unknown): boolean {
+  if (error instanceof ExpectedPageRestrictionError) return true;
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    isErrorPageInjectionError(error) ||
+    /Cannot operate on this browser internal page or web store page/i.test(message) ||
+    /Security Restriction: Navigation or requests to cloud instance metadata service/i.test(message)
+  );
+}
+
+export function logUnexpectedToolError(message: string, error: unknown): void {
+  if (isExpectedPageRestrictionError(error)) return;
+  console.error(message, error);
+}
+
+export function errorPageInjectionErrorMessage(url: string | undefined | null): string {
+  return (
+    'Chrome is showing an error page for this tab. Reload or navigate to a working page before retrying: ' +
+    (url || 'unknown URL')
+  );
+}
+
 export function isRestrictedChromeUrl(url: string | undefined | null): boolean {
   if (!url) return false;
   const lowerUrl = url.trim().toLowerCase();
   return (
+    isChromiumErrorPageUrl(lowerUrl) ||
     lowerUrl.startsWith('chrome://') ||
     lowerUrl.startsWith('edge://') ||
     lowerUrl.startsWith('devtools://') ||
@@ -46,6 +91,9 @@ export function isRestrictedChromeUrl(url: string | undefined | null): boolean {
 }
 
 export function restrictedUrlErrorMessage(url: string | undefined | null): string {
+  if (isChromiumErrorPageUrl(url)) {
+    return errorPageInjectionErrorMessage(url);
+  }
   if (isCloudMetadataUrl(url)) {
     return (
       'Security Restriction: Navigation or requests to cloud instance metadata service (' +
@@ -71,7 +119,7 @@ export function restrictedUrlErrorMessage(url: string | undefined | null): strin
 export async function assertTabInjectable(tabId: number): Promise<void> {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (isRestrictedChromeUrl(tab?.url)) {
-    throw new Error(restrictedUrlErrorMessage(tab?.url));
+    throw new ExpectedPageRestrictionError(restrictedUrlErrorMessage(tab?.url));
   }
 }
 

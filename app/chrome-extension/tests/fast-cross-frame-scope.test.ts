@@ -493,7 +493,6 @@ describe('Fast DOM: Scope, Selector, Exclude, Viewport, Limit, and Cross-Frame P
         fast: true,
         includeDetails: true,
         tabId: 1,
-        flattenCards: true, // test fallback reporting
       } as any);
 
       expect(result.isError).toBe(false);
@@ -514,8 +513,30 @@ describe('Fast DOM: Scope, Selector, Exclude, Viewport, Limit, and Cross-Frame P
         true,
       );
 
-      // Verify fallback declaration for unsupported card flattening in fast mode
-      expect(payload.unsupportedInFastMode).toContain('flattenCards');
+      expect(payload.unsupportedInFastMode).toBeUndefined();
+    });
+
+    it('rejects unsupported fast-only semantic options before taking an observation', async () => {
+      vi.spyOn(readDOMTool as any, 'resolveAffinityTab').mockResolvedValue({
+        id: 1,
+        url: 'https://example.com/app',
+      });
+      const executeSpy = vi.spyOn(inPageEngine, 'executeInPage');
+
+      const result = await readDOMTool.execute({
+        fast: true,
+        flattenCards: true,
+        virtualizeViewport: true,
+        tabId: 1,
+      } as any);
+
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text as string)).toEqual({
+        status: 'blocked',
+        code: 'unsupported_fast_options',
+        unsupported: ['flattenCards', 'virtualizeViewport'],
+      });
+      expect(executeSpy).not.toHaveBeenCalled();
     });
 
     it('cleans internal action details when includeDetails: false while retaining frame structure and counts', async () => {

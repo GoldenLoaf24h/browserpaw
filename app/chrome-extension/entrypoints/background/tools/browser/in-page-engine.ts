@@ -17,7 +17,13 @@ import { resolveToolName } from 'chrome-mcp-shared';
  * silently returning undefined inside the page.
  */
 
-import { isRestrictedChromeUrl, restrictedUrlErrorMessage } from '../../../../utils/restricted-url';
+import {
+  ExpectedPageRestrictionError,
+  isErrorPageInjectionError,
+  isChromiumErrorPageUrl,
+  isRestrictedChromeUrl,
+  restrictedUrlErrorMessage,
+} from '../../../../utils/restricted-url';
 import { reserveIndexNamespaces } from './index-namespace';
 
 const INPAGE_NAMESPACE = '__MCP_INPAGE__';
@@ -51,11 +57,7 @@ if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
 /**
  * Detects whether an error represents Chrome's native error page (e.g. chrome-error://chromewebdata/).
  */
-export function isShowingErrorPageError(error: unknown): boolean {
-  if (!error) return false;
-  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return msg.includes('is showing error page');
-}
+export const isShowingErrorPageError = isErrorPageInjectionError;
 export function isNavigationOrContextDestroyedError(error: unknown): boolean {
   if (!error) return false;
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
@@ -149,8 +151,8 @@ export async function executeInPage<R = any>(
   // raw "Cannot access a chrome:// URL" exception.
   if (typeof target.tabId === 'number') {
     const tab = await chrome.tabs.get(target.tabId).catch(() => null);
-    if (isRestrictedChromeUrl(tab?.url)) {
-      throw new Error(restrictedUrlErrorMessage(tab?.url));
+    if (isRestrictedChromeUrl(tab?.url) && !isChromiumErrorPageUrl(tab?.url)) {
+      throw new ExpectedPageRestrictionError(restrictedUrlErrorMessage(tab?.url));
     }
   }
 

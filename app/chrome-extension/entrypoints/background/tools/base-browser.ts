@@ -5,6 +5,9 @@ import { TIMEOUTS, ERROR_MESSAGES } from '../../../common/constants';
 import { sessionTabAffinity } from '../../../utils/session-tab-affinity';
 import {
   assertTabInjectable,
+  errorPageInjectionErrorMessage,
+  ExpectedPageRestrictionError,
+  isErrorPageInjectionError,
   isRestrictedChromeUrl,
   pingActionForFiles,
   restrictedUrlErrorMessage,
@@ -100,7 +103,7 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
     // "ping content script failed" line (see interaction.ts click path).
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (isRestrictedChromeUrl(tab?.url)) {
-      throw new Error(restrictedUrlErrorMessage(tab?.url));
+      throw new ExpectedPageRestrictionError(restrictedUrlErrorMessage(tab?.url));
     }
 
     const frameKey =
@@ -158,7 +161,9 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
     } catch (error) {
       // A missing receiver is the normal result before the first injection.
       // Only surface genuinely unexpected transport failures in the error panel.
-      if (!isMissingContentScriptReceiver(error)) {
+      if (isErrorPageInjectionError(error)) {
+        throw new ExpectedPageRestrictionError(errorPageInjectionErrorMessage(tab?.url));
+      } else if (!isMissingContentScriptReceiver(error)) {
         console.error(
           `ping content script failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -188,6 +193,9 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
       }
       set.add(cacheKey);
     } catch (injectionError) {
+      if (isErrorPageInjectionError(injectionError)) {
+        throw new ExpectedPageRestrictionError(errorPageInjectionErrorMessage(tab?.url));
+      }
       const errorMessage =
         injectionError instanceof Error ? injectionError.message : String(injectionError);
       console.error(

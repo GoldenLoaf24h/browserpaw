@@ -1088,6 +1088,7 @@ export class BrowserTaskManager {
       );
       const verified = new Map<number, { exists: boolean; identityVerified: boolean }>();
       const restore: Array<Pick<TaskPage, 'tabId' | 'documentId' | 'browserInstanceId'>> = [];
+      let unresolvedPendingCreations = 0;
       const ok = await this.withLedgerLock(async () => {
         const task = this.requireTask(taskId);
         this.requireActiveTask(task);
@@ -1147,6 +1148,72 @@ export class BrowserTaskManager {
           verified.set(page.tabId, { exists, identityVerified });
         }
 
+        for (const pending of [...task.pendingCreations]) {
+          const tabId = knownPendingTabId(pending);
+          if (tabId === undefined) {
+            unresolvedPendingCreations++;
+            continue;
+          }
+          if (task.pages.some((page) => page.tabId === tabId)) {
+            task.pendingCreations = task.pendingCreations.filter(
+              (candidate) => candidate !== pending,
+            );
+            continue;
+          }
+          const observed = observedById.get(tabId);
+          if (!observed) {
+            // The browser no longer contains this tab, so there is no resource
+            // left to adopt or clean up. Keep the rest of the ledger intact.
+            task.pendingCreations = task.pendingCreations.filter(
+              (candidate) => candidate !== pending,
+            );
+            continue;
+          }
+          const sameBrowser =
+            (!task.browserInstanceId || task.browserInstanceId === inventory.browserInstanceId) &&
+            observed.browserInstanceId === inventory.browserInstanceId;
+          const canAdopt =
+            adopt &&
+            sameBrowser &&
+            observed.isAgentManaged === true &&
+            typeof observed.documentId === 'string' &&
+            observed.documentId.length > 0;
+          if (!canAdopt) {
+            unresolvedPendingCreations++;
+            ok = false;
+            continue;
+          }
+
+          const page: TaskPage = {
+            tabId,
+            ...(observed.windowId !== undefined
+              ? { windowId: observed.windowId }
+              : pending.windowId !== undefined
+                ? { windowId: pending.windowId }
+                : {}),
+            ...(observed.openerTabId !== undefined ? { openerTabId: observed.openerTabId } : {}),
+            url: observed.url || pending.requestedUrl,
+            documentId: observed.documentId!,
+            browserInstanceId: inventory.browserInstanceId,
+            ownership: 'owned',
+            state: 'active',
+            openedAt: pending.createdAt,
+            lastVerifiedAt: Date.now(),
+          };
+          task.pendingCreations = task.pendingCreations.filter(
+            (candidate) => candidate !== pending,
+          );
+          task.browserInstanceId = inventory.browserInstanceId;
+          task.pages.push(page);
+          task.currentTabId = tabId;
+          verified.set(tabId, { exists: true, identityVerified: true });
+          restore.push({
+            tabId,
+            documentId: page.documentId,
+            browserInstanceId: page.browserInstanceId,
+          });
+        }
+
         task.updatedAt = Date.now();
         await this.persist();
         return ok;
@@ -1177,8 +1244,14 @@ export class BrowserTaskManager {
           ...(ok
             ? {}
             : {
-                error:
+                error: [
                   'One or more task pages no longer exist or failed identity verification; URL alone is never used to adopt a page',
+                  unresolvedPendingCreations > 0
+                    ? `${unresolvedPendingCreations} pending page creation(s) still require an explicit resume with adopt: true after their tab and document identity are observable`
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join('; '),
               }),
           task: {
             ...taskInventory(task),
@@ -1851,7 +1924,9 @@ export class BrowserTaskManager {
         throw new Error('finish keepUnknownPages requires confirm: true');
       }
       if (task.status === 'finished') {
-        const handedOverUnknown = task.pendingCreations.filter(isUnknownPending);
+        const handedOverUnknown = task.pendingCreations.filter(
+          (pending) => pending.retained === true || isUnknownPending(pending),
+        );
         return {
           ok: true,
           action: 'finish',
@@ -1919,7 +1994,7 @@ export class BrowserTaskManager {
         const tabId = knownPendingTabId(pending);
         return tabId !== undefined && inventoryTabIds.has(tabId);
       });
-      if (presentPendingCreations.length > 0) {
+      if (presentPendingCreations.length > 0 && !keepUnknownPages) {
         return {
           ok: false,
           action: 'finish',
@@ -2065,8 +2140,9 @@ export class BrowserTaskManager {
         current.updatedAt = Date.now();
         const handedOverUnknown = current.pendingCreations.filter(isUnknownPending);
         if (keepUnknownPages) {
-          for (const pending of handedOverUnknown) pending.retained = true;
+          for (const pending of current.pendingCreations) pending.retained = true;
         }
+        const retainedPending = keepUnknownPages ? current.pendingCreations : handedOverUnknown;
         if (current.status === 'active') {
           current.status = 'finished';
           current.finishedAt = current.updatedAt;
@@ -2076,8 +2152,8 @@ export class BrowserTaskManager {
           ok: true,
           action: 'finish',
           message:
-            handedOverUnknown.length > 0
-              ? 'Task finished; unidentified page-creation receipts were retained and no unknown page was closed'
+            retainedPending.length > 0
+              ? 'Task finished; pending page-creation receipts were retained and no pending page was closed'
               : current.status === 'cancelled'
                 ? 'Cancelled task cleanup finished; cancellation state was preserved'
                 : 'Task finished; borrowed pages were released without deletion',
@@ -2090,11 +2166,11 @@ export class BrowserTaskManager {
                   'Downloads on retained or borrowed pages continue in Chrome; download completion and file cleanup are not claimed.',
               }
             : {}),
-          ...(handedOverUnknown.length > 0
+          ...(retainedPending.length > 0
             ? {
                 warning:
-                  'Unidentified page-creation receipts were retained for the user. They were not closed and cleanup was not claimed.',
-                handedOverUnknown,
+                  'Pending page-creation receipts were retained for the user. They were not closed and cleanup was not claimed.',
+                handedOverUnknown: retainedPending,
               }
             : {}),
           ...(popupSync.budgetExceeded ? { budgetExceeded: popupSync.budgetExceeded } : {}),

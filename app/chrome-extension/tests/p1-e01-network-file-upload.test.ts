@@ -218,6 +218,20 @@ describe('P1-E01: Background pre-reads files for networkRequestTool FormData', (
       { name: 'attachment', base64Data: 'QQ==' },
     ]);
   });
+
+  it('returns an error-page injection failure without adding an extension console error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    injectSpy.mockRejectedValue(new Error('Chrome is showing an error page for this tab.'));
+
+    const res = await networkRequestTool.execute({
+      url: 'https://example.com/api/data',
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('Chrome is showing an error page');
+    expect(sendMsgSpy).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+  });
 });
 
 describe('S-01: Injected network-helper FormData boundary tests', () => {

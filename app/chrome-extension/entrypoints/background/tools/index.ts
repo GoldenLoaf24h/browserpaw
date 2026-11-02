@@ -3,6 +3,7 @@ import { ERROR_MESSAGES } from '@/common/constants';
 import { formatErrorForAgent, normalizeIncomingToolName, TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import * as browserTools from './browser';
 import { tabFaviconManager } from './browser/tab-favicon';
+import { logUnexpectedToolError } from '@/utils/restricted-url';
 
 const tools = { ...browserTools } as any;
 // Only schemas declared in TOOL_SCHEMAS are callable. Some modules export
@@ -108,7 +109,7 @@ export const handleCallTool = async (param: ToolCallParam, context?: ToolCallCon
     }
     return result;
   } catch (error) {
-    console.error(`Tool execution failed for ${param.name}:`, error);
+    logUnexpectedToolError(`Tool execution failed for ${param.name}:`, error);
     // Keep a bounded stack so an unexpected failure can be located without
     // reproducing it under a debugger.
     return createErrorResponse(

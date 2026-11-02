@@ -1,4 +1,8 @@
-import { isCloudMetadataUrl, restrictedUrlErrorMessage } from '@/utils/restricted-url';
+import {
+  isCloudMetadataUrl,
+  logUnexpectedToolError,
+  restrictedUrlErrorMessage,
+} from '@/utils/restricted-url';
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
@@ -222,7 +226,7 @@ class WebFetcherTool extends BaseBrowserToolExecutor {
         isError: false,
       };
     } catch (error) {
-      console.error('Error in web fetcher:', error);
+      logUnexpectedToolError('Error in web fetcher:', error);
       return createErrorResponse(
         `Error fetching web content: ${error instanceof Error ? error.message : String(error)}`,
       );

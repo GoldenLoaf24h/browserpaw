@@ -2833,6 +2833,186 @@ describe('BrowserTaskManager', () => {
     expect(status.task?.pendingCreations).toEqual([]);
   });
 
+  it('adopts a delayed-identity pending creation through resume and completes normal cleanup', async () => {
+    const storageDir = testDir('pending-creation-adopt');
+    let inventoryCalls = 0;
+    const closed: Array<Record<string, unknown>> = [];
+    const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'chrome_navigate') return opened(123, 'https://late-identity.example/start');
+      if (name === 'get_windows_and_tabs') {
+        inventoryCalls++;
+        return inventoryCalls === 1
+          ? result({
+              browserInstanceId: 'browser-1',
+              windowCount: 1,
+              tabCount: 1,
+              windows: [
+                {
+                  windowId: 1,
+                  tabs: [
+                    {
+                      tabId: 123,
+                      url: 'https://late-identity.example/final',
+                      isAgentManaged: true,
+                    },
+                  ],
+                },
+              ],
+            })
+          : live([tab(123, 'https://late-identity.example/final', true, 'doc-late-123')]);
+      }
+      if (name === 'browserpaw_set_owned_viewport') return viewport();
+      if (name === 'chrome_close_tabs') {
+        closed.push(args);
+        return result({ success: true, closedTabIds: args.tabIds });
+      }
+      throw new Error(`unexpected ${name}`);
+    });
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const { task } = await manager.execute({ action: 'start', name: 'Late identity' });
+
+    const openedResult = await manager.execute({
+      action: 'open',
+      taskId: task!.id,
+      url: 'https://late-identity.example/start',
+    });
+    expect(openedResult.ok).toBe(false);
+    expect(openedResult.task?.pages).toEqual([]);
+    expect(openedResult.task?.pendingCreations).toHaveLength(1);
+
+    const resumed = await manager.execute({
+      action: 'resume',
+      taskId: task!.id,
+      adopt: true,
+    });
+    expect(resumed.ok).toBe(true);
+    expect(resumed.task?.pendingCreations).toEqual([]);
+    expect(resumed.task?.pages).toEqual([
+      expect.objectContaining({
+        tabId: 123,
+        documentId: 'doc-late-123',
+        url: 'https://late-identity.example/final',
+        ownership: 'owned',
+        state: 'active',
+        exists: true,
+        identityVerified: true,
+      }),
+    ]);
+
+    const finished = await manager.execute({ action: 'finish', taskId: task!.id });
+    expect(finished.ok).toBe(true);
+    expect(closed).toEqual([
+      {
+        tabIds: [123],
+        expectedTabs: [
+          {
+            tabId: 123,
+            documentId: 'doc-late-123',
+            browserInstanceId: 'browser-1',
+          },
+        ],
+      },
+    ]);
+    expect(finished.task?.status).toBe('finished');
+  });
+
+  it('does not silently adopt a late pending identity without explicit resume adopt', async () => {
+    const storageDir = testDir('pending-creation-no-implicit-adopt');
+    let inventoryCalls = 0;
+    const call = jest.fn<BrowserCall>(async (name: string) => {
+      if (name === 'chrome_navigate') return opened(124, 'https://explicit-adopt.example/');
+      if (name === 'get_windows_and_tabs') {
+        inventoryCalls++;
+        return inventoryCalls === 1
+          ? result({
+              browserInstanceId: 'browser-1',
+              windowCount: 1,
+              tabCount: 1,
+              windows: [
+                {
+                  windowId: 1,
+                  tabs: [
+                    { tabId: 124, url: 'https://explicit-adopt.example/', isAgentManaged: true },
+                  ],
+                },
+              ],
+            })
+          : live([tab(124, 'https://explicit-adopt.example/', true, 'doc-explicit-124')]);
+      }
+      throw new Error(`unexpected ${name}`);
+    });
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const { task } = await manager.execute({ action: 'start', name: 'Explicit adopt' });
+    const openedResult = await manager.execute({
+      action: 'open',
+      taskId: task!.id,
+      url: 'https://explicit-adopt.example/',
+    });
+    expect(openedResult.task?.pendingCreations).toHaveLength(1);
+
+    const resumed = await manager.execute({ action: 'resume', taskId: task!.id });
+    expect(resumed.ok).toBe(false);
+    expect(resumed.task?.pages).toEqual([]);
+    expect(resumed.task?.pendingCreations).toHaveLength(1);
+    expect(resumed.error).toMatch(/resume.*adopt|pending/i);
+  });
+
+  it('retains a known pending tab only through explicit finish confirmation without closing it', async () => {
+    const storageDir = testDir('pending-creation-explicit-retain');
+    let inventoryCalls = 0;
+    const destructiveCalls: string[] = [];
+    const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'chrome_navigate') return opened(125, 'https://retain-pending.example/');
+      if (name === 'get_windows_and_tabs') {
+        inventoryCalls++;
+        return result({
+          browserInstanceId: 'browser-1',
+          windowCount: 1,
+          tabCount: 1,
+          windows: [
+            {
+              windowId: 1,
+              tabs: [{ tabId: 125, url: 'https://retain-pending.example/', isAgentManaged: true }],
+            },
+          ],
+        });
+      }
+      if (name === 'chrome_close_tabs' || name === 'browserpaw_release_owned_page') {
+        destructiveCalls.push(name);
+        return result({ success: true, closedTabIds: args.tabIds });
+      }
+      throw new Error(`unexpected ${name}`);
+    });
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const { task } = await manager.execute({ action: 'start', name: 'Retain pending' });
+    const openedResult = await manager.execute({
+      action: 'open',
+      taskId: task!.id,
+      url: 'https://retain-pending.example/',
+    });
+    expect(openedResult.task?.pendingCreations).toHaveLength(1);
+
+    const refused = await manager.execute({ action: 'finish', taskId: task!.id });
+    expect(refused.ok).toBe(false);
+    expect(destructiveCalls).toEqual([]);
+
+    const retained = await manager.execute({
+      action: 'finish',
+      taskId: task!.id,
+      keepUnknownPages: true,
+      confirm: true,
+    });
+    expect(retained.ok).toBe(true);
+    expect(retained.task?.status).toBe('finished');
+    expect(retained.task?.pendingCreations).toEqual([
+      expect.objectContaining({ tabId: 125, retained: true }),
+    ]);
+    expect(retained.handedOverUnknown).toEqual([
+      expect.objectContaining({ tabId: 125, retained: true }),
+    ]);
+    expect(destructiveCalls).toEqual([]);
+  });
+
   it('reports an unpersisted pending creation and does not continue browser verification', async () => {
     const storageDir = testDir('pending-creation-write-fail');
     let inventoryCalls = 0;

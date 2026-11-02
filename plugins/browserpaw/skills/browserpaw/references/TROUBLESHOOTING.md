@@ -18,6 +18,7 @@ points to one. Installed skills check the live Native/MCP runtime instead of sou
 - A strict locator matched more than one element; provide a more specific selector, role, label, or frame.
 - A screenshot coordinate is stale; capture a fresh screenshot and use its returned capture identity.
 - A dialog, download, popup, or upload has multiple sources; select an explicit source before proceeding.
+- Chrome is showing its native error page (`chrome-error://chromewebdata/`); content scripts cannot run there. Reload or navigate to a working page and obtain fresh refs. This is an expected page restriction, not a bridge failure.
 - Jev semantic assistance can be temporarily paused after a network, timeout or rate-limit failure. The saved user preference remains Remote or Local, and the same backend may resume after 30 seconds on the next use. Authentication or configuration faults wait for correction; saving corrected settings restores the requested mode. A deliberate Off choice remains off.
 - A semantic query returned `none` or `ambiguous`: `none` indicates no candidate satisfied the criteria (a valid business outcome, not a failure), while confidence < 0.85, top margin < 0.20, candidate count > 32, or a timeout beyond 1500ms halts execution safely without guessing.
 - Deterministic locator failed: deterministic matching requires zero inference; ensure exact text, selectors, or refs are current rather than relying on semantic guessing.

@@ -39,6 +39,7 @@ export interface FastSnapshotOptions {
   viewportThreshold?: number;
   viewportOnly?: boolean;
   activeViewportOnly?: boolean;
+  isolateModal?: boolean;
   limit?: number;
   maxTextLength?: number;
 }
@@ -240,10 +241,13 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
 
   const fastActiveElement = getDeepActiveElement();
   const targetSelector = options?.scope || options?.selector;
+  const isolateModal = options?.isolateModal !== false;
   const interactionScope = computeInteractionScope(window, {
-    explicitScope: Boolean(targetSelector),
+    explicitScope: Boolean(targetSelector) || !isolateModal,
   });
-  const focusScope = interactionScope.modalElement ?? observationFocusScope(fastActiveElement);
+  const focusScope = isolateModal
+    ? (interactionScope.modalElement ?? observationFocusScope(fastActiveElement))
+    : observationFocusScope(fastActiveElement);
 
   const safe = (e: any): boolean => !['password', 'file', 'hidden'].includes(e.type);
 
@@ -518,12 +522,14 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
       };
     }
   } else {
-    roots = interactionScope.roots;
+    roots = isolateModal ? interactionScope.roots : document.body ? [document.body] : [];
   }
 
   const scrollInfo = buildScopedScrollInfo(roots, window, {
-    modalActive: !targetSelector && interactionScope.focusTrapped,
-    ...(!targetSelector ? { containers: interactionScope.scrollContainers } : {}),
+    modalActive: !targetSelector && isolateModal && interactionScope.focusTrapped,
+    ...(!targetSelector
+      ? { containers: isolateModal ? interactionScope.scrollContainers : undefined }
+      : {}),
   });
 
   let pad = 0;

@@ -1,6 +1,6 @@
 {
   "name": "dsh-browserpaw",
-  "version": "4.1.1",
+  "version": "4.1.2",
   "description": "DeepSeek Harness bundle for BrowserPaw browser automation through the local MCP bridge.",
   "type": "module",
   "main": "index.js",

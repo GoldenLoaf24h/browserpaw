@@ -26,7 +26,10 @@ import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
 import {
   assertTabInjectable,
+  ExpectedPageRestrictionError,
   isRestrictedChromeUrl,
+  isExpectedPageRestrictionError,
+  logUnexpectedToolError,
   pingActionForFiles,
   PING_ACTION_PREFIX,
 } from '../utils/restricted-url';
@@ -271,6 +274,7 @@ describe('dom-indexer regressions', () => {
     it('flags browser internal and web store pages only', () => {
       expect(isRestrictedChromeUrl('chrome://settings')).toBe(true);
       expect(isRestrictedChromeUrl('Chrome://settings')).toBe(true);
+      expect(isRestrictedChromeUrl('chrome-error://chromewebdata/')).toBe(true);
       expect(isRestrictedChromeUrl('edge://flags')).toBe(true);
       expect(isRestrictedChromeUrl('EDGE://flags')).toBe(true);
       expect(isRestrictedChromeUrl('VIEW-SOURCE:https://example.com')).toBe(true);
@@ -290,8 +294,45 @@ describe('dom-indexer regressions', () => {
         },
       };
 
+      await expect(assertTabInjectable(9)).rejects.toBeInstanceOf(ExpectedPageRestrictionError);
       await expect(assertTabInjectable(9)).rejects.toThrow(
         /Cannot operate on this browser internal page or web store page/,
+      );
+
+      (globalThis as any).chrome = prevChrome;
+    });
+
+    it('does not log expected page restrictions as unexpected extension errors', () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const restricted = new ExpectedPageRestrictionError(
+        'Cannot operate on this browser internal page',
+      );
+
+      expect(isExpectedPageRestrictionError(restricted)).toBe(true);
+      expect(
+        isExpectedPageRestrictionError(new Error('Frame with ID 0 is showing error page')),
+      ).toBe(true);
+      expect(isExpectedPageRestrictionError(new Error('Element not found'))).toBe(false);
+
+      logUnexpectedToolError('Tool execution failed:', restricted);
+      logUnexpectedToolError('Tool execution failed:', new Error('Element not found'));
+
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      expect(consoleError).toHaveBeenCalledWith('Tool execution failed:', expect.any(Error));
+    });
+
+    it('assertTabInjectable rejects a Chromium error page with an actionable message', async () => {
+      const prevChrome = (globalThis as any).chrome;
+      (globalThis as any).chrome = {
+        ...prevChrome,
+        tabs: {
+          ...prevChrome?.tabs,
+          get: vi.fn().mockResolvedValue({ id: 12, url: 'chrome-error://chromewebdata/' }),
+        },
+      };
+
+      await expect(assertTabInjectable(12)).rejects.toThrow(
+        /Chrome is showing an error page.*Reload or navigate to a working page/,
       );
 
       (globalThis as any).chrome = prevChrome;

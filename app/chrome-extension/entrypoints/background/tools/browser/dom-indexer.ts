@@ -2151,7 +2151,7 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
 
     try {
       const shadowCandidates = querySelectorAllDeep(
-        'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover], shreddit-modal, [class*="modal"], [class*="dialog"]',
+        'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover], [class*="modal"], [class*="dialog"]',
         doc,
       );
       for (const sc of shadowCandidates) {
@@ -2303,11 +2303,146 @@ function elementIsVisibleForScope(el: Element, win: Window): boolean {
   }
 }
 
-function portalHasOpenOwner(portal: HTMLElement, blocker: HTMLElement, win: Window): boolean {
+function isHTMLElementInWindow(
+  value: Element | null | undefined,
+  win: Window,
+): value is HTMLElement {
+  const ctor = (win as unknown as { HTMLElement?: typeof HTMLElement }).HTMLElement;
+  return Boolean(value && ctor && value instanceof ctor);
+}
+
+function isTopLayerSurface(el: Element): boolean {
+  const html = el as HTMLElement;
+  try {
+    if (html.matches(':popover-open')) return true;
+  } catch {}
+  return (
+    el.tagName.toLowerCase() === 'dialog' &&
+    Boolean((el as HTMLDialogElement).open) &&
+    (() => {
+      try {
+        return (el as HTMLDialogElement).matches(':modal');
+      } catch {
+        return el.getAttribute('aria-modal') === 'true';
+      }
+    })()
+  );
+}
+
+function isOverlaySurfaceElement(el: Element): boolean {
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  if (role === 'dialog' || role === 'alertdialog') return true;
+  if (el.getAttribute('aria-modal') === 'true' || isTopLayerSurface(el)) return true;
+  const identity = [
+    el.id,
+    el.getAttribute('class'),
+    el.getAttribute('data-testid'),
+    el.getAttribute('data-state'),
+    el.tagName,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return /(?:modal|dialog|overlay|popup|popover|sheet|drawer|portal|backdrop|mask)/i.test(identity);
+}
+
+function isOverlaySurfaceContainer(parent: Element, child: Element): boolean {
+  if (isOverlaySurfaceElement(parent)) return true;
+  // Custom elements are structural overlay hosts even when the component
+  // author did not expose a framework-specific class or role.
+  return parent.tagName.includes('-') && composedContains(parent, child);
+}
+
+function modalSurfaceRoot(blocker: HTMLElement, win: Window): HTMLElement {
+  let current = blocker;
+  const seen = new Set<Element>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = composedParent(current);
+    if (
+      !isHTMLElementInWindow(parent, win) ||
+      parent === win.document.body ||
+      parent === win.document.documentElement ||
+      !isOverlaySurfaceContainer(parent, current)
+    ) {
+      break;
+    }
+    current = parent;
+  }
+  return current;
+}
+
+function referencedModalRoots(root: HTMLElement, win: Window): HTMLElement[] {
+  const roots: HTMLElement[] = [];
+  const controls = querySelectorAllDeep(
+    '[aria-controls], [aria-owns], [popovertarget], [commandfor]',
+    root,
+  );
+  for (const control of controls) {
+    if (!isHTMLElementInWindow(control, win)) continue;
+    if (
+      control.getAttribute('aria-expanded') === 'false' ||
+      !elementIsVisibleForScope(control, win)
+    )
+      continue;
+    if ((control as HTMLButtonElement).disabled) continue;
+    const ids = [
+      control.getAttribute('aria-controls'),
+      control.getAttribute('aria-owns'),
+      control.getAttribute('popovertarget'),
+      control.getAttribute('commandfor'),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .flatMap((value) => value.split(/\s+/))
+      .filter(Boolean);
+    for (const id of ids) {
+      const target = getSameRootReference(control, id);
+      if (
+        isHTMLElementInWindow(target, win) &&
+        target !== control &&
+        elementIsVisibleForScope(target, win)
+      ) {
+        roots.push(target);
+      }
+    }
+  }
+  return roots;
+}
+
+function focusedOverlayRoot(blocker: HTMLElement, win: Window): HTMLElement | null {
+  const active = getDeepActiveElement();
+  if (!active || composedContains(blocker, active)) return null;
+  for (let current: Element | null = active; current; current = composedParent(current)) {
+    if (current === win.document.body || current === win.document.documentElement) break;
+    if (isHTMLElementInWindow(current, win) && isTopLayerSurface(current)) return current;
+  }
+  return null;
+}
+
+function outerMostRoots(roots: Array<Element | null | undefined>, win: Window): HTMLElement[] {
+  const unique = Array.from(
+    new Set(
+      roots.filter(
+        (root): root is HTMLElement => isHTMLElementInWindow(root, win) && root.isConnected,
+      ),
+    ),
+  );
+  return unique.filter(
+    (root) =>
+      !unique.some(
+        (other) =>
+          other !== root && composedContains(other, root) && !composedContains(root, other),
+      ),
+  );
+}
+
+function portalHasOpenOwner(portal: HTMLElement, ownerRoot: HTMLElement, win: Window): boolean {
   const portalId = portal.id;
   if (!portalId) return false;
-  const controls = blocker.querySelectorAll('[aria-controls], [aria-owns], [popovertarget]');
-  for (const control of Array.from(controls)) {
+  const controls = querySelectorAllDeep(
+    '[aria-controls], [aria-owns], [popovertarget], [commandfor]',
+    ownerRoot,
+  );
+  for (const control of controls) {
     if (!elementIsVisibleForScope(control, win)) continue;
     const references = [
       control.getAttribute('aria-controls'),
@@ -2323,7 +2458,11 @@ function portalHasOpenOwner(portal: HTMLElement, blocker: HTMLElement, win: Wind
   return false;
 }
 
-function modalPortalRoots(blocker: HTMLElement, win: Window): HTMLElement[] {
+function modalPortalRoots(
+  blocker: HTMLElement,
+  win: Window,
+  ownerRoot: HTMLElement = blocker,
+): HTMLElement[] {
   const portalSelector = [
     '[data-radix-popper-content-wrapper]',
     '[data-radix-portal]',
@@ -2331,6 +2470,10 @@ function modalPortalRoots(blocker: HTMLElement, win: Window): HTMLElement[] {
     '[data-headlessui-portal]',
     '[data-portal]',
     ':popover-open',
+    'dialog[open]',
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[aria-modal="true"]',
     '.ant-select-dropdown',
     '.ant-picker-dropdown',
     '.ant-dropdown',
@@ -2350,33 +2493,28 @@ function modalPortalRoots(blocker: HTMLElement, win: Window): HTMLElement[] {
     const parsed = raw === 'auto' ? 0 : Number.parseInt(raw || '0', 10);
     return Number.isFinite(parsed) ? parsed : 0;
   };
-  const inTopLayer = (el: Element): boolean =>
-    Boolean((el as HTMLElement).matches?.(':popover-open')) ||
-    (el.tagName.toLowerCase() === 'dialog' &&
-      Boolean((el as HTMLDialogElement).open) &&
-      (() => {
-        try {
-          return (
-            (el as HTMLDialogElement).matches(':modal') || el.getAttribute('aria-modal') === 'true'
-          );
-        } catch {
-          return el.getAttribute('aria-modal') === 'true';
-        }
-      })());
   const blockerZ = zIndex(blocker);
-  const all = Array.from(win.document.querySelectorAll('*'));
+  const all = querySelectorAllDeep('*', win.document);
   return all.filter((el): el is HTMLElement => {
-    if (!(el instanceof HTMLElement) || el === blocker) return false;
-    if (!el.matches(portalSelector) || !elementIsVisibleForScope(el, win)) return false;
+    if (!isHTMLElementInWindow(el, win) || el === blocker) return false;
+    if (
+      (!el.matches(portalSelector) && !isOverlaySurfaceElement(el)) ||
+      !elementIsVisibleForScope(el, win)
+    )
+      return false;
     if (composedContains(blocker, el)) return true;
     if (composedContains(el, blocker)) return false;
     // Class names and generic portal markers only discover a candidate. A
     // detached portal enters the interaction scope only when it is a real
-    // top-layer surface or an open trigger inside the blocker owns it.
-    if (!inTopLayer(el) && !portalHasOpenOwner(el, blocker, win)) return false;
+    // top-layer surface, declares modal semantics, or an open trigger owns it.
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const explicitModal =
+      role === 'dialog' || role === 'alertdialog' || el.getAttribute('aria-modal') === 'true';
+    if (!isTopLayerSurface(el) && !explicitModal && !portalHasOpenOwner(el, ownerRoot, win))
+      return false;
 
     const portalZ = zIndex(el);
-    if (inTopLayer(el) && !inTopLayer(blocker)) return true;
+    if (isTopLayerSurface(el) && !isTopLayerSurface(blocker)) return true;
     if (portalZ !== blockerZ) return portalZ > blockerZ;
     return Boolean(blocker.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
   });
@@ -2399,11 +2537,11 @@ function scrollContainersInRoots(roots: Element[], win: Window): HTMLElement[] {
   const found: HTMLElement[] = [];
   for (const root of roots) {
     const all = [
-      ...(root instanceof HTMLElement ? [root] : []),
-      ...Array.from(root.querySelectorAll('*')),
+      ...(isHTMLElementInWindow(root, win) ? [root] : []),
+      ...querySelectorAllDeep('*', root),
     ];
     for (const el of all) {
-      if (!(el instanceof HTMLElement) || found.includes(el)) continue;
+      if (!isHTMLElementInWindow(el, win) || found.includes(el)) continue;
       let style: CSSStyleDeclaration;
       try {
         style = win.getComputedStyle(el);
@@ -2520,11 +2658,20 @@ export function computeInteractionScope(
   const focusTrapped = Boolean(blocker);
   const modalIsolated = Boolean(blocker && !options?.explicitScope);
   let roots: Element[] = [];
+  let modalElement: HTMLElement | undefined;
 
   if (blocker) {
-    roots = [blocker.el, ...modalPortalRoots(blocker.el, win)];
-    roots = roots.filter(
-      (root) => !roots.some((other) => other !== root && composedContains(other, root)),
+    const surfaceRoot = modalSurfaceRoot(blocker.el, win);
+    modalElement = surfaceRoot;
+    roots = outerMostRoots(
+      [
+        surfaceRoot,
+        blocker.el,
+        ...modalPortalRoots(blocker.el, win, surfaceRoot),
+        ...referencedModalRoots(surfaceRoot, win),
+        focusedOverlayRoot(blocker.el, win),
+      ],
+      win,
     );
   } else if (win.document.body) {
     roots = [win.document.body];
@@ -2536,7 +2683,7 @@ export function computeInteractionScope(
     modalIsolated,
     isConfirmationTrap: blocker?.isTrap === true,
     blockingLayerKind: blocker?.kind,
-    modalElement: blocker?.el,
+    modalElement,
     roots,
     scrollContainers: scrollContainersInRoots(roots, win),
   };

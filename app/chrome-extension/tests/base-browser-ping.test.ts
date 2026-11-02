@@ -60,4 +60,34 @@ describe('injectContentScript ping handling', () => {
       expect.stringContaining('ping content script failed: Cannot access contents of the page'),
     );
   });
+
+  it('turns a Chrome error-page ping into one friendly failure without console noise', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(chrome.tabs.sendMessage).mockRejectedValue(
+      new Error('Frame with ID 0 is showing error page'),
+    );
+
+    await expect(executor.inject(103, ['inject-scripts/network-helper.js'])).rejects.toThrow(
+      /Chrome is showing an error page/,
+    );
+
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('turns a Chrome error-page injection failure into one friendly failure without console noise', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(chrome.tabs.sendMessage).mockRejectedValue(
+      new Error('Could not establish connection. Receiving end does not exist.'),
+    );
+    vi.mocked(chrome.scripting.executeScript).mockRejectedValue(
+      new Error('Frame with ID 0 is showing error page'),
+    );
+
+    await expect(executor.inject(104, ['inject-scripts/network-helper.js'])).rejects.toThrow(
+      /Chrome is showing an error page/,
+    );
+
+    expect(consoleError).not.toHaveBeenCalled();
+  });
 });

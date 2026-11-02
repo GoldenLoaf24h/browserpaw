@@ -136,6 +136,25 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       // Fast Snapshot Engine branch (bounded actions/text with WeakMap caching)
       const hasNonZeroCursor = typeof args.cursor === 'number' && args.cursor > 0;
       if ((args.fast || args.format === 'fast') && !args.deltaOnly && !hasNonZeroCursor) {
+        const unsupportedFastOptions = [
+          args.flattenCards ? 'flattenCards' : null,
+          args.virtualizeViewport ? 'virtualizeViewport' : null,
+        ].filter((value): value is string => Boolean(value));
+        if (unsupportedFastOptions.length > 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'blocked',
+                  code: 'unsupported_fast_options',
+                  unsupported: unsupportedFastOptions,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
         const effectiveSelector = args.scope || args.selector;
         const fastObservationKey = snapshotObservationKey({
           ...args,
@@ -149,6 +168,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           viewportThreshold: args.viewportThreshold,
           viewportOnly: args.viewportOnly,
           activeViewportOnly: args.activeViewportOnly,
+          isolateModal: args.isolateModal,
           limit: args.limit,
           maxTextLength: args.maxTextLength,
         };
@@ -558,14 +578,6 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         }
 
         responseObj.coverage = coverage;
-
-        if (args.flattenCards || args.virtualizeViewport || args.isolateModal) {
-          const unsupported: string[] = [];
-          if (args.flattenCards) unsupported.push('flattenCards');
-          if (args.virtualizeViewport) unsupported.push('virtualizeViewport');
-          if (args.isolateModal) unsupported.push('isolateModal');
-          responseObj.unsupportedInFastMode = unsupported;
-        }
 
         return {
           content: [

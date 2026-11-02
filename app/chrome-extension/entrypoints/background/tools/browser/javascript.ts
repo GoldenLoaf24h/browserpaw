@@ -19,8 +19,10 @@ import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import {
   assertTabInjectable,
+  ExpectedPageRestrictionError,
   isRestrictedChromeUrl,
   restrictedUrlErrorMessage,
+  logUnexpectedToolError,
 } from '@/utils/restricted-url';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
@@ -994,7 +996,9 @@ async function executeInFrameMainWorld(
 ): Promise<CDPEvaluateResult> {
   const frame = await chrome.webNavigation.getFrame({ tabId, frameId });
   if (!frame?.documentId) throw new Error(`Frame ${frameId} has no active document`);
-  if (isRestrictedChromeUrl(frame.url)) throw new Error(restrictedUrlErrorMessage(frame.url));
+  if (isRestrictedChromeUrl(frame.url)) {
+    throw new ExpectedPageRestrictionError(restrictedUrlErrorMessage(frame.url));
+  }
   const target = { tabId, documentIds: [frame.documentId] };
   const marker = 'data-bp-evaluate-' + crypto.randomUUID();
   const cleanup = () =>
@@ -1581,7 +1585,7 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
         await clearRefBridge();
       }
     } catch (error) {
-      console.error('JavaScriptTool.execute error:', error);
+      logUnexpectedToolError('JavaScriptTool.execute error:', error);
       return createErrorResponse(
         `JavaScript tool error: ${error instanceof Error ? error.message : String(error)}`,
       );

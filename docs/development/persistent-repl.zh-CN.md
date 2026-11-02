@@ -34,7 +34,7 @@ try {
 
 建页成功但身份读取失败时，任务保留 `pendingCreations` 回执；对应页仍存在就拒绝继续建页或报告清理完成。回执不授予关闭未知文档的权限。原始 `chrome_cdp_execute` 也不接受任务作用域：协议中的 target 可绕过页面边界，需要原始 CDP 的明确诊断直接调用原子工具，并自行限定目标。
 
-未知建页结果即使没有 `tabId`，也必须保留待处理回执，重连或 Native 重启后仍阻止继续建页。默认 `finish` 返回未验证，不会假称清理完成。只有用户明确决定保留所有潜在的未识别页面，才可调用 `await task.finish({keepUnknownPages:true,confirm:true})`；保留返回的警告与交还回执。这不关闭未知页面，也不证明页面已被清理，技能的自动收尾不会启用该选项。
+未知建页结果必须保留待处理回执，重连或 Native 重启后不可静默丢弃。已有 `tabId` 的迟到页面，只有在浏览器报告同一实例、仍为 Agent 管理且取得具体 `documentId` 后，才可显式 `resume({adopt:true})` 接管；URL 相同不算身份。没有 `tabId` 的回执继续阻止新建页面。默认 `finish` 在回执仍对应页面时返回未验证，不会假称清理完成。只有用户明确决定保留所有待处理页面，才可调用 `await task.finish({keepUnknownPages:true,confirm:true})`；保留返回的警告与交还回执。这不关闭这些页面，也不证明页面已被清理，技能的自动收尾不会启用该选项。
 
 派发前拒绝带有 `status:'blocked'`、`dispatched:false`；等待响应超时带有 `status:'unknown'`、`retry:false`。`requestDispatched` 只表示请求是否进入传输，不证明物理页面动作发生或业务完成。任务、技能和原子 MCP 路径保留原回执和 content，错误的原始结果可通过 `error.result` 检查；不要从一段堆栈或超时反推“没有执行”，也不要重放未知写操作。
 

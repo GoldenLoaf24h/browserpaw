@@ -9,6 +9,7 @@ import { interactIndexTool } from './interact-index';
 import { sessionTabAffinity } from '../../../../utils/session-tab-affinity';
 import { attachActionReceipt } from '../../../../utils/action-receipt';
 import { isCdpOutcomeUncertainError } from '../../../../utils/race-cdp';
+import { logUnexpectedToolError } from '../../../../utils/restricted-url';
 import {
   FileBackingLeaseManager,
   type FileBackingConsumer,
@@ -647,7 +648,7 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
         isError: false,
       };
     } catch (error) {
-      console.error('Error in file upload operation:', error);
+      logUnexpectedToolError('Error in file upload operation:', error);
       const deliveryUnknown =
         Boolean(preparedLease) && (preparedFileMayBeSelected || isCdpOutcomeUncertainError(error));
       if (deliveryUnknown && preparedLease) {

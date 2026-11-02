@@ -4,6 +4,7 @@ import {
   inPageGetActiveElementSummary,
   inPageFindSmartScrollTarget,
   detectActiveModalBlocker,
+  computeInteractionScope,
   indexElement,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import {
@@ -218,6 +219,165 @@ describe('Interaction Scope Unification (Modal, Fast Snapshot, Scroll)', () => {
     const pruner = inPageDOMPruner();
     expect(pruner.modalIsolated).toBe(true);
     expect(pruner.treeString).not.toContain('Unrelated Option');
+  });
+
+  it('12. keeps sibling controls inside the same generic overlay host when the blocker is only its backdrop', () => {
+    document.body.innerHTML = '<x-modal-host id="overlay-host"></x-modal-host>';
+    const host = document.getElementById('overlay-host')!;
+    host.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+        width: 1000,
+        height: 800,
+      }) as DOMRect;
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <div id="overlay-backdrop" class="modal-backdrop" style="position: fixed; top: 0; left: 0; width: 1000px; height: 800px; z-index: 1000;"></div>
+      <section id="overlay-surface" style="position: fixed; top: 100px; left: 100px; width: 500px; height: 400px; z-index: 1001;">
+        <button id="overlay-apply">Apply changes</button>
+      </section>
+    `;
+    const backdrop = shadow.getElementById('overlay-backdrop')!;
+    backdrop.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+        width: 1000,
+        height: 800,
+      }) as DOMRect;
+    const surface = shadow.getElementById('overlay-surface')!;
+    surface.getBoundingClientRect = () =>
+      ({
+        x: 100,
+        y: 100,
+        left: 100,
+        top: 100,
+        right: 600,
+        bottom: 500,
+        width: 500,
+        height: 400,
+      }) as DOMRect;
+    const apply = shadow.getElementById('overlay-apply')!;
+    apply.getBoundingClientRect = () =>
+      ({
+        x: 140,
+        y: 160,
+        left: 140,
+        top: 160,
+        right: 260,
+        bottom: 200,
+        width: 120,
+        height: 40,
+      }) as DOMRect;
+
+    const blocker = detectActiveModalBlocker();
+    expect(blocker?.el.id).toBe('overlay-backdrop');
+    expect(computeInteractionScope().roots).toContain(host);
+
+    const pruner = inPageDOMPruner();
+    expect(pruner.modalIsolated).toBe(true);
+    expect(pruner.treeString).toContain('Apply changes');
+  });
+
+  it('13. includes an arbitrary referenced overlay target without relying on framework-specific classes', () => {
+    document.body.innerHTML = `
+      <div role="dialog" aria-modal="true" id="relation-modal" style="position: fixed; top: 60px; left: 80px; width: 480px; height: 360px; z-index: 2000;">
+        <button id="relation-trigger" aria-controls="relation-panel" aria-expanded="true">Open options</button>
+      </div>
+      <x-support-panel id="relation-panel" style="position: fixed; top: 180px; left: 90px; width: 260px; height: 180px; z-index: 2100;">
+        <button id="relation-choice">Referenced choice</button>
+      </x-support-panel>
+    `;
+    sizeElement('relation-modal', 480, 360);
+    sizeElement('relation-trigger');
+    sizeElement('relation-panel', 260, 180);
+    sizeElement('relation-choice');
+
+    const pruner = inPageDOMPruner();
+    expect(pruner.modalIsolated).toBe(true);
+    expect(pruner.treeString).toContain('Open options');
+    expect(pruner.treeString).toContain('Referenced choice');
+  });
+
+  it('14. fastSnapshot honors explicit background observation while still reporting the active modal', () => {
+    document.body.innerHTML = `
+      <button id="background-action">Background action</button>
+      <div role="dialog" aria-modal="true" id="fast-scope-modal" style="position: fixed; top: 50px; left: 50px; width: 500px; height: 360px; z-index: 2000;">
+        <button id="modal-action">Modal action</button>
+      </div>
+    `;
+    sizeElement('background-action');
+    sizeElement('modal-action');
+    sizeElement('fast-scope-modal', 500, 360);
+
+    const isolated = fastSnapshot();
+    const fullPage = fastSnapshot({ isolateModal: false });
+
+    expect(isolated?.actions.some((action) => action.label.includes('Background action'))).toBe(
+      false,
+    );
+    expect(isolated?.actions.some((action) => action.label.includes('Modal action'))).toBe(true);
+    expect(fullPage?.actions.some((action) => action.label.includes('Background action'))).toBe(
+      true,
+    );
+    expect(fullPage?.actions.some((action) => action.label.includes('Modal action'))).toBe(true);
+    expect(fullPage?.marker).toContainEqual(
+      expect.objectContaining({
+        modal: expect.stringContaining('fast-scope-modal'),
+        isolated: false,
+      }),
+    );
+  });
+
+  it('15. finds scrollable interaction regions inside an open Shadow DOM overlay', () => {
+    document.body.innerHTML = '<x-generic-overlay id="shadow-overlay"></x-generic-overlay>';
+    const shadow = document.getElementById('shadow-overlay')!.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <section role="dialog" aria-modal="true" id="shadow-dialog" style="position: fixed; top: 30px; left: 30px; width: 500px; height: 400px; z-index: 2000;">
+        <div id="shadow-scroll-pane" style="overflow-y: auto;"><button id="shadow-action">Continue</button></div>
+      </section>
+    `;
+    const dialog = shadow.getElementById('shadow-dialog') as HTMLElement;
+    dialog.getBoundingClientRect = () =>
+      ({
+        x: 30,
+        y: 30,
+        left: 30,
+        top: 30,
+        right: 530,
+        bottom: 430,
+        width: 500,
+        height: 400,
+      }) as DOMRect;
+    const pane = shadow.getElementById('shadow-scroll-pane') as HTMLElement;
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 220 });
+    Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 660 });
+    Object.defineProperty(pane, 'scrollTop', { configurable: true, value: 0 });
+    const action = shadow.getElementById('shadow-action')!;
+    action.getBoundingClientRect = () =>
+      ({
+        x: 50,
+        y: 70,
+        left: 50,
+        top: 70,
+        right: 170,
+        bottom: 110,
+        width: 120,
+        height: 40,
+      }) as DOMRect;
+
+    const scope = computeInteractionScope();
+    expect(scope.roots.map((root) => (root as HTMLElement).id)).toEqual(['shadow-overlay']);
+    expect(scope.scrollContainers).toEqual([pane]);
   });
 
   it('5. scrollInfo prioritizes single primary scroll container in active modal with selector and range', () => {

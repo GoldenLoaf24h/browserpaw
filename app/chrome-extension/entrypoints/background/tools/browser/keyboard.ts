@@ -20,6 +20,7 @@ import {
   createInteractionErrorResponse,
   makeInteractionOutcome,
 } from '@/utils/interaction-outcome';
+import { logUnexpectedToolError } from '@/utils/restricted-url';
 
 function createUnknownOutcomeResponse(error: unknown, acknowledgedEvents?: number): ToolResult {
   return {
@@ -939,7 +940,7 @@ class KeyboardTool extends BaseBrowserToolExecutor {
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);
       }
-      console.error('Error in keyboard operation:', error);
+      logUnexpectedToolError('Error in keyboard operation:', error);
       if (isCdpOutcomeUncertainError(error)) {
         return attachActionReceipt(createUnknownOutcomeResponse(error), (error as any)?.receipt);
       }

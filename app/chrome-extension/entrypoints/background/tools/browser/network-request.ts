@@ -212,7 +212,6 @@ class NetworkRequestTool extends BaseBrowserToolExecutor {
         isError: !resultFromContentScript?.success,
       };
     } catch (error: any) {
-      console.error('NetworkRequestTool: Error sending network request:', error);
       return createErrorResponse(
         `Error sending network request: ${error.message || String(error)}`,
       );
