@@ -317,8 +317,9 @@ Version 4.1.2 is the latest published reliability release. It converges observat
 explicit interaction outcomes and form-step boundaries so that deterministic
 tools, batch execution, REPL and Jev return the same facts. Its complete gate,
 real-browser acceptance, production deployment, Linux/Windows CI and release
-assets are recorded. The 4.1.2 release adds unified expected-page restriction
-handling and error-page injection recovery. See the
+assets are recorded. The 4.1.2 release also adds explicit delayed-page
+recovery, fast-observation fail-closed behavior, unified expected-page
+restriction handling and error-page injection recovery. See the
 [4.1.2 release record](./docs/releases/v4.1.2.md) and
 [current development work](./docs/development/DEVELOPMENT.md).
 The reproduced Native idle protocol failure in 4.1.0 was repaired and verified

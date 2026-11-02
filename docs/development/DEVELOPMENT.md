@@ -4,7 +4,9 @@ Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps respons
 
 ## Current release work
 
-The latest published tag is 4.1.2. It adds unified expected-page restriction handling and Chromium error-page injection recovery without changing successful tool contracts. Its complete local gate, deployment verification, loaded-runtime probe, Linux/Windows CI and release assets are recorded in the release archive.
+The latest published tag is 4.1.2. It adds interaction-scope parity across standard/fast/chained observation, explicit delayed page recovery, fast-observation fail-closed behavior, and unified expected-page restriction handling. Its complete local gate, deployment verification, loaded-runtime probe, Linux/Windows CI and release assets are recorded in the release archive.
+
+Release asset filenames are version-independent: `browserpaw-extension.zip` and `browserpaw-skill.zip`. The release tag carries the version identity; do not add version numbers to future asset filenames.
 
 The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
 

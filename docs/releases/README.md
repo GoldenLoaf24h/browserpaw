@@ -19,7 +19,7 @@ The following versions correspond to git tags recorded in repository history:
 
 | Tag          | Date       | Release Record           | Summary                                                                                                                   |
 | :----------- | :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------------------ |
-| **`v4.1.2`** | 2026-11-02 | [v4.1.2.md](./v4.1.2.md) | Expected page restrictions, injection recovery and log-noise boundary                                                     |
+| **`v4.1.2`** | 2026-11-02 | [v4.1.2.md](./v4.1.2.md) | Interaction scope parity, delayed page recovery and expected-page restrictions                                            |
 | **`v4.1.1`** | 2026-11-02 | [v4.1.1.md](./v4.1.1.md) | Explicit interaction outcomes, form step boundaries and observation scope parity                                          |
 | **`v4.1.0`** | 2026-11-01 | [v4.1.0.md](./v4.1.0.md) | Reliable execution, task resources, persistent sessions and standardized client plugins                                   |
 | **`v4.0.0`** | 2026-10-10 | [v4.0.0.md](./v4.0.0.md) | Comprehensive audit hardening, session recovery, and coordinate fidelity                                                  |

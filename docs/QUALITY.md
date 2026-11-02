@@ -12,6 +12,8 @@ After a complete passing gate, push the exact source commit and require the GitH
 
 After the remote gate passes, deploy its existing output with `node scripts/extension-artifacts.mjs --deploy`, then run `pnpm verify:delivery`. The destination must be explicitly configured. Use `pnpm build:deploy` when a build is actually needed; avoid rebuilding merely to copy an already verified output. Do not deploy as a side effect of documentation maintenance.
 
+Release assets use stable filenames across versions: `browserpaw-extension.zip` and `browserpaw-skill.zip`. The release tag and embedded manifest carry version identity; do not put a version number in asset filenames.
+
 For session-lifetime acceptance, record the Native PID/start time, client identity, keepalive results and a final call on the same connection after the idle threshold. A Native restart invalidates continuity even when automatic reconnect produces a healthy doctor. Preserve the failure and diagnose it before claiming the lifetime issue is fixed.
 
 ---

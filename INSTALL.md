@@ -32,7 +32,7 @@ Choose the installation option matching your environment:
 
 ### Option A: Pre-built Release (Recommended for Most Users — No Build Required)
 
-1. Download the latest `browserpaw-extension-v*.zip` from **[GitHub Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest)**.
+1. Download `browserpaw-extension.zip` from **[GitHub Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest)**.
 2. Extract the ZIP archive into a persistent local folder (e.g., `~/browserpaw-extension` or `D:\browserpaw-extension`).
 
 ### Option B: Local Repository Build (For Developers)
