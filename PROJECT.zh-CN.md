@@ -38,6 +38,6 @@ Agent → MCP 或持久 JS 接口 → Native 任务／技能编排 → 扩展执
 
 ## 证据与发布状态
 
-BrowserPaw 4.1.1 是当前发布候选版，`v4.1.0` 仍是最新已打标签的稳定版。4.1.1 在完整门禁、真实浏览器验收及匹配的 Linux/Windows CI 通过前不得发布。已复现的 Native 十分钟空闲重启通过移除 stdout 中的协议污染完成修复，并通过 665 秒同一连接实测；该有界证据不能证明所有长时间工作负载都会持续稳定，详见[开发边界](./docs/development/DEVELOPMENT.md)。
+BrowserPaw 4.1.1 是最新已打标签的稳定版；完整门禁、真实浏览器验收、生产部署和匹配的 Linux/Windows CI 均在发布标签前通过。已复现的 Native 十分钟空闲重启通过移除 stdout 中的协议污染完成修复，并通过 665 秒同一连接实测；该有界证据不能证明所有长时间工作负载都会持续稳定，详见[开发边界](./docs/development/DEVELOPMENT.md)。
 
 大型 M7 对标已停止，历史记录保留，整体成功率、耗时和 token 降低目标尚未证明。工具数量、测试总数、版本和参数从运行时帮助、生成的 [TOOLS.md](./docs/TOOLS.md)、manifest 和门禁报告读取，不手写性能保证。

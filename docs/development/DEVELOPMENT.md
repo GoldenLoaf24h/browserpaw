@@ -4,7 +4,7 @@ Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps respons
 
 ## Current release work
 
-The current release candidate is 4.1.1; the latest tagged stable release remains `v4.1.0`. The 4.1.1 work converges observation scope, explicit submit boundaries and interaction-result semantics across atomic tools, batch, form, REPL and Jev. It is not released until the complete gate, real-browser acceptance and matching Linux/Windows CI pass.
+The current stable release is 4.1.1. It converges observation scope, explicit submit boundaries and interaction-result semantics across atomic tools, batch, form, REPL and Jev. Its complete gate, real-browser acceptance, production deployment and matching Linux/Windows CI passed before the tag was published.
 
 The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
 

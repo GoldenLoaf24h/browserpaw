@@ -313,12 +313,11 @@ _Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of
 Development acceptance gates, build/deployment verification, and runtime identity standards are defined in [**`docs/QUALITY.md`**](./docs/QUALITY.md).
 Run `pnpm verify` to execute full static quality and build audits.
 
-Version 4.1.1 is the current release candidate. It converges observation scope,
+Version 4.1.1 is the latest stable release. It converges observation scope,
 explicit interaction outcomes and form-step boundaries so that deterministic
-tools, batch execution, REPL and Jev return the same facts. The latest tagged
-stable release remains `v4.1.0`; 4.1.1 must not be described as released until
-its complete gate, real-browser acceptance, and Linux/Windows CI pass. See the
-[4.1.1 release candidate record](./docs/releases/v4.1.1.md) and
+tools, batch execution, REPL and Jev return the same facts. Its complete gate,
+real-browser acceptance, production deployment and Linux/Windows CI passed
+before release. See the [4.1.1 release record](./docs/releases/v4.1.1.md) and
 [current development work](./docs/development/DEVELOPMENT.md).
 The reproduced Native idle protocol failure in 4.1.0 was repaired and verified
 on an unchanged connection for more than eleven minutes; that bounded evidence
