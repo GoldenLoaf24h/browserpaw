@@ -294,7 +294,7 @@ _Google Chrome_ 是 Google LLC 的商标。_Microsoft Edge_ 是 Microsoft Corpor
 开发验收门、构建/部署验证和运行时身份标准定义于 [**`docs/QUALITY.md`**](./docs/QUALITY.md)。
 运行 `pnpm verify` 执行完整的静态质量与构建审计。
 
-4.1.2 是当前可靠性发布候选，统一了观察范围、显式交互结果和表单步骤边界，使确定性工具、batch、REPL 与 Jev 对同一动作返回一致事实。4.1.1 发布前的完整门禁、真实浏览器验收、生产部署及 Linux/Windows CI 均已通过；4.1.2 候选新增统一的可预期页面限制处理与错误页注入恢复。验收范围和迁移说明见[4.1.2 发布记录](./docs/releases/v4.1.2.md)，开发边界见[当前开发工作](./docs/development/DEVELOPMENT.md)。
+4.1.2 是最新已发布的可靠性版本，统一了观察范围、显式交互结果和表单步骤边界，使确定性工具、batch、REPL 与 Jev 对同一动作返回一致事实。完整门禁、真实浏览器验收、生产部署、Linux/Windows CI 及发布资产均已记录；本次发布新增统一的可预期页面限制处理与错误页注入恢复。验收范围和迁移说明见[4.1.2 发布记录](./docs/releases/v4.1.2.md)，开发边界见[当前开发工作](./docs/development/DEVELOPMENT.md)。
 
 4.1.0 中已复现的 Native 空闲协议故障完成了修复，并通过同一连接超过十一分钟的实测；这属于有界运行证据，不能推成所有长时间工作负载的保证。
 

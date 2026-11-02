@@ -4,7 +4,7 @@ BrowserPaw connects agents to an existing Chrome session through a local MCP bri
 
 This hub serves as the definitive reference guide for AI Agents (Claude Code, Cursor, Windsurf, Codex) and human engineers.
 
-For development, start with [PROJECT.md](../PROJECT.md) and [development boundaries/current work](./development/DEVELOPMENT.md). Acceptance belongs to [QUALITY.md](./QUALITY.md); document ownership belongs to [DOCUMENTATION.md](./DOCUMENTATION.md). BrowserPaw 4.1.2 is the current release candidate; `v4.1.1` remains the latest published tag. Historical milestone tables are not current acceptance claims.
+For development, start with [PROJECT.md](../PROJECT.md) and [development boundaries/current work](./development/DEVELOPMENT.md). Acceptance belongs to [QUALITY.md](./QUALITY.md); document ownership belongs to [DOCUMENTATION.md](./DOCUMENTATION.md). BrowserPaw 4.1.2 is the latest published tag. Historical milestone tables are not current acceptance claims.
 
 ---
 

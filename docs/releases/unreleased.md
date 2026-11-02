@@ -18,8 +18,8 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - The Jev goal loop reuses the same action-target candidates and outcome states. It may navigate, expand, toggle local views, scroll and fill within an explicit goal, but submit/send/publish/delete actions require caller-listed steps. Model confidence does not replace authorization.
 - Skills, schema help, generated tool documentation and release migration notes are updated together. Old scripts that depended on implicit form advancement or Enter-based submission require migration.
 
-The error-page and expected-page-restriction items are queued for the 4.1.2
-release record. The remaining interaction-convergence items describe the
+The error-page and expected-page-restriction items are recorded in the 4.1.2
+release. The remaining interaction-convergence items describe the
 already published 4.1.1 behavior and are retained here as the source ledger.
 
 ## 2026-11-01: Adaptive viewport and resolution-aware screenshots
