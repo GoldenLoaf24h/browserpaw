@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
+import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
+import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import * as engine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as agentCursor from '../entrypoints/background/tools/browser/agent-cursor';
 import * as race from '../utils/race-cdp';
@@ -79,7 +82,7 @@ describe('fill-core deadline consumption', () => {
       }
       return [{ result: { success: true } }] as any;
     });
-    const interact = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+    const click = vi.spyOn(clickTool, 'execute').mockResolvedValue({
       content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
       isError: false,
     });
@@ -90,13 +93,14 @@ describe('fill-core deadline consumption', () => {
       text: 'slow value',
       clear: true,
       submit: true,
+      submitTarget: { index: 2 },
       deadlineAt: Date.now() + 180,
     });
 
     expect(result.success).toBe(false);
     expect(result.status).toBe('timeout');
     expect(result.submitted).not.toBe(true);
-    expect(interact).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
   });
 
   it('passes the absolute deadline to nested interact and bounded page execution', async () => {
@@ -137,7 +141,7 @@ describe('fill-core deadline consumption', () => {
       return [{ result: { success: true } }] as any;
     });
     const deadlineAt = Date.now() + 10_000;
-    const interact = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
+    const click = vi.spyOn(clickTool, 'execute').mockResolvedValue({
       content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
       isError: false,
     });
@@ -148,21 +152,67 @@ describe('fill-core deadline consumption', () => {
       text: 'value',
       clear: true,
       submit: true,
+      submitTarget: { index: 2 },
       deadlineAt,
     });
 
     expect(result.submitted).toBe(true);
-    expect(interact).toHaveBeenCalledWith(
+    expect(click).toHaveBeenCalledWith(
       expect.objectContaining({
         index: 2,
         expectedDeadlineAt: deadlineAt,
         tabId: 77,
       }),
+      expect.any(Object),
     );
     const waitCall = inPage.mock.calls.find(([, name]) => name === 'inPageWaitForActionable');
     expect(waitCall?.at(-1)).toEqual(expect.any(Number));
     expect(Number(waitCall?.at(-1))).toBeGreaterThan(0);
     expect(Number(waitCall?.at(-1))).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe('fill-index public outcome contract', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    installChrome();
+    installFastTransport();
+    vi.spyOn(fillIndexTool as any, 'resolveAffinityTab').mockResolvedValue({
+      id: 77,
+      url: 'https://example.com/form',
+    });
+    vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target, fnName) => {
+      if (fnName === 'inPageDetectPerceptiveSignature') {
+        return [{ result: { activeInputs: [], alerts: [] } }] as any;
+      }
+      return [{ result: { success: true } }] as any;
+    });
+  });
+
+  it('reports committed field verification through the shared interaction contract', async () => {
+    const fill = vi.spyOn(fillCore, 'performPhysicalFill');
+    fill.mockResolvedValueOnce({
+      success: true,
+      committed: true,
+      index: 1,
+      filledText: 'Ada',
+      isTrusted: true,
+      method: 'cdp_native',
+    });
+
+    const result = await fillIndexTool.execute({
+      tabId: 77,
+      index: 1,
+      text: 'Ada',
+      includeDelta: false,
+    });
+    const payload = JSON.parse((result.content[0] as any).text);
+
+    expect(result.isError).toBe(false);
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'dispatched' },
+      verification: { status: 'verified' },
+    });
   });
 });
 

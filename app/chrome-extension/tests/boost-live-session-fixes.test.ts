@@ -277,7 +277,7 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
   // Problem B: Search Bar Autocomplete & Submit Button Integration
   // =========================================================================
   describe('Problem B: Search Bar Autocomplete & Submit Button Integration', () => {
-    it('detects Taobao-style search button with btn-search and tb-bg classes', () => {
+    it('does not infer a Taobao-style search submitter without a form owner', () => {
       const searchBox = document.createElement('div');
       searchBox.className = 'search-box';
 
@@ -302,12 +302,10 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
 
       const res = inPageVerifyInputCommitment(1, '机械键盘');
       expect(res.committed).toBe(true);
-      expect(res.submitButtonState?.found).toBe(true);
-      expect(res.submitButtonState?.index).toBe(2);
-      expect(res.submitButtonState?.text).toBe('搜索');
+      expect(res.submitButtonState).toBeUndefined();
     });
 
-    it('detects search button located 3 ancestor levels up with SVG icon', () => {
+    it('does not infer a submitter from an unrelated ancestor or SVG icon', () => {
       const rootForm = document.createElement('div');
       rootForm.className = 'search-panel';
 
@@ -334,8 +332,7 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
 
       const res = inPageVerifyInputCommitment(5, 'RTX 5090');
       expect(res.committed).toBe(true);
-      expect(res.submitButtonState?.found).toBe(true);
-      expect(res.submitButtonState?.index).toBe(8);
+      expect(res.submitButtonState).toBeUndefined();
     });
 
     it('does not assume an unchanged URL requires another submit click', async () => {
@@ -397,7 +394,7 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
       expect(parsed.autoSubmitFallbackApplied).toBeUndefined();
     });
 
-    it('records submitted: true and submitMethod: pressEnter when Enter results in URL change', async () => {
+    it('records the explicit Enter dispatch without claiming business submission', async () => {
       const initialTab = { id: 202, url: 'https://www.google.com' };
       const navTab = { id: 202, url: 'https://www.google.com/search?q=test' };
 
@@ -425,8 +422,7 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
               result: {
                 success: true,
                 committed: true,
-                submitted: true,
-                submitMethod: 'pressEnter',
+                pressEnterDispatched: true,
               },
             },
           ] as any;
@@ -447,8 +443,10 @@ describe('Live Taobao Session Fixes: Tab Grouping, Search Bar Autocomplete & Ove
 
       expect(fillRes.isError).toBe(false);
       const parsed = JSON.parse((fillRes.content[0] as any).text);
-      expect(parsed.submitted).toBe(true);
-      expect(parsed.submitMethod).toBe('pressEnter');
+      expect(parsed.pressEnterDispatched).toBe(true);
+      expect(parsed.interaction?.execution?.status).toBe('dispatched');
+      expect(parsed.interaction?.verification?.status).toBe('verified');
+      expect(parsed.submitted).not.toBe(true);
       expect(parsed.urlChanged).toBe(true);
     });
   });

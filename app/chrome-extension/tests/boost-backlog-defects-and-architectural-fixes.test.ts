@@ -305,6 +305,7 @@ describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
       // Active modal dialog
       const modal = document.createElement('dialog');
       modal.open = true;
+      modal.setAttribute('aria-modal', 'true');
       modal.setAttribute('aria-label', 'Active Dialog');
       modal.style.position = 'fixed';
       modal.style.zIndex = '9999';
@@ -457,7 +458,7 @@ describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
       expect(loc.y).toBe(65);
     });
 
-    it('finds submit buttons across Shadow DOM in inPageVerifyInputCommitment', () => {
+    it('does not promote an unassociated Shadow DOM icon to a submitter', () => {
       const composerHost = document.createElement('div');
       composerHost.className = 'composer-container';
       const shadow = composerHost.attachShadow({ mode: 'open' });
@@ -477,8 +478,7 @@ describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
 
       const verification = inPageVerifyInputCommitment(90, 'Committed Tweet Text');
       expect(verification.committed).toBe(true);
-      expect(verification.submitButtonState?.found).toBe(true);
-      expect(verification.submitButtonState?.text).toBe('Post');
+      expect(verification.submitButtonState).toBeUndefined();
     });
 
     it('finds text inside generic div and custom components in inPageScrollUntilFound', async () => {

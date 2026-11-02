@@ -38,6 +38,6 @@ See [plugin compatibility](./docs/development/PLUGIN_COMPATIBILITY.md) and the [
 
 ## Evidence and release status
 
-BrowserPaw 4.1.0 is the current stable release, tagged `v4.1.0`. The reproduced ten-minute Native idle restart was fixed by removing protocol output from stdout and was verified through a 665-second unchanged-connection test. That bounded evidence does not establish uninterrupted stability for every long-running workload; see [development boundaries](./docs/development/DEVELOPMENT.md).
+BrowserPaw 4.1.1 is the current release candidate; `v4.1.0` remains the latest tagged stable release. The 4.1.1 candidate requires a complete gate, real-browser acceptance and matching Linux/Windows CI before release. The reproduced ten-minute Native idle restart was fixed by removing protocol output from stdout and was verified through a 665-second unchanged-connection test. That bounded evidence does not establish uninterrupted stability for every long-running workload; see [development boundaries](./docs/development/DEVELOPMENT.md).
 
 The large M7 comparison is stopped. Historical results are retained; overall success-rate, latency and token-reduction targets remain unproven. Tool counts, test totals, versions and supported parameters come from runtime help, generated [TOOLS.md](./docs/TOOLS.md), manifests and verification reports rather than manually maintained claims.

@@ -51,12 +51,6 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       },
       goal_done: overrides.goal_done || { type: 'noul', noul: 0.05 },
       stuck: overrides.stuck || { type: 'noul', noul: 0.1 },
-      submit_intent: overrides.submit_intent || {
-        type: 'choice',
-        choice: 'fill_only',
-        confidence: 0.99,
-        probabilities: { fill_only: 0.99, submit: 0.005, unclear: 0.005 },
-      },
     };
   }
   beforeEach(() => {
@@ -446,50 +440,31 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
       expect(result.engine).toBe('jev');
       expect(result.fallbackReason).toBe('network_error');
     });
-    const typeActionAnswers = (submitChoice: string) =>
-      createMockJevAnswers({
-        action: {
-          type: 'choice',
-          choice: 'type',
-          confidence: 0.92,
-          probabilities: {
-            click: 0.02,
-            type: 0.92,
-            select: 0.01,
-            scroll_down: 0.01,
-            scroll_up: 0.0,
-            back: 0.0,
-            wait: 0.01,
-            done: 0.03,
-            escalate: 0.0,
-          },
-        },
-        submit_intent: {
-          type: 'choice',
-          choice: submitChoice,
-          confidence: 0.9,
-          // Full distribution over the three choices so validateChoice accepts it.
-          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.05, [submitChoice]: 0.9 },
-        },
-      });
     test.each([
-      ['fill_only', false],
-      ['submit', true],
+      ['omitted', undefined, false],
+      ['explicit false', false, false],
+      ['explicit true', true, true],
     ])(
-      'P1: submit_intent "%s" decides pressEnter regardless of goal keywords',
-      async (submitChoice, expectedPressEnter) => {
+      'P1: pressEnter is %s and never inferred from goal wording',
+      async (_label, pressEnter, expected) => {
         process.env.TYPESAFE_API_KEY = 'test_key';
         const engine = new FastDecisionEngine();
         const fillArgs: any[] = [];
         (engine as any).jevClient.query = async () => ({
           result: {
-            answers: typeActionAnswers(submitChoice as string),
+            answers: createMockJevAnswers({
+              action: { type: 'choice', choice: 'type', confidence: 0.95 },
+              submit_intent: {
+                type: 'choice',
+                choice: 'submit',
+                confidence: 0.99,
+                probabilities: { fill_only: 0.005, submit: 0.99, unclear: 0.005 },
+              },
+            }),
             usage: { input_tokens: 100, output_tokens: 10 },
           },
           errorReason: null,
         });
-        // The goal deliberately contains "search": the old keyword rule would have submitted
-        // even though the task only asked to fill the box.
         const caller = async (toolName: string, args: any) => {
           if (toolName === 'chrome_fill_index') {
             fillArgs.push(args);
@@ -499,279 +474,18 @@ describe('Fast Decision Engine Integration Tests (§4, §5, §6)', () => {
           }
           return createMockInternalCaller()(toolName, args);
         };
-        await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-        expect(fillArgs).toHaveLength(1);
-        expect(fillArgs[0].pressEnter).toBe(expectedPressEnter);
-      },
-    );
-    test('P1: an unclear submit intent pauses instead of guessing', async () => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      let fillCalled = false;
-      (engine as any).jevClient.query = async () => ({
-        result: {
-          answers: typeActionAnswers('unclear'),
-          usage: { input_tokens: 100, output_tokens: 10 },
-        },
-        errorReason: null,
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') fillCalled = true;
-        return createMockInternalCaller()(toolName, args);
-      };
-      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-      expect(result.status).toBe('paused');
-      expect(result.reason).toContain('Submit intent unclear');
-      expect(fillCalled).toBe(false);
-      expect(result.pausedBeforeAction?.matchedKeyword).toBe('unclear_submit_intent');
-    });
-    test('P1: a malformed submit intent escalates rather than submitting', async () => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      let fillCalled = false;
-      (engine as any).jevClient.query = async () => ({
-        result: {
-          answers: createMockJevAnswers({
-            action: {
-              type: 'choice',
-              choice: 'type',
-              confidence: 0.92,
-              probabilities: {
-                click: 0.02,
-                type: 0.92,
-                select: 0.01,
-                scroll_down: 0.01,
-                scroll_up: 0.0,
-                back: 0.0,
-                wait: 0.01,
-                done: 0.03,
-                escalate: 0.0,
-              },
-            },
-            submit_intent: {
-              type: 'choice',
-              choice: 'submit_now',
-              confidence: 0.9,
-              probabilities: {},
-            },
-          }),
-          errorReason: null,
-        },
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') fillCalled = true;
-        return createMockInternalCaller()(toolName, args);
-      };
-      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-      expect(result.status).toBe('escalate');
-      expect(result.reason).toContain('submit intent choice validation failed');
-      expect(fillCalled).toBe(false);
-    });
-    test('P1: an explicit pressEnter parameter still overrides the judged intent', async () => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      const fillArgs: any[] = [];
-      (engine as any).jevClient.query = async () => ({
-        result: {
-          answers: typeActionAnswers('fill_only'),
-          usage: { input_tokens: 100, output_tokens: 10 },
-        },
-        errorReason: null,
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') {
-          fillArgs.push(args);
-          return { content: [{ type: 'text', text: serializeObservedFixture({ success: true }) }] };
-        }
-        return createMockInternalCaller()(toolName, args);
-      };
-      await engine.run(
-        { goal: '在搜索框中输入 BrowserPaw', maxSteps: 1, pressEnter: true },
-        caller,
-      );
-      expect(fillArgs).toHaveLength(1);
-      expect(fillArgs[0].pressEnter).toBe(true);
-    });
-    test.each([
-      { pressEnter: true, shape: 'missing', submitIntent: undefined },
-      { pressEnter: false, shape: 'missing', submitIntent: undefined },
-      {
-        pressEnter: true,
-        shape: 'malformed',
-        submitIntent: { type: 'choice', choice: 'submit_now', confidence: 0.9, probabilities: {} },
-      },
-      {
-        pressEnter: false,
-        shape: 'malformed',
-        submitIntent: { type: 'choice', choice: 'submit_now', confidence: 0.9, probabilities: {} },
-      },
-      {
-        pressEnter: true,
-        shape: 'unclear',
-        submitIntent: {
-          type: 'choice',
-          choice: 'unclear',
-          confidence: 0.9,
-          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.9 },
-        },
-      },
-      {
-        pressEnter: false,
-        shape: 'unclear',
-        submitIntent: {
-          type: 'choice',
-          choice: 'unclear',
-          confidence: 0.9,
-          probabilities: { fill_only: 0.05, submit: 0.05, unclear: 0.9 },
-        },
-      },
-    ])(
-      'P1: explicit pressEnter=$pressEnter bypasses a $shape submit intent',
-      async ({ pressEnter, submitIntent }) => {
-        process.env.TYPESAFE_API_KEY = 'test_key';
-        const engine = new FastDecisionEngine();
-        const fillArgs: any[] = [];
-        const answers: any = typeActionAnswers('submit');
-        if (submitIntent === undefined) delete answers.submit_intent;
-        else answers.submit_intent = submitIntent;
-        (engine as any).jevClient.query = async () => ({
-          result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
-          errorReason: null,
-        });
-        const caller = async (toolName: string, args: any) => {
-          if (toolName === 'chrome_fill_index') {
-            fillArgs.push(args);
-            return {
-              content: [{ type: 'text', text: serializeObservedFixture({ success: true }) }],
-            };
-          }
-          return createMockInternalCaller()(toolName, args);
-        };
-        const result = await engine.run(
-          { goal: '在搜索框中输入 BrowserPaw', maxSteps: 1, pressEnter },
+        await engine.run(
+          {
+            goal: '在搜索框中输入 BrowserPaw',
+            maxSteps: 1,
+            ...(pressEnter === undefined ? {} : { pressEnter }),
+          },
           caller,
         );
-        expect(result.status).toBe('max_steps');
         expect(fillArgs).toHaveLength(1);
-        expect(fillArgs[0].pressEnter).toBe(pressEnter);
+        expect(fillArgs[0].pressEnter).toBe(expected);
       },
     );
-    test('P1: a valid confident submit intent still presses Enter without an override', async () => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      const fillArgs: any[] = [];
-      (engine as any).jevClient.query = async () => ({
-        result: {
-          answers: typeActionAnswers('submit'),
-          usage: { input_tokens: 100, output_tokens: 10 },
-        },
-        errorReason: null,
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') {
-          fillArgs.push(args);
-          return { content: [{ type: 'text', text: serializeObservedFixture({ success: true }) }] };
-        }
-        return createMockInternalCaller()(toolName, args);
-      };
-      await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-      expect(fillArgs).toHaveLength(1);
-      expect(fillArgs[0].pressEnter).toBe(true);
-    });
-    test.each([
-      {
-        shape: 'a low-confidence submit judgment (0.40 < 0.45)',
-        confidence: 0.4,
-        probabilities: { fill_only: 0.05, submit: 0.85, unclear: 0.1 },
-      },
-      {
-        shape: 'a selected probability below the target guard (0.34 < 0.35)',
-        confidence: 0.9,
-        probabilities: { fill_only: 0.33, submit: 0.34, unclear: 0.33 },
-      },
-    ])(
-      'P1: $shape escalates without pressing Enter when pressEnter is absent',
-      async (caseData) => {
-        process.env.TYPESAFE_API_KEY = 'test_key';
-        const engine = new FastDecisionEngine();
-        let fillCalled = false;
-        const answers: any = typeActionAnswers('submit');
-        answers.submit_intent = {
-          type: 'choice',
-          choice: 'submit',
-          confidence: caseData.confidence,
-          probabilities: caseData.probabilities,
-        };
-        (engine as any).jevClient.query = async () => ({
-          result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
-          errorReason: null,
-        });
-        const caller = async (toolName: string, args: any) => {
-          if (toolName === 'chrome_fill_index') fillCalled = true;
-          return createMockInternalCaller()(toolName, args);
-        };
-        const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-        expect(result.status).toBe('escalate');
-        expect(result.reason).toMatch(/submit intent/i);
-        expect(fillCalled).toBe(false);
-      },
-    );
-    test.each([
-      ['a distribution that does not sum to 1', { fill_only: 0.4, submit: 0.6, unclear: 0.4 }],
-      ['a missing choice key', { fill_only: 0.5, submit: 0.5 }],
-      [
-        'a chosen probability that is not the maximum',
-        { fill_only: 0.7, submit: 0.2, unclear: 0.1 },
-      ],
-    ])('P1: submit_intent with %s escalates as invalid', async (_shape, probabilities) => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      let fillCalled = false;
-      const answers: any = typeActionAnswers('submit');
-      answers.submit_intent = {
-        type: 'choice',
-        choice: 'submit',
-        confidence: 0.9,
-        probabilities,
-      };
-      (engine as any).jevClient.query = async () => ({
-        result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
-        errorReason: null,
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') fillCalled = true;
-        return createMockInternalCaller()(toolName, args);
-      };
-      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-      expect(result.status).toBe('escalate');
-      expect(result.reason).toContain('submit intent choice validation failed');
-      expect(fillCalled).toBe(false);
-    });
-    test.each([
-      ['missing', undefined],
-      ['NaN', NaN],
-      ['above 1', 1.5],
-      ['below 0', -0.1],
-      ['a string', '0.9'],
-    ])('P1: submit_intent with %s confidence escalates as invalid', async (_shape, confidence) => {
-      process.env.TYPESAFE_API_KEY = 'test_key';
-      const engine = new FastDecisionEngine();
-      let fillCalled = false;
-      const answers: any = typeActionAnswers('submit');
-      answers.submit_intent.confidence = confidence;
-      (engine as any).jevClient.query = async () => ({
-        result: { answers, usage: { input_tokens: 100, output_tokens: 10 } },
-        errorReason: null,
-      });
-      const caller = async (toolName: string, args: any) => {
-        if (toolName === 'chrome_fill_index') fillCalled = true;
-        return createMockInternalCaller()(toolName, args);
-      };
-      const result = await engine.run({ goal: '在搜索框中输入 BrowserPaw', maxSteps: 1 }, caller);
-      expect(result.status).toBe('escalate');
-      expect(result.reason).toContain('submit intent choice validation failed');
-      expect(fillCalled).toBe(false);
-    });
     test('12. Guard: escalates when action confidence < 0.55 threshold (§5.3)', async () => {
       process.env.TYPESAFE_API_KEY = 'test_key';
       const engine = new FastDecisionEngine();

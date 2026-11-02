@@ -55,7 +55,9 @@ Personal learned skills live under `$BROWSERPAW_HOME/skills` (default `~/.browse
 - Prefer background pages and preserve existing tabs unless the user explicitly asks to change them.
 - Use strict locators when refs are unavailable; ambiguity is an error, not permission to choose the first match.
 - Check actionability before dispatch. Disabled, hidden, unstable, persistent-motion, or covered targets should be rejected with a machine-readable reason.
-- Native text fill sends multiline text as one input operation. Use explicit press or submit actions for submission.
+- Observation scope is part of action safety. A modal, popover or Portal can make background text readable while still blocking background actions; re-observe or target the active scope instead of bypassing the check.
+- Native text fill sends multiline text as one input operation and verifies the field, not a business submission. `pressEnter` is an explicit key step; `submit:true` requires a caller-provided `submitTarget`. Never combine both in one fill.
+- For drafts and external writes, fill and inspect without sending unless the user explicitly authorizes the final action. A disabled button, highlighted button or changed page text is not proof that the business action completed.
 - `clear:false` appends; the default replaces. Preserve whitespace and allow an empty string to clear.
 - Dialog, popup, file chooser, and download events belong to their source tab/document/session. Require an explicit scoped target when more than one is possible.
 - Do not use a browser-wide filename or URL match to claim a task download. Record and wait on a GUID plus source observation, or use one guarded trigger call.

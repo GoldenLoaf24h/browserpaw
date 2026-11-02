@@ -1,4 +1,4 @@
-import { createErrorResponse, type ToolCallContext, type ToolResult } from '@/common/tool-handler';
+import { type ToolCallContext, type ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { executeInPage } from './in-page-engine';
@@ -13,6 +13,10 @@ import { interactIndexTool } from './interact-index';
 import { performPhysicalFill } from './fill-core';
 import { matchSemantically, type JevSemanticMatchResponse } from '@/utils/form-semantic-matcher';
 import { throwIfAborted, waitWithAbort } from '@/utils/action-abort';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
 
 export interface FormPipelineField {
   query: string;
@@ -44,7 +48,8 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
     index: number,
     deadlineAt?: number,
     signal?: AbortSignal,
-  ): Promise<boolean> {
+    context?: ToolCallContext,
+  ): Promise<ToolResult> {
     throwIfAborted(signal, 'before a form click');
     const res = await interactIndexTool.execute(
       {
@@ -55,7 +60,7 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
         includeDelta: false,
         ...(deadlineAt ? { expectedDeadlineAt: deadlineAt } : {}),
       },
-      { signal },
+      { ...(context ?? {}), signal },
     );
     let parsed: any;
     try {
@@ -78,7 +83,7 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
       });
       throw error;
     }
-    return true;
+    return res;
   }
 
   private static readonly MAX_STEPS = 60;
@@ -87,14 +92,37 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
 
   async execute(args: FormPipelineParams, context?: ToolCallContext): Promise<ToolResult> {
     if (!args || !Array.isArray(args.fields) || args.fields.length === 0) {
-      return createErrorResponse('fields parameter must be a non-empty array of field descriptors');
+      return createInteractionErrorResponse(
+        'fields parameter must be a non-empty array of field descriptors',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'invalid_fields', 0),
+        { status: 'blocked', requestDispatched: false },
+      );
+    }
+    if (args.autoAdvance === true) {
+      return createInteractionErrorResponse(
+        'autoAdvance is retired. Fill the current form only, then list the next click or key step explicitly in chrome_batch_actions.',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'migration_required', 0),
+        {
+          status: 'blocked',
+          reason: 'migration_required',
+          requestDispatched: false,
+        },
+      );
     }
 
     const signal = context?.signal;
-    const completedFields: Array<FormPipelineField & { matchedQuestion?: string; step: number }> =
-      [];
+    const completedFields: Array<
+      FormPipelineField & {
+        matchedQuestion?: string;
+        step: number;
+        verification: 'verified' | 'not_requested';
+      }
+    > = [];
     const completedIndices = new Set<number>();
+    const completedInputIndices = new Set<number>();
     const semanticDecisions: Array<Record<string, unknown>> = [];
+    let dispatchedActionCount = 0;
+    let lastReceipt: unknown;
     try {
       const tab = await this.resolveAffinityTab({
         tabId: args.tabId,
@@ -102,7 +130,11 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || args.sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse('No active tab found for chrome_form_pipeline');
+        return createInteractionErrorResponse(
+          'No active tab found for chrome_form_pipeline',
+          makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
+          { status: 'blocked', requestDispatched: false },
+        );
       }
       const tabId = tab.id;
       tabFaviconManager.markTabActive(tabId);
@@ -123,13 +155,10 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               FormPipelineTool.MAX_STEPS,
               Math.max(1, Number.isFinite(requestedSteps) ? requestedSteps : 20),
             );
-            const autoAdvance = args.autoAdvance !== false;
-
             let status: 'completed' | 'partial' | 'interrupted' | 'timeout' | 'unknown' =
               'completed';
-            let reason = 'all_fields_completed';
+            let reason = 'all_requested_fields_processed';
             let interruptDetails: any = undefined;
-            let consecutiveStuck = 0;
             const remainingMs = () => Math.max(0, deadlineAt - Date.now());
 
             pipelineLoop: for (let step = 1; step <= maxSteps; step++) {
@@ -141,7 +170,7 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               }
               if (completedIndices.size >= args.fields.length) {
                 status = 'completed';
-                reason = 'all_fields_completed';
+                reason = 'all_requested_fields_processed';
                 break;
               }
 
@@ -171,6 +200,10 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                 .then((r) => r?.[0])
                 .catch(() => null);
               const preSig = preSigEntry?.result as PerceptiveSignature | null;
+              const availableInputs = (preSig?.activeInputs ?? []).filter(
+                (input) =>
+                  typeof input.index !== 'number' || !completedInputIndices.has(input.index),
+              );
               const semanticOptions = {
                 signal,
                 deadlineAt,
@@ -260,7 +293,7 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               }
 
               // Candidate 1.5: bounded semantic match between question and uncompleted fields
-              if (matchedIndex === -1 && preSig?.question && preSig.activeInputs?.length === 1) {
+              if (matchedIndex === -1 && preSig?.question && availableInputs.length === 1) {
                 const uncompletedCandidates = args.fields
                   .map((f, i) => ({ id: i, text: f.query }))
                   .filter((c) => !completedIndices.has(Number(c.id)));
@@ -281,7 +314,7 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               }
 
               // A field may select only one matching input; DOM order is not disambiguation.
-              if (matchedIndex === -1 && preSig?.activeInputs?.length) {
+              if (matchedIndex === -1 && availableInputs.length) {
                 for (let i = 0; i < args.fields.length; i++) {
                   if (completedIndices.has(i)) continue;
                   const query = args.fields[i].query.trim().toLowerCase();
@@ -289,10 +322,10 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                     [input.name, input.placeholder, input.ariaLabel]
                       .filter(Boolean)
                       .map((value) => value!.trim().toLowerCase());
-                  const exact = preSig.activeInputs.filter((input) => terms(input).includes(query));
+                  const exact = availableInputs.filter((input) => terms(input).includes(query));
                   const matches = exact.length
                     ? exact
-                    : preSig.activeInputs.filter((input) =>
+                    : availableInputs.filter((input) =>
                         terms(input).some((term) => term.includes(query) || query.includes(term)),
                       );
                   if (matches.length === 1) {
@@ -304,12 +337,12 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               }
 
               // Candidate 2.5: bounded semantic match between active inputs and uncompleted fields
-              if (matchedIndex === -1 && preSig?.activeInputs?.length === 1) {
+              if (matchedIndex === -1 && availableInputs.length === 1) {
                 const uncompletedCandidates = args.fields
                   .map((f, i) => ({ id: i, text: f.query }))
                   .filter((c) => !completedIndices.has(Number(c.id)));
 
-                for (const inp of preSig.activeInputs) {
+                for (const inp of availableInputs) {
                   const inpDescriptor = [inp.name, inp.placeholder, inp.ariaLabel]
                     .filter(Boolean)
                     .join(' ');
@@ -345,8 +378,13 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               // If no field could be matched or no interactive element found
               if (matchedIndex === -1) {
                 if (completedIndices.size > 0) {
-                  status = 'completed';
-                  reason = 'all_fields_completed';
+                  status = 'partial';
+                  reason = 'explicit_continuation_required';
+                  interruptDetails = {
+                    completedStep: step,
+                    message:
+                      'No field on the current form matches the remaining fields. Advance with an explicit click or key step in chrome_batch_actions.',
+                  };
                 } else {
                   status = 'interrupted';
                   reason = 'no_active_inputs';
@@ -356,8 +394,22 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
 
               const currentField = args.fields[matchedIndex];
               const fieldType = currentField.type ?? 'text';
+              const recordCurrentField = (verification: 'verified' | 'not_requested'): void => {
+                if (completedIndices.has(matchedIndex)) return;
+                completedIndices.add(matchedIndex);
+                completedFields.push({
+                  ...currentField,
+                  matchedQuestion: preSig?.question,
+                  step,
+                  verification,
+                });
+                if (typeof consumedInputIndex === 'number') {
+                  completedInputIndices.add(consumedInputIndex);
+                }
+              };
 
               // 5. Execute action using native CDP events
+              let consumedInputIndex: number | undefined;
               if (fieldType === 'choice') {
                 let choiceTargetIndex: number | undefined;
                 const loc = (
@@ -423,21 +475,15 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                     reason = 'semantic_target_changed';
                     break pipelineLoop;
                   }
-                  const clicked = await this.dispatchNativeClick(
+                  const clickResult = await this.dispatchNativeClick(
                     tabId,
                     choiceTargetIndex,
                     deadlineAt,
                     signal,
+                    context,
                   );
-                  if (!clicked) {
-                    status = 'interrupted';
-                    reason = 'choice_click_failed';
-                    interruptDetails = {
-                      choiceValue: currentField.value,
-                      fieldQuery: currentField.query,
-                    };
-                    break;
-                  }
+                  dispatchedActionCount += 1;
+                  lastReceipt = clickResult;
                 } else {
                   status = 'interrupted';
                   reason = 'choice_not_found';
@@ -481,12 +527,13 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                     remainingMs(),
                   );
                 });
+                dispatchedActionCount += 1;
               } else {
                 // Text fill with True Input Commitment
                 const targetIndex =
                   matchedInputIndex ??
-                  (fieldIdentified && preSig?.activeInputs?.length === 1
-                    ? preSig.activeInputs[0].index
+                  (fieldIdentified && availableInputs.length === 1
+                    ? availableInputs[0].index
                     : undefined);
                 let finalTargetIndex: number | undefined = targetIndex;
 
@@ -504,12 +551,12 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                   if (
                     loc &&
                     typeof loc.index === 'number' &&
-                    preSig?.activeInputs?.some((input) => input.index === loc.index)
+                    availableInputs.some((input) => input.index === loc.index)
                   ) {
                     finalTargetIndex = loc.index;
-                  } else if (preSig?.activeInputs && preSig.activeInputs.length > 0) {
+                  } else if (availableInputs.length > 0) {
                     // Semantic match field query against active inputs
-                    const inputCandidates = preSig.activeInputs
+                    const inputCandidates = availableInputs
                       .filter((inp) => typeof inp.index === 'number')
                       .map((inp) => ({
                         id: inp.index!,
@@ -543,9 +590,10 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                     reason = 'semantic_target_changed';
                     break pipelineLoop;
                   }
-                  const matchedInput = preSig?.activeInputs?.find(
+                  const matchedInput = availableInputs.find(
                     (input) => input.index === finalTargetIndex,
                   );
+                  consumedInputIndex = finalTargetIndex;
                   const fillOptions = {
                     tabId,
                     target: finalTargetIndex,
@@ -561,6 +609,23 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                   } as Parameters<typeof performPhysicalFill>[0] & { deadlineAt?: number };
                   throwIfAborted(signal, 'before a form field fill');
                   const fillResult = await performPhysicalFill(fillOptions);
+                  const fillExecutionStatus = fillResult.interaction?.execution.status;
+                  if (
+                    fillResult.committed === true ||
+                    fillExecutionStatus === 'dispatched' ||
+                    fillExecutionStatus === 'unknown'
+                  ) {
+                    dispatchedActionCount += 1;
+                  }
+                  if (fillResult.committed === true) {
+                    // The field value was independently read back and matched.
+                    // Record it before timeout/unknown handling so a later
+                    // transport failure cannot erase the completed field.
+                    recordCurrentField('verified');
+                  }
+                  if (fillResult.receipt) {
+                    lastReceipt = fillResult.receipt;
+                  }
                   if (
                     remainingMs() <= 0 ||
                     fillResult.status === 'timeout' ||
@@ -601,129 +666,6 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                 }
               }
 
-              // 6. Auto-advance if requested
-              if (autoAdvance) {
-                // Brief pause to observe if choice selection triggered instant SPA transition
-                const pause = Math.min(120, remainingMs());
-                if (pause > 0) await waitWithAbort(pause, signal, 'during form settling');
-                if (remainingMs() <= 0) {
-                  status = 'timeout';
-                  reason = 'deadline_exceeded';
-                  break pipelineLoop;
-                }
-                const midSig = (await executeInPage(
-                  { tabId },
-                  'inPageDetectPerceptiveSignature',
-                  [],
-                  remainingMs(),
-                )
-                  .then((r) => r?.[0]?.result)
-                  .catch(() => null)) as PerceptiveSignature | null;
-                if (remainingMs() <= 0) {
-                  status = 'timeout';
-                  reason = 'deadline_exceeded';
-                  break pipelineLoop;
-                }
-                const midDelta = computePerceptiveDelta(preSig, midSig);
-
-                if (!midDelta?.advanced) {
-                  let advanceClicked = false;
-                  const isLastField = completedIndices.size + 1 >= args.fields.length;
-                  const nextBtnCandidates = isLastField
-                    ? [
-                        'Submit',
-                        'Done',
-                        'Finish',
-                        'Complete',
-                        'Send',
-                        'OK',
-                        'Next',
-                        'Continue',
-                        '提交',
-                        '完成',
-                        '下一步',
-                        '确认',
-                      ]
-                    : ['OK', 'Next', 'Continue', '下一步', '确认'];
-
-                  for (const kw of nextBtnCandidates) {
-                    if (remainingMs() <= 0) {
-                      status = 'timeout';
-                      reason = 'deadline_exceeded';
-                      break pipelineLoop;
-                    }
-                    const loc = (
-                      await executeInPage(
-                        {
-                          tabId,
-                        },
-                        'inPageLocateByText',
-                        [kw, { exact: false, visibleOnly: true, threshold: 0 }],
-                        remainingMs(),
-                      )
-                    )?.[0]?.result;
-                    if (remainingMs() <= 0) {
-                      status = 'timeout';
-                      reason = 'deadline_exceeded';
-                      break pipelineLoop;
-                    }
-                    if (
-                      loc &&
-                      typeof loc.index === 'number' &&
-                      (loc.tagName === 'button' || loc.isClickable || loc.role === 'button')
-                    ) {
-                      advanceClicked = await this.dispatchNativeClick(
-                        tabId,
-                        loc.index,
-                        deadlineAt,
-                        signal,
-                      );
-                      if (advanceClicked) break;
-                    }
-                  }
-
-                  if (remainingMs() <= 0) {
-                    status = 'timeout';
-                    reason = 'deadline_exceeded';
-                    break pipelineLoop;
-                  }
-                  if (!advanceClicked) {
-                    await cdpSessionManager.withSession(
-                      tabId,
-                      'form-pipeline-advance',
-                      async () => {
-                        await raceCdp(
-                          tabId,
-                          'Input.dispatchKeyEvent',
-                          {
-                            type: 'keyDown',
-                            key: 'Enter',
-                            code: 'Enter',
-                            text: '\r',
-                            unmodifiedText: '\r',
-                            windowsVirtualKeyCode: 13,
-                            nativeVirtualKeyCode: 13,
-                          },
-                          remainingMs(),
-                        );
-                        await raceCdp(
-                          tabId,
-                          'Input.dispatchKeyEvent',
-                          {
-                            type: 'keyUp',
-                            key: 'Enter',
-                            code: 'Enter',
-                            windowsVirtualKeyCode: 13,
-                            nativeVirtualKeyCode: 13,
-                          },
-                          remainingMs(),
-                        );
-                      },
-                    );
-                  }
-                }
-              }
-
               // 7. Settle, perceive advancement, and guard against stuck loops
               const settleBudget = remainingMs();
               if (settleBudget >= 200) {
@@ -758,43 +700,47 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               }
 
               const delta = computePerceptiveDelta(preSig, postSig);
-              const isLastField = completedIndices.size + 1 >= args.fields.length;
-
-              const didAdvance = Boolean(
+              const pageStepChanged = Boolean(
                 delta?.advanced ||
                 (preSig?.question && postSig?.question && preSig.question !== postSig.question) ||
                 (preSig?.progress && postSig?.progress && preSig.progress !== postSig.progress) ||
                 (step === 1 && postSig?.question && !preSig?.question) ||
                 (preSig?.question && !postSig?.question) ||
-                delta?.urlChanged ||
-                isLastField,
+                delta?.urlChanged,
               );
 
-              if (autoAdvance && !didAdvance) {
-                consecutiveStuck++;
-                if (consecutiveStuck >= 2) {
-                  status = 'interrupted';
-                  reason = 'advance_stuck';
-                  interruptDetails = {
-                    stuckQuestion: preSig?.question || postSig?.question,
-                    fieldQuery: currentField.query,
-                    message: `Form failed to advance after fulfilling field "${currentField.query}". Guard triggered after 2 consecutive non-advancing steps.`,
-                  };
-                  break;
-                }
-              } else {
-                consecutiveStuck = 0;
-                completedIndices.add(matchedIndex);
-                completedFields.push({
-                  ...currentField,
-                  matchedQuestion: preSig?.question || postSig?.question,
-                  step,
-                });
-              }
+              // Choice and Enter are explicit actions. Their dispatch is known,
+              // but their business effect is not inferred from page change.
+              recordCurrentField('not_requested');
+              const remainingVisibleInputs = (postSig?.activeInputs ?? []).filter(
+                (input) =>
+                  typeof input.index !== 'number' || !completedInputIndices.has(input.index),
+              );
 
               if (remainingMs() <= 0) {
                 status = 'timeout';
                 reason = 'deadline_exceeded';
+              } else if (completedIndices.size >= args.fields.length) {
+                status = 'completed';
+                reason = 'all_fields_completed';
+              } else if (pageStepChanged) {
+                status = 'partial';
+                reason = 'explicit_continuation_required';
+                interruptDetails = {
+                  completedStep: step,
+                  nextQuestion: postSig?.question,
+                  message:
+                    'The page advanced after an explicit action. Continue with the next click or key step in chrome_batch_actions.',
+                };
+              } else if (remainingVisibleInputs.length === 0) {
+                status = 'partial';
+                reason = 'explicit_continuation_required';
+                interruptDetails = {
+                  completedStep: step,
+                  message:
+                    'No unused input from the current form matches the remaining fields. Advance the form with an explicit click or key step in chrome_batch_actions.',
+                };
+                break;
               } else if (step === maxSteps && completedIndices.size < args.fields.length) {
                 status = 'partial';
                 reason = 'max_steps_reached';
@@ -810,19 +756,41 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
               .then((r) => r?.[0]?.result)
               .catch(() => null)) as PerceptiveSignature | null;
             const updatedTab = await chrome.tabs.get(tabId).catch(() => null);
+            const verificationStatus =
+              status === 'completed'
+                ? completedFields.every((field) => field.verification === 'verified')
+                  ? 'verified'
+                  : 'not_requested'
+                : 'failed';
+            const executionStatus =
+              status === 'unknown'
+                ? 'unknown'
+                : dispatchedActionCount > 0
+                  ? 'dispatched'
+                  : 'not_dispatched';
 
             const output = {
               success: status === 'completed',
               status,
               reason,
+              completionScope: 'current_step_actions',
+              businessOutcome: 'not_verified',
               stepsExecuted: completedFields.length,
+              dispatchedActions: dispatchedActionCount,
               completedFields,
               ...(semanticDecisions.length ? { semanticDecisions } : {}),
               remainingFields: args.fields.filter((_, idx) => !completedIndices.has(idx)),
               currentQuestion: finalSig?.question,
               progress: finalSig?.progress,
               url: updatedTab?.url || tab.url || '',
+              interaction: makeInteractionOutcome(
+                executionStatus,
+                verificationStatus,
+                reason,
+                dispatchedActionCount,
+              ),
               ...(interruptDetails ? { interruptDetails } : {}),
+              ...(lastReceipt ? { lastReceipt } : {}),
             };
 
             return {
@@ -850,6 +818,14 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
             : details?.status === 'timeout'
               ? 'timeout'
               : 'blocked';
+      const unknown = status === 'unknown';
+      const dispatched =
+        unknown || details?.requestDispatched === true || dispatchedActionCount > 0;
+      const effectiveDispatchedCount =
+        dispatchedActionCount +
+        (details?.requestDispatched === true || (unknown && details?.requestDispatched !== false)
+          ? 1
+          : 0);
       return attachActionReceipt(
         {
           content: [
@@ -859,17 +835,25 @@ export class FormPipelineTool extends BaseBrowserToolExecutor {
                 success: false,
                 status,
                 retry: false,
-                requestDispatched:
-                  status === 'unknown' ||
-                  details?.requestDispatched === true ||
-                  completedFields.length > 0,
-                partial: completedFields.length > 0 || status === 'unknown',
+                completionScope: 'current_step_actions',
+                businessOutcome: 'not_verified',
+                requestDispatched: dispatched,
+                partial: completedFields.length > 0 || dispatched || unknown,
                 stepsExecuted: completedFields.length,
+                dispatchedActions: effectiveDispatchedCount,
                 completedFields,
                 ...(semanticDecisions.length ? { semanticDecisions } : {}),
                 remainingFields: args.fields.filter((_, index) => !completedIndices.has(index)),
+                interaction: makeInteractionOutcome(
+                  unknown ? 'unknown' : dispatched ? 'dispatched' : 'not_dispatched',
+                  'failed',
+                  status,
+                  effectiveDispatchedCount,
+                ),
                 error: error instanceof Error ? error.message : String(error),
-                ...(details?.lastReceipt ? { lastReceipt: details.lastReceipt } : {}),
+                ...((details?.lastReceipt ?? lastReceipt)
+                  ? { lastReceipt: details?.lastReceipt ?? lastReceipt }
+                  : {}),
                 ...(error instanceof DialogOpenedError
                   ? { requiresDialogAction: true, dialog: error.dialog }
                   : {}),

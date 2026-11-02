@@ -6,6 +6,7 @@ import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-e
 import { undoLastActionTool } from '../entrypoints/background/tools/browser/undo-action';
 import { actionHistoryManager } from '../utils/action-history-manager';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
 import * as raceCdpModule from '../utils/race-cdp';
 
@@ -27,9 +28,11 @@ describe('BUG-17: Punch-Through regression in chrome_dismiss_overlay', () => {
 
   it('does NOT dispatch redundant CDP physical clicks to original coordinates when in-page synthetic dismissal already succeeded', async () => {
     const raceCdpSpy = vi.spyOn(raceCdpModule, 'raceCdp').mockResolvedValue({} as any);
-    const withSessionSpy = vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _caller, fn) => {
-      return fn({} as any);
-    });
+    const withSessionSpy = vi
+      .spyOn(cdpSessionManager, 'withSession')
+      .mockImplementation(async (_tabId, _caller, fn) => {
+        return fn({} as any);
+      });
 
     // In-page engine simulated: dismissedCount = 1, popup closed via synthetic click
     vi.spyOn(inPageEngine, 'executeInPage').mockResolvedValue([
@@ -64,9 +67,11 @@ describe('BUG-17: Punch-Through regression in chrome_dismiss_overlay', () => {
 
   it('dispatches CDP physical click fallback only when in-page synthetic dismissal did NOT succeed', async () => {
     const raceCdpSpy = vi.spyOn(raceCdpModule, 'raceCdp').mockResolvedValue({} as any);
-    const withSessionSpy = vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _caller, fn) => {
-      return fn({} as any);
-    });
+    const withSessionSpy = vi
+      .spyOn(cdpSessionManager, 'withSession')
+      .mockImplementation(async (_tabId, _caller, fn) => {
+        return fn({} as any);
+      });
 
     // In-page engine simulated: dismissedCount = 0 (synthetic event failed to dismiss React modal),
     // but clickable overlay was identified at x=100, y=200
@@ -94,16 +99,24 @@ describe('BUG-17: Punch-Through regression in chrome_dismiss_overlay', () => {
 
     expect(res.isError).toBe(false);
     expect(withSessionSpy).toHaveBeenCalledWith(701, 'dismiss-overlay', expect.any(Function));
-    expect(raceCdpSpy).toHaveBeenCalledWith(701, 'Input.dispatchMouseEvent', expect.objectContaining({
-      type: 'mousePressed',
-      x: 100,
-      y: 200,
-    }));
-    expect(raceCdpSpy).toHaveBeenCalledWith(701, 'Input.dispatchMouseEvent', expect.objectContaining({
-      type: 'mouseReleased',
-      x: 100,
-      y: 200,
-    }));
+    expect(raceCdpSpy).toHaveBeenCalledWith(
+      701,
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({
+        type: 'mousePressed',
+        x: 100,
+        y: 200,
+      }),
+    );
+    expect(raceCdpSpy).toHaveBeenCalledWith(
+      701,
+      'Input.dispatchMouseEvent',
+      expect.objectContaining({
+        type: 'mouseReleased',
+        x: 100,
+        y: 200,
+      }),
+    );
   });
 });
 
@@ -152,7 +165,10 @@ describe('FUNC-01: computer.fill_form result reporting', () => {
   it('returns partial: true and reports item-by-item results when some fields succeed', async () => {
     vi.spyOn(interactionModule.fillTool, 'execute')
       .mockResolvedValueOnce({ content: [{ type: 'text', text: 'OK' }], isError: false })
-      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Failed to focus' }], isError: true });
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'Failed to focus' }],
+        isError: true,
+      });
 
     const res = await computerTool.execute({
       action: 'fill_form',
@@ -177,7 +193,9 @@ describe('FUNC-01: computer.fill_form result reporting', () => {
   it('treats inner success: false or empty result in fillTool as failure even if isError is false', async () => {
     vi.spyOn(interactionModule.fillTool, 'execute')
       .mockResolvedValueOnce({
-        content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Synthetic reject' }) }],
+        content: [
+          { type: 'text', text: JSON.stringify({ success: false, error: 'Synthetic reject' }) },
+        ],
         isError: false,
       })
       .mockResolvedValueOnce({
@@ -233,9 +251,9 @@ describe('FUNC-03: undo-action peek-before-pop and error propagation', () => {
     });
 
     // Simulate in-page execution returning failure (element destroyed / detached)
-    (globalThis as any).chrome.scripting.executeScript = vi.fn().mockResolvedValue([
-      { result: { success: false, reason: 'Element no longer in DOM' } },
-    ]);
+    (globalThis as any).chrome.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValue([{ result: { success: false, reason: 'Element no longer in DOM' } }]);
 
     const res = await undoLastActionTool.execute({ tabId: 703 });
 
@@ -258,9 +276,9 @@ describe('FUNC-03: undo-action peek-before-pop and error propagation', () => {
       timestamp: Date.now(),
     });
 
-    (globalThis as any).chrome.scripting.executeScript = vi.fn().mockResolvedValue([
-      { result: { success: true, restoredValue: 'Original Text' } },
-    ]);
+    (globalThis as any).chrome.scripting.executeScript = vi
+      .fn()
+      .mockResolvedValue([{ result: { success: true, restoredValue: 'Original Text' } }]);
 
     const res = await undoLastActionTool.execute({ tabId: 703 });
 
@@ -319,7 +337,9 @@ describe('FUNC-08: fill-core records history only on confirmed success', () => {
     // inPageGetElementCoordinates succeeds and returns previous value
     vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target, fnName: string) => {
       if (fnName === 'inPageGetElementCoordinates') {
-        return [{ result: { success: true, x: 100, y: 100, value: 'Original Value', tagName: 'input' } }] as any;
+        return [
+          { result: { success: true, x: 100, y: 100, value: 'Original Value', tagName: 'input' } },
+        ] as any;
       }
       if (fnName === 'inPageCheckOcclusion') {
         return [{ result: { x: 100, y: 100 } }] as any;
@@ -378,22 +398,31 @@ describe('FUNC-02: fill-core auto-submit 4s timeout reports unknown delivery', (
         return [{ result: { isFocused: true } }] as any;
       }
       if (fnName === 'inPageVerifyInputCommitment') {
-        return [{ result: { committed: true, submitButtonState: { found: true, index: 2 } } }] as any;
+        return [
+          { result: { committed: true, submitButtonState: { found: true, index: 2 } } },
+        ] as any;
       }
       return [{ result: { success: true } }] as any;
     });
 
-    const interactModule = await import('../entrypoints/background/tools/browser/interact-index');
-    // simulate slow click that exceeds 4000ms (does not resolve before timeout)
-    vi.spyOn(interactModule.interactIndexTool, 'execute').mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: 'text', text: 'late' }], isError: false }), 8000)),
+    vi.spyOn(clickTool, 'execute').mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve({ content: [{ type: 'text', text: 'late' }], isError: false }),
+            8000,
+          ),
+        ),
     );
+    const deadlineAt = Date.now() + 50;
 
     const res = await performPhysicalFill({
       tabId: 705,
       target: 1,
       text: 'Submit test',
       submit: true,
+      submitTarget: { index: 2 },
+      deadlineAt,
       clear: false,
     });
 
@@ -415,14 +444,17 @@ describe('FUNC-02: fill-core auto-submit 4s timeout reports unknown delivery', (
         return [{ result: { isFocused: true } }] as any;
       }
       if (fnName === 'inPageVerifyInputCommitment') {
-        return [{ result: { committed: true, submitButtonState: { found: true, index: 2 } } }] as any;
+        return [
+          { result: { committed: true, submitButtonState: { found: true, index: 2 } } },
+        ] as any;
       }
       return [{ result: { success: true } }] as any;
     });
 
-    const interactModule = await import('../entrypoints/background/tools/browser/interact-index');
-    vi.spyOn(interactModule.interactIndexTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: JSON.stringify({ success: false, error: 'Validation rejected' }) }],
+    vi.spyOn(clickTool, 'execute').mockResolvedValue({
+      content: [
+        { type: 'text', text: JSON.stringify({ success: false, error: 'Validation rejected' }) },
+      ],
       isError: false,
     });
 
@@ -431,6 +463,7 @@ describe('FUNC-02: fill-core auto-submit 4s timeout reports unknown delivery', (
       target: 1,
       text: 'Submit test',
       submit: true,
+      submitTarget: { index: 2 },
       clear: false,
     });
 

@@ -3,6 +3,7 @@ import {
   type IndexedElement,
   type PageAsset,
   type PrunedDOMTreeResult,
+  type ScrollInfo,
   type ScrollUntilFoundOptions,
   type ScrollUntilFoundResult,
 } from 'chrome-mcp-shared';
@@ -2118,6 +2119,17 @@ export interface ActiveModalBlockerInfo {
   isTrap?: boolean;
 }
 
+export interface InteractionScopeInfo {
+  activeModal?: string;
+  focusTrapped: boolean;
+  modalIsolated: boolean;
+  isConfirmationTrap: boolean;
+  blockingLayerKind?: 'modal' | 'mask';
+  modalElement?: HTMLElement;
+  roots: Element[];
+  scrollContainers: HTMLElement[];
+}
+
 /**
  * Detect active modal blocker using stacking score competition algorithm.
  * Evaluates Top-Layer, dialog role, aria-modal, z-index, and DOM order so
@@ -2168,32 +2180,57 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         continue;
       const pos = style.position;
       const isPositioned = pos === 'fixed' || pos === 'absolute' || pos === 'sticky';
-      const isDialogRole =
-        d.tagName.toLowerCase() === 'dialog' ||
-        d.getAttribute('role') === 'dialog' ||
-        d.getAttribute('role') === 'alertdialog' ||
-        d.getAttribute('aria-modal') === 'true';
+      const tag = d.tagName.toLowerCase();
+      const role = (d.getAttribute('role') || '').toLowerCase();
+      const ariaModal = (d.getAttribute('aria-modal') || '').toLowerCase();
 
-      if (!isPositioned && !isDialogRole) continue;
+      const isNativeOpenDialog = tag === 'dialog' && Boolean((d as HTMLDialogElement).open);
+      let isNativeModalDialog = false;
+      if (isNativeOpenDialog) {
+        try {
+          isNativeModalDialog = (d as HTMLDialogElement).matches(':modal');
+        } catch {
+          isNativeModalDialog = false;
+        }
+      }
+      if (ariaModal === 'false' && !isNativeModalDialog) continue;
+      // An open non-modal <dialog> participates in the normal document flow and
+      // must not turn into an interaction blocker merely because of its tag.
+      if (isNativeOpenDialog && !isNativeModalDialog && ariaModal !== 'true') continue;
+      const isExplicitModal = ariaModal === 'true' || role === 'alertdialog' || isNativeModalDialog;
       // Large positioned application shells are not evidence of a modal blocker.
       const hasModalIdentity = /modal|dialog|backdrop|overlay|mask/i.test(
         `${d.id} ${d.getAttribute('class') || ''}`,
       );
-      if (!isDialogRole && !hasModalIdentity && !d.hasAttribute('popover')) continue;
+      const isPopover = Boolean((d as any).matches?.(':popover-open')) || d.hasAttribute('popover');
+      if (isPopover && !isExplicitModal) continue;
+      if (!isExplicitModal && !hasModalIdentity) continue;
+      if (!isPositioned && !isNativeOpenDialog) continue;
 
       const rect = d.getBoundingClientRect();
       const ix = Math.max(0, Math.min(rect.right, vpWidth) - Math.max(rect.left, 0));
       const iy = Math.max(0, Math.min(rect.bottom, vpHeight) - Math.max(rect.top, 0));
       const cov = vpArea > 0 ? (ix * iy) / vpArea : 0;
+      const declaredWidth = Number.parseFloat(style.width || d.style.width || '0');
+      const declaredHeight = Number.parseFloat(style.height || d.style.height || '0');
+      const hasBox =
+        rect.width > 0 ||
+        rect.height > 0 ||
+        d.offsetWidth > 0 ||
+        d.offsetHeight > 0 ||
+        declaredWidth > 0 ||
+        declaredHeight > 0;
 
-      const qualifies = cov >= 0.6 || (isDialogRole && cov >= 0.12);
+      const qualifies =
+        cov >= 0.6 ||
+        (isExplicitModal && hasBox) ||
+        (hasModalIdentity && hasBox && composedContains(d, getDeepActiveElement()));
       if (!qualifies) continue;
 
       const hasInputs = !!d.querySelector('input, textarea, select, button, a');
       const kind: 'modal' | 'mask' =
-        isDialogRole || hasInputs ? 'modal' : cov >= 0.85 ? 'mask' : 'modal';
+        isExplicitModal || hasInputs ? 'modal' : cov >= 0.85 ? 'mask' : 'modal';
 
-      const tag = d.tagName.toLowerCase();
       const id = d.id ? `#${d.id}` : '';
       const name =
         d.getAttribute('aria-label') ||
@@ -2210,11 +2247,10 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
 
       // Stacking score: Top-Layer > confirmation trap > alertdialog > aria-modal > z-index > DOM order
       let score = 0;
-      const isNativeDialog = tag === 'dialog' && (d as HTMLDialogElement).open;
       const isPopoverOpen =
         Boolean((d as any).matches?.(':popover-open')) ||
         (d.hasAttribute('popover') && style.display !== 'none');
-      if (isNativeDialog || isPopoverOpen) {
+      if (isNativeOpenDialog || isPopoverOpen) {
         score += 1_000_000;
       }
       if (isDiscardOrConfirm) {
@@ -2249,6 +2285,261 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
   } catch {
     return null;
   }
+}
+
+function elementIsVisibleForScope(el: Element, win: Window): boolean {
+  try {
+    if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert')) return false;
+    const style = win.getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      (style.opacity === '' || parseFloat(style.opacity) > 0) &&
+      el.getBoundingClientRect().width > 0 &&
+      el.getBoundingClientRect().height > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function portalHasOpenOwner(portal: HTMLElement, blocker: HTMLElement, win: Window): boolean {
+  const portalId = portal.id;
+  if (!portalId) return false;
+  const controls = blocker.querySelectorAll('[aria-controls], [aria-owns], [popovertarget]');
+  for (const control of Array.from(controls)) {
+    if (!elementIsVisibleForScope(control, win)) continue;
+    const references = [
+      control.getAttribute('aria-controls'),
+      control.getAttribute('aria-owns'),
+      control.getAttribute('popovertarget'),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .flatMap((value) => value.split(/\s+/));
+    if (!references.includes(portalId)) continue;
+    if (control.getAttribute('aria-expanded') === 'false') continue;
+    return true;
+  }
+  return false;
+}
+
+function modalPortalRoots(blocker: HTMLElement, win: Window): HTMLElement[] {
+  const portalSelector = [
+    '[data-radix-popper-content-wrapper]',
+    '[data-radix-portal]',
+    '[data-floating-ui-portal]',
+    '[data-headlessui-portal]',
+    '[data-portal]',
+    ':popover-open',
+    '.ant-select-dropdown',
+    '.ant-picker-dropdown',
+    '.ant-dropdown',
+    '.ant-message',
+    '.ant-notification',
+    '.MuiMenu-root',
+    '.MuiPopover-root',
+    '.MuiAutocomplete-popper',
+    '.el-select-dropdown',
+    '.el-dropdown-menu',
+    '[role="menu"]',
+    '[role="listbox"]',
+    '[role="tooltip"]',
+  ].join(',');
+  const zIndex = (el: Element): number => {
+    const raw = win.getComputedStyle(el).zIndex;
+    const parsed = raw === 'auto' ? 0 : Number.parseInt(raw || '0', 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const inTopLayer = (el: Element): boolean =>
+    Boolean((el as HTMLElement).matches?.(':popover-open')) ||
+    (el.tagName.toLowerCase() === 'dialog' &&
+      Boolean((el as HTMLDialogElement).open) &&
+      (() => {
+        try {
+          return (
+            (el as HTMLDialogElement).matches(':modal') || el.getAttribute('aria-modal') === 'true'
+          );
+        } catch {
+          return el.getAttribute('aria-modal') === 'true';
+        }
+      })());
+  const blockerZ = zIndex(blocker);
+  const all = Array.from(win.document.querySelectorAll('*'));
+  return all.filter((el): el is HTMLElement => {
+    if (!(el instanceof HTMLElement) || el === blocker) return false;
+    if (!el.matches(portalSelector) || !elementIsVisibleForScope(el, win)) return false;
+    if (composedContains(blocker, el)) return true;
+    if (composedContains(el, blocker)) return false;
+    // Class names and generic portal markers only discover a candidate. A
+    // detached portal enters the interaction scope only when it is a real
+    // top-layer surface or an open trigger inside the blocker owns it.
+    if (!inTopLayer(el) && !portalHasOpenOwner(el, blocker, win)) return false;
+
+    const portalZ = zIndex(el);
+    if (inTopLayer(el) && !inTopLayer(blocker)) return true;
+    if (portalZ !== blockerZ) return portalZ > blockerZ;
+    return Boolean(blocker.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+}
+
+function selectorForScopeElement(el: Element): string | undefined {
+  const escapeSelector = (value: string) =>
+    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(value)
+      : value.replace(/([^a-zA-Z0-9_-])/g, '\\$1');
+  if (el.id) return `#${escapeSelector(el.id)}`;
+  const testId = el.getAttribute('data-testid');
+  if (testId) return `[data-testid="${escapeSelector(testId)}"]`;
+  const role = el.getAttribute('role');
+  if (role) return `${el.tagName.toLowerCase()}[role="${escapeSelector(role)}"]`;
+  return undefined;
+}
+
+function scrollContainersInRoots(roots: Element[], win: Window): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  for (const root of roots) {
+    const all = [
+      ...(root instanceof HTMLElement ? [root] : []),
+      ...Array.from(root.querySelectorAll('*')),
+    ];
+    for (const el of all) {
+      if (!(el instanceof HTMLElement) || found.includes(el)) continue;
+      let style: CSSStyleDeclaration;
+      try {
+        style = win.getComputedStyle(el);
+      } catch {
+        // Inaccessible stylesheets must not make observation fail open.
+        continue;
+      }
+      if (
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0)
+      ) {
+        continue;
+      }
+      const scrolls =
+        el.scrollHeight > el.clientHeight + 2 &&
+        /(auto|scroll|overlay)/.test(style.overflowY) &&
+        el.clientHeight > 0;
+      if (scrolls) found.push(el);
+    }
+  }
+  return found;
+}
+
+export function buildScopedScrollInfo(
+  roots: Element[],
+  win: Window = window,
+  options?: { modalActive?: boolean; containers?: HTMLElement[] },
+): ScrollInfo {
+  const containers = options?.containers ?? scrollContainersInRoots(roots, win);
+  if (containers.length === 1) {
+    const container = containers[0];
+    const viewportHeight = Math.max(1, container.clientHeight || 1);
+    const totalHeight = Math.max(container.scrollHeight, viewportHeight);
+    const scrollY = Math.max(0, container.scrollTop || 0);
+    return {
+      pages_up: Number((scrollY / viewportHeight).toFixed(1)),
+      pages_down: Number(
+        (Math.max(0, totalHeight - (scrollY + viewportHeight)) / viewportHeight).toFixed(1),
+      ),
+      scroll_y: Math.round(scrollY),
+      total_height: Math.round(totalHeight),
+      viewport_height: Math.round(viewportHeight),
+      containerIndex: indexElement(container),
+      containerTag: container.tagName.toLowerCase(),
+      ...(selectorForScopeElement(container)
+        ? { containerSelector: selectorForScopeElement(container) }
+        : {}),
+      ambiguous: false,
+      scope: 'element',
+    };
+  }
+
+  if (containers.length > 1) {
+    return {
+      pages_up: 0,
+      pages_down: 0,
+      scroll_y: 0,
+      total_height: 0,
+      viewport_height: 0,
+      ambiguous: true,
+      scope: 'ambiguous',
+    };
+  }
+
+  if (options?.modalActive) {
+    const viewportHeight = Math.max(
+      1,
+      win.innerHeight || win.document.documentElement?.clientHeight || 1,
+    );
+    return {
+      pages_up: 0,
+      pages_down: 0,
+      scroll_y: 0,
+      total_height: viewportHeight,
+      viewport_height: viewportHeight,
+      ambiguous: false,
+      scope: 'none',
+      backgroundBlocked: true,
+    };
+  }
+
+  const doc = win.document;
+  const viewportHeight = win.innerHeight || doc.documentElement?.clientHeight || 1;
+  const scrollY = Math.max(
+    0,
+    win.scrollY || win.pageYOffset || doc.documentElement?.scrollTop || doc.body?.scrollTop || 0,
+  );
+  const totalHeight = Math.max(
+    doc.body?.scrollHeight || 0,
+    doc.documentElement?.scrollHeight || 0,
+    doc.body?.offsetHeight || 0,
+    doc.documentElement?.offsetHeight || 0,
+    viewportHeight,
+  );
+  return {
+    pages_up: Number((scrollY / viewportHeight).toFixed(1)),
+    pages_down: Number(
+      (Math.max(0, totalHeight - (scrollY + viewportHeight)) / viewportHeight).toFixed(1),
+    ),
+    scroll_y: Math.round(scrollY),
+    total_height: Math.round(totalHeight),
+    viewport_height: Math.round(viewportHeight),
+    ambiguous: false,
+    scope: 'page',
+  };
+}
+
+export function computeInteractionScope(
+  win: Window = window,
+  options?: { explicitScope?: boolean },
+): InteractionScopeInfo {
+  const blocker = detectActiveModalBlocker(win);
+  const focusTrapped = Boolean(blocker);
+  const modalIsolated = Boolean(blocker && !options?.explicitScope);
+  let roots: Element[] = [];
+
+  if (blocker) {
+    roots = [blocker.el, ...modalPortalRoots(blocker.el, win)];
+    roots = roots.filter(
+      (root) => !roots.some((other) => other !== root && composedContains(other, root)),
+    );
+  } else if (win.document.body) {
+    roots = [win.document.body];
+  }
+
+  return {
+    activeModal: blocker?.name,
+    focusTrapped,
+    modalIsolated,
+    isConfirmationTrap: blocker?.isTrap === true,
+    blockingLayerKind: blocker?.kind,
+    modalElement: blocker?.el,
+    roots,
+    scrollContainers: scrollContainersInRoots(roots, win),
+  };
 }
 
 /**
@@ -3740,9 +4031,11 @@ export function inPageDOMPruner(options?: {
   let roots: Element[] = [];
   let selectorMatched = false;
   let modalIsolated = false;
+  let interactionScope: InteractionScopeInfo | undefined;
 
   const targetSelector = options?.scope || options?.selector;
   if (targetSelector) {
+    interactionScope = computeInteractionScope(window, { explicitScope: true });
     try {
       const allRoots = targetSelector.includes(':has-text(')
         ? queryWithHasText(document, targetSelector, false)
@@ -3755,91 +4048,15 @@ export function inPageDOMPruner(options?: {
       selectorMatched = false;
     }
   } else if (options?.isolateModal !== false) {
-    // Phase 2: Safe Modal Isolation & Portal/Toast Protection (Auto-detected by default)
-    const activeBlocker = detectActiveModalBlocker(window);
-    if (activeBlocker && activeBlocker.el) {
-      modalIsolated = true;
-      const modalRoots: Element[] = [activeBlocker.el];
-      const WHITELIST_SELECTORS = [
-        'dialog[open]',
-        '[popover]:not([popover="manual"])',
-        ':popover-open',
-        '[data-radix-popper-content-wrapper]',
-        '[data-radix-portal]',
-        '[data-floating-ui-portal]',
-        '[data-headlessui-portal]',
-        '[data-portal]',
-        '#toast-root',
-        '#notification-root',
-        '#portal-root',
-        '.Toastify',
-        '.toaster',
-        '[data-sonner-toaster]',
-        '.ant-select-dropdown',
-        '.ant-picker-dropdown',
-        '.ant-dropdown',
-        '.ant-message',
-        '.ant-notification',
-        '.MuiMenu-root',
-        '.MuiPopover-root',
-        '.MuiAutocomplete-popper',
-        '.MuiSnackbar-root',
-        '.el-select-dropdown',
-        '.el-dropdown-menu',
-        '.el-notification',
-      ];
-
-      for (const sel of WHITELIST_SELECTORS) {
-        try {
-          const items = Array.from(document.querySelectorAll(sel));
-          for (const item of items) {
-            if (item instanceof HTMLElement) {
-              const s = window.getComputedStyle(item);
-              if (
-                s.display !== 'none' &&
-                s.visibility !== 'hidden' &&
-                (s.opacity === '' || parseFloat(s.opacity) > 0)
-              ) {
-                if (!modalRoots.includes(item)) modalRoots.push(item);
-              }
-            }
-          }
-        } catch {}
-      }
-
-      // Dynamic top-level body portals check for any modern UI library
-      try {
-        const topPortals = Array.from(
-          document.querySelectorAll('body > div, body > section, body > aside'),
-        );
-        for (const tp of topPortals) {
-          if (tp instanceof HTMLElement) {
-            const s = window.getComputedStyle(tp);
-            if (
-              (s.position === 'fixed' || s.position === 'absolute') &&
-              parseInt(s.zIndex || '0', 10) >= 1000
-            ) {
-              if (
-                s.display !== 'none' &&
-                s.visibility !== 'hidden' &&
-                (s.opacity === '' || parseFloat(s.opacity) > 0)
-              ) {
-                if (!modalRoots.includes(tp)) modalRoots.push(tp);
-              }
-            }
-          }
-        }
-      } catch {}
-
-      roots = modalRoots.filter(
-        (r) => !modalRoots.some((other) => other !== r && other.contains(r)),
-      );
-      selectorMatched = true;
-    } else if (document.body) {
-      roots = [document.body];
-      selectorMatched = true;
-    }
+    interactionScope = computeInteractionScope(window);
+    roots = interactionScope.roots;
+    modalIsolated = interactionScope.modalIsolated;
+    selectorMatched = roots.length > 0;
   } else if (document.body) {
+    interactionScope = {
+      ...computeInteractionScope(window, { explicitScope: true }),
+      roots: [document.body],
+    };
     roots = [document.body];
     selectorMatched = true;
   }
@@ -4237,29 +4454,19 @@ export function inPageDOMPruner(options?: {
     }
   }
 
-  // Calculate scroll guidance (pages_up / pages_down)
-  const scrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 1;
-  const totalHeight = Math.max(
-    document.body?.scrollHeight || 0,
-    document.documentElement?.scrollHeight || 0,
-    document.body?.offsetHeight || 0,
-    document.documentElement?.offsetHeight || 0,
-    viewportHeight,
-  );
-  const pixelsAbove = Math.max(0, scrollY);
-  const pixelsBelow = Math.max(0, totalHeight - (scrollY + viewportHeight));
-
-  const pages_up = Number((pixelsAbove / viewportHeight).toFixed(1));
-  const pages_down = Number((pixelsBelow / viewportHeight).toFixed(1));
-
-  const scrollInfo = {
-    pages_up,
-    pages_down,
-    scroll_y: Math.round(scrollY),
-    total_height: Math.round(totalHeight),
-    viewport_height: Math.round(viewportHeight),
-  };
+  // Scroll guidance uses the same roots as the observation. Explicit scope is
+  // allowed to inspect background content, but the default modal scope never
+  // falls back to scrolling the obscured page.
+  const usePrecomputedContainers =
+    !targetSelector && options?.isolateModal !== false && interactionScope !== undefined;
+  const scrollInfo = buildScopedScrollInfo(roots, window, {
+    modalActive: Boolean(
+      interactionScope?.focusTrapped && !targetSelector && options?.isolateModal !== false,
+    ),
+    ...(usePrecomputedContainers ? { containers: interactionScope?.scrollContainers ?? [] } : {}),
+  });
+  const pages_up = scrollInfo.pages_up;
+  const pages_down = scrollInfo.pages_down;
 
   const compressionRatio =
     totalOriginalNodes > 0
@@ -4292,65 +4499,9 @@ export function inPageDOMPruner(options?: {
 
   let treeString = treeLines.join('\n');
 
-  let activeModal: string | undefined = undefined;
-  let focusTrapped = false;
-  let isConfirmationTrap = false;
-  let blockingLayerKind: 'modal' | 'mask' | undefined = undefined;
-
-  try {
-    const topBlocker = detectActiveModalBlocker(window);
-    if (topBlocker) {
-      focusTrapped = true;
-      blockingLayerKind = topBlocker.kind;
-      activeModal = topBlocker.name;
-      if (topBlocker.isTrap) {
-        isConfirmationTrap = true;
-      }
-    }
-  } catch {}
-
-  try {
-    if (!activeModal) {
-      const dialogs = Array.from(
-        document.querySelectorAll(
-          'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]',
-        ),
-      ) as HTMLElement[];
-      for (const d of dialogs) {
-        const isAriaHidden = d.getAttribute('aria-hidden') === 'true';
-        const isOpenAttr =
-          d.tagName.toLowerCase() === 'dialog' ? (d as HTMLDialogElement).open : true;
-        if (!isAriaHidden && isOpenAttr) {
-          let isVis = false;
-          try {
-            const style = window.getComputedStyle(d);
-            isVis = style.display !== 'none' && style.visibility !== 'hidden' && d.offsetWidth > 0;
-          } catch {}
-          if (isVis) {
-            focusTrapped = true;
-            const tag = d.tagName.toLowerCase();
-            const id = d.id ? `#${d.id}` : '';
-            const name =
-              d.getAttribute('aria-label') ||
-              d.querySelector('h1, h2, h3, [role="heading"]')?.textContent?.trim()?.slice(0, 40);
-            const textSnippet = `${tag}${id} ${name || ''} ${d.textContent?.slice(0, 300) || ''}`;
-            const isDiscardOrConfirm =
-              /(discard|abandon|unsaved|confirm|放弃|取消|未保存|确认放弃|是否放弃|离开)/i.test(
-                textSnippet,
-              );
-            const baseDesc = name ? `${tag}${id} "${name}"` : `${tag}${id || '.modal'}`;
-            if (isDiscardOrConfirm) {
-              isConfirmationTrap = true;
-              activeModal = `${baseDesc} [CONFIRMATION_TRAP]`;
-            } else {
-              activeModal = baseDesc;
-            }
-            break;
-          }
-        }
-      }
-    }
-  } catch {}
+  const activeModal = interactionScope?.activeModal;
+  const focusTrapped = interactionScope?.focusTrapped === true;
+  const isConfirmationTrap = interactionScope?.isConfirmationTrap === true;
 
   if (activeModal) {
     const modalNotice = isConfirmationTrap
@@ -4983,6 +5134,40 @@ function getActionableBlockReason(el: Element, action: string): string | null {
   if (!isOption) {
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return 'hidden';
+    const visible = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    let ancestor = composedParent(el);
+    while (
+      ancestor &&
+      ancestor !== el.ownerDocument.body &&
+      ancestor !== el.ownerDocument.documentElement
+    ) {
+      if (typeof win.getComputedStyle === 'function') {
+        const style = win.getComputedStyle(ancestor);
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const clipsX = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowX);
+        const clipsY = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowY);
+        if (clipsX || clipsY) {
+          const area = ancestor.getBoundingClientRect();
+          const left = area.left + (ancestor.clientLeft || 0);
+          const top = area.top + (ancestor.clientTop || 0);
+          const right = left + (ancestor.clientWidth || area.width);
+          const bottom = top + (ancestor.clientHeight || area.height);
+          if (clipsX) {
+            visible.left = Math.max(visible.left, left);
+            visible.right = Math.min(visible.right, right);
+          }
+          if (clipsY) {
+            visible.top = Math.max(visible.top, top);
+            visible.bottom = Math.min(visible.bottom, bottom);
+          }
+          if (visible.right <= visible.left || visible.bottom <= visible.top) {
+            return 'out_of_view';
+          }
+        }
+      }
+      ancestor = composedParent(ancestor);
+    }
   }
 
   return null;
@@ -6739,6 +6924,7 @@ export function inPageFillIndex(
   tagName?: string;
   filledText?: string;
   submitButtonState?: { found: boolean; disabled?: boolean; text?: string };
+  pressEnterDispatched?: boolean;
   diagnostics?: string;
   error?: string;
 } {
@@ -7021,18 +7207,6 @@ export function inPageFillIndex(
         composed: true,
       }),
     );
-    if (el instanceof HTMLInputElement && el.form) {
-      const submitBtn = el.form.querySelector(
-        'button[type="submit"], input[type="submit"]',
-      ) as HTMLElement | null;
-      if (submitBtn) {
-        submitBtn.click();
-      } else if (typeof el.form.requestSubmit === 'function') {
-        try {
-          el.form.requestSubmit();
-        } catch {}
-      }
-    }
   }
 
   const verification: any = textToFill
@@ -7048,6 +7222,7 @@ export function inPageFillIndex(
     ...(verification.submitButtonState
       ? { submitButtonState: verification.submitButtonState }
       : {}),
+    ...(pressEnter ? { pressEnterDispatched: true } : {}),
     ...(verification.diagnostics ? { diagnostics: verification.diagnostics } : {}),
   };
 }
@@ -7176,15 +7351,31 @@ export function inPageGetActiveElementSummary(): {
   value?: string;
   text?: string;
   hasActiveModal?: boolean;
+  activeModal?: string;
+  focusTrapped?: boolean;
+  modalIsolated?: boolean;
+  isConfirmationTrap?: boolean;
+  scrollInfo?: ScrollInfo;
 } {
   try {
     const el = getDeepActiveElement();
-    const modalBlocker =
-      typeof detectActiveModalBlocker === 'function' ? detectActiveModalBlocker(window) : null;
-    const hasActiveModal = Boolean(modalBlocker && modalBlocker.el);
+    const scope = computeInteractionScope(window);
+    const hasActiveModal = scope.focusTrapped;
+    const scrollInfo = buildScopedScrollInfo(scope.roots, window, {
+      modalActive: scope.focusTrapped,
+      containers: scope.scrollContainers,
+    });
+    const modalState = {
+      hasActiveModal,
+      activeModal: scope.activeModal,
+      focusTrapped: scope.focusTrapped,
+      modalIsolated: scope.modalIsolated,
+      isConfirmationTrap: scope.isConfirmationTrap,
+      scrollInfo,
+    };
 
     if (!el || el === document.body || el === document.documentElement) {
-      return { hasActiveModal };
+      return modalState;
     }
 
     const targetEl = el as HTMLElement;
@@ -7211,7 +7402,7 @@ export function inPageGetActiveElementSummary(): {
       isInput,
       value,
       text,
-      hasActiveModal,
+      ...modalState,
     };
   } catch {
     return {};
@@ -7564,144 +7755,28 @@ export function inPageVerifyInputCommitment(
     currentValue = rawText.trim();
   }
 
-  // Check nearby submit/action button state
+  // Only a native form owner and a real submitter establish submit-button
+  // identity. Nearby icons, role=button elements and class-name guesses are not
+  // proof that an element is the field's submit control.
   let submitButtonState: { found: boolean; disabled?: boolean; text?: string; index?: number } = {
     found: false,
   };
   try {
-    let container: Element | null =
-      el.closest('form') ||
-      el.closest('[role="search"]') ||
-      el.closest('[role="form"]') ||
-      el.closest('[role="dialog"]') ||
-      el.closest(
-        '[data-testid*="composer" i], [data-testid*="post" i], [data-testid*="editor" i], [data-testid*="comment" i], [data-testid*="chat" i], [data-testid*="message" i], [data-testid*="tweet" i]',
-      ) ||
-      el.closest('[class*="composer" i]') ||
-      el.closest('[class*="search" i]') ||
-      el.closest('[class*="form" i]') ||
-      el.closest('[class*="input-group" i]') ||
-      el.closest('[class*="search-box" i]') ||
-      el.closest('[class*="search-bar" i]') ||
-      el.parentElement?.parentElement ||
-      el.parentElement;
-    if (!container) container = el.ownerDocument.body;
-
-    const candidateButtons: Element[] = Array.from(
-      querySelectorAllDeep(
-        'button, [role="button"], input[type="submit"], input[type="button"], a.btn, a[class*="btn" i], a[class*="button" i], a[class*="submit" i], a[href*="doPostBack" i]',
-        container,
-      ),
-    );
-
-    // If container is within a form with an ID, also check external submit buttons with form="formId"
-    const formEl = el.closest('form');
-    if (formEl && formEl.id) {
-      const extButtons = Array.from(
-        querySelectorAllDeep(
-          `button[form="${formEl.id}"], input[form="${formEl.id}"]`,
-          el.ownerDocument,
-        ),
-      );
-      for (const eb of extButtons) {
-        if (!candidateButtons.includes(eb)) candidateButtons.push(eb);
-      }
-    }
-
-    // If still no buttons found and container is narrow, expand search up the DOM tree (up to 8 levels, penetrating Shadow DOM hosts)
-    let currAncestor: Element | null = el.parentElement;
-    let upCount = 0;
-    while (currAncestor && upCount < 8 && candidateButtons.length === 0) {
-      const expanded = Array.from(
-        querySelectorAllDeep(
-          'button, [role="button"], input[type="submit"], input[type="button"], a.btn, a[class*="btn" i], a[class*="button" i], a[class*="submit" i]',
-          currAncestor,
-        ),
-      );
-      if (expanded.length > 0) {
-        candidateButtons.push(...expanded);
-        break;
-      }
-      if (currAncestor.parentElement) {
-        currAncestor = currAncestor.parentElement;
-      } else {
-        const rootNode =
-          typeof currAncestor.getRootNode === 'function' ? currAncestor.getRootNode() : null;
-        if (
-          rootNode &&
-          typeof ShadowRoot !== 'undefined' &&
-          rootNode instanceof ShadowRoot &&
-          (rootNode as any).host
-        ) {
-          currAncestor = (rootNode as any).host;
-        } else {
-          currAncestor = null;
-        }
-      }
-      upCount++;
-    }
-
-    const candidateBtn = candidateButtons.find((b) => {
-      const type = (b.getAttribute('type') || '').toLowerCase();
-      const text = (b.textContent || (b as HTMLInputElement).value || '').trim().toLowerCase();
-      const testId = (b.getAttribute('data-testid') || '').toLowerCase();
-      const ariaLabel = (b.getAttribute('aria-label') || '').toLowerCase();
-      const name = (b.getAttribute('name') || '').toLowerCase();
-      const id = (b.getAttribute('id') || '').toLowerCase();
-      const href = (b.getAttribute('href') || '').toLowerCase();
-      const className = (b.getAttribute('class') || '').toLowerCase();
-      const title = (b.getAttribute('title') || '').toLowerCase();
-
-      const hasSearchIconOrChild = Boolean(
-        b.querySelector('svg, i, [class*="search" i], [data-icon*="search" i]'),
-      );
-
-      return (
-        type === 'submit' ||
-        testId.includes('submit') ||
-        testId.includes('send') ||
-        testId.includes('post') ||
-        testId.includes('publish') ||
-        testId.includes('confirm') ||
-        testId.includes('tweet') ||
-        testId.includes('search') ||
-        testId.includes('query') ||
-        ariaLabel.includes('tweet') ||
-        ariaLabel.includes('post') ||
-        ariaLabel.includes('submit') ||
-        ariaLabel.includes('send') ||
-        ariaLabel.includes('search') ||
-        ariaLabel.includes('query') ||
-        ariaLabel.includes('搜索') ||
-        ariaLabel.includes('查询') ||
-        ariaLabel.includes('提交') ||
-        title.includes('search') ||
-        title.includes('搜索') ||
-        title.includes('查询') ||
-        title.includes('提交') ||
-        name.includes('submit') ||
-        name.includes('search') ||
-        name.includes('query') ||
-        name.includes('btnsearch') ||
-        id.includes('submit') ||
-        id.includes('search') ||
-        id.includes('btnsearch') ||
-        href.includes('dopostback') ||
-        className.includes('btn-search') ||
-        className.includes('search-btn') ||
-        className.includes('search-button') ||
-        className.includes('btn-primary') ||
-        className.includes('btn-action') ||
-        className.includes('btn-submit') ||
-        className.includes('button-primary') ||
-        className.includes('is-primary') ||
-        className.includes('submit-btn') ||
-        hasSearchIconOrChild ||
-        /(tweet|post|reply|send|submit|发布|发帖|发送|提交|ok|next|continue|确认|确定|查询|搜索|search|query|find|go|enter|login|sign in)/i.test(
-          text,
-        )
-      );
-    });
+    const formOwner =
+      (el as HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement | HTMLSelectElement).form ||
+      el.closest('form');
+    const submitButtons = formOwner
+      ? Array.from(formOwner.elements).filter((candidate): candidate is Element => {
+          if (candidate instanceof HTMLButtonElement) return candidate.type === 'submit';
+          return (
+            candidate instanceof HTMLInputElement &&
+            (candidate.type === 'submit' || candidate.type === 'image')
+          );
+        })
+      : [];
+    // Multiple submitters make the next action ambiguous. Report no submit
+    // identity instead of selecting the first one.
+    const candidateBtn = submitButtons.length === 1 ? submitButtons[0] : undefined;
 
     if (candidateBtn) {
       const disabled =
@@ -7920,25 +7995,8 @@ export function inPageVerifyInputCommitment(
     committed = isStrictMatch || isCleanMatch;
   }
 
-  // Check if associated action button is still disabled for composer / post targets
-  const isPostOrComposer = Boolean(
-    semantics.isComposer ||
-    semantics.isEditor ||
-    (submitButtonState.found &&
-      /^(tweet|post|reply|send|发帖|发送|发布)/i.test(submitButtonState.text || '')),
-  );
-
   let diagnostics: string | undefined;
-  if (
-    committed &&
-    isPostOrComposer &&
-    submitButtonState.found &&
-    submitButtonState.disabled &&
-    normExpected.length > 0
-  ) {
-    committed = false;
-    diagnostics = `Associated action button ("${submitButtonState.text || 'Submit'}") remains disabled, indicating framework reactive state (React/Draft.js) has not committed the input.`;
-  } else if (!committed) {
+  if (!committed) {
     diagnostics = `Element value ("${normCurrent.slice(0, 50)}") did not reflect expected input ("${normExpected.slice(0, 50)}").`;
   }
 
@@ -8762,6 +8820,8 @@ export async function inPageExtractDropdownOptions(
 
 export interface SmartScrollTargetInfo {
   found: boolean;
+  reason?: string;
+  ambiguous?: boolean;
   isWindow: boolean;
   tagName: string;
   selector?: string;
@@ -8792,9 +8852,52 @@ export function inPageFindSmartScrollTarget(options?: {
   direction?: 'down' | 'up' | 'left' | 'right';
   isWindow?: boolean;
 }): SmartScrollTargetInfo {
+  const unavailable = (reason: string, ambiguous = false): SmartScrollTargetInfo => ({
+    found: false,
+    reason,
+    ambiguous,
+    isWindow: false,
+    tagName: 'none',
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+    scrollWidth: 0,
+    scrollHeight: 0,
+    clientWidth: 0,
+    clientHeight: 0,
+    canScrollDown: false,
+    canScrollUp: false,
+    canScrollRight: false,
+    canScrollLeft: false,
+  });
+  const direction = options?.direction;
+  const interactionScope = computeInteractionScope(window);
+  const inInteractionScope = (el: Element): boolean =>
+    !interactionScope.focusTrapped ||
+    interactionScope.roots.some((root) => root === el || composedContains(root, el));
+  const canScrollInDirection = (el: HTMLElement): boolean => {
+    const scrollTop = el.scrollTop || 0;
+    const scrollLeft = el.scrollLeft || 0;
+    const canScrollDown = scrollTop + el.clientHeight < el.scrollHeight - 5;
+    const canScrollUp = scrollTop > 5;
+    const canScrollRight = scrollLeft + el.clientWidth < el.scrollWidth - 5;
+    const canScrollLeft = scrollLeft > 5;
+    if (direction === 'down') return canScrollDown;
+    if (direction === 'up') return canScrollUp;
+    if (direction === 'right') return canScrollRight;
+    if (direction === 'left') return canScrollLeft;
+    return canScrollDown || canScrollUp || canScrollRight || canScrollLeft;
+  };
+
   // If explicitly requested window scroll, skip container search
   if (!options?.isWindow) {
     let targetEl: Element | null = null;
+    const hasExplicitTarget = Boolean(
+      typeof options?.ref === 'number' || options?.selector || options?.coordinate,
+    );
 
     if (typeof options?.ref === 'number') {
       targetEl = findIndexedElement(options.ref);
@@ -8804,14 +8907,15 @@ export function inPageFindSmartScrollTarget(options?: {
       } catch {}
     } else if (options?.coordinate) {
       try {
-        if (typeof document.elementFromPoint === 'function') {
-          targetEl = document.elementFromPoint(options.coordinate.x, options.coordinate.y);
-        }
+        targetEl = deepElementFromPoint(options.coordinate.x, options.coordinate.y);
       } catch {}
     }
 
     // If a target element was specified, check if it or an ancestor is scrollable
     if (targetEl) {
+      if (!inInteractionScope(targetEl)) {
+        return unavailable('target_outside_interaction_scope');
+      }
       let curr: Element | null = targetEl;
       while (curr && curr !== document.body && curr !== document.documentElement) {
         const isScrollable =
@@ -8830,6 +8934,24 @@ export function inPageFindSmartScrollTarget(options?: {
       }
       if (curr === document.body || curr === document.documentElement) {
         targetEl = null; // Fall back to window
+      }
+    }
+
+    if (hasExplicitTarget && !targetEl) {
+      return unavailable('target_not_scrollable');
+    }
+
+    if (!targetEl && !hasExplicitTarget) {
+      const scopedContainers = (interactionScope.scrollContainers || []).filter(
+        canScrollInDirection,
+      );
+      if (interactionScope.focusTrapped && scopedContainers.length > 1) {
+        return unavailable('ambiguous_scroll_container', true);
+      }
+      if (scopedContainers.length === 1) {
+        targetEl = scopedContainers[0];
+      } else if (interactionScope.focusTrapped) {
+        return unavailable('no_scroll_container_in_interaction_scope');
       }
     }
 
@@ -9124,6 +9246,9 @@ export function inPageFindSmartScrollTarget(options?: {
   }
 
   // Fallback to Window / Document
+  if (interactionScope.focusTrapped) {
+    return unavailable('background_scroll_blocked_by_modal');
+  }
   const win = typeof window !== 'undefined' ? window : (globalThis as any).window;
   const doc = (
     typeof document !== 'undefined' ? document.documentElement || document.body : null

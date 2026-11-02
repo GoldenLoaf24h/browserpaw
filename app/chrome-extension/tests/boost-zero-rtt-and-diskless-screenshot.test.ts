@@ -81,7 +81,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       expect(verified.submitButtonState?.text).toBe('立即查询');
     });
 
-    it('detects buttons in non-form search wrappers and input-groups', () => {
+    it('does not infer a submitter from nearby buttons without a native form owner', () => {
       const searchBox = document.createElement('div');
       searchBox.className = 'search-box input-group';
 
@@ -104,9 +104,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
 
       const verified = inPageVerifyInputCommitment(30, 'query');
       expect(verified.committed).toBe(true);
-      expect(verified.submitButtonState?.found).toBe(true);
-      expect(verified.submitButtonState?.index).toBe(31);
-      expect(verified.submitButtonState?.text).toBe('Search');
+      expect(verified.submitButtonState).toBeUndefined();
     });
 
     it('detects external submit button associated via HTML5 form="formId" attribute', () => {
@@ -405,8 +403,8 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
         },
       ] as any);
 
-      const interactMod = await import('../entrypoints/background/tools/browser/interact-index');
-      const interactSpy = vi.spyOn(interactMod.interactIndexTool, 'execute').mockResolvedValue({
+      const interactionMod = await import('../entrypoints/background/tools/browser/interaction');
+      const clickSpy = vi.spyOn(interactionMod.clickTool, 'execute').mockResolvedValue({
         content: [
           { type: 'text', text: JSON.stringify({ success: true, action: 'click', index: 18 }) },
         ],
@@ -417,6 +415,7 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
         index: 15,
         text: '13800138000',
         submit: true,
+        submitTarget: { index: 18 },
       });
 
       expect(res.isError).toBe(false);
@@ -424,11 +423,11 @@ describe('Zero-RTT Submission & Diskless Screenshot Hardening', () => {
       expect(parsed.submitted).toBe(true);
       expect(parsed.submitMethod).toBe('click');
       expect(parsed.submittedButtonIndex).toBe(18);
-      expect(interactSpy).toHaveBeenCalledWith(
+      expect(clickSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           index: 18,
-          action: 'click',
         }),
+        expect.any(Object),
       );
 
       vi.restoreAllMocks();

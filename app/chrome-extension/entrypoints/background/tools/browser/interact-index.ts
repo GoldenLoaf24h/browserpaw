@@ -57,6 +57,10 @@ import { startActionNetworkCapture } from '../../../../utils/action-network-capt
 import { projectFramePoint } from '../../../../utils/frame-coordinates';
 import { withActionReceipt, attachActionReceipt } from '../../../../utils/action-receipt';
 import { assertObservedTarget } from '../../../../utils/observed-target-guard';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '../../../../utils/interaction-outcome';
 
 export interface InteractIndexParams {
   expectedGuard?: unknown[];
@@ -277,40 +281,113 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         !isNaN((args.coordinate as any).y)) ||
       (args?.coordinate && parseUnifiedCoordinate(args.coordinate)),
     );
+    const blockedError = (message: string, reason = 'invalid_arguments') =>
+      createInteractionErrorResponse(
+        message,
+        makeInteractionOutcome('not_dispatched', 'not_requested', reason, 0),
+        { status: 'blocked', requestDispatched: false },
+      );
+    const normalizeInteractionFailure = (result: ToolResult): ToolResult => {
+      if (!result.isError) return result;
+      const first = result.content?.[0];
+      if (first?.type !== 'text' || typeof first.text !== 'string') return result;
+      let payload: any;
+      try {
+        payload = JSON.parse(first.text);
+      } catch {
+        const executionStatus = actionDispatched ? 'unknown' : 'not_dispatched';
+        const unknown = executionStatus === 'unknown';
+        return {
+          ...result,
+          content: [
+            {
+              ...first,
+              text: JSON.stringify({
+                success: false,
+                status: unknown ? 'unknown' : 'blocked',
+                requestDispatched: unknown,
+                retry: !unknown,
+                error: first.text,
+                interaction: makeInteractionOutcome(
+                  executionStatus,
+                  'not_requested',
+                  first.text,
+                  unknown ? 1 : 0,
+                ),
+              }),
+            },
+            ...result.content.slice(1),
+          ],
+        };
+      }
+      if (!payload || typeof payload !== 'object' || payload.interaction) return result;
+      const explicitlyNotDispatched =
+        payload.requestDispatched === false || payload.dispatched === false;
+      const executionStatus =
+        explicitlyNotDispatched || !actionDispatched ? 'not_dispatched' : 'unknown';
+      const unknown = executionStatus === 'unknown';
+      return {
+        ...result,
+        content: [
+          {
+            ...first,
+            text: JSON.stringify({
+              ...payload,
+              status: payload.status ?? (unknown ? 'unknown' : 'blocked'),
+              requestDispatched: payload.requestDispatched ?? unknown,
+              retry: payload.retry ?? !unknown,
+              interaction: makeInteractionOutcome(
+                executionStatus,
+                'not_requested',
+                typeof payload.error === 'string' ? payload.error : undefined,
+                unknown ? 1 : 0,
+              ),
+            }),
+          },
+          ...result.content.slice(1),
+        ],
+      };
+    };
 
     if (args.captureId && args.expectedScreenshotId) {
-      return createErrorResponse(
+      return blockedError(
         'captureId and expectedScreenshotId are distinct screenshot identities and cannot be combined. Use captureId for ordinary screenshot coordinates or expectedScreenshotId for a Jev vision-frame click.',
+        'conflicting_capture_identity',
       );
     }
     if (args.captureId && !hasCoord && !hasPoints && !hasPath) {
-      return createErrorResponse(
+      return blockedError(
         'captureId only supports screenshot coordinate actions (coordinate, points, or drag path); index/selector-only actions do not use screenshot coordinates.',
+        'invalid_capture_target',
       );
     }
 
     if (hasPoints && action !== 'click') {
-      return createErrorResponse(
+      return blockedError(
         'points is only supported for click sequences; use path or end for drag',
+        'invalid_points_action',
       );
     }
     if (!hasIndex && !hasCoord && !hasPoints && !hasPath) {
-      return createErrorResponse(
+      return blockedError(
         `Either index (positive 1-based integer) or coordinate ({ x: number, y: number }) must be provided for ${resolveToolName('interact_index')}`,
+        'missing_target',
       );
     }
 
     const validActions = ['click', 'hover', 'double_click', 'right_click', 'drag'];
     if (!validActions.includes(action)) {
-      return createErrorResponse(
+      return blockedError(
         `Unsupported action "${action}". Allowed actions: ${validActions.join(', ')}`,
+        'unsupported_action',
       );
     }
 
     if (args.expectedScreenshotId) {
       if (action !== 'click') {
-        return createErrorResponse(
+        return blockedError(
           `expectedScreenshotId only supports action="click", received "${action}"`,
+          'invalid_screenshot_action',
         );
       }
       if (
@@ -320,24 +397,30 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         args.path !== undefined ||
         args.points !== undefined
       ) {
-        return createErrorResponse(
+        return blockedError(
           'expectedScreenshotId only supports direct coordinate click (index/selector/ref/path/points are rejected)',
+          'invalid_screenshot_target',
         );
       }
       if (!args.coordinate) {
-        return createErrorResponse('expectedScreenshotId requires coordinate');
+        return blockedError(
+          'expectedScreenshotId requires coordinate',
+          'missing_screenshot_coordinate',
+        );
       }
       if (
         typeof args.expectedDeadlineAt !== 'number' ||
         !Number.isFinite(args.expectedDeadlineAt)
       ) {
-        return createErrorResponse(
+        return blockedError(
           'expectedDeadlineAt must be a finite number when expectedScreenshotId is provided',
+          'invalid_screenshot_deadline',
         );
       }
       if (Date.now() >= args.expectedDeadlineAt) {
-        return createErrorResponse(
+        return blockedError(
           `Interaction deadline expired before execution (now=${Date.now()}, deadline=${args.expectedDeadlineAt})`,
+          'deadline_expired',
         );
       }
     }
@@ -356,10 +439,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       });
       const tabId = tab.id;
       if (!tabId) {
-        return createErrorResponse(`No active tab found for ${resolveToolName('interact_index')}`);
+        return blockedError(
+          `No active tab found for ${resolveToolName('interact_index')}`,
+          'no_active_tab',
+        );
       }
       if (args.frameId !== undefined && (!Number.isSafeInteger(args.frameId) || args.frameId < 0)) {
-        return createErrorResponse('frameId must be a non-negative safe integer');
+        return blockedError('frameId must be a non-negative safe integer', 'invalid_frame_id');
       }
 
       // Declared outside runAction so the surrounding finally can cancel it on every
@@ -686,6 +772,12 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 text: JSON.stringify(
                   {
                     success: true,
+                    interaction: makeInteractionOutcome(
+                      'dispatched',
+                      'not_requested',
+                      undefined,
+                      dispatched,
+                    ),
                     action: 'click_sequence',
                     pointsDispatched: dispatched,
                     coordinates: scaledPoints,
@@ -1761,6 +1853,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               text: JSON.stringify(
                 {
                   success: true,
+                  interaction: makeInteractionOutcome('dispatched'),
                   urlChanged,
                   previousUrl,
                   currentUrl,
@@ -1824,11 +1917,12 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       };
 
       try {
-        return args.skipLock
+        const result = args.skipLock
           ? await withActionReceipt(tabId, runAction)
           : await sessionTabAffinity.runSerialized(tabId, () =>
               withActionReceipt(tabId, runAction),
             );
+        return normalizeInteractionFailure(result);
       } finally {
         // Every exit path must release the tracker, otherwise its navigation and tab
         // listeners leak for the life of the extension.
@@ -1845,6 +1939,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   success: false,
                   status: 'blocked',
                   requestDispatched: false,
+                  interaction: makeInteractionOutcome('not_dispatched', 'not_requested'),
                   error: error instanceof Error ? error.message : String(error),
                 }),
               },
@@ -1868,6 +1963,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                   status: 'unknown',
                   retry: false,
                   dispatched: true,
+                  interaction: makeInteractionOutcome('unknown', 'not_requested', error.message, 1),
                   error: error.message,
                 }),
               },
@@ -1878,8 +1974,19 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         );
       }
       return attachActionReceipt(
-        createErrorResponse(
+        createInteractionErrorResponse(
           `Error executing ${resolveToolName('interact_index')}: ${error instanceof Error ? error.message : String(error)}`,
+          makeInteractionOutcome(
+            actionDispatched ? 'unknown' : 'not_dispatched',
+            'not_requested',
+            actionDispatched ? 'dispatch_unknown' : 'interaction_preparation_failed',
+            actionDispatched ? 1 : 0,
+          ),
+          {
+            status: actionDispatched ? 'unknown' : 'blocked',
+            requestDispatched: actionDispatched,
+            retry: actionDispatched ? false : true,
+          },
         ),
         (error as any)?.receipt,
       );

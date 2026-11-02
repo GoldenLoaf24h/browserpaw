@@ -6,10 +6,11 @@ Welcome to the **BrowserPaw** release archive. This directory contains individua
 
 ## 🚧 Active & In-Flight Versions
 
-| Version        | Status         | Release Notes                    | Description                                                         |
-| :------------- | :------------- | :------------------------------- | :------------------------------------------------------------------ |
-| **Unreleased** | In Development | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates        |
-| **v3.3.0**     | Local Draft    | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance |
+| Version        | Status            | Release Notes                    | Description                                                          |
+| :------------- | :---------------- | :------------------------------- | :------------------------------------------------------------------- |
+| **Unreleased** | In Development    | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates         |
+| **v4.1.1**     | Release Candidate | [v4.1.1.md](./v4.1.1.md)         | Explicit interaction outcomes, form step boundaries and scope parity |
+| **v3.3.0**     | Local Draft       | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance  |
 
 ---
 

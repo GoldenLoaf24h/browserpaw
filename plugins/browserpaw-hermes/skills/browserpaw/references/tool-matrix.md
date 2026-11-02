@@ -15,7 +15,7 @@ Use only these wrapper names. Their schemas are exposed directly by the Hermes p
 | `browserpaw_scroll_until_found`   | Search virtualized content       | `query`, `maxSteps`, `stepPx`, `tabId`                                                                                               |
 | `browserpaw_get_markdown`         | Read article or document text    | `fit`, `includeLinks`, `tabId`                                                                                                       |
 | `browserpaw_interact_index`       | Click, hover, focus, drag        | `index`, `action`, `frameId`, `end`                                                                                                  |
-| `browserpaw_fill_index`           | Fill and optionally submit       | `index`, `text`, `clear`, `pressEnter`, `frameId`                                                                                    |
+| `browserpaw_fill_index`           | Fill and verify one field        | `index`, `text`, `clear`, `pressEnter`, `submit`, `submitTarget`, `frameId`                                                           |
 | `browserpaw_batch_actions`        | Predictable action pipeline      | `actions`, `tabId`, `settleTimeoutMs`, `includeDelta`                                                                                |
 | `browserpaw_smart_scroll`         | Scroll the relevant container    | `direction`, `amount`, `tabId`                                                                                                       |
 | `browserpaw_screenshot`           | Capture page or element          | `targetIndex`, `region`, `format`, `quality`, `fullPage`, `tabId`, `maxWidth`, `maxDimension`, `maxPixels`, `highClarity`, `savePng` |

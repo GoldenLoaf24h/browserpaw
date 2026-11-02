@@ -376,9 +376,10 @@ describe('Phase 2: Modal Isolation & Selector Hardening', () => {
         <button id="bg-btn-2">Background Item 2</button>
       </div>
 
-      <div role="dialog" id="edit-dialog" aria-label="Edit Profile" style="position: fixed; left: 100px; top: 100px; width: 600px; height: 400px;">
+      <div role="dialog" id="edit-dialog" aria-modal="true" aria-label="Edit Profile" style="position: fixed; left: 100px; top: 100px; width: 600px; height: 400px;">
         <h2>Edit Profile</h2>
         <input id="input-username" value="Alice" />
+        <button id="role-trigger" aria-controls="portal-dropdown" aria-expanded="true">Choose role</button>
         <button id="btn-save">Save Changes</button>
       </div>
 
@@ -401,9 +402,9 @@ describe('Phase 2: Modal Isolation & Selector Hardening', () => {
     expect(indexedIds).toContain('input-username');
     expect(indexedIds).toContain('btn-save');
 
-    // Whitelisted portal dropdown and toast must be protected and present
+    // A detached portal is present only when an open control inside the modal owns it.
     expect(indexedIds).toContain('opt-role-admin');
-    expect(indexedIds).toContain('toast-msg');
+    expect(indexedIds).not.toContain('toast-msg');
 
     // Background elements outside modal must be pruned
     expect(indexedIds).not.toContain('bg-btn-1');

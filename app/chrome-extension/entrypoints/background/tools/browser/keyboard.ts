@@ -16,6 +16,10 @@ import {
   isCdpOutcomeUncertainError,
   raceCdp,
 } from '@/utils/race-cdp';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
 
 function createUnknownOutcomeResponse(error: unknown, acknowledgedEvents?: number): ToolResult {
   return {
@@ -26,9 +30,16 @@ function createUnknownOutcomeResponse(error: unknown, acknowledgedEvents?: numbe
           success: false,
           status: 'unknown',
           retry: false,
+          requestDispatched: true,
           ...(acknowledgedEvents !== undefined
             ? { dispatched: acknowledgedEvents > 0, acknowledgedEvents }
             : {}),
+          interaction: makeInteractionOutcome(
+            'unknown',
+            'not_requested',
+            'keyboard_dispatch_unknown',
+            acknowledgedEvents && acknowledgedEvents > 0 ? acknowledgedEvents : undefined,
+          ),
           error: `Keyboard CDP outcome unknown: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -37,6 +48,67 @@ function createUnknownOutcomeResponse(error: unknown, acknowledgedEvents?: numbe
     ],
     isError: true,
   };
+}
+
+function blockedKeyboardError(message: string, reason: string): ToolResult {
+  return createInteractionErrorResponse(
+    message,
+    makeInteractionOutcome('not_dispatched', 'not_requested', reason, 0),
+    { status: 'blocked', requestDispatched: false },
+  );
+}
+
+function withKeyboardInteraction(result: ToolResult): ToolResult {
+  const block = result.content?.at(-1);
+  if (block?.type !== 'text') return result;
+  let payload: any;
+  try {
+    payload = JSON.parse(block.text);
+  } catch {
+    return result;
+  }
+  if (!payload || typeof payload !== 'object' || payload.interaction) return result;
+
+  const acknowledged = Number(payload.acknowledgedEvents || 0);
+  const execution: 'not_dispatched' | 'dispatched' | 'unknown' =
+    payload.status === 'unknown'
+      ? 'unknown'
+      : !result.isError && payload.success === true
+        ? 'dispatched'
+        : payload.requestDispatched === true ||
+            payload.dispatched === true ||
+            acknowledged > 0 ||
+            payload.status === 'timeout'
+          ? 'unknown'
+          : 'not_dispatched';
+  block.text = JSON.stringify({
+    ...payload,
+    interaction: makeInteractionOutcome(
+      execution,
+      'not_requested',
+      keyboardExecutionReason(payload, execution),
+      execution === 'not_dispatched'
+        ? 0
+        : acknowledged > 0
+          ? acknowledged
+          : execution === 'dispatched'
+            ? 1
+            : undefined,
+    ),
+  });
+  return result;
+}
+
+function keyboardExecutionReason(
+  payload: any,
+  execution: 'not_dispatched' | 'dispatched' | 'unknown',
+) {
+  if (typeof payload.reason === 'string') return payload.reason;
+  if (execution === 'unknown') return 'keyboard_dispatch_unknown';
+  if (execution === 'not_dispatched' && typeof payload.error === 'string') {
+    return 'keyboard_preparation_failed';
+  }
+  return undefined;
 }
 
 /**
@@ -407,8 +479,9 @@ class KeyboardTool extends BaseBrowserToolExecutor {
     const { keys, selector, selectorType = 'css', delay = TIMEOUTS.KEYBOARD_DELAY } = args;
 
     if (!keys) {
-      return createErrorResponse(
+      return blockedKeyboardError(
         ERROR_MESSAGES.INVALID_PARAMETERS + ': Keys parameter must be provided',
+        'missing_keys',
       );
     }
 
@@ -420,7 +493,10 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || (args as any).sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+        return blockedKeyboardError(
+          ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID',
+          'no_active_tab',
+        );
       }
       tabFaviconManager.markTabActive(tab.id);
       let cursorTarget:
@@ -825,7 +901,9 @@ class KeyboardTool extends BaseBrowserToolExecutor {
             new Error('Keyboard simulation reported a failed key combination'),
           );
         }
-        return createErrorResponse('Keyboard simulation timed out or failed to receive response');
+        return createUnknownOutcomeResponse(
+          new Error('Keyboard simulation timed out or failed to receive a correlated response'),
+        );
       }
 
       return {
@@ -851,9 +929,12 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || (args as any).sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+        return blockedKeyboardError(
+          ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID',
+          'no_active_tab',
+        );
       }
-      return await withActionReceipt(tab.id, run);
+      return withKeyboardInteraction(await withActionReceipt(tab.id, run));
     } catch (error) {
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);
@@ -863,8 +944,15 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         return attachActionReceipt(createUnknownOutcomeResponse(error), (error as any)?.receipt);
       }
       return attachActionReceipt(
-        createErrorResponse(
+        createInteractionErrorResponse(
           `Error simulating keyboard events: ${error instanceof Error ? error.message : String(error)}`,
+          makeInteractionOutcome(
+            'not_dispatched',
+            'not_requested',
+            'keyboard_preparation_failed',
+            0,
+          ),
+          { status: 'blocked', requestDispatched: false },
         ),
         (error as any)?.receipt,
       );

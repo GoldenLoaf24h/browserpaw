@@ -4,9 +4,11 @@ Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps respons
 
 ## Current release work
 
-The current stable release is 4.1.0, tagged `v4.1.0`. The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
+The current release candidate is 4.1.1; the latest tagged stable release remains `v4.1.0`. The 4.1.1 work converges observation scope, explicit submit boundaries and interaction-result semantics across atomic tools, batch, form, REPL and Jev. It is not released until the complete gate, real-browser acceptance and matching Linux/Windows CI pass.
 
-Current work integrates bounded Jev judgments into the shared locator, task and skill execution paths. Deterministic targeting stays first, transient model failures pause inference while retaining the user's backend choice, and unknown browser dispatch is never replayed. Source checks, real-model evaluation and loaded-runtime acceptance remain separate gates; implementation tests do not establish model accuracy or production readiness.
+The reproduced ten-minute Native idle failure was caused by a diagnostic written to framed stdout. It was fixed by moving that diagnostic to stderr, passed the complete gate, and retained the same Native process and original MCP connection through a real 665-second idle test. Preserve the original failures and keep diagnostics off Native stdout.
+
+Current work integrates bounded Jev judgments into the shared locator, task and skill execution paths. Deterministic targeting stays first, transient model failures pause inference while retaining the user's backend choice, and unknown browser dispatch is never replayed. `chrome_form_pipeline` fills only the exposed step; later Next/Submit/Enter actions must be listed explicitly. Source checks, real-model evaluation and loaded-runtime acceptance remain separate gates; implementation tests do not establish model accuracy or production readiness.
 
 The 320-run M7 comparison is stopped by user decision. Preserve its frozen plans, historical results and costs; do not restart it as a routine gate or claim its population efficiency targets passed. Hermes end-user verification belongs to the user. Physical window testing was waived, not passed.
 

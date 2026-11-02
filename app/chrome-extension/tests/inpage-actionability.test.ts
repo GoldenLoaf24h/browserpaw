@@ -564,4 +564,27 @@ describe('inPageWaitForActionable pre-flight & stability watchdog', () => {
       expect(disabledRes.error).toBeDefined();
     });
   });
+
+  describe('12. Overflow clipping', () => {
+    it('rejects an element fully clipped outside a scroll container', async () => {
+      const pane = document.createElement('div');
+      pane.style.overflowY = 'auto';
+      Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 100 });
+      attachBox(pane, 300, 100, 50, 100);
+
+      const button = document.createElement('button');
+      button.textContent = 'Clipped action';
+      attachBox(button, 100, 40, 100, 300);
+      pane.append(button);
+      document.body.append(pane);
+
+      const idx = indexElement(button);
+      const result = await inPageWaitForActionable(idx, 'click', 250);
+
+      expect(result.success).toBe(false);
+      expect(result.actionable).toBe(false);
+      expect(result.notFound).toBe(false);
+      expect(result.reason).toBe('out_of_view');
+    });
+  });
 });

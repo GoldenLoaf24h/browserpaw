@@ -57,7 +57,16 @@ describe('actionability failures stop physical delivery', () => {
         skipLock: true,
       });
       expect(result.isError).toBe(true);
+      const payload = JSON.parse((result.content[0] as any).text);
       expect(JSON.stringify(result)).toContain(reason);
+      expect(payload).toMatchObject({
+        status: 'blocked',
+        requestDispatched: false,
+        interaction: {
+          execution: { status: 'not_dispatched', dispatchedCount: 0 },
+          verification: { status: 'not_requested' },
+        },
+      });
       expect(race.raceCdp).not.toHaveBeenCalled();
       expect(page).toHaveBeenCalledWith({ tabId: 42 }, 'inPageWaitForActionable', [1, 'click']);
       expect(page.mock.calls.some((call) => /InteractIndex|Synthetic/.test(String(call[1])))).toBe(
@@ -95,6 +104,11 @@ describe('actionability failures stop physical delivery', () => {
     const payload = JSON.parse((result.content[0] as any).text);
     expect(payload.success).toBe(false);
     expect(payload.completedActions).toBe(0);
+    expect(payload.requestDispatched).toBe(false);
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'not_dispatched', dispatchedCount: 0 },
+      verification: { status: 'not_requested' },
+    });
     expect(race.raceCdp).not.toHaveBeenCalled();
   });
 

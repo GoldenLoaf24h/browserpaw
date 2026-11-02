@@ -3,6 +3,8 @@
  * Strict contracts for System One state, questions, actions, and decision engines.
  */
 
+import type { InteractionOutcome } from 'chrome-mcp-shared';
+
 export interface JevPageState {
   url: string;
   title: string;
@@ -155,4 +157,5 @@ export interface ActTowardGoalResult {
   jevUsage?: JevUsage;
   verification?: VerificationResult[];
   lastReceipt?: any;
+  interaction: InteractionOutcome;
 }

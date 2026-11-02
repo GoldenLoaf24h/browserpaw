@@ -84,7 +84,10 @@ describe('A-02: press/release compensation on a real click path', () => {
 
     const dispatched = await (formPipelineTool as any).dispatchNativeClick(400, 1);
 
-    expect(dispatched).toBe(true);
+    expect(dispatched).toMatchObject({
+      isError: false,
+      content: [{ type: 'text', text: '{"success":true}' }],
+    });
   });
 
   it('click tool fails closed instead of falling back to a content-script click on an uncertain dispatch', async () => {

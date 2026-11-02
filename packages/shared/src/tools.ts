@@ -106,6 +106,36 @@ export function normalizeIncomingToolName(name: string): {
   return { canonicalBackendName: 'chrome_' + name, prefix: '' };
 }
 
+const EXPLICIT_TARGET_SCHEMA = {
+  type: 'object',
+  properties: {
+    index: { type: 'number', description: 'Element index from the current observation' },
+    frameId: {
+      type: 'integer',
+      minimum: 0,
+      description: 'Resolve only in this frame; never fall back to another frame.',
+    },
+    ref: {
+      type: ['string', 'number'],
+      description: 'Element ref or numeric index from the current observation',
+    },
+    selector: { type: 'string', description: 'CSS selector or XPath for the target' },
+    text: { type: 'string', description: 'Visible text target' },
+    role: { type: 'string', description: 'ARIA role target' },
+    label: { type: 'string', description: 'Associated native or ARIA label target' },
+    exact: { type: 'boolean', description: 'Require an exact text or label match' },
+  },
+  additionalProperties: false,
+  anyOf: [
+    { required: ['index'] },
+    { required: ['ref'] },
+    { required: ['selector'] },
+    { required: ['text'] },
+    { required: ['role'] },
+    { required: ['label'] },
+  ],
+} as const;
+
 /**
  * Rewrites any tool references inside an agent-facing text/prompt/error to the target prefix.
  */
@@ -2240,7 +2270,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: true,
     },
     description:
-      'Fill text into an input or textarea element using its compact 1-based numeric index. For single search/form submission, pass pressEnter: true to fill and submit in 1 turn without needing a separate click. When filling multiple fields or clicking submit, use chrome_batch_actions to pipeline in 1 turn.',
+      'Fill text into an input, textarea, or editable element using its index or a strict locator. Filling verifies the field value only. A caller-requested Enter is an explicit separate action; `submit: true` requires `submitTarget` and uses the normal trusted click path.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2263,13 +2293,14 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         pressEnter: {
           type: 'boolean',
           description:
-            'Whether to dispatch an Enter key event immediately after filling the text (default: false). Strongly recommended for search boxes and single-input queries to trigger immediate submission in 1 turn.',
+            'Dispatch one explicit Enter after the field value is verified (default: false). This is a key action, not proof that a form or external write succeeded. Do not combine with submit:true.',
         },
         submit: {
           type: 'boolean',
           description:
-            'Whether to automatically submit the form after filling (default: false). If true, clicks the detected submit button or presses Enter, completing fill + submit in 1 turn.',
+            'Click the caller-specified submitTarget after filling. Requires submitTarget; missing or ambiguous targets reject the request before dispatch. Do not combine with pressEnter:true.',
         },
+        submitTarget: EXPLICIT_TARGET_SCHEMA,
         tabId: { type: 'number', description: 'Target tab ID (optional)' },
         windowId: { type: 'number', description: 'Target window ID (optional)' },
         waitForSettle: {
@@ -2305,7 +2336,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
     },
     description:
       'Execute a sequential multi-step pipeline of browser actions in a single round-trip without waiting for intermediate model turns.\n' +
-      '* CRITICAL EFFICIENCY RULE: When the next 2+ actions are predictable (e.g. form filling: [fill username, fill password, click submit]; or search flow: [fill query, press Enter, wait]), ALWAYS use chrome_batch_actions instead of individual tool calls. It completes the entire sequence in 1 turn (3~5x faster, 75%+ lower token cost).\n' +
+      '* List each mutation explicitly. A fill step does not implicitly advance or submit a form; list the click or press_key step when the task authorizes it.\n' +
       '* Supported action types: click, double_click, right_click, fill, hover, scroll, press_key, wait, fill_form, assert, extract.\n' +
       '* Set includeDelta: true to automatically inspect DOM changes after the pipeline completes.',
     inputSchema: {
@@ -2376,8 +2407,9 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
               submit: {
                 type: 'boolean',
                 description:
-                  'Whether to automatically submit the form after filling (clicks detected submit button or presses Enter) (for type: fill)',
+                  'Click the explicit submitTarget after filling (for type: fill). Requires submitTarget and cannot be combined with pressEnter.',
               },
+              submitTarget: EXPLICIT_TARGET_SCHEMA,
               fields: {
                 type: 'array',
                 items: {
@@ -3400,7 +3432,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: true,
     },
     description:
-      'Autonomously fill and advance multi-step forms / wizards (e.g. Typeform, onboarding, multi-page surveys) in a local execution loop without multi-turn LLM ping-pong. Automatically matches fields, selects choices, triggers step advancement (via Enter or OK/Next button), and yields structured interrupts upon CAPTCHA or blocking validation errors.',
+      'Fill the fields exposed by the current form step. Each field is an explicit action: text fills a matching control, choice clicks the named option, and enter dispatches the Enter key. The tool no longer guesses a next button or implicitly advances. Use chrome_batch_actions for explicit click or key steps, and verify business submission separately.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3422,7 +3454,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
                 type: 'string',
                 enum: ['text', 'choice', 'enter'],
                 description:
-                  'Input method: "text" (default fill), "choice" (click matching button/option), "enter" (submit via Enter key)',
+                  'Explicit action: "text" fills a matching control, "choice" clicks the named option, and "enter" dispatches Enter without claiming business submission',
               },
             },
             required: ['query', 'value'],
@@ -3444,7 +3476,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         autoAdvance: {
           type: 'boolean',
           description:
-            'Automatically trigger step advance via Enter or clicking OK/Next button after input (default: true)',
+            'Deprecated compatibility flag. Implicit keyword clicks and Enter fallback are removed; true returns a migration-required refusal.',
         },
         tabId: { type: 'number', description: 'Target tab ID (optional)' },
         windowId: { type: 'number', description: 'Target window ID (optional)' },
@@ -3515,7 +3547,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         pressEnter: {
           type: 'boolean',
           description:
-            'Whether the caller authorizes Enter after filling. Automatic submission still requires a clearly requested search goal and a verified search control; generic forms and external writes pause for the caller.',
+            'Explicitly authorizes one Enter key step when the selected action is a fill. It does not prove business submission; generic forms and external writes still require caller authorization.',
         },
         mode: {
           type: 'string',

@@ -24,7 +24,7 @@ function setupPopup(api: ReturnType<typeof vi.fn>) {
           if (setupActive) unmounted.push(fn);
         },
       };
-    if (id === 'chrome-mcp-shared') return { CURRENT_VERSION: '4.1.0' };
+    if (id === 'chrome-mcp-shared') return { CURRENT_VERSION: '4.1.1' };
     if (id === './jev-api') return { jevFetch: api };
     if (id === '@/utils/version-checker')
       return { checkExtensionVersionUpdate: async () => ({ hasUpdate: false }) };

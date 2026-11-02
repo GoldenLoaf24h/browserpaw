@@ -4,8 +4,8 @@
 
 | Profile            | Tool Count | Estimated Prompt Footprint (chars/4) | Description                                                                           |
 | :----------------- | :--------: | :----------------------------------: | :------------------------------------------------------------------------------------ |
-| **core** (default) |     16     |                ~11.1k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
-| **full**           |     52     |                ~24.3k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
+| **core** (default) |     16     |                ~11.5k                | High-frequency essentials: 1-based DOM indexing, form filling, visual actions, grep   |
+| **full**           |     52     |                ~24.7k                | Complete canonical tool surface: raw CDP access, tab groups, diagnostics, performance |
 | **crawl**          |     12     |                ~6.6k                 | High-throughput web extraction, markdown summarization, and media inspection          |
 
 Canonical surface: 52 tools = 49 extension-executed tools + 3 native-server tools (`chrome_task`, `chrome_skill`, `chrome_act_toward_goal`). Profile counts are Core 16 / Crawl 12 / Full 52. Footprints are character-based estimates (serialized schema characters / 4), not measured BPE token counts.
@@ -187,7 +187,7 @@ Run a bounded semantic micro-loop toward a natural-language page goal. The loop 
 - `pauseBeforeKeywords` — List of keywords (e.g. ["Post", "Submit", "Pay"]). If the predicted action targets an element whose label, text, or role matches any keyword, the micro-loop suspends before execution and returns status "paused" with target element context for System 2 confirmation.
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context
 - `sessionContext` — Optional alias for sessionId
-- `pressEnter` — Whether the caller authorizes Enter after filling. Automatic submission still requires a clearly requested search goal and a verified search control; generic forms and external writes pause for the caller.
+- `pressEnter` — Explicitly authorizes one Enter key step when the selected action is a fill. It does not prove business submission; generic forms and external writes still require caller authorization.
 - `mode:off|local|remote` — Requested Jev mode. Must match the globally enabled backend; cannot override off or switch backends.
 - `verification` — Read-only independent observations required to declare the goal complete. Without these, completion remains unverified.
 - `taskId` — Optional durable task identity; restricts this operation to its verified pages.
@@ -226,15 +226,16 @@ Click, hover, or interact with an element using its compact 1-based numeric inde
 
 ### `chrome_fill_index`
 
-Fill text into an input or textarea element using its compact 1-based numeric index. For single search/form submission, pass pressEnter: true to fill and submit in 1 turn without needing a separate click. When filling multiple fields or clicking submit, use browserpaw_batch_actions to pipeline in 1 turn.
+Fill text into an input, textarea, or editable element using its index or a strict locator. Filling verifies the field value only. A caller-requested Enter is an explicit separate action; `submit: true` requires `submitTarget` and uses the normal trusted click path.
 
 - `index` (required) — Compact 1-based numeric index of the target element
 - `frameId` — Resolve only in this frame, including explicit main frame 0; never cross-frame fallback.
 - `text` — Text content to fill into the element
 - `value` — Alias for text parameter
 - `clear` — Whether to clear existing field content before typing (default: true)
-- `pressEnter` — Whether to dispatch an Enter key event immediately after filling the text (default: false). Strongly recommended for search boxes and single-input queries to trigger immediate submission in 1 turn.
-- `submit` — Whether to automatically submit the form after filling (default: false). If true, clicks the detected submit button or presses Enter, completing fill + submit in 1 turn.
+- `pressEnter` — Dispatch one explicit Enter after the field value is verified (default: false). This is a key action, not proof that a form or external write succeeded. Do not combine with submit:true.
+- `submit` — Click the caller-specified submitTarget after filling. Requires submitTarget; missing or ambiguous targets reject the request before dispatch. Do not combine with pressEnter:true.
+- `submitTarget`
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `waitForSettle` — Wait for DOM mutations to settle after filling text before returning (default: false)
@@ -409,12 +410,12 @@ Rolls back the most recent mutating action on this tab (e.g. reverts form field 
 
 ### `chrome_form_pipeline`
 
-Autonomously fill and advance multi-step forms / wizards (e.g. Typeform, onboarding, multi-page surveys) in a local execution loop without multi-turn LLM ping-pong. Automatically matches fields, selects choices, triggers step advancement (via Enter or OK/Next button), and yields structured interrupts upon CAPTCHA or blocking validation errors.
+Fill the fields exposed by the current form step. Each field is an explicit action: text fills a matching control, choice clicks the named option, and enter dispatches the Enter key. The tool no longer guesses a next button or implicitly advances. Use browserpaw_batch_actions for explicit click or key steps, and verify business submission separately.
 
 - `fields` (required) — Ordered list of fields and values to fulfill throughout the form flow
 - `maxSteps` — Maximum form advancement steps to attempt before returning (default: 20)
 - `timeoutMs` — Total pipeline deadline, including nested operations (default: 60000ms).
-- `autoAdvance` — Automatically trigger step advance via Enter or clicking OK/Next button after input (default: true)
+- `autoAdvance` — Deprecated compatibility flag. Implicit keyword clicks and Enter fallback are removed; true returns a migration-required refusal.
 - `tabId` — Target tab ID (optional)
 - `windowId` — Target window ID (optional)
 - `sessionId` — Optional session identifier to bind affinity to a specific tab context

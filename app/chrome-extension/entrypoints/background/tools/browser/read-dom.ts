@@ -541,6 +541,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                 w: fastData.w,
                 h: fastData.h,
                 scroll: fastData.scroll,
+                scrollInfo: fastData.scrollInfo,
                 omitted_actions: totalOmittedActions,
                 omitted_elements,
               }),

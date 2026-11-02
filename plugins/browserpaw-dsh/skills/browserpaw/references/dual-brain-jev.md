@@ -32,7 +32,7 @@ Remote inference sends relevant target descriptions and local page context to th
 - `maxSteps`: default 10, maximum 60.
 - `timeoutMs`: total deadline, default 90000, maximum 300000.
 - `textHint`: exact input supplied by the caller.
-- `pressEnter`: explicit submission intent; never authorize an unrelated external write.
+- `pressEnter`: authorize one Enter key step after a selected fill. It records the key dispatch, not business submission, and never authorizes an unrelated external write.
 - `pauseBeforeKeywords`: additional stopping points.
 - `verification`: up to eight independent read-only observations with concrete JSON Schema assertions.
 

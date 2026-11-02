@@ -1,4 +1,5 @@
-import { createErrorResponse, ToolResult } from '@/common/tool-handler';
+import type { ToolCallContext } from '@/common/tool-handler';
+import type { ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
@@ -14,6 +15,11 @@ import type { SmartScrollTargetInfo } from './dom-indexer';
 import { parseUnifiedCoordinate, type PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { animateAgentCursor } from './agent-cursor';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
+import { TaskCancelledError, throwIfAborted, waitWithAbort } from '@/utils/action-abort';
 
 export interface SmartScrollParams {
   tabId?: number;
@@ -58,8 +64,10 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
 export class SmartScrollTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.SMART_SCROLL;
 
-  async execute(args: SmartScrollParams = {}): Promise<ToolResult> {
+  async execute(args: SmartScrollParams = {}, context?: ToolCallContext): Promise<ToolResult> {
+    let scrollDispatched = false;
     try {
+      throwIfAborted(context?.signal, 'before smart scroll');
       const tab = await this.resolveAffinityTab({
         tabId: args.tabId,
         windowId: args.windowId,
@@ -67,7 +75,11 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
       });
 
       if (!tab.id) {
-        return createErrorResponse('No active tab found for chrome_smart_scroll');
+        return createInteractionErrorResponse(
+          'No active tab found for chrome_smart_scroll',
+          makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
+          { status: 'blocked', requestDispatched: false },
+        );
       }
 
       const tabId = tab.id;
@@ -101,25 +113,26 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
           },
         ]);
 
-        const target = (targetResults?.[0]?.result || {
-          found: true,
-          isWindow: true,
-          tagName: 'window',
-          x: 400,
-          y: 300,
-          width: 800,
-          height: 600,
-          scrollLeft: 0,
-          scrollTop: 0,
-          scrollWidth: 800,
-          scrollHeight: 1200,
-          clientWidth: 800,
-          clientHeight: 600,
-          canScrollDown: true,
-          canScrollUp: false,
-          canScrollRight: false,
-          canScrollLeft: false,
-        }) as SmartScrollTargetInfo;
+        const target = targetResults?.[0]?.result as SmartScrollTargetInfo | undefined;
+        if (!target?.found) {
+          return createInteractionErrorResponse(
+            `No unambiguous scroll container is available${
+              target?.reason ? `: ${target.reason}` : ''
+            }. Refresh the observation and pass the reported container index, or choose an explicit target.`,
+            makeInteractionOutcome(
+              'not_dispatched',
+              'not_requested',
+              target?.reason || 'scroll_container_unavailable',
+              0,
+            ),
+            {
+              status: 'blocked',
+              requestDispatched: false,
+              ...(target?.ambiguous ? { ambiguous: true } : {}),
+              ...(target?.reason ? { reason: target.reason } : {}),
+            },
+          );
+        }
 
         // 2. Compute pixel distance
         let pixelDistance: number;
@@ -179,6 +192,8 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
         const skipUntil = smartScrollWheelSkipUntil.get(tabId) || 0;
         if (!isBackground && skipUntil < Date.now()) {
           try {
+            throwIfAborted(context?.signal, 'before physical scroll dispatch');
+            scrollDispatched = true;
             await cdpSessionManager.withSession(tabId, 'smart_scroll', async () => {
               if (args.smooth !== false) {
                 // Progressive multi-step wheel easing matching macOS momentum curve (10-14 steps over ~180-260ms)
@@ -198,6 +213,7 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
                   accumulatedY += stepY;
 
                   if (stepX !== 0 || stepY !== 0) {
+                    throwIfAborted(context?.signal, 'during physical scroll dispatch');
                     await raceCdp(tabId, 'Input.dispatchMouseEvent', {
                       type: 'mouseWheel',
                       x: target.x,
@@ -207,7 +223,11 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
                     });
                   }
                   if (i < STEPS) {
-                    await new Promise((resolve) => setTimeout(resolve, stepDelayMs));
+                    await waitWithAbort(
+                      stepDelayMs,
+                      context?.signal,
+                      'during smooth scroll dispatch',
+                    );
                   }
                 }
               } else {
@@ -240,6 +260,8 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
 
         // 4. In-page scroll fallback if CDP wheel failed
         if (!cdpSuccess) {
+          throwIfAborted(context?.signal, 'before in-page scroll dispatch');
+          scrollDispatched = true;
           await executeInPage({ tabId }, 'inPagePerformSmartScroll', [
             target.isWindow,
             target.selector,
@@ -283,6 +305,15 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
         const scrollProgress = Math.round(
           Math.min(100, Math.max(0, (currentScrollTop / maxScrollY) * 100)),
         );
+        const moved =
+          direction === 'down'
+            ? currentScrollTop > target.scrollTop
+            : direction === 'up'
+              ? currentScrollTop < target.scrollTop
+              : direction === 'right'
+                ? currentScrollLeft > target.scrollLeft
+                : currentScrollLeft < target.scrollLeft;
+        const verification = !updatedStatus ? 'not_requested' : moved ? 'verified' : 'failed';
 
         return {
           content: [
@@ -311,6 +342,13 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
                     : currentScrollTop < maxScrollY,
                   canScrollUp: updatedStatus ? updatedStatus.canScrollUp : currentScrollTop > 0,
                   settle: settleResult,
+                  requestDispatched: scrollDispatched,
+                  interaction: makeInteractionOutcome(
+                    scrollDispatched ? 'dispatched' : 'not_dispatched',
+                    verification,
+                    verification === 'failed' ? 'scroll_not_observed' : undefined,
+                    scrollDispatched ? 1 : 0,
+                  ),
                 },
                 null,
                 2,
@@ -321,14 +359,50 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
         };
       });
     } catch (error) {
+      if (error instanceof TaskCancelledError) {
+        const message = error.message;
+        return attachScrollError(
+          message,
+          scrollDispatched ? 'unknown' : 'blocked',
+          scrollDispatched,
+          scrollDispatched ? 'scroll_cancelled_after_dispatch' : 'scroll_cancelled',
+        );
+      }
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);
       }
-      return createErrorResponse(
+      const unknown = scrollDispatched || isCdpOutcomeUncertainError(error);
+      return attachScrollError(
         `Error executing chrome_smart_scroll: ${error instanceof Error ? error.message : String(error)}`,
+        unknown ? 'unknown' : 'blocked',
+        unknown,
+        unknown ? 'scroll_dispatch_unknown' : 'scroll_preparation_failed',
       );
     }
   }
+}
+
+function attachScrollError(
+  message: string,
+  status: 'blocked' | 'unknown',
+  requestDispatched: boolean,
+  reason: string,
+): ToolResult {
+  const unknown = status === 'unknown';
+  return createInteractionErrorResponse(
+    message,
+    makeInteractionOutcome(
+      unknown ? 'unknown' : 'not_dispatched',
+      'not_requested',
+      reason,
+      unknown ? 1 : 0,
+    ),
+    {
+      status,
+      requestDispatched,
+      retry: unknown ? false : undefined,
+    },
+  );
 }
 
 export const smartScrollTool = new SmartScrollTool();

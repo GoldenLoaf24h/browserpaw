@@ -1,9 +1,11 @@
-import type { IndexedElement } from 'chrome-mcp-shared';
+import type { IndexedElement, ScrollInfo } from 'chrome-mcp-shared';
 import { observationPriority } from '@/utils/observation-priority';
 import {
   buildTableObservation,
+  buildScopedScrollInfo,
   composedContains,
   composedParent,
+  computeInteractionScope,
   createTableObservationCache,
   findIndexedElement,
   getDeepActiveElement,
@@ -65,6 +67,7 @@ export interface FastAction {
   focused?: boolean;
   withinFocusScope?: boolean;
   delta?: number;
+  containerIndex?: number;
 }
 
 export interface FastSnapshotResult {
@@ -74,6 +77,7 @@ export interface FastSnapshotResult {
   h: number;
   text: string;
   scroll: { y: number; height: number };
+  scrollInfo?: ScrollInfo;
   actions: FastAction[];
   structuralElements?: IndexedElement[];
   marker: any[];
@@ -84,6 +88,8 @@ export interface FastSnapshotResult {
   selectorMatched?: boolean;
   textTruncated?: boolean;
   omitted_text?: number;
+  activeModal?: string;
+  modalIsolated?: boolean;
 }
 
 export interface PawFastCache {
@@ -233,7 +239,11 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
   cache.actionElements?.clear();
 
   const fastActiveElement = getDeepActiveElement();
-  const focusScope = observationFocusScope(fastActiveElement);
+  const targetSelector = options?.scope || options?.selector;
+  const interactionScope = computeInteractionScope(window, {
+    explicitScope: Boolean(targetSelector),
+  });
+  const focusScope = interactionScope.modalElement ?? observationFocusScope(fastActiveElement);
 
   const safe = (e: any): boolean => !['password', 'file', 'hidden'].includes(e.type);
 
@@ -461,7 +471,6 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     return false;
   };
 
-  const targetSelector = options?.scope || options?.selector;
   let roots: Element[] = [];
   let selectorMatched: boolean | undefined = undefined;
 
@@ -509,8 +518,13 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
       };
     }
   } else {
-    roots = [document.body];
+    roots = interactionScope.roots;
   }
+
+  const scrollInfo = buildScopedScrollInfo(roots, window, {
+    modalActive: !targetSelector && interactionScope.focusTrapped,
+    ...(!targetSelector ? { containers: interactionScope.scrollContainers } : {}),
+  });
 
   let pad = 0;
   let checkViewport = true;
@@ -752,7 +766,7 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
 
   const BODY_TEXT_BUDGET = 6000;
   const words: string[] = [];
-  const walkerRoots = targetSelector ? roots : [document.body];
+  const walkerRoots = roots;
   const range = document.createRange();
   let bodyTextLength = 0;
   const visitedTextRoots = new Set<Node>();
@@ -838,9 +852,6 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
   }
 
   const text = words.join('\n').slice(0, BODY_TEXT_BUDGET);
-  const height = document.documentElement
-    ? document.documentElement.scrollHeight
-    : document.body.scrollHeight;
   const maxElements =
     typeof options?.limit === 'number' && options.limit > 0 ? Math.min(options.limit, 250) : 250;
   const ranked = [...rank.entries()].sort((a, b) => b[1] - a[1]);
@@ -885,13 +896,38 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     semantics,
     page_key[6],
   ];
-  if (window.scrollY + window.innerHeight < height - 2) {
-    actions.push({ id: 'scroll_down', kind: 'scroll', label: 'Scroll down', delta: 560 });
+  if (scrollInfo.pages_down > 0) {
+    actions.push({
+      id: 'scroll_down',
+      kind: 'scroll',
+      label: 'Scroll down',
+      delta: 560,
+      ...(typeof scrollInfo.containerIndex === 'number'
+        ? { containerIndex: scrollInfo.containerIndex }
+        : {}),
+    });
   }
-  if (window.scrollY > 0) {
-    actions.push({ id: 'scroll_up', kind: 'scroll', label: 'Scroll up', delta: -560 });
+  if (scrollInfo.pages_up > 0) {
+    actions.push({
+      id: 'scroll_up',
+      kind: 'scroll',
+      label: 'Scroll up',
+      delta: -560,
+      ...(typeof scrollInfo.containerIndex === 'number'
+        ? { containerIndex: scrollInfo.containerIndex }
+        : {}),
+    });
   }
   actions.push({ id: 'wait', kind: 'wait', label: 'Wait for the page to update' });
+  if (interactionScope.activeModal) {
+    marker.push({
+      modal: interactionScope.activeModal,
+      isolated: interactionScope.modalIsolated,
+    });
+  }
+  if (scrollInfo.ambiguous || scrollInfo.backgroundBlocked) {
+    marker.push({ scrollInfo });
+  }
 
   // Clear single-pass layout cache
   DOM_CACHE.clearCache();
@@ -902,7 +938,11 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     w: window.innerWidth,
     h: window.innerHeight,
     text,
-    scroll: { y: window.scrollY, height },
+    scroll: {
+      y: scrollInfo.scroll_y ?? 0,
+      height: scrollInfo.total_height ?? window.innerHeight,
+    },
+    scrollInfo,
     actions,
     structuralElements,
     marker,
@@ -910,6 +950,8 @@ export function fastSnapshot(options?: FastSnapshotOptions): FastSnapshotResult 
     guards,
     omitted_actions,
     omitted_elements: omittedElements,
+    ...(interactionScope.activeModal ? { activeModal: interactionScope.activeModal } : {}),
+    ...(interactionScope.modalIsolated ? { modalIsolated: true } : {}),
     ...(selectorMatched !== undefined ? { selectorMatched } : {}),
     ...(hasTextTruncated ? { textTruncated: true, omitted_text: omittedTextChars } : {}),
   };
@@ -927,6 +969,13 @@ export function inPageCheckOcclusion(action: {
 
   const e = findIndexedElement(action.node);
   if (!e) return null;
+  const interactionScope = computeInteractionScope(window);
+  if (
+    interactionScope.focusTrapped &&
+    !interactionScope.roots.some((root) => root === e || composedContains(root, e))
+  ) {
+    return null;
+  }
   if (typeof (e as any).matches === 'function' && (e as any).matches(':disabled')) return null;
   if (typeof e.closest === 'function' && e.closest('[aria-disabled="true"],[inert]')) return null;
 

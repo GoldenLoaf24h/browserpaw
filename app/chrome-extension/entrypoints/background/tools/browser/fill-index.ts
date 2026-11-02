@@ -1,5 +1,5 @@
 import { actionHistoryManager } from '@/utils/action-history-manager';
-import { createErrorResponse, type ToolCallContext, ToolResult } from '@/common/tool-handler';
+import { type ToolCallContext, ToolResult } from '@/common/tool-handler';
 import { throwIfAborted } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
@@ -23,6 +23,11 @@ import { tabFaviconManager } from './tab-favicon';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
 import { performPhysicalFill } from './fill-core';
 import { withActionReceipt, attachActionReceipt } from '@/utils/action-receipt';
+import {
+  createInteractionErrorResponse,
+  inferFillInteraction,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
 
 export interface FillIndexParams {
   expectedGuard?: unknown[];
@@ -33,6 +38,16 @@ export interface FillIndexParams {
   clear?: boolean;
   pressEnter?: boolean;
   submit?: boolean;
+  submitTarget?: {
+    index?: number;
+    frameId?: number;
+    ref?: string | number;
+    selector?: string;
+    text?: string;
+    role?: string;
+    label?: string;
+    exact?: boolean;
+  };
   tabId?: number;
   windowId?: number;
   waitForSettle?: boolean;
@@ -47,7 +62,25 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
 
   async execute(args: FillIndexParams, context?: ToolCallContext): Promise<ToolResult> {
     if (typeof args?.index !== 'number' || args.index <= 0) {
-      return createErrorResponse('Index parameter must be a positive 1-based integer');
+      return createInteractionErrorResponse(
+        'Index parameter must be a positive 1-based integer',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'invalid_index', 0),
+        { status: 'blocked', requestDispatched: false },
+      );
+    }
+    if (args.submit === true && !args.submitTarget) {
+      return createInteractionErrorResponse(
+        'submit:true requires an explicit submitTarget with a resolved field or control; no field mutation was dispatched',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'missing_submit_target', 0),
+        { status: 'blocked', requestDispatched: false, submitted: false },
+      );
+    }
+    if (args.submit === true && args.pressEnter === true) {
+      return createInteractionErrorResponse(
+        'pressEnter:true and submit:true are conflicting submit actions; no field mutation was dispatched',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'conflicting_submit_actions', 0),
+        { status: 'blocked', requestDispatched: false, submitted: false },
+      );
     }
 
     const textToFill = args.text ?? args.value ?? '';
@@ -65,7 +98,11 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || args.sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(`No active tab found for ${resolveToolName('fill_index')}`);
+        return createInteractionErrorResponse(
+          `No active tab found for ${resolveToolName('fill_index')}`,
+          makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
+          { status: 'blocked', requestDispatched: false },
+        );
       }
       const targetTabId: number = tab.id;
 
@@ -105,6 +142,8 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
             clear: args.clear,
             pressEnter: args.pressEnter,
             submit: args.submit,
+            submitTarget: args.submitTarget,
+            taskId: context?.taskId,
             sessionId: args.sessionId,
             sessionContext: args.sessionContext,
             signal: context?.signal,
@@ -122,8 +161,12 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
               ...fillResult,
               success: false,
               status,
+              ...(fillResult.committed === true
+                ? { partial: true, completedSteps: 1, failedStep: 'follow_up_action' }
+                : {}),
               retry: status === 'unknown' ? false : undefined,
               committed: fillResult.committed,
+              interaction: fillResult.interaction ?? inferFillInteraction(fillResult),
               error:
                 fillResult.error ||
                 fillResult.diagnostics ||
@@ -138,7 +181,10 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
             );
           }
 
-          const outcome: any = { ...fillResult };
+          const outcome: any = {
+            ...fillResult,
+            interaction: fillResult.interaction ?? inferFillInteraction(fillResult),
+          };
 
           const shouldWaitSettle =
             args.waitForSettle ||
@@ -206,17 +252,12 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
             );
           }
 
-          (outcome as any).pressEnter = Boolean(
-            args.pressEnter || (args.submit && (outcome as any).submitMethod === 'pressEnter'),
-          );
-          if (
-            !submitOutcomeUnknown &&
-            outcome.submitted === true &&
-            outcome.submitMethod === 'pressEnter'
-          ) {
-            (outcome as any).pressEnterDispatched = true;
-          } else if (submitOutcomeUnknown) {
-            (outcome as any).pressEnterDispatched = false;
+          (outcome as any).pressEnter = args.pressEnter === true;
+          if (args.pressEnter === true) {
+            (outcome as any).pressEnterDispatched =
+              outcome.pressEnterDispatched === true &&
+              !submitOutcomeUnknown &&
+              outcome.submitResult?.status !== 'blocked';
           }
 
           if (
@@ -224,16 +265,11 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
             typeof (outcome.submitButtonState as any).index === 'number'
           ) {
             const btnIdx = (outcome.submitButtonState as any).index;
-            const btnTxt = outcome.submitButtonState.text || 'Submit';
+            const btnTxt = outcome.submitButtonState.text;
             (outcome as any).submitButtonIndex = btnIdx;
-            (outcome as any).submitButtonText = btnTxt;
-            if (!args.submit && !outcome.submitted) {
-              (outcome as any).nextActionHint =
-                `Submit button detected at index [${btnIdx}] ("${btnTxt}"). 1-Turn Optimal Paradigm: Use ${resolveToolName('fill_index')}({ index: ${args.index}, text: '...', submit: true }), pass pressEnter: true, or use ${resolveToolName('batch_actions')}([{type: 'fill', index: ${args.index}, text: '...'}, {type: 'click', index: ${btnIdx}}]) to eliminate extra turns.`;
+            if (btnTxt) {
+              (outcome as any).submitButtonText = btnTxt;
             }
-          } else if (!args.pressEnter && !args.submit && !outcome.submitted) {
-            (outcome as any).nextActionHint =
-              `1-Turn Optimal Paradigm: Pass submit: true or pressEnter: true to ${resolveToolName('fill_index')}, or use ${resolveToolName('batch_actions')} to pipeline fill and submit in 1 turn.`;
           }
 
           const seen = new WeakSet();
@@ -267,6 +303,12 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
                   success: false,
                   status: 'blocked',
                   requestDispatched: false,
+                  interaction: makeInteractionOutcome(
+                    'not_dispatched',
+                    'not_requested',
+                    'fill_preparation_failed',
+                    0,
+                  ),
                   error: error instanceof Error ? error.message : String(error),
                 }),
               },
@@ -283,8 +325,10 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
         return createTargetOccludedResponse(error as any);
       }
       return attachActionReceipt(
-        createErrorResponse(
+        createInteractionErrorResponse(
           `Error executing ${resolveToolName('fill_index')}: ${error instanceof Error ? error.message : String(error)}`,
+          makeInteractionOutcome('unknown', 'not_requested', 'unclassified_fill_error'),
+          { status: 'unknown', retry: false },
         ),
         (error as any)?.receipt,
       );

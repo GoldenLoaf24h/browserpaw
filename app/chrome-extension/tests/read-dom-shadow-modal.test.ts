@@ -28,7 +28,7 @@ describe('Shadow DOM & Modal Focus Trap Enhancements', () => {
       <div id="main-content">
         <button id="btn-open">Open</button>
       </div>
-      <dialog open id="test-modal" aria-label="Flair Selection">
+      <dialog open id="test-modal" aria-modal="true" aria-label="Flair Selection">
         <h2>Select Flair</h2>
         <button id="btn-save">Save</button>
       </dialog>

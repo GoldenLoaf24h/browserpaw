@@ -89,6 +89,50 @@ describe('Chained Snapshot Enhancement (v3.4.0)', () => {
     expect(summary.keyChanges[0].index).toBe(3);
   });
 
+  it('preserves the shared interaction scope in chained snapshots', async () => {
+    (executeInPage as any).mockImplementation((target: any, fnName: string) => {
+      if (fnName === 'inPageGetActiveElementSummary') {
+        return Promise.resolve([
+          {
+            result: {
+              tagName: 'button',
+              hasActiveModal: true,
+              activeModal: 'dialog.confirm',
+              focusTrapped: true,
+              modalIsolated: true,
+              isConfirmationTrap: false,
+            },
+          },
+        ]);
+      }
+      if (fnName === 'inPageDOMPruner') {
+        return Promise.resolve([
+          { frameId: 0, result: { indexedElements: [{ index: 1, tagName: 'button' }] } },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    snapshotCacheManager.setSnapshot(testTabId, {
+      url: testUrl,
+      elementCount: 0,
+      elements: [],
+    });
+
+    const summary = await captureChainedSnapshotSummary(testTabId, testUrl, {
+      maxItems: 5,
+      delayMs: 0,
+    });
+
+    expect(summary).toMatchObject({
+      hasActiveModal: true,
+      activeModal: 'dialog.confirm',
+      focusTrapped: true,
+      modalIsolated: true,
+      isConfirmationTrap: false,
+    });
+  });
+
   it('caps keyChanges at maxItems to prevent context bloat', async () => {
     (executeInPage as any).mockImplementation((target: any, fnName: string) => {
       if (fnName === 'inPageGetActiveElementSummary') {

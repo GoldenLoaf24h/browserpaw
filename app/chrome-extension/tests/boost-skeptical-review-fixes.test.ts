@@ -299,6 +299,7 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
         index: 5,
         text: 'query text',
         submit: true,
+        submitTarget: { index: 9 },
       });
 
       const parsed = JSON.parse(res.content[0].text);

@@ -23,6 +23,8 @@ import { dispatchNativeSelectAll } from './keyboard';
 import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 import { throwIfAborted, TaskCancelledError } from '@/utils/action-abort';
 import { assertObservedTarget } from '@/utils/observed-target-guard';
+import { inferFillInteraction } from '@/utils/interaction-outcome';
+import type { InteractionOutcome } from 'chrome-mcp-shared';
 export { getNativeValueSetter, getNativeCheckedSetter } from './fast-snapshot';
 
 export class FocusVerificationError extends Error {
@@ -44,6 +46,17 @@ export interface PhysicalFillOptions {
   clear?: boolean;
   pressEnter?: boolean;
   submit?: boolean;
+  submitTarget?: {
+    index?: number;
+    frameId?: number;
+    ref?: string | number;
+    selector?: string;
+    text?: string;
+    role?: string;
+    label?: string;
+    exact?: boolean;
+  };
+  taskId?: string;
   preferComposer?: boolean;
   sessionId?: string;
   sessionContext?: string;
@@ -53,6 +66,7 @@ export interface PhysicalFillOptions {
 }
 
 export interface PhysicalFillResult {
+  interaction?: InteractionOutcome;
   success: boolean;
   committed: boolean;
   index?: number;
@@ -75,13 +89,14 @@ export interface PhysicalFillResult {
   submitMethod?: 'click' | 'pressEnter';
   submittedButtonIndex?: number;
   submitResult?: any;
+  pressEnterDispatched?: boolean;
   disambiguationWarning?: string;
   diagnostics?: string;
   error?: string;
   resolutionPath?: string;
   tabHandover?: TabHandoverInfo;
   autoSubmitHandled?: boolean;
-  status?: 'success' | 'timeout' | 'unknown';
+  status?: 'success' | 'blocked' | 'timeout' | 'unknown';
   timedOut?: boolean;
   deadlineExceeded?: boolean;
   retry?: false;
@@ -205,11 +220,54 @@ export async function performPhysicalFill(
 ): Promise<PhysicalFillResult> {
   const pressEnter = options.pressEnter === true;
   const submit = options.submit === true;
+  if (submit && pressEnter) {
+    const message =
+      'pressEnter:true and submit:true are conflicting submit actions; no field mutation was dispatched';
+    return {
+      success: false,
+      committed: false,
+      filledText: '',
+      isTrusted: false,
+      method: 'cdp_native',
+      submitted: false,
+      status: 'blocked',
+      timedOut: false,
+      interaction: inferFillInteraction({
+        success: false,
+        committed: false,
+        status: 'blocked',
+        error: message,
+      }),
+      error: message,
+      diagnostics: message,
+    };
+  }
+  if (submit && !options.submitTarget) {
+    return {
+      success: false,
+      committed: false,
+      filledText: '',
+      isTrusted: false,
+      method: 'cdp_native',
+      submitted: false,
+      status: 'blocked',
+      timedOut: false,
+      interaction: inferFillInteraction({
+        success: false,
+        committed: false,
+        status: 'blocked',
+        error: 'submit:true requires an explicit submitTarget; no field mutation was dispatched',
+      }),
+      error: 'submit:true requires an explicit submitTarget; no field mutation was dispatched',
+      diagnostics:
+        'submit:true requires an explicit submitTarget; no field mutation was dispatched',
+    };
+  }
 
   // Arm handover tracker at the very start of physical fill so any navigation/tab derivation
   // triggered by pressEnter, typing, or auto-submit is reliably captured without races.
   const handoverTracker =
-    pressEnter || submit
+    pressEnter || (submit && Boolean(options.submitTarget))
       ? sessionTabAffinity.startHandoverTracking(
           options.tabId,
           options.sessionId || options.sessionContext,
@@ -217,11 +275,14 @@ export async function performPhysicalFill(
       : null;
 
   try {
-    return await withActionReceipt(options.tabId, () => runPhysicalFill(options, handoverTracker));
+    const result = await withActionReceipt(options.tabId, () =>
+      runPhysicalFill(options, handoverTracker),
+    );
+    return { ...result, interaction: inferFillInteraction(result) };
   } catch (error) {
     if (!(error instanceof FillDeadlineExceededError)) throw error;
     const committed = error.outcome === 'committed';
-    return {
+    const result: PhysicalFillResult = {
       success: false,
       committed,
       filledText: committed ? String(options.text ?? '') : '',
@@ -235,6 +296,7 @@ export async function performPhysicalFill(
       diagnostics: error.message,
       ...((error as any).receipt ? { receipt: (error as any).receipt } : {}),
     };
+    return { ...result, interaction: inferFillInteraction(result) };
   } finally {
     // Every exit path - normal return, early return, or throw - must release the
     // tracker, otherwise its listeners leak for the life of the extension.
@@ -563,7 +625,15 @@ async function runPhysicalFill(
       };
 
       if (submit && resObj.success) {
-        await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt, signal);
+        await handleAutoSubmit(
+          tabId,
+          resObj,
+          options.submitTarget!,
+          sessionId,
+          deadlineAt,
+          signal,
+          options.taskId,
+        );
       }
       if (handoverTracker) {
         const handover = await handoverTracker.waitForHandover(
@@ -705,7 +775,15 @@ async function runPhysicalFill(
     };
 
     if (submit && resObj.success) {
-      await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt);
+      await handleAutoSubmit(
+        tabId,
+        resObj,
+        options.submitTarget!,
+        sessionId,
+        deadlineAt,
+        signal,
+        options.taskId,
+      );
     }
     if (handoverTracker) {
       const handover = await handoverTracker.waitForHandover(
@@ -1062,7 +1140,7 @@ async function runPhysicalFill(
         submitButtonState: verification?.submitButtonState,
         disambiguationWarning,
         resolutionPath,
-        ...(pressEnter ? { submitted: true, submitMethod: 'pressEnter' } : {}),
+        ...(pressEnter ? { pressEnterDispatched: true } : {}),
       };
       filledViaCdp = true;
     } catch (cdpErr) {
@@ -1404,6 +1482,8 @@ async function runPhysicalFill(
     submitButtonState: outcome.submitButtonState,
     submitted: outcome.submitted,
     submitMethod: outcome.submitMethod,
+    submitResult: outcome.submitResult,
+    pressEnterDispatched: outcome.pressEnterDispatched,
     disambiguationWarning,
     resolutionPath,
   };
@@ -1422,7 +1502,15 @@ async function runPhysicalFill(
 
   // 6. Handle auto-submit if requested (and not already submitted via pressEnter)
   if (submit && resObj.success && !resObj.submitted) {
-    await handleAutoSubmit(tabId, resObj, sessionId, targetFrameId, deadlineAt);
+    await handleAutoSubmit(
+      tabId,
+      resObj,
+      options.submitTarget!,
+      sessionId,
+      deadlineAt,
+      signal,
+      options.taskId,
+    );
   }
 
   if (handoverTracker) {
@@ -1438,257 +1526,119 @@ async function runPhysicalFill(
 }
 
 /**
- * Executes 1-turn auto-submit via detected submit button click or physical Enter key.
+ * Dispatches the caller-specified submit target through the normal trusted
+ * click path. A failed or unknown click is never converted into Enter.
  */
 async function handleAutoSubmit(
   tabId: number,
   result: PhysicalFillResult,
+  submitTarget: NonNullable<PhysicalFillOptions['submitTarget']>,
   sessionId?: string,
-  targetFrameId = 0,
   deadlineAt?: number,
   signal?: AbortSignal,
+  taskId?: string,
 ): Promise<void> {
   result.autoSubmitHandled = true;
   if (result.submitted) return;
-  const markDeadlineStop = (message: string, status: 'timeout' | 'unknown' = 'timeout') => {
-    result.success = false;
-    result.status = status;
-    result.timedOut = true;
-    result.deadlineExceeded = true;
-    result.submitted = false;
-    result.submitResult = {
-      success: false,
-      status,
-      timedOut: true,
-      message,
-    };
-  };
 
-  throwIfAborted(signal, 'before auto-submit');
   try {
-    assertBudget(deadlineAt, 'before auto-submit');
-  } catch (error) {
-    markDeadlineStop(error instanceof Error ? error.message : String(error));
-    return;
-  }
+    throwIfAborted(signal, 'before explicit submit');
+    assertBudget(deadlineAt, 'before explicit submit');
+    const { clickTool } = await import('./interaction');
+    const { ref, ...submitArgs } = submitTarget;
+    const explicitTarget: Record<string, unknown> =
+      typeof ref === 'number' && submitArgs.index === undefined
+        ? { ...submitArgs, index: ref }
+        : { ...submitTarget };
+    const clickResult = await withDeadline(
+      clickTool.execute(
+        {
+          ...explicitTarget,
+          tabId,
+          sessionId,
+          ...(typeof deadlineAt === 'number' ? { expectedDeadlineAt: deadlineAt } : {}),
+        },
+        { signal, taskId },
+      ),
+      deadlineAt,
+      'during explicit submit click',
+    );
 
-  if (result.submitButtonState?.found && typeof result.submitButtonState.index === 'number') {
-    const btnIdx = result.submitButtonState.index;
+    const rawText = clickResult.content[0]?.type === 'text' ? clickResult.content[0].text : '';
+    let submitSummary: any = rawText;
     try {
-      // P1: Rich-text editor (Draft.js/ProseMirror/React) reactive settle polling:
-      // Wait for button to transition from disabled to enabled (up to 450ms, polling every 50ms)
-      try {
-        await withDeadline(
-          chrome.scripting.executeScript({
-            target: targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-            func: (idx: number) => {
-              return new Promise<void>((resolve) => {
-                const start = Date.now();
-                function check() {
-                  const isolatedMap = (globalThis as any)[
-                    Symbol.for('__browser_use_isolated_index_map__')
-                  ];
-                  const entry = isolatedMap?.get(idx);
-                  const el = typeof entry?.deref === 'function' ? entry.deref() : entry;
-                  if (el) {
-                    const disabled =
-                      el.disabled === true ||
-                      el.getAttribute('aria-disabled') === 'true' ||
-                      el.classList.contains('disabled') ||
-                      el.style.pointerEvents === 'none';
-                    if (!disabled || Date.now() - start > 450) {
-                      resolve();
-                      return;
-                    }
-                  } else if (Date.now() - start > 450) {
-                    resolve();
-                    return;
-                  }
-                  setTimeout(check, 50);
-                }
-                check();
-              });
-            },
-            args: [btnIdx],
-          }),
-          deadlineAt,
-          'during submit-button readiness polling',
-        );
-      } catch (pollErr) {
-        if (pollErr instanceof FillDeadlineExceededError) {
-          markDeadlineStop(pollErr.message);
-          return;
-        }
-      }
+      submitSummary = JSON.parse(rawText);
+    } catch {}
+    const outcomeUnknown =
+      submitSummary &&
+      typeof submitSummary === 'object' &&
+      (submitSummary.status === 'unknown' ||
+        (submitSummary.requestDispatched === true &&
+          submitSummary.success === false &&
+          submitSummary.status !== 'blocked' &&
+          submitSummary.status !== 'cancelled'));
+    const outcomeFailed =
+      clickResult.isError ||
+      (submitSummary &&
+        typeof submitSummary === 'object' &&
+        (submitSummary.success === false || submitSummary.status === 'blocked'));
 
-      const { interactIndexTool } = await import('./interact-index');
-      assertBudget(deadlineAt, 'before submit click');
-      const clickBudget = nestedTimeout(deadlineAt);
-      const clickTimeoutDueToDeadline = clickBudget !== undefined && clickBudget <= 4000;
-      const clickPromise = interactIndexTool.execute({
-        index: btnIdx,
-        action: 'click',
-        tabId,
-        frameId: targetFrameId,
-        skipLock: true,
-        sessionId,
-        waitForSettle: false,
-        ...(typeof deadlineAt === 'number' ? { expectedDeadlineAt: deadlineAt } : {}),
-      });
-      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<{ isTimeout: true }>((resolve) => {
-        timeoutTimer = setTimeout(
-          () => resolve({ isTimeout: true }),
-          Math.min(4000, clickBudget ?? 4000),
-        );
-      });
-      let raceRes: { isTimeout: boolean; res?: any };
-      try {
-        raceRes = (await Promise.race([
-          clickPromise.then((res) => ({ isTimeout: false, res })),
-          timeoutPromise,
-        ])) as { isTimeout: boolean; res?: any };
-      } finally {
-        if (timeoutTimer) {
-          clearTimeout(timeoutTimer);
-        }
-      }
-
-      if (raceRes.isTimeout) {
-        result.submitted = false;
-        result.submitMethod = 'click';
-        result.submittedButtonIndex = btnIdx;
-        result.submitResult = {
-          success: false,
-          timedOut: true,
-          status: 'unknown',
-          message: 'Auto-submit click timed out after 4000ms; submit delivery status is unknown',
-        };
-        result.status = 'unknown';
-        result.success = false;
-        result.deadlineExceeded = clickTimeoutDueToDeadline;
-        return;
-      }
-
-      const clickRes = raceRes.res;
-      let submitSummary: any = (clickRes?.content?.[0] as any)?.text;
-      try {
-        submitSummary = JSON.parse(submitSummary);
-      } catch {}
-      const hasTopError = Boolean(clickRes?.isError);
-      const innerSuccess =
-        submitSummary && typeof submitSummary === 'object'
-          ? submitSummary.success !== false
-          : !hasTopError;
-      const submitOk = !hasTopError && innerSuccess;
-
-      result.submitted = submitOk;
-      result.submitMethod = 'click';
-      result.submittedButtonIndex = btnIdx;
-      result.submitResult = submitSummary || { success: submitOk };
-      if (submitSummary?.tabHandover) {
-        result.tabHandover = submitSummary.tabHandover;
-      }
-      return;
-    } catch (clickErr) {
-      if (clickErr instanceof FillDeadlineExceededError) {
-        markDeadlineStop(clickErr.message, clickErr.outcome === 'unknown' ? 'unknown' : 'timeout');
-        return;
-      }
-      if (isCdpOutcomeUncertainError(clickErr)) {
-        result.submitted = false;
-        result.submitMethod = 'click';
-        result.submitResult = {
-          success: false,
-          status: 'unknown',
-          message: `Submit click outcome is unknown; not retrying with Enter. ${
-            clickErr instanceof Error ? clickErr.message : String(clickErr)
-          }`,
-        };
-        result.status = 'unknown';
-        result.success = false;
-        return;
-      }
-      console.warn(
-        '[performPhysicalFill] Auto-submit click failed, falling back to Enter:',
-        clickErr,
-      );
+    result.submitMethod = 'click';
+    result.submittedButtonIndex = submitTarget.index;
+    result.submitResult = submitSummary || clickResult;
+    if (typeof (clickResult as any).receipt !== 'undefined') {
+      (result as any).submitReceipt = (clickResult as any).receipt;
     }
-  }
 
-  // Fallback to Enter key
-  try {
-    assertBudget(deadlineAt, 'before submit Enter fallback');
-    await cdpSessionManager.withSession(tabId, 'auto-submit', async () => {
-      await raceCdp(
-        tabId,
-        'Input.dispatchKeyEvent',
-        {
-          type: 'keyDown',
-          key: 'Enter',
-          code: 'Enter',
-          text: '\r',
-          unmodifiedText: '\r',
-          windowsVirtualKeyCode: 13,
-          nativeVirtualKeyCode: 13,
-        },
-        nestedTimeout(deadlineAt),
-      );
-      await raceCdp(
-        tabId,
-        'Input.dispatchKeyEvent',
-        {
-          type: 'keyUp',
-          key: 'Enter',
-          code: 'Enter',
-          windowsVirtualKeyCode: 13,
-          nativeVirtualKeyCode: 13,
-        },
-        nestedTimeout(deadlineAt),
-      );
-    });
-    result.submitted = true;
-    result.submitMethod = 'pressEnter';
-  } catch (enterErr) {
-    if (enterErr instanceof FillDeadlineExceededError) {
-      markDeadlineStop(
-        enterErr.message,
-        enterErr.outcome === 'not_started' ? 'timeout' : 'unknown',
-      );
-      return;
-    }
-    if (isCdpOutcomeUncertainError(enterErr)) {
+    if (outcomeUnknown) {
+      result.success = false;
+      result.status = 'unknown';
+      result.retry = false;
       result.submitted = false;
-      result.submitMethod = 'pressEnter';
       result.submitResult = {
+        ...(submitSummary && typeof submitSummary === 'object' ? submitSummary : {}),
         success: false,
         status: 'unknown',
-        message: `Enter submission outcome is unknown; not retrying in-page. ${
-          enterErr instanceof Error ? enterErr.message : String(enterErr)
-        }`,
+        retry: false,
       };
       return;
     }
-    // If CDP fails, fallback to in-page synthetic Enter
-    try {
-      assertBudget(deadlineAt, 'before synthetic Enter fallback');
-      if (typeof result.index === 'number' && result.index > 0) {
-        await executeInPage(
-          targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
-          'inPageFillIndex',
-          [result.index, '', false, true],
-          nestedTimeout(deadlineAt),
-        );
-      }
-      result.submitted = true;
-      result.submitMethod = 'pressEnter';
-    } catch (fallbackErr) {
-      if (fallbackErr instanceof FillDeadlineExceededError) {
-        markDeadlineStop(
-          fallbackErr.message,
-          fallbackErr.outcome === 'not_started' ? 'timeout' : 'unknown',
-        );
-      }
+
+    if (outcomeFailed) {
+      result.success = false;
+      result.status = 'blocked';
+      result.submitted = false;
+      result.submitResult = {
+        ...(submitSummary && typeof submitSummary === 'object'
+          ? submitSummary
+          : { message: rawText }),
+        success: false,
+        status: 'blocked',
+      };
+      return;
     }
+
+    // Click dispatch is known. This still does not claim server-side or
+    // business acceptance; callers must verify the resulting page state.
+    result.submitted = true;
+  } catch (error) {
+    if (error instanceof FillDeadlineExceededError) {
+      result.success = false;
+      result.status = error.outcome === 'not_started' ? 'timeout' : 'unknown';
+      result.timedOut = true;
+      result.deadlineExceeded = true;
+      result.submitted = false;
+      result.retry = false;
+      result.submitMethod = 'click';
+      result.submitResult = {
+        success: false,
+        status: result.status,
+        retry: false,
+        timedOut: true,
+        message: error.message,
+      };
+      return;
+    }
+    throw error;
   }
 }

@@ -3,8 +3,6 @@ import { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
   isSensitiveElement,
   buildState,
-  extractElementIndices,
-  buildQuestions,
   validateChoice,
   extractTextPayload,
   isDestructiveTarget,
@@ -155,53 +153,6 @@ describe('Jev Client & Helper Unit Tests', () => {
       // Element indices are what every action question refers to, so they survive longest.
       expect(state.elements.length).toBeGreaterThan(0);
       expect(state.elements[0]).toContain('[1]');
-    });
-  });
-
-  describe('3. Questions assembly (§5.2)', () => {
-    test('builds 8 parallel questions with proper criteria', () => {
-      const elements = ['[1] button "Submit"', '[12] textbox "Search"', '[25] link "Help"'];
-      const questions = buildQuestions(elements, 'Search BrowserPaw');
-
-      expect(questions).toHaveProperty('action');
-      expect(questions).toHaveProperty('click_target');
-      expect(questions).toHaveProperty('type_target');
-      expect(questions).toHaveProperty('select_target');
-      expect(questions).toHaveProperty('submit_intent');
-      expect(questions).toHaveProperty('goal_done');
-      expect(questions).toHaveProperty('stuck');
-      expect(questions).toHaveProperty('destructive');
-
-      expect(questions.action.type).toBe('choice');
-      expect(questions.click_target.type).toBe('choice');
-      expect(questions.submit_intent.type).toBe('choice');
-      expect(questions.goal_done.type).toBe('noul');
-      expect(questions.stuck.type).toBe('noul');
-      expect(questions.destructive.type).toBe('noul');
-
-      // Submitting after a fill is a separate judgment, so the option set is fixed rather
-      // than derived from the element list.
-      expect(Object.keys(questions.submit_intent.criteria)).toEqual([
-        'fill_only',
-        'submit',
-        'unclear',
-      ]);
-
-      const clickCriteriaKeys = Object.keys(questions.click_target.criteria);
-      expect(clickCriteriaKeys).toContain('1');
-      expect(clickCriteriaKeys).toContain('12');
-      expect(clickCriteriaKeys).toContain('25');
-      expect(clickCriteriaKeys).toContain('none');
-    });
-
-    test('deduplicates element indices when elements list contains duplicate indices', () => {
-      const elements = ['[5] button "OK"', '[5] button "OK Duplicate"', '[8] link "Home"'];
-      const indices = extractElementIndices(elements);
-      expect(indices).toEqual(['5', '8']);
-
-      const questions = buildQuestions(elements, 'Click OK');
-      const clickKeys = Object.keys(questions.click_target.criteria);
-      expect(clickKeys).toEqual(['5', '8', 'none']);
     });
   });
 

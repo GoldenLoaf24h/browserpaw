@@ -1,4 +1,4 @@
-import { createErrorResponse, type ToolCallContext, type ToolResult } from '@/common/tool-handler';
+import { type ToolCallContext, type ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import {
   TOOL_NAMES,
@@ -39,6 +39,50 @@ import { startActionNetworkCapture } from '@/utils/action-network-capture';
 import { performPhysicalFill } from './fill-core';
 import { withActionReceipt } from '@/utils/action-receipt';
 import { throwIfAborted, waitWithAbort } from '@/utils/action-abort';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
+
+const MUTATING_BATCH_ACTION_TYPES = new Set([
+  'click',
+  'double_click',
+  'right_click',
+  'fill',
+  'fill_form',
+  'press_key',
+  'key',
+  'scroll',
+]);
+
+function isMutatingBatchAction(type: unknown): boolean {
+  return typeof type === 'string' && MUTATING_BATCH_ACTION_TYPES.has(type);
+}
+
+function dispatchedCountForOutput(type: unknown, output: any): number {
+  if (!isMutatingBatchAction(type)) return 0;
+  if (!output || typeof output !== 'object') return 0;
+  const interaction = output?.interaction?.execution;
+  if (interaction?.status === 'unknown' || interaction?.status === 'dispatched') {
+    return Math.max(1, Number(interaction.dispatchedCount) || 1);
+  }
+  if (interaction?.status === 'not_dispatched') return 0;
+  if (type === 'fill_form' && Array.isArray(output?.fields)) {
+    const count = output.fields.filter(
+      (field: any) =>
+        field?.committed === true ||
+        field?.status === 'unknown' ||
+        field?.interaction?.execution?.status === 'dispatched' ||
+        field?.interaction?.execution?.status === 'unknown',
+    ).length;
+    if (count > 0) return count;
+  }
+  if (output?.requestDispatched === true || output?.committed === true) return 1;
+  // Successful batch step outputs are often factual objects without a
+  // `success` field; a completed mutating step in that shape was dispatched.
+  if (output?.success !== false) return 1;
+  return 0;
+}
 
 declare module 'chrome-mcp-shared' {
   interface BatchActionItem {
@@ -187,10 +231,44 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
   async execute(args: BatchActionsParams, context?: ToolCallContext): Promise<ToolResult> {
     const actions = args?.actions;
     if (!Array.isArray(actions) || actions.length === 0) {
-      return createErrorResponse('actions parameter must be a non-empty array of actions');
+      return createInteractionErrorResponse(
+        'actions parameter must be a non-empty array of actions',
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'invalid_actions', 0),
+        { status: 'blocked', requestDispatched: false },
+      );
+    }
+    const invalidSubmitAction = actions.findIndex(
+      (action) => action?.type === 'fill' && action.submit === true && !action.submitTarget,
+    );
+    if (invalidSubmitAction !== -1) {
+      return createInteractionErrorResponse(
+        `Action ${invalidSubmitAction} of type 'fill' has submit:true without submitTarget; the entire batch was rejected before dispatch`,
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'missing_submit_target', 0),
+        {
+          status: 'blocked',
+          requestDispatched: false,
+          failedActionIndex: invalidSubmitAction,
+        },
+      );
+    }
+    const conflictingSubmitAction = actions.findIndex(
+      (action) => action?.type === 'fill' && action.submit === true && action.pressEnter === true,
+    );
+    if (conflictingSubmitAction !== -1) {
+      return createInteractionErrorResponse(
+        `Action ${conflictingSubmitAction} of type 'fill' requests both Enter and an explicit submitTarget; the entire batch was rejected before dispatch`,
+        makeInteractionOutcome('not_dispatched', 'not_requested', 'conflicting_submit_actions', 0),
+        {
+          status: 'blocked',
+          requestDispatched: false,
+          failedActionIndex: conflictingSubmitAction,
+        },
+      );
     }
 
     const signal = context?.signal;
+    let mutationAttempted = false;
+    let unclassifiedUnknownOutcome = false;
     try {
       const tab = await this.resolveAffinityTab({
         tabId: args.tabId,
@@ -198,7 +276,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || args.sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(`No active tab found for ${resolveToolName('batch_actions')}`);
+        return createInteractionErrorResponse(
+          `No active tab found for ${resolveToolName('batch_actions')}`,
+          makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
+          { status: 'blocked', requestDispatched: false },
+        );
       }
       const tabId = tab.id;
       tabFaviconManager.markTabActive(tabId);
@@ -211,6 +293,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
             success: boolean;
             status?: 'success' | 'failed' | 'unknown';
             retry?: boolean;
+            requestDispatched?: boolean;
             error?: string;
             output?: any;
           }> = [];
@@ -223,6 +306,8 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
           }> = [];
           let interruptedReason: string | undefined;
           let unknownOutcome = false;
+          let dialogInterrupt: DialogOpenedError | undefined;
+          let dispatchedActions = 0;
 
           let spaDriftNotice: string | undefined;
 
@@ -243,6 +328,10 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
           actionsLoop: for (let i = 0; i < actions.length; i++) {
             throwIfAborted(signal, 'before a batch action');
             const item = actions[i];
+            let stepDispatchedCount = 0;
+            if (isMutatingBatchAction(item?.type)) {
+              mutationAttempted = true;
+            }
             if (item && typeof item === 'object') {
               if (
                 typeof (item as any).index === 'string' &&
@@ -340,7 +429,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                         loc.error ||
                           `Action ${i} of type '${item.type}' target not found. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
                       ),
-                      { locator: loc },
+                      { locator: loc, requestDispatched: false },
                     );
                   }
 
@@ -353,8 +442,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                         [targetIndex, item.type],
                       )
                     )?.[0]?.result;
-                    if (!ready?.success)
-                      throw new Error(ready?.error || 'Target is not actionable');
+                    if (!ready?.success) {
+                      throw Object.assign(new Error(ready?.error || 'Target is not actionable'), {
+                        requestDispatched: false,
+                      });
+                    }
                     loc = { ...loc, ...ready };
                   }
 
@@ -391,8 +483,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                             reason: interceptRes.pierceReason || 'transient_mask',
                           };
                         } else {
-                          throw new Error(
-                            `Action ${i} click intercepted by ${interceptRes.description}. Please dismiss or interact with the overlay/dialog first.`,
+                          throw Object.assign(
+                            new Error(
+                              `Action ${i} click intercepted by ${interceptRes.description}. Please dismiss or interact with the overlay/dialog first.`,
+                            ),
+                            { requestDispatched: false },
                           );
                         }
                       }
@@ -586,7 +681,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                           fillLoc.error ||
                             `Action ${i} of type 'fill' target not found. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
                         ),
-                        { locator: fillLoc },
+                        { locator: fillLoc, requestDispatched: false },
                       );
                     }
                     targetRef = fillLoc.index ?? targetRef;
@@ -612,6 +707,8 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     clear: item.clear,
                     pressEnter: item.pressEnter,
                     submit: item.submit,
+                    submitTarget: item.submitTarget,
+                    taskId: context?.taskId,
                     preferComposer: item.preferComposer,
                     sessionId: args.sessionId,
                     sessionContext: args.sessionContext,
@@ -642,6 +739,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                         retry: status === 'unknown' ? false : undefined,
                         committed: fillRes.committed,
                         receipt: fillRes.receipt,
+                        output: fillRes,
                         ...(fillLoc ? { locator: fillLoc } : {}),
                       },
                     );
@@ -662,6 +760,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     isComposer: fillRes.isComposer,
                     isEditor: fillRes.isEditor,
                     isSearch: fillRes.isSearch,
+                    ...(fillRes.interaction ? { interaction: fillRes.interaction } : {}),
                     submitButtonState: fillRes.submitButtonState,
                     ...(fillRes.submitted
                       ? {
@@ -729,10 +828,12 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                         selector: field.selector,
                         resolutionPath: fillRes.resolutionPath,
                         submitResult: fillRes.submitResult,
+                        ...(fillRes.interaction ? { interaction: fillRes.interaction } : {}),
                         error: fillRes.error || fillRes.diagnostics,
                       });
                     } catch (fillErr) {
                       if (fillErr instanceof DialogOpenedError) {
+                        Object.assign(fillErr, { output: { fields: fillFormResults } });
                         throw fillErr;
                       }
                       if (isCdpOutcomeUncertainError(fillErr)) {
@@ -761,7 +862,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       new Error(
                         `Batch fill_form outcome unknown on at least one field; stopping to avoid replay`,
                       ),
-                      { status: 'unknown', retry: false },
+                      { status: 'unknown', retry: false, output: stepOutput },
                     );
                   }
                   if (!allFieldsPassed && item.abortOnFailure !== false) {
@@ -769,8 +870,11 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       .filter((r) => !r.success)
                       .map((r) => `field ${r.fieldIndex} [${r.ref ?? r.selector}]: ${r.error}`)
                       .join('; ');
-                    throw new Error(
-                      `Batch fill_form failed on ${failedDesc}. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
+                    throw Object.assign(
+                      new Error(
+                        `Batch fill_form failed on ${failedDesc}. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
+                      ),
+                      { output: stepOutput },
                     );
                   }
                   break;
@@ -1481,19 +1585,24 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
               }
 
               const stepStatus = stepOutput?.status ?? stepOutput?.submitResult?.status;
+              stepDispatchedCount = dispatchedCountForOutput(item.type, stepOutput);
               if (stepStatus === 'unknown') {
                 itemNetCapture.dispose();
                 batchNetCapture.dispose();
                 unknownOutcome = true;
+                unclassifiedUnknownOutcome = true;
+                dispatchedActions += Math.max(1, stepDispatchedCount);
                 actionResults.push({
                   actionIndex: i,
                   success: false,
                   status: 'unknown',
                   retry: false,
+                  requestDispatched: stepDispatchedCount > 0,
                   error:
                     stepOutput?.message ||
                     stepOutput?.submitResult?.message ||
                     `Action ${i} (${item.type}) outcome unknown`,
+                  output: stepOutput,
                 });
                 interruptedReason = `Action ${i} (${item.type}) outcome unknown; batch stopped to avoid replay`;
                 break actionsLoop;
@@ -1531,26 +1640,52 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                   stepOutput?.success === false || stepOutput?.passed === false
                     ? 'failed'
                     : 'success',
+                requestDispatched: stepDispatchedCount > 0,
                 output: stepOutput,
               });
+              dispatchedActions += stepDispatchedCount;
             } catch (stepErr) {
               itemNetCapture.dispose();
               batchNetCapture.dispose();
               if (stepErr instanceof DialogOpenedError) {
-                return createDialogInterruptResponse(stepErr);
+                dialogInterrupt = stepErr;
+                const dialogDispatchUnknown = stepErr.dispatchStage !== 'before';
+                stepDispatchedCount =
+                  isMutatingBatchAction(item.type) && stepErr.dispatchStage !== 'before' ? 1 : 0;
+                dispatchedActions += stepDispatchedCount;
+                if (dialogDispatchUnknown) unknownOutcome = true;
+                actionResults.push({
+                  actionIndex: i,
+                  success: false,
+                  status: dialogDispatchUnknown ? 'unknown' : 'failed',
+                  retry: dialogDispatchUnknown ? false : undefined,
+                  requestDispatched: stepDispatchedCount > 0,
+                  error: `Dialog opened: ${stepErr.dialog.message}`,
+                  ...((stepErr as any)?.output ? { output: (stepErr as any).output } : {}),
+                });
+                interruptedReason = `Dialog opened during action ${i} (${item.type}); batch stopped for handoff`;
+                break;
               }
               const uncertain =
                 isCdpOutcomeUncertainError(stepErr) ||
                 (stepErr as any)?.status === 'unknown' ||
                 (stepErr as any)?.status === 'timeout';
               if (uncertain) unknownOutcome = true;
+              if (uncertain) unclassifiedUnknownOutcome = true;
+              stepDispatchedCount =
+                dispatchedCountForOutput(item.type, (stepErr as any)?.output) ||
+                (uncertain && isMutatingBatchAction(item.type) ? 1 : 0) ||
+                ((stepErr as any)?.committed === true ? 1 : 0);
+              dispatchedActions += stepDispatchedCount;
               const locatorDiag = formatLocatorDiagnostics((stepErr as any)?.locator);
               actionResults.push({
                 actionIndex: i,
                 success: false,
                 status: uncertain ? 'unknown' : 'failed',
                 retry: uncertain ? false : undefined,
+                requestDispatched: stepDispatchedCount > 0,
                 error: stepErr instanceof Error ? stepErr.message : String(stepErr),
+                ...((stepErr as any)?.output ? { output: (stepErr as any).output } : {}),
                 ...locatorDiag,
               });
               interruptedReason = uncertain
@@ -1598,6 +1733,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
 
           const totalCompleted = actionResults.filter((r) => r.success).length;
           const executedActions = actionResults.length;
+          const requestedAssertions = actions.filter((action) => action.type === 'assert').length;
           const batchResult: BatchActionResult & {
             spaDriftNotice?: string;
             networkSettled?: boolean;
@@ -1605,6 +1741,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
             status?: 'success' | 'partial' | 'unknown';
             partial?: boolean;
             retry?: boolean;
+            requestDispatched?: boolean;
             executedActions?: number;
           } = {
             success: totalCompleted === actions.length,
@@ -1631,7 +1768,65 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
             ...(assertions.length > 0 ? { assertions } : {}),
             ...(delta ? { delta } : {}),
             ...(perceptiveDelta ? { perceptiveDelta } : {}),
+            interaction: makeInteractionOutcome(
+              unknownOutcome ? 'unknown' : dispatchedActions > 0 ? 'dispatched' : 'not_dispatched',
+              requestedAssertions === 0
+                ? 'not_requested'
+                : assertions.length === requestedAssertions &&
+                    assertions.every((assertion) => assertion.passed)
+                  ? 'verified'
+                  : 'failed',
+              interruptedReason,
+              dispatchedActions,
+            ),
+            requestDispatched: dispatchedActions > 0,
+            ...(!(totalCompleted === actions.length && !unknownOutcome) ? { retry: false } : {}),
           };
+
+          if (dialogInterrupt) {
+            const interruptResult = createDialogInterruptResponse(dialogInterrupt);
+            const dialogPayload = JSON.parse((interruptResult.content[0] as any).text);
+            const dialogInteraction = dialogPayload.interaction;
+            const assertionsIncomplete =
+              requestedAssertions > 0 && assertions.length < requestedAssertions;
+            const interactionStatus = unknownOutcome
+              ? ('unknown' as const)
+              : dispatchedActions > 0
+                ? ('dispatched' as const)
+                : ('not_dispatched' as const);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    ...batchResult,
+                    ...dialogPayload,
+                    status: unknownOutcome ? 'unknown' : 'partial',
+                    retry: false,
+                    requestDispatched:
+                      dispatchedActions > 0 || dialogInterrupt.dispatchStage !== 'before',
+                    interruptedReason,
+                    interaction: {
+                      execution: {
+                        status: interactionStatus,
+                        reason: dialogInteraction?.execution?.reason ?? 'dialog_opened',
+                        dispatchedCount: dispatchedActions,
+                      },
+                      verification: assertionsIncomplete
+                        ? {
+                            status: 'failed' as const,
+                            reason: 'assertions_not_completed',
+                          }
+                        : (dialogInteraction?.verification ?? {
+                            status: 'not_requested' as const,
+                          }),
+                    },
+                  }),
+                },
+              ],
+              isError: false,
+            };
+          }
 
           return {
             content: [
@@ -1648,8 +1843,20 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
       if (error instanceof DialogOpenedError) {
         return createDialogInterruptResponse(error);
       }
-      return createErrorResponse(
+      const unknown = mutationAttempted || unclassifiedUnknownOutcome;
+      return createInteractionErrorResponse(
         `Error executing chrome_batch_actions: ${error instanceof Error ? error.message : String(error)}`,
+        makeInteractionOutcome(
+          unknown ? 'unknown' : 'not_dispatched',
+          'not_requested',
+          unknown ? 'unclassified_batch_error' : 'batch_preparation_failed',
+          unknown ? undefined : 0,
+        ),
+        {
+          status: unknown ? 'unknown' : 'blocked',
+          requestDispatched: unknown,
+          retry: unknown ? false : undefined,
+        },
       );
     }
   }

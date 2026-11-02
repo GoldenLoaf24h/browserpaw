@@ -28,7 +28,6 @@ import {
   getTop3Probabilities,
   isDestructiveTarget,
   isSessionKeyInvalid,
-  validateChoice,
 } from './jev-client';
 import { runVerifications } from './verification';
 import { classifySemanticAnswer } from './semantic-match';
@@ -850,7 +849,6 @@ export class FastDecisionEngine {
       let targetLine: string = '';
       let confidence: number = 0;
       let jevSuggestion: any = undefined;
-      let submitAfterFill = false;
 
       const observedActions = Array.isArray(domData.actions) ? domData.actions : undefined;
       const valuedInputs = (observedActions || []).filter(
@@ -887,6 +885,9 @@ export class FastDecisionEngine {
           node: action.node,
           kind: action.kind,
           label: draftNames.has(String(action.node)) ? 'Editable control' : action.label,
+          ...(typeof action.containerIndex === 'number'
+            ? { containerIndex: action.containerIndex }
+            : {}),
         })),
       );
       if (stepCandidatesResult.omittedCount > 0) {
@@ -1144,72 +1145,6 @@ export class FastDecisionEngine {
           return tryComplete('Jev decided goal is accomplished via next_step');
         }
 
-        if (actionToTake === 'type' && params.pressEnter === undefined) {
-          const submitIntent = answers.submit_intent;
-          if (
-            !validateChoice(submitIntent, ['fill_only', 'submit', 'unclear']) ||
-            typeof submitIntent.confidence !== 'number' ||
-            !Number.isFinite(submitIntent.confidence) ||
-            submitIntent.confidence < 0 ||
-            submitIntent.confidence > 1
-          ) {
-            jevModelManager.disableIfCurrent(initialMode, 'invalid_response');
-            return finish(
-              'escalate',
-              'jev',
-              false,
-              'invalid_response',
-              'submit intent choice validation failed',
-              steps,
-              finalPage,
-              currentElements,
-              jevCalls,
-              inputTokens,
-            );
-          }
-          const probabilities = Object.values(
-            submitIntent.probabilities as Record<string, number>,
-          ).sort((a, b) => b - a);
-          if (submitIntent.confidence < 0.85 || probabilities[0] - probabilities[1] < 0.2) {
-            return finish(
-              'escalate',
-              'jev',
-              false,
-              null,
-              'submit intent confidence or probability margin is insufficient',
-              steps,
-              finalPage,
-              currentElements,
-              jevCalls,
-              inputTokens,
-            );
-          }
-          {
-            if (submitIntent.choice === 'unclear') {
-              return finish(
-                'paused',
-                'jev',
-                false,
-                null,
-                'Submit intent unclear; fill the field and confirm whether to submit',
-                steps,
-                finalPage,
-                currentElements,
-                jevCalls,
-                inputTokens,
-                {
-                  action: 'type',
-                  target: targetIndex !== undefined ? '[' + targetIndex + ']' : undefined,
-                  matchedKeyword: 'unclear_submit_intent',
-                },
-              );
-            }
-            if (submitIntent.choice === 'submit') {
-              submitAfterFill = true;
-            }
-          }
-        }
-
         if (
           params.pauseBeforeKeywords &&
           Array.isArray(params.pauseBeforeKeywords) &&
@@ -1310,6 +1245,7 @@ export class FastDecisionEngine {
           const scrollRes = await safeCaller('chrome_smart_scroll', {
             direction: 'down',
             tabId: params.tabId,
+            ...(targetIndex !== undefined ? { index: targetIndex } : {}),
             sessionId: params.sessionId || params.sessionContext,
           });
           outcome = this.parseOutcome(scrollRes);
@@ -1317,6 +1253,7 @@ export class FastDecisionEngine {
           const scrollRes = await safeCaller('chrome_smart_scroll', {
             direction: 'up',
             tabId: params.tabId,
+            ...(targetIndex !== undefined ? { index: targetIndex } : {}),
             sessionId: params.sessionId || params.sessionContext,
           });
           outcome = this.parseOutcome(scrollRes);
@@ -1383,8 +1320,7 @@ export class FastDecisionEngine {
               inputTokens,
             );
           }
-          const shouldPressEnter =
-            params.pressEnter === true || (params.pressEnter === undefined && submitAfterFill);
+          const shouldPressEnter = params.pressEnter === true;
           if (
             shouldPressEnter &&
             !(
@@ -1741,6 +1677,20 @@ export class FastDecisionEngine {
     // A model name cannot establish the endpoint's current billing rate.
     const estCostUsd = null;
     const totalCalls = jevCalls + vCalls;
+    const executionStatus =
+      status === 'unknown'
+        ? 'unknown'
+        : extra?.requestDispatched === true ||
+            (extra?.requestDispatched === undefined && steps.length > 0)
+          ? 'dispatched'
+          : 'not_dispatched';
+    const verificationStatus = !extra?.verification
+      ? 'not_requested'
+      : extra.verification.length > 0 && extra.verification.every((item) => item.pass)
+        ? 'verified'
+        : 'failed';
+    const dispatchedCount =
+      steps.length + (status === 'unknown' && extra?.requestDispatched === true ? 1 : 0);
 
     return {
       status,
@@ -1775,6 +1725,17 @@ export class FastDecisionEngine {
         : {}),
       ...(extra?.verification ? { verification: extra.verification } : {}),
       ...(extra?.lastReceipt ? { lastReceipt: extra.lastReceipt } : {}),
+      interaction: {
+        execution: {
+          status: executionStatus,
+          ...(reason ? { reason } : {}),
+          ...(dispatchedCount > 0 ? { dispatchedCount } : {}),
+        },
+        verification: {
+          status: verificationStatus,
+          ...(reason && verificationStatus === 'failed' ? { reason } : {}),
+        },
+      },
       ...(attempts > 0
         ? {
             jevUsage: {

@@ -20,7 +20,7 @@ describe('DoctorTool buildId and verbose reporting', () => {
       },
       runtime: {
         id: 'test-extension-id',
-        getManifest: vi.fn().mockReturnValue({ version: '4.1.0' }),
+        getManifest: vi.fn().mockReturnValue({ version: '4.1.1' }),
       },
     };
   });
@@ -33,7 +33,7 @@ describe('DoctorTool buildId and verbose reporting', () => {
     const payload = JSON.parse(res.content[0].text);
     expect(payload.success).toBe(true);
     expect(payload.buildId).toBe('unbuilt');
-    expect(payload.manifestVersion).toBe('4.1.0');
+    expect(payload.manifestVersion).toBe('4.1.1');
     expect(payload.extensionId).toBe('test-extension-id');
   });
 

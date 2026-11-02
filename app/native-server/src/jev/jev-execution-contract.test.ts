@@ -7,6 +7,7 @@ function engineFor(step: string) {
   const engine = new FastDecisionEngine();
   (engine as any).jevClient.getRemoteClient = () => ({});
   (engine as any).jevClient.query = async (_state: any, questions: any) => {
+    expect(questions).not.toHaveProperty('submit_intent');
     const keys = Object.keys(questions.next_step.criteria);
     return {
       result: {
@@ -61,16 +62,7 @@ describe('Jev executor trust boundaries', () => {
   test('verifies the first confirmed fill without requesting another model decision', async () => {
     const engine = engineFor('type_7');
     const decide = (engine as any).jevClient.query;
-    const query = jest.fn(async (...args: any[]) => {
-      const response = await decide(...args);
-      response.result.answers.submit_intent = {
-        type: 'choice',
-        choice: 'fill_only',
-        confidence: 0.99,
-        probabilities: { fill_only: 0.99, submit: 0.005, unclear: 0.005 },
-      };
-      return response;
-    });
+    const query = jest.fn(decide);
     (engine as any).jevClient.query = query;
     let filled = false;
     const caller = jest.fn(async (name: string, args: any) => {
@@ -100,7 +92,15 @@ describe('Jev executor trust boundaries', () => {
       },
       caller,
     );
-    expect(response).toMatchObject({ status: 'done', success: true, steps: [{ action: 'type' }] });
+    expect(response).toMatchObject({
+      status: 'done',
+      success: true,
+      steps: [{ action: 'type' }],
+      interaction: {
+        execution: { status: 'dispatched', dispatchedCount: 1 },
+        verification: { status: 'verified' },
+      },
+    });
     expect(query).toHaveBeenCalledTimes(1);
     expect(caller.mock.calls.filter(([name]) => name === 'chrome_fill_index')).toHaveLength(1);
     expect(
@@ -111,16 +111,7 @@ describe('Jev executor trust boundaries', () => {
   test('keeps caller text and existing editor values out of model state and action criteria', async () => {
     const engine = engineFor('type_7');
     const decide = (engine as any).jevClient.query;
-    const query = jest.fn(async (...args: any[]) => {
-      const response = await decide(...args);
-      response.result.answers.submit_intent = {
-        type: 'choice',
-        choice: 'fill_only',
-        confidence: 0.99,
-        probabilities: { fill_only: 0.99, submit: 0.005, unclear: 0.005 },
-      };
-      return response;
-    });
+    const query = jest.fn(decide);
     (engine as any).jevClient.query = query;
     const caller = jest.fn(async (name: string) =>
       name === 'chrome_read_dom'
@@ -468,6 +459,10 @@ describe('Jev executor trust boundaries', () => {
       success: false,
       retry: false,
       requestDispatched: true,
+      interaction: {
+        execution: { status: 'unknown', dispatchedCount: 1 },
+        verification: { status: 'not_requested' },
+      },
     });
     expect(response.lastReceipt).toBe(receipt);
     expect(caller).toHaveBeenCalledTimes(2);

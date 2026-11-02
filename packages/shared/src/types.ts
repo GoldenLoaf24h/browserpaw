@@ -69,6 +69,33 @@ export interface ScrollInfo {
   scroll_y?: number;
   total_height?: number;
   viewport_height?: number;
+  containerIndex?: number;
+  containerTag?: string;
+  containerSelector?: string;
+  ambiguous?: boolean;
+  /** Which interaction scope owns the reported scroll position. */
+  scope?: 'page' | 'element' | 'ambiguous' | 'none';
+  /** True when an active modal prevented falling back to background-page scroll. */
+  backgroundBlocked?: boolean;
+}
+
+export type InteractionExecutionStatus = 'not_dispatched' | 'dispatched' | 'unknown';
+export type InteractionVerificationStatus = 'verified' | 'failed' | 'not_requested';
+
+/**
+ * Cross-tool outcome for browser interactions. `success` describes tool
+ * completion; it does not imply that a mutation was dispatched or verified.
+ */
+export interface InteractionOutcome {
+  execution: {
+    status: InteractionExecutionStatus;
+    reason?: string;
+    dispatchedCount?: number;
+  };
+  verification: {
+    status: InteractionVerificationStatus;
+    reason?: string;
+  };
 }
 
 export interface PageAsset {
@@ -163,6 +190,16 @@ export interface BatchActionItem {
   clear?: boolean;
   pressEnter?: boolean;
   submit?: boolean;
+  submitTarget?: {
+    index?: number;
+    frameId?: number;
+    ref?: string | number;
+    selector?: string;
+    text?: string;
+    role?: string;
+    label?: string;
+    exact?: boolean;
+  };
   waitForSettle?: boolean;
   settleTimeoutMs?: number;
   /** Wait for in-flight network requests to reach quiescence before proceeding */
@@ -216,18 +253,32 @@ export interface CapturedNetworkResult {
 
 export interface BatchActionResult {
   success: boolean;
+  status?: 'success' | 'partial' | 'unknown';
+  partial?: boolean;
+  retry?: boolean;
+  requestDispatched?: boolean;
+  executedActions?: number;
   completedActions: number;
   totalActions: number;
   extractedData?: Record<string, string>;
   assertions?: Array<{ actionIndex: number; passed: boolean; condition?: string; error?: string }>;
   delta?: any;
-  results: Array<{ actionIndex: number; success: boolean; error?: string; output?: any }>;
+  results: Array<{
+    actionIndex: number;
+    success: boolean;
+    status?: 'success' | 'failed' | 'unknown';
+    retry?: boolean;
+    requestDispatched?: boolean;
+    error?: string;
+    output?: any;
+  }>;
   interruptedReason?: string;
   settle?: PageSettleResult;
   urlChanged?: boolean;
   previousUrl?: string;
   currentUrl?: string;
   networkResult?: CapturedNetworkResult;
+  interaction?: InteractionOutcome;
 }
 
 export interface ReadDOMParams {

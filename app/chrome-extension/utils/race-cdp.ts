@@ -157,6 +157,13 @@ export function createDialogInterruptResponse(err: DialogOpenedError | DialogInf
           success: false,
           status: dispatchUnknown ? 'unknown' : 'blocked',
           retry: !dispatchUnknown,
+          interaction: {
+            execution: {
+              status: dispatchUnknown ? 'unknown' : 'not_dispatched',
+              reason: 'dialog_opened',
+            },
+            verification: { status: 'not_requested' },
+          },
           requiresDialogAction: true,
           dialog: {
             ...(dialog.dialogId ? { dialogId: dialog.dialogId } : {}),
@@ -267,6 +274,14 @@ export function createTargetOccludedResponse(err?: StalePageError | Error | stri
           error: 'target_occluded',
           retry: true,
           message: msg,
+          interaction: {
+            execution: {
+              status: 'not_dispatched',
+              reason: 'target_occluded',
+              dispatchedCount: 0,
+            },
+            verification: { status: 'not_requested' },
+          },
         }),
       },
     ],

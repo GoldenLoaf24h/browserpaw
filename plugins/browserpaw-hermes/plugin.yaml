@@ -1,6 +1,6 @@
 manifest_version: 1
 name: browserpaw
-version: '4.1.0'
+version: '4.1.1'
 description: 'BrowserPaw Chrome browser automation plugin for Hermes Agent, exposing a curated browserpaw_* tool set backed by the local BrowserPaw MCP bridge.'
 author: GoldenLoaf24h
 license: AGPL-3.0

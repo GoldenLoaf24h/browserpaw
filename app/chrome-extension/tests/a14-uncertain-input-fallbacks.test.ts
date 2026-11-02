@@ -14,6 +14,8 @@ import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-inde
 import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-actions';
 import { smartScrollTool } from '../entrypoints/background/tools/browser/smart-scroll';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
+import { fillTool } from '../entrypoints/background/tools/browser/interaction';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as raceCdpModule from '../utils/race-cdp';
 import { CdpDispatchTimeoutError } from '../utils/race-cdp';
@@ -22,6 +24,38 @@ import { sessionTabAffinity } from '../utils/session-tab-affinity';
 
 const OUTCOME_UNKNOWN_MESSAGE =
   'CDP Input.dispatchMouseEvent outcome unknown: connection lost after dispatch (tab detached). The command may have executed; inspect page state before retrying.';
+
+describe('core interaction tools expose the common not-dispatched contract', () => {
+  it('click rejects a missing target before dispatch', async () => {
+    const res = await clickTool.execute({});
+    const payload = JSON.parse((res.content[0] as any).text);
+
+    expect(res.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'blocked',
+      requestDispatched: false,
+      interaction: {
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      },
+    });
+  });
+
+  it('fill rejects a missing target before dispatch', async () => {
+    const res = await fillTool.execute({ value: 'draft' });
+    const payload = JSON.parse((res.content[0] as any).text);
+
+    expect(res.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'blocked',
+      requestDispatched: false,
+      interaction: {
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      },
+    });
+  });
+});
 
 function passthroughSession() {
   return vi
@@ -154,7 +188,7 @@ describe('A-14 computer.key: uncertain key dispatch must not fall back to DOM ke
   });
 });
 
-describe('A-14 fill-core auto-submit: uncertain click must not be retried with Enter', () => {
+describe('A-14 fill-core explicit submit: one click, never an Enter fallback', () => {
   const tabId = 9401;
 
   function mockFillPipeline(submitButtonState: Record<string, unknown>) {
@@ -212,45 +246,116 @@ describe('A-14 fill-core auto-submit: uncertain click must not be retried with E
   }
 
   it('reports the uncertain click and never presses Enter', async () => {
-    vi.spyOn(interactIndexTool, 'execute').mockRejectedValue(new Error(OUTCOME_UNKNOWN_MESSAGE));
+    const click = vi.spyOn(clickTool, 'execute').mockResolvedValue({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            success: false,
+            status: 'unknown',
+            requestDispatched: true,
+            message: 'Click outcome unknown; not retrying.',
+          }),
+        },
+      ],
+      isError: true,
+    } as any);
 
-    const res = await performPhysicalFill({ tabId, target: 1, text: 'hello', submit: true });
+    const res = await performPhysicalFill({
+      tabId,
+      target: 1,
+      text: 'hello',
+      submit: true,
+      submitTarget: { index: 9 },
+      deadlineAt: Date.now() + 10_000,
+    });
 
+    expect(click).toHaveBeenCalledTimes(1);
     expect(enterDispatches()).toHaveLength(0);
     expect(res.submitted).toBe(false);
+    expect(res.interaction?.execution.status).toBe('unknown');
+    expect(res.interaction?.verification.status).toBe('verified');
     expect(res.submitMethod).toBe('click');
     expect((res.submitResult as any)?.status).toBe('unknown');
     expect((res.submitResult as any)?.message).toMatch(/not retrying/i);
   });
 
-  it('keeps the Enter fallback when the click fails definitively', async () => {
-    vi.spyOn(interactIndexTool, 'execute').mockRejectedValue(new Error('Element is not clickable'));
+  it('reports a definitive click failure without changing it into Enter', async () => {
+    vi.spyOn(clickTool, 'execute').mockResolvedValue({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            success: false,
+            status: 'blocked',
+            requestDispatched: false,
+            error: 'Element is not clickable',
+          }),
+        },
+      ],
+      isError: true,
+    } as any);
 
-    const res = await performPhysicalFill({ tabId, target: 1, text: 'hello', submit: true });
+    const res = await performPhysicalFill({
+      tabId,
+      target: 1,
+      text: 'hello',
+      submit: true,
+      submitTarget: { index: 9 },
+    });
 
-    expect(enterDispatches().length).toBeGreaterThan(0);
-    expect(res.submitted).toBe(true);
-    expect(res.submitMethod).toBe('pressEnter');
+    expect(enterDispatches()).toHaveLength(0);
+    expect(res.submitted).toBe(false);
+    expect(res.status).toBe('blocked');
+    expect(res.submitMethod).toBe('click');
   });
 
-  it('fails closed and never synthesizes an in-page Enter when the Enter dispatch is uncertain', async () => {
-    mockFillPipeline({ found: false });
-    vi.mocked(raceCdpModule.raceCdp).mockImplementation(
-      async (_tabId: number, method: string, params: any) => {
-        if (method === 'Input.dispatchKeyEvent' && params?.key === 'Enter') {
-          throw new Error(OUTCOME_UNKNOWN_MESSAGE);
-        }
-        return {} as any;
-      },
-    );
+  it('rejects submit:true without submitTarget before mutating the field', async () => {
+    const inPage = vi.mocked(inPageEngine.executeInPage);
+    const before = inPage.mock.calls.length;
 
     const res = await performPhysicalFill({ tabId, target: 1, text: 'hello', submit: true });
 
-    expect(inPageFillCalls()).toHaveLength(0);
+    expect(res.status).toBe('blocked');
+    expect(res.committed).toBe(false);
     expect(res.submitted).toBe(false);
-    expect(res.submitMethod).toBe('pressEnter');
-    expect((res.submitResult as any)?.status).toBe('unknown');
-    expect((res.submitResult as any)?.message).toMatch(/not retrying/i);
+    expect(res.interaction?.execution.status).toBe('not_dispatched');
+    expect(res.interaction?.verification.status).toBe('not_requested');
+    expect(inPage.mock.calls.length).toBe(before);
+  });
+
+  it('returns the same not-dispatched interaction contract from the public fill tool', async () => {
+    const res = await fillIndexTool.execute({
+      index: 1,
+      text: 'hello',
+      submit: true,
+      tabId,
+    });
+    const payload = JSON.parse((res.content[0] as any).text);
+
+    expect(res.isError).toBe(true);
+    expect(payload.status).toBe('blocked');
+    expect(payload.requestDispatched).toBe(false);
+    expect(payload.submitted).toBe(false);
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'not_dispatched', dispatchedCount: 0 },
+      verification: { status: 'not_requested' },
+    });
+  });
+
+  it('reports an explicit pressEnter dispatch without claiming business submission', async () => {
+    const res = await performPhysicalFill({
+      tabId,
+      target: 1,
+      text: 'hello',
+      pressEnter: true,
+    });
+
+    expect(enterDispatches().map(([, , params]) => params.type)).toEqual(['keyDown', 'keyUp']);
+    expect(res.pressEnterDispatched).toBe(true);
+    expect(res.interaction?.execution.status).toBe('dispatched');
+    expect(res.interaction?.verification.status).toBe('verified');
+    expect(res.submitted).not.toBe(true);
   });
 
   it('native fill: uncertain typing must fail closed and never fall back to inPageFillIndex (fill-core:847)', async () => {
@@ -311,6 +416,7 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
         committed: true,
         submitted,
         submitMethod: submitted === undefined ? undefined : 'pressEnter',
+        pressEnterDispatched: submitted === true,
         submitButtonState: { found: true, index: 9, text: 'Search' },
       } as any);
       const click = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
@@ -334,7 +440,9 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
 
   it('does not auto-click submit button or claim pressEnterDispatched when submit Enter outcome is unknown', async () => {
     vi.spyOn(fillCoreModule, 'performPhysicalFill').mockResolvedValue({
-      success: true,
+      success: false,
+      status: 'unknown',
+      retry: false,
       committed: true,
       index: 1,
       ref: 1,
@@ -349,6 +457,7 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
       autoSubmitHandled: true,
       submitted: false,
       submitMethod: 'pressEnter',
+      pressEnterDispatched: false,
       submitResult: {
         success: false,
         status: 'unknown',
@@ -365,17 +474,22 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
       index: 1,
       text: 'browserpaw',
       submit: true,
+      submitTarget: { index: 9 },
       tabId,
       waitForSettle: false,
       includeDelta: false,
     });
 
     expect(interactSpy).not.toHaveBeenCalled();
-    expect(res.isError).toBe(false);
+    expect(res.isError).toBe(true);
 
     const parsed = JSON.parse((res.content[0] as any).text);
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
+    expect(parsed.status).toBe('unknown');
     expect(parsed.committed).toBe(true);
+    expect(parsed.partial).toBe(true);
+    expect(parsed.completedSteps).toBe(1);
+    expect(parsed.failedStep).toBe('follow_up_action');
     expect(parsed.submitted).toBe(false);
     expect(parsed.submitResult?.status).toBe('unknown');
     expect(parsed.pressEnterDispatched).not.toBe(true);
@@ -383,7 +497,9 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
 
   it('does not auto-click submit button when pressEnter is requested and Enter outcome is unknown', async () => {
     vi.spyOn(fillCoreModule, 'performPhysicalFill').mockResolvedValue({
-      success: true,
+      success: false,
+      status: 'unknown',
+      retry: false,
       committed: true,
       index: 1,
       ref: 1,
@@ -398,6 +514,7 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
       autoSubmitHandled: true,
       submitted: false,
       submitMethod: 'pressEnter',
+      pressEnterDispatched: false,
       submitResult: {
         success: false,
         status: 'unknown',
@@ -420,10 +537,11 @@ describe('A-14 fill-index: downstream uncertain outcome prohibits auto-click and
     });
 
     expect(interactSpy).not.toHaveBeenCalled();
-    expect(res.isError).toBe(false);
+    expect(res.isError).toBe(true);
 
     const parsed = JSON.parse((res.content[0] as any).text);
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
+    expect(parsed.status).toBe('unknown');
     expect(parsed.committed).toBe(true);
     expect(parsed.submitted).toBe(false);
     expect(parsed.submitResult?.status).toBe('unknown');

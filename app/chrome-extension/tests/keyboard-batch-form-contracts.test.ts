@@ -47,6 +47,10 @@ describe('keyboard action receipts', () => {
 
     expect(result.isError).toBe(false);
     expect(payload.receipt?.dialog?.message).toBe('Saved');
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'dispatched' },
+      verification: { status: 'not_requested' },
+    });
   });
 
   it('returns a dialog interrupt with a receipt when CDP raises DialogOpenedError', async () => {
@@ -77,8 +81,29 @@ describe('keyboard action receipts', () => {
     expect(payload.success).toBe(false);
     expect(payload.status).toBe('unknown');
     expect(payload.retry).toBe(false);
+    expect(payload.requestDispatched).toBe(true);
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'unknown' },
+      verification: { status: 'not_requested' },
+    });
     expect(sendMessage).not.toHaveBeenCalled();
     expect(cdpSessionManager.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a blocked interaction contract when keys are missing', async () => {
+    const result = await keyboardTool.execute({ tabId: 10, keys: '' });
+    const payload = JSON.parse((result.content[0] as any).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      success: false,
+      status: 'blocked',
+      requestDispatched: false,
+      interaction: {
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      },
+    });
   });
 });
 
@@ -131,6 +156,7 @@ describe('batch actions unknown outcome contract', () => {
     expect(payload.success).toBe(false);
     expect(payload.status).toBe('unknown');
     expect(payload.retry).toBe(false);
+    expect(payload.interaction?.execution?.status).toBe('unknown');
     expect(payload.partial).toBe(true);
     expect(payload.executedActions).toBe(1);
     expect(payload.results).toHaveLength(1);
@@ -139,6 +165,71 @@ describe('batch actions unknown outcome contract', () => {
     expect(payload.interruptedReason).toContain('unknown');
     expect(execute.mock.calls.filter(([, name]) => name === 'inPageScrollToIndex')).toHaveLength(0);
     expect(secondAction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a later fill without submitTarget before dispatching an earlier batch action', async () => {
+    const resolveTab = vi.mocked((batchActionsTool as any).resolveAffinityTab);
+    const fill = vi.spyOn(fillCore, 'performPhysicalFill');
+    const dispatch = vi.spyOn(race, 'raceCdp');
+
+    const result = await batchActionsTool.execute({
+      tabId: 20,
+      actions: [
+        { type: 'click', index: 1 },
+        { type: 'fill', index: 2, text: 'draft', submit: true },
+      ],
+    });
+    const payload = JSON.parse((result.content[0] as any).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'blocked',
+      requestDispatched: false,
+      failedActionIndex: 1,
+      interaction: {
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      },
+    });
+    expect(resolveTab).not.toHaveBeenCalled();
+    expect(fill).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects conflicting Enter and explicit submit before dispatching any batch action', async () => {
+    const resolveTab = vi.mocked((batchActionsTool as any).resolveAffinityTab);
+    const fill = vi.spyOn(fillCore, 'performPhysicalFill');
+    const dispatch = vi.spyOn(race, 'raceCdp');
+
+    const result = await batchActionsTool.execute({
+      tabId: 20,
+      actions: [
+        { type: 'click', index: 1 },
+        {
+          type: 'fill',
+          index: 2,
+          text: 'draft',
+          pressEnter: true,
+          submit: true,
+          submitTarget: { index: 3 },
+        },
+      ],
+    });
+    const payload = JSON.parse((result.content[0] as any).text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      status: 'blocked',
+      requestDispatched: false,
+      failedActionIndex: 1,
+      interaction: {
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      },
+    });
+    expect(resolveTab).not.toHaveBeenCalled();
+    expect(fill).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('passes each fill_form field frameId to performPhysicalFill', async () => {
@@ -187,7 +278,13 @@ describe('batch actions unknown outcome contract', () => {
     const result = await batchActionsTool.execute({
       tabId: 20,
       actions: [
-        { type: 'fill', ref: 3, value: 'x', submit: true },
+        {
+          type: 'fill',
+          ref: 3,
+          value: 'x',
+          submit: true,
+          submitTarget: { index: 9 },
+        },
         { type: 'wait', durationMs: 1 },
       ],
     });
@@ -217,6 +314,50 @@ describe('batch actions unknown outcome contract', () => {
 
     expect(payload.requiresDialogAction).toBe(true);
     expect(payload.receipt?.dialog?.message).toBe('Paused');
+  });
+
+  it('retains completed steps and marks skipped assertions when a later step opens a dialog', async () => {
+    const dialog = { type: 'alert', message: 'Paused', defaultPrompt: '' };
+    let keyDispatches = 0;
+    vi.spyOn(race, 'raceCdp').mockImplementation(async (_tabId, method) => {
+      if (method === 'Input.dispatchKeyEvent') {
+        keyDispatches += 1;
+        if (keyDispatches === 1) {
+          throw new race.DialogOpenedError(dialog);
+        }
+      }
+      return {} as any;
+    });
+    vi.spyOn(cdpSessionManager, 'getPendingDialog').mockReturnValue(dialog as any);
+
+    const result = await batchActionsTool.execute({
+      tabId: 20,
+      actions: [
+        { type: 'wait', durationMs: 1 },
+        { type: 'key', key: 'Enter' },
+        { type: 'assert', selector: '#result', expectedText: 'Saved' },
+      ],
+    });
+    const payload = JSON.parse((result.content[0] as any).text);
+
+    expect(payload.requiresDialogAction).toBe(true);
+    expect(payload.dialog.message).toBe('Paused');
+    expect(payload.completedActions).toBe(1);
+    expect(payload.executedActions).toBe(2);
+    expect(payload.results).toHaveLength(2);
+    expect(payload.results[0]).toMatchObject({ actionIndex: 0, success: true });
+    expect(payload.results[1]).toMatchObject({ actionIndex: 1, success: false });
+    expect(payload.interruptedReason).toContain('Dialog opened');
+    expect(payload.retry).toBe(false);
+    expect(payload.requestDispatched).toBe(true);
+    expect(payload.interaction.execution).toMatchObject({
+      status: 'unknown',
+      dispatchedCount: 1,
+    });
+    expect(payload.interaction.verification).toMatchObject({
+      status: 'failed',
+      reason: 'assertions_not_completed',
+    });
   });
 });
 
@@ -253,7 +394,7 @@ describe('form pipeline bounded execution contract', () => {
       }
       return [{ result: { success: true, index: 1, committed: true } }] as any;
     });
-    vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
+    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
       success: true,
       committed: true,
       filledText: 'v',
@@ -291,29 +432,37 @@ describe('form pipeline bounded execution contract', () => {
       }
       return [{ result: { success: true, index: 1, committed: true } }] as any;
     });
-    vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'v',
-      isTrusted: true,
-      method: 'cdp_native',
+    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return {
+        success: true,
+        committed: true,
+        filledText: 'v',
+        isTrusted: true,
+        method: 'cdp_native',
+      };
     });
-    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-
     const result = await formPipelineTool.execute({
       tabId: 30,
-      fields: [{ query: 'q', value: 'v' }],
+      fields: [
+        { query: 'q', value: 'v' },
+        { query: 'next', value: 'must-not-run-after-deadline' },
+      ],
       maxSteps: 60,
-      timeoutMs: 20,
+      timeoutMs: 1000,
     });
     const payload = JSON.parse((result.content[0] as any).text);
 
     expect(result.isError).toBe(true);
     expect(payload.success).toBe(false);
-    const waits = timeoutSpy.mock.calls
-      .map(([, ms]) => Number(ms))
-      .filter((ms) => Number.isFinite(ms) && ms >= 0 && ms < 600000);
-    expect(waits.filter((ms) => ms > 20)).toEqual([]);
+    expect(payload.status).toBe('timeout');
+    expect(payload.completedFields).toHaveLength(1);
+    expect(payload.remainingFields).toHaveLength(1);
+    expect(payload.interaction).toMatchObject({
+      execution: { status: 'dispatched', dispatchedCount: 1 },
+      verification: { status: 'failed', reason: 'deadline_exceeded' },
+    });
+    expect(fill.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it('returns unknown after a dialog interrupt and still attaches the receipt', async () => {

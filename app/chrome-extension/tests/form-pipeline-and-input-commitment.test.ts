@@ -82,7 +82,7 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       expect(verified.diagnostics).toContain('did not reflect expected input');
     });
 
-    it('rejects commitment when composer DOM text matches but tweet/submit button remains disabled', () => {
+    it('keeps field commitment independent from a disabled associated submit button', () => {
       const form = document.createElement('form');
       const composer = document.createElement('div');
       composer.setAttribute('contenteditable', 'true');
@@ -101,8 +101,8 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       getIsolatedIndexMap().set(42, composer);
 
       const verified = inPageVerifyInputCommitment(42, 'Draft tweet text');
-      expect(verified.committed).toBe(false);
-      expect(verified.diagnostics).toContain('remains disabled');
+      expect(verified.committed).toBe(true);
+      expect(verified.diagnostics).toBeUndefined();
       expect(verified.submitButtonState?.disabled).toBe(true);
     });
 
@@ -477,10 +477,17 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
       expect(res.isError).toBe(false);
       const payload = JSON.parse(res.content[0].text);
       expect(payload.status).toBe('completed');
+      expect(payload.reason).toBe('all_requested_fields_processed');
+      expect(payload.completionScope).toBe('current_step_actions');
+      expect(payload.businessOutcome).toBe('not_verified');
       expect(payload.completedFields.length).toBe(2);
+      expect(payload.interaction).toMatchObject({
+        execution: { status: 'dispatched', dispatchedCount: 2 },
+        verification: { status: 'verified' },
+      });
     });
 
-    it('interrupts execution with advance_stuck when form fails to advance 2 consecutive steps', async () => {
+    it('stops after the current fields and requires explicit continuation when the form does not advance', async () => {
       (globalThis.chrome.tabs as any).get = vi.fn().mockResolvedValue({
         id: 205,
         url: 'https://example.com/stuck-wizard',
@@ -534,9 +541,33 @@ describe('Next-Gen Architecture: True Input Commitment, Anti-Ghosting & Autonomo
 
       expect(res.isError).toBe(true);
       const payload = JSON.parse(res.content[0].text);
-      expect(payload.status).toBe('interrupted');
-      expect(payload.reason).toBe('advance_stuck');
-      expect(payload.interruptDetails?.fieldQuery).toBe('stalledInput');
+      expect(payload.status).toBe('partial');
+      expect(payload.reason).toBe('explicit_continuation_required');
+      expect(payload.completedFields).toHaveLength(1);
+      expect(payload.businessOutcome).toBe('not_verified');
+      expect(payload.interaction).toMatchObject({
+        execution: { status: 'dispatched', dispatchedCount: 1 },
+        verification: { status: 'failed', reason: 'explicit_continuation_required' },
+      });
+      expect(payload.remainingFields).toEqual([{ query: 'nextInput', value: 'will-not-reach' }]);
+    });
+
+    it('rejects retired autoAdvance before changing any field', async () => {
+      const res = await formPipelineTool.execute({
+        fields: [{ query: 'name', value: 'Ada' }],
+        tabId: 205,
+        autoAdvance: true,
+      });
+      const payload = JSON.parse(res.content[0].text);
+
+      expect(res.isError).toBe(true);
+      expect(payload.status).toBe('blocked');
+      expect(payload.reason).toBe('migration_required');
+      expect(payload.requestDispatched).toBe(false);
+      expect(payload.interaction).toMatchObject({
+        execution: { status: 'not_dispatched', dispatchedCount: 0 },
+        verification: { status: 'not_requested' },
+      });
     });
 
     it('interrupts execution immediately upon CAPTCHA detection', async () => {

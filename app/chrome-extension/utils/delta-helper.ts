@@ -4,7 +4,7 @@ import {
   snapshotObservationKey,
   type DomDiffResult,
 } from './snapshot-cache-manager';
-import type { PrunedDOMTreeResult } from 'chrome-mcp-shared';
+import type { PrunedDOMTreeResult, ScrollInfo } from 'chrome-mcp-shared';
 import { describeFrameCoverage } from './frame-coverage';
 import type { ToolResult } from '@/common/tool-handler';
 
@@ -198,6 +198,11 @@ export interface ChainedSnapshotSummary {
     text?: string;
   };
   hasActiveModal: boolean;
+  activeModal?: string;
+  focusTrapped?: boolean;
+  modalIsolated?: boolean;
+  isConfirmationTrap?: boolean;
+  scrollInfo?: ScrollInfo;
   deltaSummary: { added: number; modified: number; removed: number };
   coverage?: NonNullable<DomDiffResult['coverage']>;
   deltaError?: string;
@@ -311,6 +316,17 @@ export async function captureChainedSnapshot(
         }
       : undefined,
     hasActiveModal: Boolean(activeElInfo.hasActiveModal),
+    ...(activeElInfo.activeModal ? { activeModal: activeElInfo.activeModal } : {}),
+    ...(typeof activeElInfo.focusTrapped === 'boolean'
+      ? { focusTrapped: activeElInfo.focusTrapped }
+      : {}),
+    ...(typeof activeElInfo.modalIsolated === 'boolean'
+      ? { modalIsolated: activeElInfo.modalIsolated }
+      : {}),
+    ...(typeof activeElInfo.isConfirmationTrap === 'boolean'
+      ? { isConfirmationTrap: activeElInfo.isConfirmationTrap }
+      : {}),
+    ...(activeElInfo.scrollInfo ? { scrollInfo: activeElInfo.scrollInfo } : {}),
     deltaSummary: {
       added: added.length,
       modified: modified.length,

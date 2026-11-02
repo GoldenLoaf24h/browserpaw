@@ -313,15 +313,22 @@ _Google Chrome_ is a trademark of Google LLC. _Microsoft Edge_ is a trademark of
 Development acceptance gates, build/deployment verification, and runtime identity standards are defined in [**`docs/QUALITY.md`**](./docs/QUALITY.md).
 Run `pnpm verify` to execute full static quality and build audits.
 
-Version 4.1.0 brings document-scoped observations, guarded native input,
-task-owned resources, persistent code sessions and client-specific plugin packages.
-See the [release record](./docs/releases/v4.1.0.md) for validation and limitations.
-BrowserPaw 4.1.0 is the current stable release, tagged `v4.1.0`. The reproduced
-Native idle protocol failure was repaired and verified on an unchanged connection
-for more than eleven minutes; this is bounded runtime evidence, not a guarantee
-for every long-running workload. See [current development work](./docs/development/DEVELOPMENT.md).
+Version 4.1.1 is the current release candidate. It converges observation scope,
+explicit interaction outcomes and form-step boundaries so that deterministic
+tools, batch execution, REPL and Jev return the same facts. The latest tagged
+stable release remains `v4.1.0`; 4.1.1 must not be described as released until
+its complete gate, real-browser acceptance, and Linux/Windows CI pass. See the
+[4.1.1 release candidate record](./docs/releases/v4.1.1.md) and
+[current development work](./docs/development/DEVELOPMENT.md).
+The reproduced Native idle protocol failure in 4.1.0 was repaired and verified
+on an unchanged connection for more than eleven minutes; that bounded evidence
+is not a guarantee for every long-running workload.
 The 320-run M7 comparison has stopped; its historical evidence remains available.
 The planned 95% task success and 20%/30%/50% efficiency thresholds are unproven.
 Report performance only from matched, versioned runs.
 
-The new Jev interaction integration is not yet runtime-qualified. Real Jev 1.14.0 evaluation safely refused two clear targets in an independent Chinese-language holdout, below the acceptance target. Deterministic tools remain the default; do not lower confidence thresholds or infer production accuracy from unit tests. See the [development ledger](./docs/releases/unreleased.md).
+The Jev interaction integration is not yet runtime-qualified. Real Jev 1.14.0
+evaluation safely refused two clear targets in an independent Chinese-language
+holdout, below the acceptance target. Deterministic tools remain the default; do
+not lower confidence thresholds or infer production accuracy from unit tests.
+See the [development ledger](./docs/releases/unreleased.md).

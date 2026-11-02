@@ -1,4 +1,4 @@
-import { createErrorResponse, type ToolCallContext, ToolResult } from '@/common/tool-handler';
+import type { ToolCallContext, ToolResult } from '@/common/tool-handler';
 import { throwIfAborted } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES, type UnifiedLocatorResult } from 'chrome-mcp-shared';
@@ -8,6 +8,10 @@ import { resolveTargetLocation, formatLocatorDiagnostics } from './unified-locat
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import type { PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { attachActionReceipt } from '@/utils/action-receipt';
+import {
+  createInteractionErrorResponse,
+  makeInteractionOutcome,
+} from '@/utils/interaction-outcome';
 import { interactIndexTool } from './interact-index';
 import { performPhysicalFill } from './fill-core';
 
@@ -104,6 +108,18 @@ interface ClickToolParams {
   windowId?: number; // when no tabId, pick active tab from this window
   sessionId?: string; // session affinity identifier
   sessionContext?: string;
+  /** Absolute epoch-ms deadline supplied by a compound caller. */
+  expectedDeadlineAt?: number;
+  /** Alias accepted by the common locator/executor path. */
+  deadlineAt?: number;
+}
+
+function blockedInteraction(message: string, reason: string): ToolResult {
+  return createInteractionErrorResponse(
+    message,
+    makeInteractionOutcome('not_dispatched', 'not_requested', reason, 0),
+    { status: 'blocked', requestDispatched: false },
+  );
 }
 
 /**
@@ -126,6 +142,7 @@ class ClickTool extends BaseBrowserToolExecutor {
       button,
       modifiers,
     } = args;
+    const expectedDeadlineAt = args.expectedDeadlineAt ?? args.deadlineAt;
 
     const hasRef = Boolean(args.ref || args.index !== undefined);
     const hasSelector = Boolean(selector);
@@ -133,12 +150,14 @@ class ClickTool extends BaseBrowserToolExecutor {
     const hasCoords = Boolean(coordinates);
 
     if (!hasRef && !hasSelector && !hasTextOrRole && !hasCoords) {
-      return createErrorResponse(
+      return blockedInteraction(
         ERROR_MESSAGES.INVALID_PARAMETERS +
           ': Provide ref, index, selector, text/role, or coordinate',
+        'invalid_target',
       );
     }
 
+    let actionAttempted = false;
     try {
       throwIfAborted(context?.signal, 'before click');
       const clickHadPreexistingBinding = sessionTabAffinity.hasBinding(
@@ -151,7 +170,10 @@ class ClickTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || (args as any).sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+        return blockedInteraction(
+          ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID',
+          'no_active_tab',
+        );
       }
       const tabId = tab.id;
 
@@ -181,13 +203,15 @@ class ClickTool extends BaseBrowserToolExecutor {
             finalRef = resolved.ref;
             finalSelector = undefined; // Use ref instead of selector
           } else {
-            return createErrorResponse(
+            return blockedInteraction(
               `Failed to resolve XPath selector: ${resolved?.error || 'unknown error'}`,
+              'xpath_resolution_failed',
             );
           }
         } catch (error) {
-          return createErrorResponse(
+          return blockedInteraction(
             `Error resolving XPath: ${error instanceof Error ? error.message : String(error)}`,
+            'xpath_resolution_failed',
           );
         }
       }
@@ -209,12 +233,12 @@ class ClickTool extends BaseBrowserToolExecutor {
         operation: 'click',
         taskId: context?.taskId,
         signal: context?.signal,
-        deadlineAt: (args as any)?.deadlineAt ?? (args as any)?.deadline,
+        deadlineAt: expectedDeadlineAt,
       });
 
       if (!loc.success) {
         return addResultWarning(
-          createErrorResponse(loc.error || 'Target not found'),
+          blockedInteraction(loc.error || 'Target not found', 'target_not_found'),
           clickAffinityWarning,
           loc,
         );
@@ -223,6 +247,7 @@ class ClickTool extends BaseBrowserToolExecutor {
       throwIfAborted(context?.signal, 'before click action');
       const action = args.double ? 'double_click' : button === 'right' ? 'right_click' : 'click';
       const usedCoordinateFallback = loc.resolutionPath === 'coordinate';
+      actionAttempted = true;
       const delegated = await interactIndexTool.execute(
         {
           tabId,
@@ -243,6 +268,7 @@ class ClickTool extends BaseBrowserToolExecutor {
           waitForSettle: waitForNavigation === true,
           settleTimeoutMs: waitForNavigation ? timeout : undefined,
           includeDelta: false,
+          ...(typeof expectedDeadlineAt === 'number' ? { expectedDeadlineAt } : {}),
           sessionId: args.sessionId,
           sessionContext: args.sessionContext,
         },
@@ -251,9 +277,21 @@ class ClickTool extends BaseBrowserToolExecutor {
       return addResultWarning(delegated, clickAffinityWarning, loc);
     } catch (error) {
       console.error('Error in click operation:', error);
+      const status = actionAttempted ? 'unknown' : 'blocked';
       return attachActionReceipt(
-        createErrorResponse(
+        createInteractionErrorResponse(
           `Error performing click: ${error instanceof Error ? error.message : String(error)}`,
+          makeInteractionOutcome(
+            actionAttempted ? 'unknown' : 'not_dispatched',
+            'not_requested',
+            actionAttempted ? 'dispatch_unknown' : 'click_preparation_failed',
+            actionAttempted ? 1 : 0,
+          ),
+          {
+            status,
+            requestDispatched: actionAttempted,
+            retry: actionAttempted ? false : true,
+          },
         ),
         (error as any)?.receipt,
       );
@@ -308,18 +346,21 @@ class FillTool extends BaseBrowserToolExecutor {
     const hasCoords = Boolean(coordinates);
 
     if (!hasRef && !hasSelector && !hasTargetTextOrRole && !hasCoords) {
-      return createErrorResponse(
+      return blockedInteraction(
         ERROR_MESSAGES.INVALID_PARAMETERS +
           ': Provide ref, index, selector, targetText/role, or coordinate',
+        'invalid_target',
       );
     }
 
     if (value === undefined || value === null) {
-      return createErrorResponse(
+      return blockedInteraction(
         ERROR_MESSAGES.INVALID_PARAMETERS + ': Text or value must be provided',
+        'missing_value',
       );
     }
 
+    let actionAttempted = false;
     try {
       throwIfAborted(context?.signal, 'before fill');
       const fillHadPreexistingBinding = sessionTabAffinity.hasBinding(
@@ -331,7 +372,10 @@ class FillTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || (args as any).sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID');
+        return blockedInteraction(
+          ERROR_MESSAGES.TAB_NOT_FOUND + ': Active tab has no ID',
+          'no_active_tab',
+        );
       }
       const tabId = tab.id;
 
@@ -361,13 +405,15 @@ class FillTool extends BaseBrowserToolExecutor {
             finalRef = resolved.ref;
             finalSelector = undefined; // Use ref instead of selector
           } else {
-            return createErrorResponse(
+            return blockedInteraction(
               `Failed to resolve XPath selector: ${resolved?.error || 'unknown error'}`,
+              'xpath_resolution_failed',
             );
           }
         } catch (error) {
-          return createErrorResponse(
+          return blockedInteraction(
             `Error resolving XPath: ${error instanceof Error ? error.message : String(error)}`,
+            'xpath_resolution_failed',
           );
         }
       }
@@ -395,13 +441,14 @@ class FillTool extends BaseBrowserToolExecutor {
 
       if (!loc.success) {
         return addResultWarning(
-          createErrorResponse(loc.error || 'Target not found'),
+          blockedInteraction(loc.error || 'Target not found', 'target_not_found'),
           fillAffinityWarning,
           loc,
         );
       }
 
       throwIfAborted(context?.signal, 'before fill action');
+      actionAttempted = true;
       const fillResult = await performPhysicalFill({
         tabId,
         target: loc.index ?? '',
@@ -457,9 +504,21 @@ class FillTool extends BaseBrowserToolExecutor {
       };
     } catch (error) {
       console.error('Error in fill operation:', error);
+      const status = actionAttempted ? 'unknown' : 'blocked';
       return attachActionReceipt(
-        createErrorResponse(
+        createInteractionErrorResponse(
           `Error filling element: ${error instanceof Error ? error.message : String(error)}`,
+          makeInteractionOutcome(
+            actionAttempted ? 'unknown' : 'not_dispatched',
+            'not_requested',
+            actionAttempted ? 'dispatch_unknown' : 'fill_preparation_failed',
+            actionAttempted ? 1 : 0,
+          ),
+          {
+            status,
+            requestDispatched: actionAttempted,
+            retry: actionAttempted ? false : true,
+          },
         ),
         (error as any)?.receipt,
       );

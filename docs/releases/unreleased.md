@@ -2,6 +2,19 @@
 
 This document tracks in-progress architectural updates, fixes, and documentation improvements queued for future releases.
 
+## 2026-11-02: BrowserPaw 4.1.1 interaction convergence
+
+- Standard, fast, chained and action-preflight observations now share one interaction-scope calculation for modal state, Portal inclusion and scroll-container ownership. Explicit background reads remain possible, but modal and occlusion checks still block background actions.
+- Field verification is independent from nearby submit controls. `chrome_fill_index` verifies the field value only; `pressEnter` records an explicit key step, while `submit:true` requires a caller-provided `submitTarget` and rejects the request before field mutation when it is missing. Enter plus an explicit submit click is rejected as a conflicting double submission.
+- `chrome_form_pipeline` fills the fields exposed by the current form step and no longer guesses Next/Submit controls or falls back to Enter. It reports `completionScope:"current_step_actions"`, `businessOutcome:"not_verified"` and retains verified fields before a later error. `autoAdvance:true` returns `migration_required`; multi-step work must list explicit click, key and assertion steps in `chrome_batch_actions`.
+- Public click, fill, interact, keyboard, batch and form results expose the same execution/verification outcome contract. Dispatch-unknown mutations remain `retry:false`; earlier completed fields and original receipts survive later failures.
+- Pre-dispatch actionability now rejects targets fully clipped by an ancestor scroll container, instead of reporting a successful click at coordinates outside the target's visible region.
+- Batches validate all submit targets and reject conflicting Enter/submit follow-ups before the first action is dispatched.
+- The Jev goal loop reuses the same action-target candidates and outcome states. It may navigate, expand, toggle local views, scroll and fill within an explicit goal, but submit/send/publish/delete actions require caller-listed steps. Model confidence does not replace authorization.
+- Skills, schema help, generated tool documentation and release migration notes are updated together. Old scripts that depended on implicit form advancement or Enter-based submission require migration.
+
+This section is queued for the 4.1.1 release record and remains unverified until the complete gate and real-browser acceptance in the release plan pass.
+
 ## 2026-11-01: Adaptive viewport and resolution-aware screenshots
 
 - Owned task pages no longer apply a fixed 1440x900 / DPR 1 emulation. BrowserPaw clears stale device metrics, measures the real window's CSS viewport and DPR, and preserves both for task reporting and coordinate mapping. Explicit `resize_page` remains available when a caller intentionally needs a fixed size.
@@ -117,7 +130,7 @@ This document tracks in-progress architectural updates, fixes, and documentation
 ## 🎯 Version Invariants & Release Rules
 
 1. **No Untagged Release Claims**: Features in progress must remain recorded here or in draft files. No release may be documented as published without an active git tag.
-2. **Current Monorepo Version**: Working version is `4.0.0` across packages.
+2. **Current Monorepo Version**: Working version is `4.1.1` across core packages; the DSH adapter keeps its independent package version.
 3. **Pending Validation**: All delivered items must pass the complete verification suite defined in [`docs/QUALITY.md`](../QUALITY.md).
 
 ---
@@ -215,7 +228,7 @@ This document tracks in-progress architectural updates, fixes, and documentation
 - **Bounded Vision Fallback**: Capability probes and image requests receive the remaining execution budget. Screenshot capture returns on budget expiry and ignores late results without issuing a vision request or click.
 - **Retired Configuration Keys Stop Round-Tripping**: The remote config loader reads known fields only, so keys removed from the product no longer survive on disk after a save.
 - **Model Sees Its Own Results**: The DOM tree handed to the model now includes the current value of filled controls, and the model state carries a bounded slice of visible page text. A fill that previously looked like a no-op no longer loops until the run reports `stuck`.
-- **Submit Judgment Replaces Keyword Matching**: Whether a filled field is also submitted is an explicit model question with a `fill_only` / `submit` / `unclear` answer. Automatic submission requires a valid answer distribution and execution thresholds. Explicit `pressEnter` still cannot authorize a general form submission: the goal and target must identify a search form, otherwise execution pauses.
+- **Explicit Fill and Submit Boundary**: A fill verifies the field value only. `pressEnter` dispatches one caller-authorized key step, and `submit:true` requires an explicit `submitTarget`; neither result claims business submission. The former model-based submit judgment and implicit Enter/Next fallback are retired.
 - **Deterministic Locators & Semantic Assistance Boundary**: Deterministic locators (exact text, CSS/XPath selector, explicit reference ID, frame targeting) execute with zero model inference. Semantic matching assists only non-exact visible text, accessible labels, or named ARIA roles when deterministic lookup finds no candidate.
 - **Native Authoritative Mode & Retained Preference**: Native owns the effective mode and the user's requested backend. Temporary failures retain that preference during a persisted 30-second pause; subsequent use can resume the same backend. Configuration/authentication faults wait for correction. Deliberate user Off remains off, and neither reopening the popup nor a caller's mode argument can override it. Backends do not switch automatically.
 - **Semantic Guardrails & Decision Thresholds**: Semantic candidate evaluation enforces a 1500ms remaining deadline cap, a maximum of 32 candidates, minimum confidence >= 0.85, and a minimum margin >= 0.20 over the runner-up. Exceeding candidate limits or failing confidence/margin criteria returns `ambiguous` or `unavailable` without executing speculative actions.

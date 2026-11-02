@@ -29,15 +29,19 @@ export interface StepCandidatesResult {
 export function buildStepCandidates(
   elements: string[],
   goal?: string,
-  observedActions?: Array<{ node?: string | number; kind?: string; label?: string }>,
+  observedActions?: Array<{
+    node?: string | number;
+    kind?: string;
+    label?: string;
+    containerIndex?: number;
+  }>,
 ): StepCandidatesResult {
   const candidates: StepCandidate[] = [];
   const candidateMap = new Map<string, StepCandidate>();
 
-  let hasInputField = false;
-
   const descriptions = new Map<string, string>();
   const available: Array<{ index: string; action: 'click' | 'type' | 'select'; line: string }> = [];
+  const observedScrolls = new Map<'scroll_down' | 'scroll_up', number | undefined>();
   for (const line of elements) {
     const match = line.match(/^\[(\d+)\](?:\s*\[[^\]]+\])*\s*([a-zA-Z0-9_-]+)(.*)$/);
     if (!match) continue;
@@ -55,6 +59,14 @@ export function buildStepCandidates(
   }
   if (observedActions) {
     for (const item of observedActions) {
+      if (item.kind === 'scroll') {
+        const action = item.label?.toLowerCase().includes('up') ? 'scroll_up' : 'scroll_down';
+        observedScrolls.set(
+          action,
+          typeof item.containerIndex === 'number' ? item.containerIndex : undefined,
+        );
+        continue;
+      }
       const index = String(item.node ?? '');
       if (!/^[1-9]\d*$/.test(index)) continue;
       const action =
@@ -83,7 +95,6 @@ export function buildStepCandidates(
     };
     candidates.push(candidate);
     candidateMap.set(key, candidate);
-    if (action === 'type') hasInputField = true;
   }
   // Never present an arbitrary prefix as complete candidate coverage.
   const omittedCount = candidates.length > 26 ? candidates.length : 0;
@@ -92,19 +103,28 @@ export function buildStepCandidates(
     candidateMap.clear();
   }
 
+  const scrollActions: StepCandidate[] = (['scroll_down', 'scroll_up'] as const).flatMap(
+    (action) => {
+      if (observedActions && !observedScrolls.has(action)) return [];
+      return [
+        {
+          key: action,
+          action,
+          ...(observedScrolls.get(action) !== undefined
+            ? { targetIndex: observedScrolls.get(action) }
+            : {}),
+          description:
+            action === 'scroll_down'
+              ? 'Scroll down to reveal more page content'
+              : 'Scroll up to view content above',
+          isDestructive: false,
+        },
+      ];
+    },
+  );
+
   const standardActions: StepCandidate[] = [
-    {
-      key: 'scroll_down',
-      action: 'scroll_down',
-      description: 'Scroll down to reveal more page content',
-      isDestructive: false,
-    },
-    {
-      key: 'scroll_up',
-      action: 'scroll_up',
-      description: 'Scroll up to view content above',
-      isDestructive: false,
-    },
+    ...scrollActions,
     {
       key: 'back',
       action: 'back',
@@ -153,17 +173,6 @@ export function buildStepCandidates(
     ),
     stuck: noul('Is the execution stuck in a loop with no progress or change across recent steps?'),
   };
-
-  if (hasInputField || (goal && /input|enter|search|type|fill|write/i.test(goal))) {
-    questions.submit_intent = choice(
-      'When text is entered into a field, does the task also require submitting it (pressing Enter or triggering search), or only filling the field?',
-      {
-        fill_only: 'Only enter the text without submitting or pressing Enter.',
-        submit: 'Enter the text and submit it (e.g. press Enter or trigger search).',
-        unclear: 'The task does not make clear whether submitting after filling is wanted.',
-      },
-    );
-  }
 
   return { candidates, candidateKeys, candidateMap, questions, omittedCount };
 }

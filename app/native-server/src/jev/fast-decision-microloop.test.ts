@@ -660,6 +660,7 @@ describe('Plan C Micro-Loop Reliability Dedicated Tests', () => {
     expect(candidateKeys).toContain('select_3');
     expect(questions.next_step).toBeDefined();
     expect(questions.next_step.type).toBe('choice');
+    expect(questions).not.toHaveProperty('submit_intent');
   });
 
   test('C18. Unified next_step executes candidate action directly without separate target query', async () => {

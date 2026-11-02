@@ -15,7 +15,7 @@ Executes sequential browser interactions inside one MCP call. It stops on failed
 | `click`        | `index` or `selector` or `coordinate` | `modifiers`, `waitForSettle`, `settleTimeoutMs`   | Physical mouse click (`isTrusted: true`)              |
 | `double_click` | `index` or `selector` or `coordinate` | `modifiers`                                       | Double click at target element or coordinate          |
 | `right_click`  | `index` or `selector` or `coordinate` | `modifiers`                                       | Context menu click                                    |
-| `fill`         | (`index` or `selector`) + `text`      | `clear: true`, `pressEnter: true`, `submit: true` | Clears field, types text, dispatches input and change |
+| `fill`         | (`index` or `selector`) + `text`      | `clear: true`, `submit: true`, `submitTarget`     | Fills and verifies the field only; submission is a separate explicit step unless a valid `submitTarget` is supplied |
 | `hover`        | `index` or `selector` or `coordinate` | -                                                 | Moves pointer over target                             |
 | `scroll`       | `direction` + `amount`                | `coordinate`                                      | Scrolls viewport (`up`, `down`, `left`, `right`)      |
 | `press_key`    | `key`                                 | -                                                 | Dispatches key press event (e.g. `Enter`, `Tab`)      |
@@ -32,8 +32,8 @@ Executes sequential browser interactions inside one MCP call. It stops on failed
 {
   "tabId": 101,
   "actions": [
-    { "type": "fill", "index": 2, "text": "flight from JFK to LHR", "pressEnter": true },
-    { "type": "click", "index": 5 },
+    { "type": "fill", "index": 2, "text": "flight from JFK to LHR" },
+    { "type": "press_key", "key": "Enter" },
     {
       "type": "assert",
       "selector": ".results-container",
@@ -90,7 +90,7 @@ Returns matching request headers, response headers, HTTP status, and parsed JSON
 
 ## 2. `chrome_form_pipeline`
 
-Dedicated autonomous form filler for multi-step onboarding, surveys, checkout forms, and user profile updates.
+`chrome_form_pipeline` fills fields on the currently exposed form step. It does not guess a Next/Submit button and does not automatically advance after filling.
 
 ```json
 {
@@ -98,14 +98,42 @@ Dedicated autonomous form filler for multi-step onboarding, surveys, checkout fo
   "fields": [
     { "query": "Full Name", "value": "Jane Doe", "type": "text" },
     { "query": "Work Email", "value": "jane@example.com", "type": "text" },
-    { "query": "Role", "value": "Developer", "type": "choice" },
-    { "query": "Submit Application", "value": "Enter", "type": "enter" }
+    { "query": "Role", "value": "Developer", "type": "choice" }
   ],
-  "maxSteps": 20,
-  "autoAdvance": true
+  "maxSteps": 20
 }
 ```
 
-- **True Input Commitment**: Verifies native input state triggers framework change events (`React`, `Vue`, `Angular`).
-- **Auto-Advance**: When `autoAdvance: true` (default), automatically triggers step advancement (via Enter or clicking Next/Submit button).
-- **Auto-Retry on Occlusion**: If a field is momentarily obscured by sticky headers or toasts, automatically scrolls into view and retries.
+- **Scoped effects**: Text fields are verified by reading back their values. A `choice` or `enter` action records a known dispatch, not a business result. No form, order or external write is marked accepted.
+- **No implicit advancement**: A later step must be listed explicitly in `chrome_batch_actions`, for example a search `press_key`, a Next click, or a named submit target authorized by the user.
+- **Explicit field actions**: `type:"choice"` clicks the named visible option; `type:"enter"` dispatches Enter as its own requested key action. Neither proves business completion.
+- **Migration**: `autoAdvance:true` is retired and returns `migration_required` before changing a field.
+- **Bounded recovery**: Ambiguous targets, unknown delivery and validation failures stop with completed fields and the original receipt. Do not retry an uncertain mutation.
+- **Progress fields**: `completionScope:"current_step_actions"` and `businessOutcome:"not_verified"` distinguish completed local steps from later wizard or server work.
+
+## 3. Safe Submission Patterns
+
+**Draft: stop before Send/Post.** Fill the field, verify its value and return the current draft state. Do not include a guessed Send/Post click or Enter fallback.
+
+```json
+{
+  "actions": [
+    { "type": "fill", "index": 12, "text": "Draft text" },
+    { "type": "assert", "index": 12, "condition": "equals", "expectedText": "Draft text" }
+  ]
+}
+```
+
+**Search: submit only when requested.** Use a separate key or an explicitly resolved search button, then verify the results independently.
+
+```json
+{
+  "actions": [
+    { "type": "fill", "index": 4, "text": "BrowserPaw" },
+    { "type": "press_key", "key": "Enter" },
+    { "type": "assert", "selector": "[data-testid=results]", "condition": "visible" }
+  ]
+}
+```
+
+**Unknown result: stop and inspect.** A response with `execution.status:"unknown"` means the mutation may already have happened. Do not append another click, press Enter, or rerun the pipeline. Read fresh evidence or hand the task back to the caller.
