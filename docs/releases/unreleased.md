@@ -2,6 +2,12 @@
 
 This document tracks in-progress architectural updates, fixes, and documentation improvements queued for future releases.
 
+## 2026-11-03: Dynamic-page capture, rich-text input and partial frame observations
+
+- Viewport screenshots retry transient DOM revision changes up to two times after cleanup. Retries stay bound to the original tab and page geometry; document, viewport, DPR and scroll changes remain hard failures. Persistently changing DOM returns `screenshot_page_unstable` without logging a recoverable capture condition as an extension error. Coordinate actions still validate the successful capture's DOM revision before dispatch.
+- Standard and fast DOM reads isolate each frame even when inventory lacks document IDs. Unavailable inventory preserves an independent main-frame read with unverified coverage. Readable main content survives failed child frames, with explicit incomplete coverage; a child frame can never substitute for a missing main frame. Main-frame failures retain their diagnostic reason.
+- Shared error formatting preserves cross-world protocol messages, names and codes without serializing arbitrary payloads or failing on circular wrappers. Indexed fills retain those diagnostics. A rejected native text-insertion attempt cannot trigger a synthetic rewrite when delivery is unknown; pre-dispatch session failures retain the existing fallback. Multiline replacement continues through the trusted native input path without implicit Enter or submission.
+
 ## 2026-11-02: BrowserPaw 4.1.2 page-restriction reliability patch
 
 - Chromium native error pages (`chrome-error://chromewebdata/`) are now rejected as non-injectable pages before scripting. If Chrome switches to an error page before the tab URL reflects it, the injection exception is converted to one actionable tool error without writing expected failures to the extension error panel.

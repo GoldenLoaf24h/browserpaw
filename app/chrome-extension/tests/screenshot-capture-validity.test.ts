@@ -10,6 +10,7 @@ import {
   clearScreenshotValidity,
   createScreenshotCapture,
   inPageReadScreenshotState,
+  readScreenshotPageState,
   SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
   validateScreenshotCapture,
   type ScreenshotPageState,
@@ -297,6 +298,7 @@ describe('Screenshot capture validity', () => {
   it.each([
     ['document', { documentId: 'doc-replaced' }, /document changed/i],
     ['viewport', { viewportWidth: 1024 }, /viewport changed/i],
+    ['DPR', { devicePixelRatio: 3 }, /device pixel ratio changed/i],
     ['scroll position', { scrollY: 35 }, /page scrolled/i],
   ])('fails when the %s changes during capture', async (_label, patch, message) => {
     probeQueue = [{ ...baseState }, { ...baseState, ...patch }];
@@ -308,6 +310,7 @@ describe('Screenshot capture validity', () => {
   });
 
   it('fails when DOM changes during capture on the same document and viewport', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(cdpSessionManager.sendCommand).mockImplementation(
       async (tabId: number, method: string, params: any) => {
         if (method === 'Page.captureScreenshot') {
@@ -322,6 +325,67 @@ describe('Screenshot capture validity', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/DOM changed during screenshot capture/i);
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(cdpSessionManager.sendCommand)
+        .mock.calls.filter(([, method]) => method === 'Page.captureScreenshot'),
+    ).toHaveLength(3);
+  });
+
+  it('recaptures transient DOM changes and binds coordinates to the successful capture', async () => {
+    let captures = 0;
+    vi.mocked(cdpSessionManager.sendCommand).mockImplementation(async (id, method, params) => {
+      if (method === 'Page.captureScreenshot' && ++captures === 1) {
+        document.body.innerHTML = '<button id="replacement">Replacement</button>';
+        await Promise.resolve();
+      }
+      return baseSendCommand(id, method, params);
+    });
+    const result = await captureScreenshot();
+    expect(result.isError).toBeFalsy();
+    const payload = JSON.parse(result.content[0].text as string);
+    expect(payload.coordinateValidation.supported).toBe(true);
+    const state = await readScreenshotPageState(tabId);
+    expect(
+      validateScreenshotCapture(
+        payload.captureId,
+        tabId,
+        state,
+        screenshotContextManager.getContext(tabId)?.timestamp,
+        state.domRevision,
+      ).valid,
+    ).toBe(true);
+    expect(
+      vi
+        .mocked(cdpSessionManager.sendCommand)
+        .mock.calls.filter(([, method]) => method === 'Page.captureScreenshot'),
+    ).toHaveLength(2);
+  });
+
+  it('does not follow a replacement document between DOM retries', async () => {
+    const execute = vi.mocked(chrome.scripting.executeScript).getMockImplementation()!;
+    let probes = 0;
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async (options: any) => {
+      const results: any = await execute(options);
+      if (++probes >= 3) results[0].result.documentId = 'replacement-document';
+      return results;
+    });
+    vi.mocked(cdpSessionManager.sendCommand).mockImplementation(async (id, method, params) => {
+      if (method === 'Page.captureScreenshot') {
+        document.body.append(document.createElement('button'));
+        await Promise.resolve();
+      }
+      return baseSendCommand(id, method, params);
+    });
+    const result = await captureScreenshot();
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/document changed/i);
+    expect(
+      vi
+        .mocked(cdpSessionManager.sendCommand)
+        .mock.calls.filter(([, method]) => method === 'Page.captureScreenshot'),
+    ).toHaveLength(1);
   });
 
   it('validates captureId before click dispatch and marks only validated coordinates', async () => {

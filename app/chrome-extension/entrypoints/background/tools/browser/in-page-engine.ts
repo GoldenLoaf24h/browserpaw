@@ -1,4 +1,4 @@
-import { resolveToolName } from 'chrome-mcp-shared';
+import { resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
 /**
  * Dispatcher for in-page entrypoints registered by entrypoints/inpage-engine.ts.
  *
@@ -107,7 +107,7 @@ export async function executeInPage<R = any>(
   fnName: string,
   args: unknown[],
   timeoutMs = EXECUTE_TIMEOUT_MS,
-): Promise<chrome.scripting.InjectionResult<R>[]> {
+): Promise<Array<chrome.scripting.InjectionResult<R> & { error?: string }>> {
   const observing = ['inPageDOMPruner', 'inPageFastSnapshot'].includes(fnName);
   // Observe documents independently: one stalled child renderer must not discard readable frames.
   if (target.allFrames && observing) {
@@ -115,36 +115,40 @@ export async function executeInPage<R = any>(
     try {
       frames = await chrome.webNavigation.getAllFrames({ tabId: target.tabId });
     } catch {
-      // The original broadcast still reports failures; coverage cannot be verified without inventory.
+      // Preserve the readable main document; coverage remains unverified without inventory.
     }
-    if (frames?.length && frames.every((frame) => frame.documentId)) {
-      const observed = await Promise.all(
-        frames.map(async (frame) => {
-          try {
-            const results = await executeInPage<R>(
-              { tabId: target.tabId, documentIds: [frame.documentId] },
-              fnName,
-              args,
-              timeoutMs,
-            );
-            return results.map((result) =>
-              (result.result as any)?.isErrorPage
-                ? { ...result, frameId: frame.frameId, documentId: frame.documentId }
-                : result,
-            );
-          } catch (error) {
-            return [
-              {
-                frameId: frame.frameId,
-                documentId: frame.documentId,
-                error: error instanceof Error ? error.message : String(error),
-              },
-            ];
-          }
-        }),
-      );
-      return observed.flat();
+    if (!frames?.length) frames = [{ frameId: 0 } as chrome.webNavigation.GetAllFrameResultDetails];
+    if (!frames.some((frame) => frame.frameId === 0)) {
+      frames.unshift({ frameId: 0 } as chrome.webNavigation.GetAllFrameResultDetails);
     }
+    const observed = await Promise.all(
+      frames.map(async (frame) => {
+        try {
+          const results = await executeInPage<R>(
+            frame.documentId
+              ? { tabId: target.tabId, documentIds: [frame.documentId] }
+              : { tabId: target.tabId, frameIds: [frame.frameId] },
+            fnName,
+            args,
+            timeoutMs,
+          );
+          return results.map((result) =>
+            (result.result as any)?.isErrorPage
+              ? { ...result, frameId: frame.frameId, documentId: frame.documentId }
+              : result,
+          );
+        } catch (error) {
+          return [
+            {
+              frameId: frame.frameId,
+              documentId: frame.documentId,
+              error: formatErrorForAgent(error, { maxFrames: 0 }),
+            },
+          ];
+        }
+      }),
+    );
+    return observed.flat();
   }
   // Reject browser internal / web store pages up front so read_dom,
   // interact_index, batch_actions, etc. return a friendly error instead of the
@@ -160,6 +164,7 @@ export async function executeInPage<R = any>(
     typeof target.tabId === 'number' &&
     !target.allFrames &&
     (!target.frameIds || target.frameIds.every((id) => id === 0)) &&
+    !(observing && target.frameIds) &&
     !target.documentIds &&
     injectedTabs.has(target.tabId);
   if (!isAlreadyInjected) {

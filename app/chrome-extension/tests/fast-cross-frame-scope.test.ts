@@ -10,6 +10,7 @@ import {
   inPageSetIndexNamespace,
   INDEX_NAMESPACE_SIZE,
   getIsolatedIndexMap,
+  inPageDOMPruner,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 
 describe('Fast DOM: Scope, Selector, Exclude, Viewport, Limit, and Cross-Frame Persistent References', () => {
@@ -302,6 +303,51 @@ describe('Fast DOM: Scope, Selector, Exclude, Viewport, Limit, and Cross-Frame P
   });
 
   describe('5. Cross-Frame integration: persistent namespaces, frame attribute retention, and details consumption', () => {
+    it.each([true, false])(
+      'preserves the main tree and reports failed child coverage (fast=%s)',
+      async (fast) => {
+        document.body.innerHTML = '<button>Main content</button>';
+        const snapshot = fast ? fastSnapshot() : inPageDOMPruner({});
+        vi.spyOn(readDOMTool as any, 'resolveAffinityTab').mockResolvedValue({
+          id: 1,
+          url: 'https://test.local',
+        });
+        vi.mocked(chrome.webNavigation.getAllFrames).mockResolvedValue([
+          { frameId: 0 },
+          { frameId: 9 },
+        ] as any);
+        vi.spyOn(inPageEngine, 'executeInPage').mockResolvedValue([
+          { frameId: 0, result: snapshot },
+          { frameId: 9, error: 'Renderer unavailable' },
+        ] as any);
+        const result = await readDOMTool.execute({ fast, tabId: 1 });
+        expect(result.isError).toBeFalsy();
+        const data = JSON.parse(result.content[0].text as string);
+        expect(data.treeString).toContain('Main content');
+        expect(data.coverage).toMatchObject({
+          status: 'incomplete',
+          failedFrames: [{ frameId: 9, reason: 'Renderer unavailable' }],
+        });
+      },
+    );
+
+    it.each([true, false])(
+      'does not substitute child content for an absent main frame (fast=%s)',
+      async (fast) => {
+        document.body.innerHTML = '<button>Child only</button>';
+        const snapshot = fast ? fastSnapshot() : inPageDOMPruner({});
+        vi.spyOn(readDOMTool as any, 'resolveAffinityTab').mockResolvedValue({
+          id: 1,
+          url: 'https://test.local',
+        });
+        vi.spyOn(inPageEngine, 'executeInPage').mockResolvedValue([
+          { frameId: 9, result: snapshot },
+        ] as any);
+        const result = await readDOMTool.execute({ fast, tabId: 1 });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).not.toContain('Child only');
+      },
+    );
     it('marks missing inventory frames incomplete even when all returned snapshots succeeded', async () => {
       document.body.innerHTML = '<button>Observed</button>';
       const snap = fastSnapshot()!;

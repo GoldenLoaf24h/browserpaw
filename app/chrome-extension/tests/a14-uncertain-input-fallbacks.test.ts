@@ -373,13 +373,10 @@ describe('A-14 fill-core explicit submit: one click, never an Enter fallback', (
     expect(inPageFillCalls()).toHaveLength(0);
   });
 
-  it('native fill: keeps inPageFillIndex fallback when CDP typing fails definitively', async () => {
-    vi.mocked(raceCdpModule.raceCdp).mockImplementation(async (_tabId: number, method: string) => {
-      if (method === 'Input.insertText') {
-        throw new Error('Input.insertText rejected: element not focused');
-      }
-      return {} as any;
-    });
+  it('native fill: keeps fallback when the CDP session fails before typing', async () => {
+    vi.mocked(cdpSessionManager.withSession).mockRejectedValue(
+      new Error('CDP session unavailable'),
+    );
 
     const res = await performPhysicalFill({ tabId, target: 1, text: 'hello' });
 

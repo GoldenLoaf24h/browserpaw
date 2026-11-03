@@ -93,4 +93,106 @@ describe('read-only frame observations isolate renderer failures', () => {
       { frameId: 9, documentId: 'blocked', result: { isErrorPage: true } },
     ]);
   });
+
+  it('isolates child frame failures using frameIds when inventory lacks documentId', async () => {
+    chrome.webNavigation.getAllFrames = vi.fn(async () => [{ frameId: 0 }, { frameId: 9 }]) as any;
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async (options: any) => {
+      const frameId = options.target.frameIds?.[0];
+      if (options.target.allFrames || frameId === 9) return new Promise(() => {});
+      if (options.files) return [{ frameId: 0, documentId: 'main' }] as any;
+      if (typeof options.args?.[0] === 'number')
+        return [{ frameId: 0, documentId: 'main', result: true }] as any;
+      return [
+        {
+          frameId: 0,
+          documentId: 'main',
+          result: {
+            engineType: 'object',
+            fnType: 'function',
+            singleTurn: true,
+            status: 'success',
+            value: { treeString: 'main content', indexedElements: [] },
+          },
+        },
+      ] as any;
+    });
+
+    const pending = executeInPage({ tabId: 1, allFrames: true }, 'inPageDOMPruner', []);
+    const checked = expect(pending).resolves.toMatchObject([
+      { frameId: 0, result: { treeString: 'main content' } },
+      { frameId: 9, error: expect.stringContaining('timeout') },
+    ]);
+    await vi.advanceTimersByTimeAsync(4001);
+    await checked;
+    const calls = vi.mocked(chrome.scripting.executeScript).mock.calls;
+    expect(calls.every(([options]) => !options.target.allFrames)).toBe(true);
+    expect(
+      calls.every(([options]) => !(options.target.frameIds && options.target.documentIds)),
+    ).toBe(true);
+  });
+
+  it('preserves main frame failure separately from readable child content', async () => {
+    chrome.webNavigation.getAllFrames = vi.fn(async () => [
+      { frameId: 0, documentId: 'main' },
+      { frameId: 9, documentId: 'sub' },
+    ]) as any;
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async (options: any) => {
+      const documentId = options.target.documentIds?.[0];
+      if (documentId === 'main') {
+        throw new Error('main frame crashed');
+      }
+      if (options.files) return [{ frameId: 9, documentId: 'sub' }] as any;
+      if (typeof options.args?.[0] === 'number') {
+        return [{ frameId: 9, documentId: 'sub', result: true }] as any;
+      }
+      return [
+        {
+          frameId: 9,
+          documentId: 'sub',
+          result: {
+            engineType: 'object',
+            fnType: 'function',
+            singleTurn: true,
+            status: 'success',
+            value: { treeString: 'child content', indexedElements: [] },
+          },
+        },
+      ] as any;
+    });
+
+    await expect(
+      executeInPage({ tabId: 1, allFrames: true }, 'inPageDOMPruner', []),
+    ).resolves.toMatchObject([
+      { frameId: 0, error: 'main frame crashed' },
+      { frameId: 9, result: { treeString: 'child content' } },
+    ]);
+  });
+
+  it('preserves a main-frame observation when the frame inventory is unavailable', async () => {
+    vi.mocked(chrome.webNavigation.getAllFrames).mockRejectedValue(
+      new Error('Inventory unavailable'),
+    );
+    vi.mocked(chrome.scripting.executeScript).mockImplementation(async (options: any) => {
+      expect(options.target.allFrames).toBeUndefined();
+      if (options.files) return [{ frameId: 0, documentId: 'main' }] as any;
+      if (typeof options.args?.[0] === 'number')
+        return [{ frameId: 0, documentId: 'main', result: true }] as any;
+      return [
+        {
+          frameId: 0,
+          documentId: 'main',
+          result: {
+            engineType: 'object',
+            fnType: 'function',
+            singleTurn: true,
+            status: 'success',
+            value: { treeString: 'main content', indexedElements: [] },
+          },
+        },
+      ] as any;
+    });
+    await expect(
+      executeInPage({ tabId: 1, allFrames: true }, 'inPageDOMPruner', []),
+    ).resolves.toMatchObject([{ frameId: 0, result: { treeString: 'main content' } }]);
+  });
 });

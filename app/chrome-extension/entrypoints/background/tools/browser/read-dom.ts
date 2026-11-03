@@ -4,6 +4,7 @@ import { BaseBrowserToolExecutor } from '../base-browser';
 import {
   TOOL_NAMES,
   resolveToolName,
+  formatErrorForAgent,
   type PrunedDOMTreeResult,
   type IndexedElement,
 } from 'chrome-mcp-shared';
@@ -179,7 +180,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           [fastOpts],
         );
 
-        const mainFrame = snapRes.find((r) => r.frameId === 0) || snapRes[0];
+        const mainFrame = snapRes.find((r) => r.frameId === 0);
         const fastData = mainFrame?.result as any;
         if (fastData?.isErrorPage) {
           const pageUrl = scrubUrl(tab.url || '');
@@ -202,8 +203,12 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
             isError: false,
           };
         }
-        if (!fastData) {
-          return createErrorResponse('Failed to execute fast DOM snapshot');
+        if (!mainFrame || !fastData) {
+          return createErrorResponse(
+            formatErrorForAgent(mainFrame?.error ?? 'Main frame result unavailable', {
+              context: 'Failed to execute fast DOM snapshot',
+            }),
+          );
         }
 
         const subFrames = snapRes.filter(
@@ -646,10 +651,14 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       }
 
       // Merge multi-frame results
-      const mainFrame = results.find((r) => r.frameId === 0) || results[0];
+      const mainFrame = results.find((r) => r.frameId === 0);
       const mainData = mainFrame?.result;
       if (!mainData) {
-        return createErrorResponse('Failed to execute DOM pruning on main frame');
+        return createErrorResponse(
+          formatErrorForAgent(mainFrame?.error ?? 'Main frame result unavailable', {
+            context: 'Failed to execute DOM pruning on main frame',
+          }),
+        );
       }
 
       const mergedData: PrunedDOMTreeResult = {

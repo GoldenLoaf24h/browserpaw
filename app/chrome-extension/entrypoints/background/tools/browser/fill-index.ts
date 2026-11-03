@@ -2,7 +2,7 @@ import { actionHistoryManager } from '@/utils/action-history-manager';
 import { type ToolCallContext, ToolResult } from '@/common/tool-handler';
 import { throwIfAborted } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
+import { TOOL_NAMES, resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
 import { executeInPage } from './in-page-engine';
 import { computePerceptiveDelta } from './dom-indexer';
 import { waitForPageSettle } from '@/utils/action-watchdog';
@@ -309,7 +309,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
                     'fill_preparation_failed',
                     0,
                   ),
-                  error: error instanceof Error ? error.message : String(error),
+                  error: formatErrorForAgent(error, { maxFrames: 0 }),
                 }),
               },
             ],
@@ -326,7 +326,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
       }
       return attachActionReceipt(
         createInteractionErrorResponse(
-          `Error executing ${resolveToolName('fill_index')}: ${error instanceof Error ? error.message : String(error)}`,
+          `Error executing ${resolveToolName('fill_index')}: ${formatErrorForAgent(error)}`,
           makeInteractionOutcome('unknown', 'not_requested', 'unclassified_fill_error'),
           { status: 'unknown', retry: false },
         ),

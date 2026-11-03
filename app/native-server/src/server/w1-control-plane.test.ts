@@ -383,31 +383,15 @@ describe('W1 Control Plane, Security, MCP Session & Process Lifecycle', () => {
       (jevModelManager as any).serviceProcess = null;
       (jevModelManager as any).servicePid = null;
 
-      let unloadRequestCount = 0;
-      let server8009: http.Server | null = null;
+      const requests = jest
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('Foreign service must not receive requests'));
       try {
-        server8009 = http.createServer((req, res) => {
-          if (req.url === '/unload' || req.url === '/shutdown') {
-            unloadRequestCount++;
-          }
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true }));
-        });
-        await new Promise<void>((resolve, reject) => {
-          server8009!.listen(8009, '127.0.0.1', () => resolve());
-          server8009!.on('error', (err: any) => {
-            if (err.code === 'EADDRINUSE') resolve();
-            else reject(err);
-          });
-        });
-
         const stopRes = await jevModelManager.stopLocalService();
         expect(stopRes.success).toBe(false);
-        expect(unloadRequestCount).toBe(0);
+        expect(requests).not.toHaveBeenCalled();
       } finally {
-        if (server8009) {
-          await new Promise<void>((resolve) => server8009!.close(() => resolve()));
-        }
+        requests.mockRestore();
       }
     });
   });

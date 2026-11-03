@@ -337,6 +337,7 @@ describe('Phase 2: Modal Isolation & Selector Hardening', () => {
   it('accepts scope as an alias for selector in chrome_read_dom', async () => {
     const mockExecuteInPage = vi.spyOn(engine, 'executeInPage').mockResolvedValue([
       {
+        frameId: 0,
         result: {
           elementCount: 1,
           selectorMatched: true,
@@ -475,6 +476,7 @@ describe('Phase 2: Modal Isolation & Selector Hardening', () => {
   it('preserves scope, modalIsolated, and isConfirmationTrap in chrome_read_dom response payload', async () => {
     vi.spyOn(engine, 'executeInPage').mockResolvedValue([
       {
+        frameId: 0,
         result: {
           elementCount: 2,
           interactiveCount: 2,

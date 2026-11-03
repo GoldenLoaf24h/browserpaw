@@ -78,6 +78,8 @@ The default model-facing image is fitted to a 1568px long edge and 1.15MP while 
 
 For routine visual checks, start with the default JPEG budget. Use a smaller `maxDimension` for layout confirmation, and reserve `highClarity` or a tight `region` for OCR and fine details. If a background-tab capture is slow, let BrowserPaw's bounded retry finish; do not issue a burst of duplicate screenshots.
 
+Viewport captures retry transient DOM changes at most twice, keeping the same tab, document, viewport, DPR and scroll position. A continuously changing page returns `screenshot_page_unstable` without a usable capture. Wait for the relevant view to settle before requesting another screenshot; never reuse an older capture for an action whose result is unknown.
+
 ### E. User-Facing or Saved Screenshots
 
 ```json

@@ -472,26 +472,18 @@ describe('clear:false physical fill commitment', () => {
     },
   );
 
-  it('allows synthetic append only when insertion failed before dispatch', async () => {
+  it('allows synthetic append when the CDP session fails before any input dispatch', async () => {
     const input = document.createElement('input');
     input.value = 'prefix';
     attachBox(input);
     document.body.appendChild(input);
     getIsolatedIndexMap().set(1, input);
-    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _caller, fn) =>
-      fn({} as any),
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('CDP session unavailable'),
     );
     vi.spyOn(agentCursor, 'animateAgentCursor').mockResolvedValue();
     vi.spyOn(agentCursor, 'animateAgentCursorClick').mockResolvedValue();
-    vi.spyOn(raceCdpModule, 'raceCdp').mockImplementation(async (_tabId, method, params: any) => {
-      if (method === 'Input.dispatchMouseEvent' && params?.type === 'mousePressed') {
-        input.focus();
-      }
-      if (method === 'Input.insertText') {
-        throw new Error('Input.insertText rejected before dispatch');
-      }
-      return {} as any;
-    });
+    const dispatch = vi.spyOn(raceCdpModule, 'raceCdp').mockResolvedValue({} as any);
 
     const result = await performPhysicalFill({
       tabId,
@@ -503,6 +495,7 @@ describe('clear:false physical fill commitment', () => {
     expect(result.success).toBe(true);
     expect(result.method).toBe('synthetic_inpage');
     expect(input.value).toBe('prefix-suffix');
+    expect(dispatch).not.toHaveBeenCalled();
     expect(
       (inPageEngine.executeInPage as any).mock.calls.filter(
         ([, name]: any[]) => name === 'inPageFillIndex',

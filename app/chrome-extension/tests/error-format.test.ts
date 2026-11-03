@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  DEFAULT_STACK_FRAMES,
-  formatErrorForAgent,
-  MAX_STACK_LINE_CHARS,
-} from 'chrome-mcp-shared';
+import { DEFAULT_STACK_FRAMES, formatErrorForAgent, MAX_STACK_LINE_CHARS } from 'chrome-mcp-shared';
 
 /**
  * Unexpected tool failures used to reach the agent as a bare message string —
@@ -67,7 +63,8 @@ describe('formatErrorForAgent', () => {
   it('stringifies non-Error throwables instead of printing [object Object]', () => {
     expect(formatErrorForAgent('raw string')).toBe('raw string');
     expect(formatErrorForAgent(undefined)).toBe('undefined');
-    expect(formatErrorForAgent({ code: 42 })).toBe('[object Object]');
+    expect(formatErrorForAgent({ code: 42 })).not.toContain('[object Object]');
+    expect(formatErrorForAgent({ code: 42 })).toContain('42');
   });
 
   it('truncates pathologically long frames', () => {
@@ -79,6 +76,30 @@ describe('formatErrorForAgent', () => {
 
     expect(frame.length).toBeLessThanOrEqual(MAX_STACK_LINE_CHARS + 1);
     expect(frame.endsWith('…')).toBe(true);
+  });
+
+  it('preserves cross-world diagnostic fields without serializing user payloads', () => {
+    const error: any = {
+      name: 'ProtocolError',
+      message: 'Frame detached',
+      code: -32000,
+      body: 'private draft',
+    };
+    error.self = error;
+    const text = formatErrorForAgent(error);
+    expect(text).toContain('ProtocolError: Frame detached');
+    expect(text).toContain('-32000');
+    expect(text).not.toContain('private draft');
+    expect(text).not.toContain('[object Object]');
+  });
+
+  it('handles nested protocol errors and circular error wrappers', () => {
+    expect(formatErrorForAgent({ error: { message: 'Nested failure', code: 5 } })).toContain(
+      'Nested failure',
+    );
+    const cyclic: any = {};
+    cyclic.error = cyclic;
+    expect(formatErrorForAgent(cyclic)).toBe('[Circular error]');
   });
 
   it('defaults are documented constants, not magic numbers', () => {

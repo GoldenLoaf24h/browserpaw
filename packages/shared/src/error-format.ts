@@ -21,11 +21,32 @@ export interface FormatErrorOptions {
   maxFrames?: number;
 }
 
+function formatNonErrorObject(obj: Record<string, unknown>, seen = new WeakSet<object>()): string {
+  if (seen.has(obj)) return '[Circular error]';
+  seen.add(obj);
+  const message = typeof obj.message === 'string' ? obj.message : '';
+  const name = typeof obj.name === 'string' && obj.name !== 'Error' ? obj.name : '';
+  if (!message && obj.error && typeof obj.error === 'object') {
+    return formatNonErrorObject(obj.error as Record<string, unknown>, seen);
+  }
+  // Only diagnostic fields cross the error boundary, never arbitrary payloads.
+  const text = [name, message].filter(Boolean).join(': ') || 'Unknown error object';
+  const code =
+    typeof obj.code === 'string' || (typeof obj.code === 'number' && Number.isFinite(obj.code))
+      ? ` (code: ${obj.code})`
+      : '';
+  return text + code;
+}
+
 export function formatErrorForAgent(error: unknown, options: FormatErrorOptions = {}): string {
   const context = options.context ? `${options.context}: ` : '';
 
-  if (!(error instanceof Error)) {
+  if (error === null || typeof error !== 'object') {
     return context + String(error);
+  }
+
+  if (!(error instanceof Error)) {
+    return context + formatNonErrorObject(error as Record<string, unknown>);
   }
 
   const name = error.name && error.name !== 'Error' ? `${error.name}: ` : '';
@@ -43,9 +64,11 @@ export function formatErrorForAgent(error: unknown, options: FormatErrorOptions 
     .filter((line) => line.startsWith('at '));
   if (frames.length === 0) return text;
 
-  const kept = frames.slice(0, maxFrames).map((line) =>
-    line.length > MAX_STACK_LINE_CHARS ? `${line.slice(0, MAX_STACK_LINE_CHARS)}…` : line,
-  );
+  const kept = frames
+    .slice(0, maxFrames)
+    .map((line) =>
+      line.length > MAX_STACK_LINE_CHARS ? `${line.slice(0, MAX_STACK_LINE_CHARS)}…` : line,
+    );
   text += `\n${kept.join('\n')}`;
   if (frames.length > kept.length) {
     text += `\n  … ${frames.length - kept.length} more frame(s) omitted`;

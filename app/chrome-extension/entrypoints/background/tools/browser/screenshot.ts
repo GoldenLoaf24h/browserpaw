@@ -1,7 +1,7 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { projectFramePoint } from '@/utils/frame-coordinates';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
+import { TOOL_NAMES, resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import {
   canvasToDataURL,
@@ -35,6 +35,16 @@ export const DEFAULT_SCREENSHOT_MAX_DIMENSION = 1568;
 export const DEFAULT_SCREENSHOT_MAX_PIXELS = 1_150_000;
 const BACKGROUND_CAPTURE_WARMUP_TIMEOUT_MS = 1500;
 const BACKGROUND_CAPTURE_RETRY_TIMEOUT_MS = 5000;
+
+class ScreenshotDomChangedError extends Error {
+  constructor(
+    message: string,
+    readonly tabId: number,
+    readonly state: ScreenshotPageStateProbe,
+  ) {
+    super(message);
+  }
+}
 
 export function clampCanvasDimensions(
   width: number,
@@ -417,6 +427,33 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
    * Execute screenshot operation
    */
   async execute(rawArgs: ScreenshotToolParams): Promise<ToolResult> {
+    let retryState: ScreenshotPageStateProbe | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.capture(rawArgs, retryState);
+      } catch (error) {
+        if (!(error instanceof ScreenshotDomChangedError)) throw error;
+        if (attempt === 2) {
+          return createErrorResponse(
+            JSON.stringify({
+              status: 'blocked',
+              code: 'screenshot_page_unstable',
+              error: error.message,
+            }),
+          );
+        }
+        rawArgs = { ...rawArgs, tabId: error.tabId };
+        retryState = error.state;
+        // Only read-only capture is retried, after its cleanup has completed.
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
+  }
+
+  private async capture(
+    rawArgs: ScreenshotToolParams,
+    retryState?: ScreenshotPageStateProbe,
+  ): Promise<ToolResult> {
     const targetIndex =
       typeof rawArgs.targetIndex === 'number'
         ? rawArgs.targetIndex
@@ -552,6 +589,12 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           }
         }
         preUrl = preCaptureState?.documentURL || tab.url || '';
+      }
+
+      if (retryState) {
+        if (!preCaptureState)
+          throw new Error('Failed to verify page identity before screenshot retry');
+        assertScreenshotCaptureStable(retryState, preCaptureState);
       }
 
       if (isJevVision) {
@@ -1270,7 +1313,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         }
         assertScreenshotCaptureStable(preCaptureState, captureState, {
           allowScrollChange: fullPage,
-          compareDpr: false,
+          compareDpr: pageStateProbeAvailable,
         });
         if (coordinateValidationSupported) {
           if (captureState.observerInitializedNow) {
@@ -1278,8 +1321,10 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
             coordinateValidationUnsupportedReason =
               'DOM mutation observer continuity was lost during capture';
           } else if (preDomRevision === undefined || captureState.domRevision !== preDomRevision) {
-            throw new Error(
+            throw new ScreenshotDomChangedError(
               `DOM changed during screenshot capture: pre=${preDomRevision ?? 'unknown'} post=${captureState.domRevision}`,
+              tab.id!,
+              preCaptureState,
             );
           } else {
             captureDomRevision = captureState.domRevision;
@@ -1500,10 +1545,9 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         }
       }
     } catch (error) {
+      if (error instanceof ScreenshotDomChangedError) throw error;
       logUnexpectedToolError('Error during screenshot execution:', error);
-      return createErrorResponse(
-        `Screenshot error: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
-      );
+      return createErrorResponse(formatErrorForAgent(error, { context: 'Screenshot error' }));
     } finally {
       // 3. Reset page only if we prepared it
       if (didPreparePage) {

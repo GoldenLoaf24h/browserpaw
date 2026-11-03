@@ -18,7 +18,7 @@ import { withActionReceipt, type ActionReceipt } from '@/utils/action-receipt';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
 import { resolveTargetLocation } from './unified-locator';
 import { sessionTabAffinity, type TabHandoverInfo } from '@/utils/session-tab-affinity';
-import { resolveToolName } from 'chrome-mcp-shared';
+import { resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
 import { dispatchNativeSelectAll } from './keyboard';
 import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 import { throwIfAborted, TaskCancelledError } from '@/utils/action-abort';
@@ -156,7 +156,7 @@ function rethrowIfDeadlineOrUncertain(
   phase: string,
 ): void {
   if (error instanceof FillDeadlineExceededError) throw error;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorForAgent(error, { maxFrames: 0 });
   const deadlineExpired =
     typeof deadlineAt === 'number' && Number.isFinite(deadlineAt) && Date.now() >= deadlineAt;
   if (
@@ -846,6 +846,7 @@ async function runPhysicalFill(
 
     let verification: any = null;
     let textWasDispatched = false;
+    let textDispatchAttempted = false;
 
     // Phase M1 Instantaneous Occlusion Circuit Breaker & Live Target Re-resolution
     if (numericIndex !== undefined && numericIndex > 0) {
@@ -1024,6 +1025,7 @@ async function runPhysicalFill(
         if (clear === true || (clear !== false && !isKnownEmpty)) {
           await dispatchNativeSelectAll(tabId, nestedTimeout(deadlineAt));
           if (!textToFill) {
+            textDispatchAttempted = true;
             await raceInput(tabId, 'Input.dispatchKeyEvent', {
               type: 'rawKeyDown',
               windowsVirtualKeyCode: 8,
@@ -1042,6 +1044,7 @@ async function runPhysicalFill(
 
         // Whole-text insertion preserves linebreaks without triggering Enter handlers.
         if (textToFill) {
+          textDispatchAttempted = true;
           await raceInput(tabId, 'Input.insertText', { text: String(textToFill) });
           textWasDispatched = true;
         }
@@ -1212,6 +1215,24 @@ async function runPhysicalFill(
           };
         }
         throw cdpErr;
+      }
+      if (textDispatchAttempted && !textWasDispatched) {
+        const diagnostics = formatErrorForAgent(cdpErr, { maxFrames: 0 });
+        return {
+          success: false,
+          committed: false,
+          index: numericIndex,
+          ref: options.target,
+          selector: selectorOrRef,
+          filledText: textToFill,
+          isTrusted: false,
+          method: 'cdp_native',
+          status: 'unknown',
+          retry: false,
+          error: `Input dispatch outcome is unknown: ${diagnostics}; inspect the field before retrying`,
+          diagnostics,
+          resolutionPath,
+        };
       }
       if (textWasDispatched) {
         const observedLength =

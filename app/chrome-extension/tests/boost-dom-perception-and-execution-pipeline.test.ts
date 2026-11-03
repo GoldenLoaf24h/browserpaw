@@ -946,6 +946,7 @@ describe('BrowserPaw High-Precision DOM Perception & Execution Pipeline (F1 - M3
         if (fnName === 'inPageFastSnapshot') {
           return [
             {
+              frameId: 0,
               result: {
                 url: 'https://example.com',
                 title: 'Test',
@@ -973,6 +974,7 @@ describe('BrowserPaw High-Precision DOM Perception & Execution Pipeline (F1 - M3
         if (fnName === 'inPageFastSnapshot') {
           return [
             {
+              frameId: 0,
               result: {
                 url: 'https://example.com',
                 title: 'Fast Snapshot Test',
