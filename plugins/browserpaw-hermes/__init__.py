@@ -810,35 +810,7 @@ TOOL_DEFINITIONS = {
             "required": []
         }
     },
-    "browserpaw_tool_docs": {
-        "description": "Return compact parameter documentation for a category of BrowserPaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "enum": [
-                        "navigate",
-                        "perceive",
-                        "act",
-                        "observe",
-                        "manage",
-                        "crawl",
-                        "diagnose",
-                        "network"
-                    ],
-                    "description": "Tool category to document"
-                },
-                "activateForSession": {
-                    "type": "boolean",
-                    "description": "When true, dynamically exposes all tools in this category for the current MCP session without server restart. Default: false"
-                }
-            },
-            "required": [
-                "category"
-            ]
-        }
-    },
+    "browserpaw_tool_docs": _CORE_SCHEMAS["chrome_tool_docs"],
     "browserpaw_inspect_media": {
         "description": "Inspect and extract high-fidelity media assets (images, canvas, captchas, icons) directly by element index or selector. Uses in-memory lossless extraction for <img>/<canvas>, with super-sampled 200%+ crop fallback for complex DOM containers.",
         "inputSchema": {
@@ -1036,9 +1008,6 @@ _LOCATOR_SCHEMA_FIELDS = {
 _batch_properties = TOOL_DEFINITIONS["browserpaw_batch_actions"]["inputSchema"]["properties"]["actions"]["items"]["properties"]
 for _field, _schema in _LOCATOR_SCHEMA_FIELDS.items():
     _batch_properties.setdefault(_field, dict(_schema))
-TOOL_DEFINITIONS["browserpaw_tool_docs"]["inputSchema"]["properties"]["category"][
-    "enum"
-].insert(5, "workflow")
 
 def _make_handler(ctx: Any, tool_name: str) -> Callable:
     def handler(args: dict, **kwargs: Any) -> str:

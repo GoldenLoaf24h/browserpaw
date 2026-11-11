@@ -60,9 +60,9 @@ describe('browserpaw-claude plugin contract (Claude Code)', () => {
     assert.ok(server, '.mcp.json must declare the browserpaw server');
     assert.equal(server.type, 'stdio');
     assert.equal(server.command, 'mcp-chrome-stdio');
-    // The bundled Claude Code plugin starts with the complete canonical tool surface.
+    // The bundled Claude Code plugin starts with the compact default tool surface.
     // Runtime tool discovery remains available through chrome_tool_docs.
-    assert.deepEqual(server.env, { CHROME_MCP_TOOL_PROFILE: 'full' });
+    assert.deepEqual(server.env, { CHROME_MCP_TOOL_PROFILE: 'core' });
   });
 
   it('loads the skill under the bare /browserpaw name', () => {

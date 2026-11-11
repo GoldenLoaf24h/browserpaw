@@ -33,18 +33,20 @@ describe('tool aliases preserve browser result data', () => {
     },
   );
 
-  it('still aligns references in tool-owned help', async () => {
-    nativeHost.isConnected = true;
-    jest.spyOn(nativeHost, 'sendRequestToExtensionAndWait').mockResolvedValue({
-      status: 'success',
-      data: { content: [{ type: 'text', text: 'Call browserpaw_read_dom next.' }] },
-    });
-    const result = await handleToolCall('chrome_tool_docs', {}, 'fidelity-owned-docs');
-    expect(
-      result.content.some(
-        (item) => item.type === 'text' && item.text === 'Call chrome_read_dom next.',
-      ),
-    ).toBe(true);
+  it('renders tool-owned schemas locally and aligns their namespace', async () => {
+    const send = jest.spyOn(nativeHost, 'sendRequestToExtensionAndWait');
+    const result = await handleToolCall(
+      'browserpaw_tool_docs',
+      { names: ['chrome_read_dom'] },
+      'fidelity-owned-docs',
+    );
+    const text = result.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join('');
+    expect(text).toContain('browserpaw_read_dom');
+    expect(JSON.parse(text).tools[0].inputSchema).toBeDefined();
+    expect(send).not.toHaveBeenCalled();
   });
   it('preserves an uncertain failure receipt and its original error text', async () => {
     const payload = {

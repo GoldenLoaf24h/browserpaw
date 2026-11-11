@@ -522,7 +522,7 @@ describe('mcp-server-stdio: BUG-18, BUG-19, and PERF-02', () => {
       const activatingResult = await callHandler({
         params: {
           name: 'chrome_tool_docs',
-          arguments: { category: 'manage', activateForSession: true },
+          arguments: { names: ['chrome_history'], activateForSession: true },
         },
       });
 
@@ -539,7 +539,7 @@ describe('mcp-server-stdio: BUG-18, BUG-19, and PERF-02', () => {
       const pureResult = await callHandler({
         params: {
           name: 'chrome_tool_docs',
-          arguments: { category: 'core' },
+          arguments: { category: 'navigate' },
         },
       });
 

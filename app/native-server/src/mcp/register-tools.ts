@@ -12,11 +12,11 @@ import {
   filterToolSchemas,
   formatErrorForAgent,
   NativeMessageType,
-  profileBlockedMessage,
   resolveToolProfile,
   TOOL_SCHEMAS,
-  TOOL_CATEGORIES,
-  TOOL_NAME_TO_CATEGORY,
+  getToolDocumentation,
+  getVisibleToolSchemas,
+  sameToolSelection,
   agentUpdateNotifier,
   normalizeIncomingToolName,
   alignToolReferences,
@@ -120,6 +120,7 @@ const fastDecisionEngine = new FastDecisionEngine();
 
 // Per-session dynamic tool activation store
 const sessionExtraTools = new Map<string, Set<string>>();
+const listNotifiers = new WeakMap<Server, () => void>();
 
 let cachedUpdateNotice: string | null = null;
 let updateCheckStarted = false;
@@ -138,30 +139,32 @@ export const clearSessionExtraTools = (sessionId: string): void => {
 };
 
 export const setupTools = (server: Server, serverSessionId?: string) => {
-  const stopModeNotifications = jevModelManager.onModeStateChanged(() => {
-    void server.sendToolListChanged().catch(() => {});
-  });
+  const visibleTools = () =>
+    getVisibleToolSchemas(
+      EXPOSED_TOOLS,
+      sessionExtraTools.get(serverSessionId || 'default') || new Set(),
+      jevModelManager.getActiveMode() !== 'off' && jevModelManager.isAvailable(),
+    );
+  let lastVisible = new Set(visibleTools().map((tool) => tool.name));
+  const notifyIfChanged = () => {
+    const next = new Set(visibleTools().map((tool) => tool.name));
+    if (!sameToolSelection(lastVisible, next)) {
+      lastVisible = next;
+      void server.sendToolListChanged().catch(() => {});
+    }
+  };
+  listNotifiers.set(server, notifyIfChanged);
+  const stopModeNotifications = jevModelManager.onModeStateChanged(notifyIfChanged);
   const previousClose = server.onclose;
   server.onclose = () => {
     stopModeNotifications();
+    listNotifiers.delete(server);
+    sessionExtraTools.delete(serverSessionId || 'default');
     previousClose?.();
   };
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const effectiveSessionId = serverSessionId || 'default';
-    const extra = sessionExtraTools.get(effectiveSessionId);
-    let tools = EXPOSED_TOOLS;
-    if (extra && extra.size > 0) {
-      tools = TOOL_SCHEMAS.filter(
-        (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || extra.has(t.name),
-      );
-    }
-    // Gating check: If Jev mode is 'off' or neither local nor remote is available, hide chrome_act_toward_goal
-    const activeMode = jevModelManager.getActiveMode();
-    if (activeMode === 'off' || !jevModelManager.isAvailable()) {
-      tools = tools.filter((t) => getBaseToolName(t.name) !== 'act_toward_goal');
-    }
-    return { tools };
+    return { tools: visibleTools() };
   });
 
   // Call tool handler
@@ -219,41 +222,34 @@ const handleToolCallInner = async (
     const backendName = normalized.canonicalBackendName;
     const requestedPrefix = normalized.prefix || getActiveToolPrefix();
 
-    const extra = sessionExtraTools.get(effectiveSessionId);
-    let isAllowed =
-      EXPOSED_TOOLS.some((t) => t.name === backendName) || (extra && extra.has(backendName));
-    let autoActivatedCategory: string | undefined;
-
-    if (!isAllowed) {
-      const known = TOOL_SCHEMAS.some((t) => t.name === backendName);
-      if (known) {
-        const cat = TOOL_NAME_TO_CATEGORY[backendName];
-        if (cat) {
-          const catList = TOOL_CATEGORIES[cat] ? TOOL_CATEGORIES[cat].split(' ') : [];
-          const set = sessionExtraTools.get(effectiveSessionId) || new Set<string>();
-          for (const tName of catList) set.add(tName);
-          sessionExtraTools.set(effectiveSessionId, set);
-          autoActivatedCategory = cat;
-          isAllowed = true;
-          if (server && typeof (server as any).sendToolListChanged === 'function') {
-            (server as any).sendToolListChanged().catch(() => {});
-          }
+    if (!TOOL_SCHEMAS.some((tool) => tool.name === backendName)) {
+      throw new Error(
+        `Tool "${name}" is not a BrowserPaw tool. Use chrome_tool_docs to discover tools.`,
+      );
+    }
+    if (backendName === 'chrome_tool_docs') {
+      const { result, selection } = getToolDocumentation(args);
+      if (selection !== undefined) {
+        const previous = sessionExtraTools.get(effectiveSessionId) || new Set<string>();
+        const next = new Set(selection);
+        const available =
+          jevModelManager.getActiveMode() !== 'off' && jevModelManager.isAvailable();
+        const before = new Set(
+          getVisibleToolSchemas(EXPOSED_TOOLS, previous, available).map((tool) => tool.name),
+        );
+        const after = new Set(
+          getVisibleToolSchemas(EXPOSED_TOOLS, next, available).map((tool) => tool.name),
+        );
+        sessionExtraTools.set(effectiveSessionId, next);
+        if (!sameToolSelection(before, after)) {
+          if (server && listNotifiers.has(server)) listNotifiers.get(server)!();
+          else void server?.sendToolListChanged().catch(() => {});
         }
       }
-
-      if (!isAllowed) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: known
-                ? profileBlockedMessage(backendName, TOOL_PROFILE)
-                : `Tool "${name}" is not a BrowserPaw tool. Call tools/list to see the ${EXPOSED_TOOLS.length} available tools.`,
-            },
-          ],
-          isError: true,
-        };
+      for (const item of result.content) {
+        if (item.type === 'text') item.text = alignToolReferences(item.text, requestedPrefix);
       }
+      return result;
     }
     if (backendName === 'chrome_task' || backendName === 'chrome_skill') {
       return await getBrowserServices().execute(backendName, args, sessionId, signal);
@@ -275,19 +271,6 @@ const handleToolCallInner = async (
       };
     }
 
-    const alignResult = (res: CallToolResult): CallToolResult => {
-      // Page data and source URLs are opaque; only generated tool documentation uses aliases.
-      if (backendName !== 'chrome_tool_docs') return res;
-      if (!res || !Array.isArray(res.content)) return res;
-      for (const item of res.content) {
-        if (item && item.type === 'text' && typeof item.text === 'string') {
-          item.text = alignToolReferences(item.text, requestedPrefix);
-        }
-      }
-      return res;
-    };
-
-    // Autonomous semantic micro-loop tool runs locally on Native Server
     if (backendName === 'chrome_act_toward_goal') {
       const activeMode = jevModelManager.getActiveMode();
       if (args?.mode && args.mode !== activeMode) {
@@ -381,28 +364,7 @@ const handleToolCallInner = async (
         ],
         isError: false,
       };
-      if (autoActivatedCategory && result && Array.isArray(result.content)) {
-        result.content.unshift({
-          type: 'text',
-          text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
-        });
-      }
-      return alignResult(result);
-    }
-
-    // Dynamic activation hook for chrome_tool_docs
-    if (backendName === 'chrome_tool_docs' && args?.activateForSession && args?.category) {
-      const catList = TOOL_CATEGORIES[args.category]
-        ? TOOL_CATEGORIES[args.category].split(' ')
-        : [];
-      if (catList.length > 0) {
-        const set = sessionExtraTools.get(effectiveSessionId) || new Set<string>();
-        for (const tName of catList) set.add(tName);
-        sessionExtraTools.set(effectiveSessionId, set);
-      }
-      if (server && typeof (server as any).sendToolListChanged === 'function') {
-        (server as any).sendToolListChanged().catch(() => {});
-      }
+      return result;
     }
 
     await prepareMediaArgsIfNeeded(backendName, args);
@@ -416,13 +378,7 @@ const handleToolCallInner = async (
     }
 
     const result = await callToolInternal(backendName, args, sessionId, 120000, signal);
-    if (autoActivatedCategory && result && Array.isArray(result.content)) {
-      result.content.unshift({
-        type: 'text',
-        text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
-      });
-    }
-    return alignResult(result);
+    return result;
   } catch (error: any) {
     if (typeof error?.requestDispatched === 'boolean') {
       const failure = {

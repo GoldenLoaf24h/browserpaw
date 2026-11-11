@@ -24,7 +24,7 @@ const SKILL_EXAMPLES: Array<[string, Record<string, unknown>]> = [
   ['chrome_handle_dialog', { action: 'accept', promptText: 'confirmation_code' }],
   ['chrome_javascript', { code: 'document.title' }],
   ['chrome_request_human_intervention', { reason: 'Please solve slider verification' }],
-  ['chrome_tool_docs', { category: 'network', activateForSession: true }],
+  ['chrome_tool_docs', { names: ['chrome_network_request'], activateForSession: true }],
   ['chrome_doctor', {}],
   ['chrome_computer', { action: 'left_click', coordinates: { x: 450, y: 320 } }],
   [

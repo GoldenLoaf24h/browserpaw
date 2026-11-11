@@ -9,11 +9,6 @@ import {
   TOOL_SCHEMAS,
 } from 'chrome-mcp-shared';
 
-/**
- * The full tool list costs ~70KB / ~18k tokens of fixed schema overhead in every
- * session. The streamlined core profile trims down to 16 primary
- * tools to eliminate decision paralysis and cut token overhead by >65%.
- */
 describe('tool profiles', () => {
   it('defaults to core and only exposes full on explicit full', () => {
     expect(resolveToolProfile()).toBe('core');
@@ -57,28 +52,22 @@ describe('tool profiles', () => {
     }
   });
 
-  it('keeps the 14 hyper-focused tools a browsing session needs', () => {
-    const core = new Set(filterToolSchemas(TOOL_SCHEMAS, 'core').map((t: any) => t.name));
-    expect(core.size).toBe(16);
-
-    for (const required of [
-      'chrome_read_dom',
-      'chrome_get_markdown',
-      'chrome_inspect_media',
-      'chrome_grep',
-      'chrome_interact_index',
-      'chrome_fill_index',
-      'chrome_batch_actions',
-      'chrome_screenshot',
-      'chrome_smart_scroll',
-      'chrome_navigate',
-      'chrome_switch_tab',
-      'chrome_close_tabs',
-      'get_windows_and_tabs',
-      'chrome_tool_docs',
-    ]) {
-      expect(core.has(required), String(required) + ' must stay in core').toBe(true);
-    }
+  it('keeps the nine agreed tools within the UTF-8 schema budget', () => {
+    const schemas = filterToolSchemas(TOOL_SCHEMAS, 'core');
+    expect(new Set(schemas.map((tool) => tool.name))).toEqual(
+      new Set([
+        'chrome_task',
+        'chrome_skill',
+        'chrome_navigate',
+        'get_windows_and_tabs',
+        'chrome_switch_tab',
+        'chrome_read_dom',
+        'chrome_interact_index',
+        'chrome_fill_index',
+        'chrome_tool_docs',
+      ]),
+    );
+    expect(Buffer.byteLength(JSON.stringify(schemas), 'utf8')).toBeLessThanOrEqual(26 * 1024);
   });
 
   it('confirms heavy and non-essential tools are pruned from core', () => {
@@ -98,11 +87,11 @@ describe('tool profiles', () => {
     expect(core.has('chrome_cdp_execute')).toBe(false);
   });
 
-  it('trims more than 60% of the fixed schema cost', () => {
+  it('reduces serialized schema size', () => {
     const fullBytes = JSON.stringify(TOOL_SCHEMAS).length;
     const coreBytes = JSON.stringify(filterToolSchemas(TOOL_SCHEMAS, 'core')).length;
 
-    // Core cuts more than 60% of schema tokens
+    // JSON size is not an Agent token measurement.
     expect(coreBytes / fullBytes).toBeLessThan(0.5);
   });
 
@@ -112,7 +101,7 @@ describe('tool profiles', () => {
     }
   });
 
-  it('explains a profile-blocked call and points to auto-activation', () => {
+  it('explains a profile-blocked call and points to explicit name discovery', () => {
     const msg = profileBlockedMessage('chrome_history', 'core');
 
     expect(msg).toContain('chrome_history');

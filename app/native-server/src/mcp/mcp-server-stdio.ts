@@ -11,12 +11,13 @@ import {
   ToolListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
+  CURRENT_VERSION,
   filterToolSchemas,
-  profileBlockedMessage,
   resolveToolProfile,
   TOOL_SCHEMAS,
-  TOOL_CATEGORIES,
-  TOOL_NAME_TO_CATEGORY,
+  getToolDocumentation,
+  getVisibleToolSchemas,
+  sameToolSelection,
   normalizeIncomingToolName,
   alignToolReferences,
   getActiveToolPrefix,
@@ -34,6 +35,7 @@ import { readBridgeToken } from '../server/token';
 import { jevModelManager } from '../server/jev-model-manager';
 
 let stdioMcpServer: Server | null = null;
+let notifyStdioToolListChanged: (() => void) | undefined;
 let mcpClient: Client | null = null;
 let mcpClientGeneration = 0;
 let currentClientGeneration = 0;
@@ -57,9 +59,6 @@ export const resetMcpClientForTesting = () => {
 // Profile contract: resolved at startup (default is 'core', set CHROME_MCP_TOOL_PROFILE=full to expose all tools).
 const TOOL_PROFILE = resolveToolProfile(process.env.CHROME_MCP_TOOL_PROFILE);
 const EXPOSED_TOOLS = filterToolSchemas(TOOL_SCHEMAS, TOOL_PROFILE);
-
-// Dynamic tool activation store for stdio session
-const dynamicExtraTools = new Set<string>();
 
 // Resolve MCP target URL from environment or configuration
 const resolveTargetUrl = (): string => {
@@ -112,12 +111,12 @@ export const ensureMcpClient = async (): Promise<Client | null> => {
       const token = readBridgeToken();
       const headers = { Authorization: `Bearer ${token}` };
       localClient = new Client(
-        { name: 'Mcp Chrome Proxy', version: '1.0.0' },
+        { name: 'Mcp Chrome Proxy', version: CURRENT_VERSION },
         { capabilities: {} },
       );
       localClient.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
         if (currentClientGeneration !== thisGeneration || !stdioMcpServer) return;
-        await stdioMcpServer.sendToolListChanged();
+        notifyStdioToolListChanged?.();
       });
       const transport = new StreamableHTTPClientTransport(targetUrl, {
         requestInit: { headers, redirect: 'error' },
@@ -161,7 +160,7 @@ export const getStdioMcpServer = () => {
   stdioMcpServer = new Server(
     {
       name: 'BrowserPaw Stdio',
-      version: '1.0.0',
+      version: CURRENT_VERSION,
     },
     {
       capabilities: {
@@ -177,95 +176,86 @@ export const getStdioMcpServer = () => {
 };
 
 export const setupTools = (server: Server) => {
+  let dynamicExtraTools = new Set<string>();
+  let selectionQueue: Promise<unknown> = Promise.resolve();
+  let closed = false;
+  const visibleTools = () =>
+    getVisibleToolSchemas(
+      EXPOSED_TOOLS,
+      dynamicExtraTools,
+      jevModelManager.getActiveMode() !== 'off' && jevModelManager.isAvailable(),
+    );
+  const previousClose = server.onclose;
+  let lastVisible = new Set(visibleTools().map((tool) => tool.name));
+  const notifyIfChanged = () => {
+    const next = new Set(visibleTools().map((tool) => tool.name));
+    if (!closed && !sameToolSelection(lastVisible, next)) {
+      lastVisible = next;
+      void server.sendToolListChanged().catch(() => {});
+    }
+  };
+  notifyStdioToolListChanged = notifyIfChanged;
+  server.onclose = () => {
+    closed = true;
+    dynamicExtraTools.clear();
+    if (notifyStdioToolListChanged === notifyIfChanged) notifyStdioToolListChanged = undefined;
+    previousClose?.();
+  };
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    let tools = EXPOSED_TOOLS;
-    if (dynamicExtraTools.size > 0) {
-      tools = TOOL_SCHEMAS.filter(
-        (t) => EXPOSED_TOOLS.some((e) => e.name === t.name) || dynamicExtraTools.has(t.name),
-      );
-    }
-    // Gating check: If Jev mode is 'off' or neither local nor remote is available, hide chrome_act_toward_goal
-    const activeMode = jevModelManager.getActiveMode();
-    if (activeMode === 'off' || !jevModelManager.isAvailable()) {
-      tools = tools.filter((t) => getBaseToolName(t.name) !== 'act_toward_goal');
-    }
-    return { tools };
+    return { tools: visibleTools() };
   });
 
-  // Call tool handler
+  // Known hidden tools stay callable without widening the public list.
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
     const args = request.params.arguments || {};
     const normalized = normalizeIncomingToolName(name);
     const backendName = normalized.canonicalBackendName;
     const requestedPrefix = normalized.prefix || getActiveToolPrefix();
-
-    let isAllowed =
-      EXPOSED_TOOLS.some((t) => t.name === backendName) || dynamicExtraTools.has(backendName);
-    let autoActivatedCategory: string | undefined;
-
-    if (!isAllowed) {
-      const known = TOOL_SCHEMAS.some((t) => t.name === backendName);
-      if (known) {
-        const cat = TOOL_NAME_TO_CATEGORY[backendName];
-        if (cat) {
-          const catList = TOOL_CATEGORIES[cat] ? TOOL_CATEGORIES[cat].split(' ') : [];
-          for (const tName of catList) dynamicExtraTools.add(tName);
-          autoActivatedCategory = cat;
-          isAllowed = true;
-          if (server && typeof (server as any).sendToolListChanged === 'function') {
-            (server as any).sendToolListChanged().catch(() => {});
-          }
-        }
+    let selection: string[] | undefined;
+    try {
+      if (!TOOL_SCHEMAS.some((tool) => tool.name === backendName)) {
+        throw new Error(
+          `Tool "${name}" is not a BrowserPaw tool. Use chrome_tool_docs to discover tools.`,
+        );
       }
-
-      if (!isAllowed) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: known
-                ? profileBlockedMessage(backendName, TOOL_PROFILE)
-                : `Tool "${name}" is not a BrowserPaw tool. Call tools/list to see the ${EXPOSED_TOOLS.length} available tools.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    // Dynamic activation hook for chrome_tool_docs
-    if (
-      backendName === 'chrome_tool_docs' &&
-      (args as any)?.activateForSession &&
-      (args as any)?.category
-    ) {
-      const cat = (args as any).category;
-      const catList = TOOL_CATEGORIES[cat] ? TOOL_CATEGORIES[cat].split(' ') : [];
-      for (const tName of catList) dynamicExtraTools.add(tName);
-      if (server && typeof (server as any).sendToolListChanged === 'function') {
-        (server as any).sendToolListChanged().catch(() => {});
-      }
-    }
-
-    const res = await handleToolCall(backendName, args);
-    if (res && Array.isArray(res.content)) {
       if (backendName === 'chrome_tool_docs') {
+        selection = getToolDocumentation(args).selection;
+      }
+    } catch (error) {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+      };
+    }
+
+    const execute = async () => {
+      if (closed)
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: 'MCP session is closed' }],
+        };
+      const res = await handleToolCall(backendName, args);
+      if (backendName === 'chrome_tool_docs') {
+        if (!closed && !res.isError && selection !== undefined) {
+          dynamicExtraTools = new Set(selection);
+          notifyIfChanged();
+        }
         for (const item of res.content) {
-          if (item && item.type === 'text' && typeof item.text === 'string') {
-            item.text = alignToolReferences(item.text, requestedPrefix);
-          }
+          if (item.type === 'text') item.text = alignToolReferences(item.text, requestedPrefix);
         }
       }
-      if (autoActivatedCategory) {
-        res.content.unshift({
-          type: 'text',
-          text: `[System Note: Tool category "${autoActivatedCategory}" has been dynamically unlocked for this session.]`,
-        });
-      }
-    }
-    return res;
+      return res;
+    };
+    if (selection === undefined) return execute();
+    // Serialize only presentation changes; never queue or replay browser actions here.
+    const run = selectionQueue.then(execute, execute);
+    selectionQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   });
 
   // List resources handler - REQUIRED BY MCP PROTOCOL

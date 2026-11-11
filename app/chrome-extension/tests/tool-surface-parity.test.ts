@@ -28,7 +28,7 @@ describe('tool surface parity', () => {
       (sources.match(/TOOL_NAMES\.BROWSER\.[A-Z_]+/g) || []).map((s) => s.split('.').pop()),
     );
     // Map exported public TOOL_SCHEMAS to TOOL_NAMES.BROWSER constant keys.
-    // Of the 50 exported schemas: 49 are extension browser tools, 1 is native-only loop tool (ACT_TOWARD_GOAL).
+    // The 52 schemas include 49 extension implementations and three Native execution tools.
     const browserNameToKey = new Map<string, string>();
     for (const [key, name] of Object.entries(TOOL_NAMES.BROWSER)) {
       browserNameToKey.set(name, key);
@@ -56,19 +56,5 @@ describe('tool surface parity', () => {
     // The filter is the fix; without it an undeclared export becomes callable.
     expect(src).toContain('declaredToolNames');
     expect(src).toContain('declaredToolNames.has(tool.name)');
-  });
-
-  it('unknown tool names get a "not a BrowserPaw tool" message, not a profile hint', async () => {
-    const fs = await import('node:fs');
-    for (const path of [
-      '../../app/native-server/src/mcp/register-tools.ts',
-      '../../app/native-server/src/mcp/mcp-server-stdio.ts',
-    ]) {
-      const src = fs.readFileSync(path, 'utf-8');
-      expect(src, `${path} must distinguish unknown from profile-hidden`).toContain(
-        'is not a BrowserPaw tool',
-      );
-      expect(src).toContain('const known = TOOL_SCHEMAS.some');
-    }
   });
 });

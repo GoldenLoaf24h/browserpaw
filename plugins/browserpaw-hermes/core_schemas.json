@@ -1391,7 +1391,7 @@
     }
   },
   "chrome_tool_docs": {
-    "description": "Return compact parameter documentation for a category of BrowserPaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.",
+    "description": "Discover tools without expanding the visible list. No arguments lists categories; category lists tool names and uses; names returns complete schemas. names with activateForSession:true replaces temporary visible tools; names:[] resets. Known hidden tools remain callable.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1408,18 +1408,25 @@
             "diagnose",
             "network"
           ],
-          "description": "Tool category to document"
+          "description": "List tool names and uses in this category; do not combine with names."
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact tool names to inspect, accepting supported namespace prefixes. Empty with activation clears temporary tools."
         },
         "activateForSession": {
           "type": "boolean",
-          "description": "When true, dynamically exposes all tools in this category for the current MCP session without server restart. Default: false"
+          "description": "With names only, replace the temporary visible selection after validation. Category activation is no longer supported. Default: false."
         },
         "taskId": {
           "type": "string",
           "description": "Optional durable task identity; restricts this operation to its verified pages."
         }
       },
-      "required": ["category"]
+      "required": []
     }
   },
   "chrome_inspect_media": {
@@ -1601,6 +1608,10 @@
           "type": "string",
           "description": "Remote HTTP/HTTPS URL to fetch the image or media asset from"
         },
+        "mediaUrl": {
+          "type": "string",
+          "description": "Optional media URL (alias for fileUrl)."
+        },
         "base64Data": {
           "type": "string",
           "description": "Base64-encoded media data string, optionally with \"data:<mime>;base64,\" prefix"
@@ -1620,6 +1631,11 @@
         "selector": {
           "type": "string",
           "description": "CSS selector for the target container (optional fallback for index)"
+        },
+        "frameId": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional frameId when targeting an editor inside an iframe."
         },
         "tabId": {
           "type": "number",
@@ -1681,7 +1697,7 @@
         },
         "scrollDelayMs": {
           "type": "number",
-          "description": "Pause duration in ms after each step to allow virtual list rendering (default: 250ms). Alias for settleMs."
+          "description": "Pause duration in ms after each step to allow virtual list rendering (default: 150ms). Alias for settleMs."
         },
         "settleMs": {
           "type": "number",

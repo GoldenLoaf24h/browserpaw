@@ -1,53 +1,20 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
-/**
- * Tool exposure profiles.
- *
- * The full tool list is 50 schemas (49 browser/extension tools + 1 native loop tool) / ~59KB / ~16k tokens of fixed cost in every
- * session, and the agent pays it whether or not it ever touches tab groups or
- * performance traces. Profiles let a deployment expose only the tools a
- * browsing workflow actually needs.
- *
- * NOTE on the achievable saving: the biggest schemas (chrome_computer 5.2KB,
- * chrome_batch_actions 3.1KB, chrome_screenshot 3.2KB) are all core interaction
- * tools, so a usable core set cannot go below ~42KB. The real gain is ~25%
- * (~4.1k tokens/session), not the 80% a naive "13 tools" split suggests — those
- * 13 omit navigation entirely.
- */
+/** Profiles control schema visibility, not permission to call a known tool. */
 export type ToolProfile = 'core' | 'crawl' | 'full';
 
-/**
- * Tools an agent needs to browse, act, and verify. Everything here is either
- * taught in skill/SKILL.md or required to complete a basic session (navigation,
- * tab discovery). The omitted tools are management (tab groups, move/attach
- * tab), history/bookmarks, performance tracing, and the chrome_network_* pair.
- */
+/** Stable default surface; additional schemas are discovered by name. */
 export const CORE_TOOL_NAMES: Set<string> = new Set([
-  // Durable tasks and verified skills are the default code-first workflow.
   'chrome_task',
   'chrome_skill',
-  // Navigate (4)
   'chrome_navigate',
   'chrome_switch_tab',
-  'chrome_close_tabs',
   'get_windows_and_tabs',
-  // Perceive (4)
   'chrome_read_dom',
-  'chrome_get_markdown',
-  'chrome_inspect_media',
-  'chrome_grep',
-  // Act (3)
   'chrome_interact_index',
   'chrome_fill_index',
-  'chrome_batch_actions',
-  // Observe (2)
-  'chrome_screenshot',
-  'chrome_smart_scroll',
+  'chrome_tool_docs',
 ]);
-
-// Tool discovery is part of every profile: chrome_tool_docs is how an agent
-// learns about tools its current profile hides.
-CORE_TOOL_NAMES.add('chrome_tool_docs');
 
 /**
  * Resolve the active profile. Accepts the env value verbatim so callers can
@@ -88,7 +55,7 @@ export const CRAWL_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * Tool categories, space-separated name lists. chrome_tool_docs reads this
- * so an agent can request one category's full schema set on demand.
+ * so agents can inspect names before requesting individual schemas.
  */
 export const TOOL_CATEGORIES: Record<string, string> = {
   navigate: [
@@ -159,7 +126,7 @@ export const TOOL_CATEGORIES: Record<string, string> = {
 
 /**
  * Reverse mapping from tool name to its primary functional category.
- * Used by Native Server to auto-unlock a tool category upon first call.
+ * Used for discovery and compatibility guidance.
  */
 export const TOOL_NAME_TO_CATEGORY: Record<string, string> = {};
 for (const [category, toolList] of Object.entries(TOOL_CATEGORIES)) {
@@ -214,7 +181,7 @@ export function filterToolSchemas(schemas: Tool[], profile: ToolProfile): Tool[]
     typeof process !== 'undefined' &&
     (process.env.CHROME_MCP_AUTO_PROMOTE_JEV === 'true' ||
       process.env.CHROME_MCP_AUTO_PROMOTE_JEV === '1');
-  if ((hasKey || autoPromote) && autoPromote && profile === 'core') {
+  if (autoPromote && profile === 'core') {
     allow.add('chrome_act_toward_goal');
   } else if (shouldPurgeJev) {
     allow.delete('chrome_act_toward_goal');
@@ -231,5 +198,5 @@ export function filterToolSchemas(schemas: Tool[], profile: ToolProfile): Tool[]
 export function profileBlockedMessage(name: string, profile: ToolProfile): string {
   const cat = TOOL_NAME_TO_CATEGORY[name];
   const catHint = cat ? ` (in category "${cat}")` : '';
-  return `Tool "${name}"${catHint} is not exposed under the "${profile}" tool profile. Call chrome_tool_docs(category: "${cat || 'act'}") to inspect its parameters, or call it directly to auto-activate the category for this session.`;
+  return `Tool "${name}"${catHint} is hidden under the "${profile}" profile but remains callable. Use chrome_tool_docs with names:["${name}"] to inspect its schema; activateForSession:true replaces the temporary visible selection.`;
 }

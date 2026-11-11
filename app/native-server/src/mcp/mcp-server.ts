@@ -1,11 +1,12 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CURRENT_VERSION } from 'chrome-mcp-shared';
 import { setupTools } from './register-tools';
 
 export function createMcpServerInstance(sessionId?: string): Server {
   const server = new Server(
     {
       name: 'BrowserPaw',
-      version: '1.0.0',
+      version: CURRENT_VERSION,
     },
     {
       capabilities: {

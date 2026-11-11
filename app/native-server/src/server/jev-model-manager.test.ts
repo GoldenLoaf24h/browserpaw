@@ -259,6 +259,27 @@ describe('JevModelManager & Downloader (§1, §3)', () => {
     delete process.env.MOCK_CUDA_AVAILABLE;
   });
 
+  test('caches CUDA probes independently per Python executable, including failed probes', () => {
+    const environment = process.env.NODE_ENV;
+    const probe = jest
+      .spyOn(require('node:child_process'), 'execSync')
+      .mockReturnValueOnce('True\n')
+      .mockImplementationOnce(() => {
+        throw new Error('Python unavailable');
+      });
+    process.env.NODE_ENV = 'production';
+    try {
+      expect(jevModelManager.detectCudaAvailable('cache-probe-python-a')).toBe(true);
+      expect(jevModelManager.detectCudaAvailable('cache-probe-python-a')).toBe(true);
+      expect(jevModelManager.detectCudaAvailable('cache-probe-python-b')).toBe(false);
+      expect(jevModelManager.detectCudaAvailable('cache-probe-python-b')).toBe(false);
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      if (environment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = environment;
+    }
+  });
+
   test('15. imports cleanly without recursion and defaults to ~/.browserpaw when BROWSERPAW_HOME is unset', async () => {
     const { homedir } = await import('node:os');
     const { join } = await import('node:path');

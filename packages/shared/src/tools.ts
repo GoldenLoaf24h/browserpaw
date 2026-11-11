@@ -1212,6 +1212,11 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           description:
             'Observed element ref to click once after source tracking is ready. Mutually exclusive with guid.',
         },
+        index: {
+          type: 'number',
+          description:
+            '1-based element index from chrome_read_dom to click to trigger the download (alias for clickTargetIndex)',
+        },
         frameId: {
           type: 'integer',
           minimum: 0,
@@ -3193,7 +3198,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       openWorldHint: false,
     },
     description:
-      'Return compact parameter documentation for a category of BrowserPaw tools (navigate | perceive | act | observe | manage | crawl | diagnose | network). Use when a workflow needs a tool that is not in the current profile view.',
+      'Discover tools without expanding the visible list. No arguments lists categories; category lists tool names and uses; names returns complete schemas. names with activateForSession:true replaces temporary visible tools; names:[] resets. Known hidden tools remain callable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3210,15 +3215,21 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
             'diagnose',
             'network',
           ],
-          description: 'Tool category to document',
+          description: 'List tool names and uses in this category; do not combine with names.',
+        },
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Exact tool names to inspect, accepting supported namespace prefixes. Empty with activation clears temporary tools.',
         },
         activateForSession: {
           type: 'boolean',
           description:
-            'When true, dynamically exposes all tools in this category for the current MCP session without server restart. Default: false',
+            'With names only, replace the temporary visible selection after validation. Category activation is no longer supported. Default: false.',
         },
       },
-      required: ['category'],
+      required: [],
     },
   },
   {
@@ -3603,6 +3614,10 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           type: 'string',
           description: 'Remote HTTP/HTTPS URL to fetch the image or media asset from',
         },
+        mediaUrl: {
+          type: 'string',
+          description: 'Optional media URL (alias for fileUrl).',
+        },
         base64Data: {
           type: 'string',
           description:
@@ -3626,6 +3641,11 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         selector: {
           type: 'string',
           description: 'CSS selector for the target container (optional fallback for index)',
+        },
+        frameId: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Optional frameId when targeting an editor inside an iframe.',
         },
         tabId: {
           type: 'number',
@@ -3728,7 +3748,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         scrollDelayMs: {
           type: 'number',
           description:
-            'Pause duration in ms after each step to allow virtual list rendering (default: 250ms). Alias for settleMs.',
+            'Pause duration in ms after each step to allow virtual list rendering (default: 150ms). Alias for settleMs.',
         },
         settleMs: {
           type: 'number',
@@ -3782,6 +3802,7 @@ function alignSchemaDescriptions(schema: any): any {
   return copy;
 }
 
+// Retained in RAW_TOOL_SCHEMAS for legacy contract test compatibility only.
 export const PURGED_TOOL_NAMES = new Set([
   'chrome_click_element',
   'chrome_burst_interact',

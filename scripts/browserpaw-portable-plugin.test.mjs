@@ -53,7 +53,7 @@ describe('browserpaw portable ChatGPT/Codex plugin', () => {
     assert.deepEqual(mcp.mcpServers.browserpaw, {
       type: 'stdio',
       command: 'mcp-chrome-stdio',
-      env: { CHROME_MCP_TOOL_PROFILE: 'full' },
+      env: { CHROME_MCP_TOOL_PROFILE: 'core' },
     });
   });
 
@@ -66,12 +66,7 @@ describe('browserpaw portable ChatGPT/Codex plugin', () => {
   });
 
   it('keeps installable plugin trees free of repository-only agent notes', () => {
-    for (const name of [
-      'browserpaw',
-      'browserpaw-claude',
-      'browserpaw-hermes',
-      'browserpaw-dsh',
-    ]) {
+    for (const name of ['browserpaw', 'browserpaw-claude', 'browserpaw-hermes', 'browserpaw-dsh']) {
       assert.deepEqual(
         findForbiddenEntries(join(repoRoot, 'plugins', name)),
         [],
