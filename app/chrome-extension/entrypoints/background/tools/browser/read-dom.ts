@@ -128,8 +128,6 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
           const count = dismissRes?.[0]?.result?.dismissedCount ?? 0;
           if (count > 0) {
             await waitForPageSettle(tab.id, { timeoutMs: 500 }).catch(() => {});
-          } else {
-            await new Promise((r) => setTimeout(r, 100));
           }
         } catch {}
       }

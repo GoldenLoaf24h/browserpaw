@@ -80,14 +80,8 @@ export function parseUnifiedCoordinate(
       : 800;
   const ox = options?.originX || 0;
   const oy = options?.originY || 0;
-  const isCropped = Boolean(
-    options?.originX || options?.originY || options?.cropWidth || options?.cropHeight,
-  );
-  const targetW =
-    options?.cropWidth ?? (isCropped ? (options?.cropWidth ?? options?.screenshotWidth ?? vw) : vw);
-  const targetH =
-    options?.cropHeight ??
-    (isCropped ? (options?.cropHeight ?? options?.screenshotHeight ?? vh) : vh);
+  const targetW = options?.cropWidth ?? vw;
+  const targetH = options?.cropHeight ?? vh;
   const pointFormat = options?.pointFormat || 'auto';
   const roundedPoint = (x: number, y: number): ParsedCoordinate | null => {
     const point = { x: Math.round(x + ox), y: Math.round(y + oy) };

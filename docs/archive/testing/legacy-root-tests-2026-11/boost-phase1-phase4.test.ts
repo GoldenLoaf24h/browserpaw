@@ -393,11 +393,12 @@ describe('Boost Phase 1 - Phase 4 Comprehensive Verification Suite', () => {
       assert.ok(waitSrc.includes('window.__mcpElementMap = window.__claudeElementMap || {}'));
       assert.ok(waitSrc.includes('window.__claudeElementMap = window.__mcpElementMap'));
 
-      const fillSrc = fs.readFileSync('app/chrome-extension/inject-scripts/fill-helper.js', 'utf-8');
-      assert.ok(fillSrc.includes('window.__mcpElementMap || window.__claudeElementMap'));
+      const interactionSrc = fs.readFileSync('app/chrome-extension/entrypoints/background/tools/browser/interaction.ts', 'utf-8');
+      assert.ok(interactionSrc.includes('interactIndexTool'));
+      assert.ok(interactionSrc.includes('performPhysicalFill'));
 
-      const clickSrc = fs.readFileSync('app/chrome-extension/inject-scripts/click-helper.js', 'utf-8');
-      assert.ok(clickSrc.includes('window.__mcpElementMap || window.__claudeElementMap'));
+      const fillCoreSrc = fs.readFileSync('app/chrome-extension/entrypoints/background/tools/browser/fill-core.ts', 'utf-8');
+      assert.ok(fillCoreSrc.includes('performPhysicalFill'));
     });
   });
 

@@ -429,6 +429,12 @@ async function finalizeTraceSession(
     LAST_RESULTS.set(tabId, resultRecord);
     if (session.sessionId) {
       SESSION_LAST_RESULTS.set(session.sessionId, resultRecord);
+      if (SESSION_LAST_RESULTS.size > 20) {
+        const oldestKey = SESSION_LAST_RESULTS.keys().next().value;
+        if (oldestKey !== undefined) {
+          SESSION_LAST_RESULTS.delete(oldestKey);
+        }
+      }
     }
 
     sessions.delete(tabId);
@@ -614,7 +620,11 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
           // Owner Guard: If caller provided a sessionId and this tab belongs to another principal session, reject!
           if (sessionId && session.sessionId && session.sessionId !== sessionId) {
             return createErrorResponse(
-              'Cannot stop performance trace on tab ' + args.tabId + ': it is owned by another session (' + session.sessionId + ').'
+              'Cannot stop performance trace on tab ' +
+                args.tabId +
+                ': it is owned by another session (' +
+                session.sessionId +
+                ').',
             );
           }
         }
@@ -630,7 +640,9 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
         }
       } else {
         // Legacy unauthenticated callers without tabId or sessionId: fallback to foreground/affinity tab
-        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(() => null);
+        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(
+          () => null,
+        );
         if (targetTab?.id && sessions.has(targetTab.id)) {
           targetTabId = targetTab.id;
           session = sessions.get(targetTab.id);
@@ -705,7 +717,9 @@ class PerformanceAnalyzeInsightTool extends BaseBrowserToolExecutor {
           result = SESSION_LAST_RESULTS.get(sessionId);
         }
       } else {
-        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(() => null);
+        const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(
+          () => null,
+        );
         if (targetTab?.id && LAST_RESULTS.has(targetTab.id)) {
           result = LAST_RESULTS.get(targetTab.id);
         }

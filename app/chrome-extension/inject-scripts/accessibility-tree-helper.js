@@ -803,7 +803,7 @@
               boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
             });
             const title = document.createElement('div');
-            title.textContent = 'Record-Replay 运行日志';
+            title.textContent = 'Record-Replay Execution Log';
             Object.assign(title.style, { fontWeight: 'bold', marginBottom: '6px' });
             const body = document.createElement('div');
             body.id = '__rr_overlay_body';
@@ -853,7 +853,7 @@
             pointerEvents: 'none',
           });
           const tip = document.createElement('div');
-          tip.textContent = '点击选取元素（Esc 取消）';
+          tip.textContent = 'Click to select element (Esc to cancel)';
           Object.assign(tip.style, {
             position: 'fixed',
             top: '10px',
@@ -1390,7 +1390,7 @@
               if (!key) continue;
               const label = v.label || key;
               const def = v.default || '';
-              const promptText = `请输入参数 ${label} (${key})`;
+              const promptText = `Please enter parameter ${label} (${key})`;
               let val = window.prompt(promptText, def);
               if (typeof val !== 'string') val = def;
               values[key] = val;
@@ -1425,14 +1425,14 @@
             fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
           });
           const title = document.createElement('div');
-          title.textContent = '请输入回放参数';
+          title.textContent = 'Please enter replay parameters';
           Object.assign(title.style, { fontSize: '16px', fontWeight: '600', marginBottom: '12px' });
           const form = document.createElement('form');
           for (const v of vars) {
             const row = document.createElement('div');
             Object.assign(row.style, { marginBottom: '10px' });
             const label = document.createElement('label');
-            label.textContent = `${v.label || v.key}${v.sensitive ? ' (敏感)' : ''}`;
+            label.textContent = `${v.label || v.key}${v.sensitive ? ' (sensitive)' : ''}`;
             Object.assign(label.style, {
               display: 'block',
               marginBottom: '6px',
@@ -1458,7 +1458,7 @@
           Object.assign(actions.style, { display: 'flex', gap: '8px', marginTop: '12px' });
           const ok = document.createElement('button');
           ok.type = 'submit';
-          ok.textContent = '确定';
+          ok.textContent = 'OK';
           Object.assign(ok.style, {
             background: '#0969da',
             color: '#fff',
@@ -1469,7 +1469,7 @@
           });
           const cancel = document.createElement('button');
           cancel.type = 'button';
-          cancel.textContent = '取消';
+          cancel.textContent = 'Cancel';
           Object.assign(cancel.style, {
             background: '#f3f4f6',
             color: '#111',

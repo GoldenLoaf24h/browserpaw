@@ -32,6 +32,38 @@ export interface ToolCallParam {
 /**
  * Handle tool execution
  */
+function coerceArgsWithSchema(argsObj: Record<string, any>, properties: Record<string, any>): void {
+  if (!argsObj || typeof argsObj !== 'object' || !properties) return;
+  for (const key of Object.keys(argsObj)) {
+    const val = argsObj[key];
+    const prop = properties[key];
+    if (!prop) continue;
+
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      const lower = trimmed.toLowerCase();
+      if (prop.type === 'boolean') {
+        if (lower === 'true') {
+          argsObj[key] = true;
+        } else if (lower === 'false') {
+          argsObj[key] = false;
+        }
+      } else if (prop.type === 'integer' && /^-?\d+$/.test(trimmed)) {
+        argsObj[key] = parseInt(trimmed, 10);
+      } else if (prop.type === 'number' && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+        argsObj[key] = Number(trimmed);
+      }
+    } else if (
+      val &&
+      typeof val === 'object' &&
+      !Array.isArray(val) &&
+      (prop.type === 'object' || prop.properties)
+    ) {
+      coerceArgsWithSchema(val, prop.properties || {});
+    }
+  }
+}
+
 export const handleCallTool = async (param: ToolCallParam, context?: ToolCallContext) => {
   try {
     const session = await chrome.storage.session.get('agentControlEnabled');
@@ -60,27 +92,7 @@ export const handleCallTool = async (param: ToolCallParam, context?: ToolCallCon
   try {
     const args = param.args ?? {};
     // Strict schema-driven argument coercion: only coerce when explicitly declared as boolean or number/integer
-    for (const key of Object.keys(args)) {
-      const val = args[key];
-      if (typeof val === 'string') {
-        const trimmed = val.trim();
-        const lower = trimmed.toLowerCase();
-        const prop = schemaProperties[key];
-        if (prop) {
-          if (prop.type === 'boolean') {
-            if (lower === 'true') {
-              args[key] = true;
-            } else if (lower === 'false') {
-              args[key] = false;
-            }
-          } else if (prop.type === 'integer' && /^-?\d+$/.test(trimmed)) {
-            args[key] = parseInt(trimmed, 10);
-          } else if (prop.type === 'number' && /^-?\d+(\.\d+)?$/.test(trimmed)) {
-            args[key] = Number(trimmed);
-          }
-        }
-      }
-    }
+    coerceArgsWithSchema(args, schemaProperties);
 
     if (param.sessionId) {
       args.sessionId = param.sessionId;

@@ -3,8 +3,6 @@
  * Authoritative sources: PROJECT.md & ORIGINAL_REQUEST.md
  */
 
-import { type MockDOMNode, countTotalNodes } from './dom-samples.ts';
-
 export interface ExpectedIndexRule {
   minInteractiveCount: number;
   expectedSequentialStart: 1;
@@ -12,9 +10,12 @@ export interface ExpectedIndexRule {
 
 /**
  * Validates DOM Pruning Compression Ratio according to Acceptance Criteria:
- * "针对包含超过 1000 个 DOM 节点的复杂网页进行快照提取测试，输出的交互元素树相比原始 HTML 缩减超过 85% 以上，且不丢失任何可见交互按钮或输入框。"
+ * "Perform snapshot extraction testing on complex web pages with over 1,000 DOM nodes; the output interactive element tree must achieve >= 85% compression compared to raw HTML while preserving all visible interactive buttons and inputs."
  */
-export function validateDOMCompression(originalNodes: number, prunedElements: number): {
+export function validateDOMCompression(
+  originalNodes: number,
+  prunedElements: number,
+): {
   compressionRatio: number;
   passesCriterion: boolean;
 } {
@@ -60,7 +61,11 @@ export function validateToolAnnotations(tool: {
 /**
  * Derives expected execution result for batch actions pipeline.
  */
-export function deriveBatchActionOutcome(actions: Array<{ type: string; [key: string]: any }>, availableIndices: Set<number>, pageDriftOccurredAt?: number) {
+export function deriveBatchActionOutcome(
+  actions: Array<{ type: string; index?: number; [key: string]: unknown }>,
+  availableIndices: Set<number>,
+  pageDriftOccurredAt?: number,
+) {
   let completed = 0;
   const results: Array<{ actionIndex: number; success: boolean; error?: string }> = [];
   let interruptedReason: string | undefined;

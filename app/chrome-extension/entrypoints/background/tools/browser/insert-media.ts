@@ -4,6 +4,7 @@ import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { executeInPage } from './in-page-engine';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { sendFileOperationToNative, cancelFileOperation } from '../../native-host';
+import { isCloudMetadataUrl } from '../../../../utils/restricted-url';
 
 export interface InsertMediaParams {
   filePath?: string;
@@ -55,6 +56,12 @@ export class InsertMediaTool extends BaseBrowserToolExecutor {
         // 1. If mediaUrl or remote fileUrl provided, fetch binary
         const fetchTargetUrl = args.mediaUrl || args.fileUrl;
         if (!base64 && fetchTargetUrl) {
+          if (
+            isCloudMetadataUrl(fetchTargetUrl) ||
+            fetchTargetUrl.trim().toLowerCase().startsWith('file:')
+          ) {
+            return createErrorResponse('Access denied: Blocked restricted or cloud metadata URL');
+          }
           try {
             const resp = await fetch(fetchTargetUrl);
             if (!resp.ok) {
@@ -93,7 +100,7 @@ export class InsertMediaTool extends BaseBrowserToolExecutor {
               const mediaUrl = new URL(nativeRes.mediaUrl);
               const stored = await chrome.storage.local
                 .get(['serverStatus'])
-                .catch(() => ({} as any));
+                .catch(() => ({}) as any);
               const bridgeToken = (stored as any)?.serverStatus?.token;
               if (bridgeToken) {
                 mediaUrl.searchParams.set('token', bridgeToken);

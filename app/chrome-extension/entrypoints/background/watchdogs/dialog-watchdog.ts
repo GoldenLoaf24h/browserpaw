@@ -21,6 +21,7 @@ export class DialogWatchdog extends BaseWatchdog {
   public readonly listensTo = ['Page.javascriptDialogOpening', 'Page.javascriptDialogClosed'];
   private observer: CdpEventObserver | null = null;
   private pendingDialogs = new Map<number, DialogEventData>();
+  private tabRemovedListener: ((tabId: number) => void) | null = null;
 
   public start(): void {
     if (this.isRunning) return;
@@ -52,6 +53,13 @@ export class DialogWatchdog extends BaseWatchdog {
     };
 
     cdpSessionManager.addCdpEventObserver(this.observer);
+
+    this.tabRemovedListener = (tabId: number) => {
+      this.pendingDialogs.delete(tabId);
+    };
+    if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved?.addListener) {
+      chrome.tabs.onRemoved.addListener(this.tabRemovedListener);
+    }
   }
 
   public stop(): void {
@@ -59,6 +67,12 @@ export class DialogWatchdog extends BaseWatchdog {
     if (this.observer) {
       cdpSessionManager.removeCdpEventObserver(this.observer);
       this.observer = null;
+    }
+    if (this.tabRemovedListener) {
+      if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved?.removeListener) {
+        chrome.tabs.onRemoved.removeListener(this.tabRemovedListener);
+      }
+      this.tabRemovedListener = null;
     }
     this.pendingDialogs.clear();
     this.isRunning = false;

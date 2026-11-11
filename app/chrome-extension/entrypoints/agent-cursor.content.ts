@@ -829,7 +829,7 @@ function initAgentCursor() {
       const speed = dist(prevPt, cursorState.point) / dt;
       cursorState.stretchSpring.target = clamp(1 - speed / 5500, 0.65, 1);
 
-      if (prg >= 0.99 && dist(cursorState.point, motion.path.end) <= 1.5) {
+      if (prg >= 0.985 && dist(cursorState.point, motion.path.end) <= 2.5) {
         cursorState.point = motion.path.end;
         resetSpring(cursorState.positionXSpring, motion.path.end.x);
         resetSpring(cursorState.positionYSpring, motion.path.end.y);

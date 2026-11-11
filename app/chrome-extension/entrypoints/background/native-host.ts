@@ -749,6 +749,13 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
       }
       fileOperationCallbacks.clear();
 
+      for (const controller of activeToolCalls.values()) {
+        try {
+          controller.abort();
+        } catch {}
+      }
+      activeToolCalls.clear();
+
       // Mark server as stopped since native host disconnection means server is down
       void markServerStopped('native_port_disconnected');
 

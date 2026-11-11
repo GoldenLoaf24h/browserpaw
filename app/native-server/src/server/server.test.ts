@@ -223,31 +223,47 @@ describe('Fastify MCP Native Server Integration Tests', () => {
     await client.connect(transport);
     expect(transport.sessionId).toBeDefined();
 
-    const tools = await client.listTools();
-    expect(tools.tools.length).toBe(16); // Core profile exposes exactly 16 primary tools
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.length).toBe(9);
 
-    // Call tool when extension is disconnected -> returns isError: true immediately without blocking
-    const t0 = Date.now();
-    const toolRes = (await client.callTool({
-      name: 'chrome_click_index',
-      arguments: { index: 1 },
-    })) as any;
-    const duration = Date.now() - t0;
-    expect(duration).toBeLessThan(1000);
-    expect(toolRes.isError).toBe(true);
+      const t0 = Date.now();
+      const toolRes = await client.callTool({
+        name: 'chrome_interact_index',
+        arguments: { index: 1, action: 'click' },
+      });
+      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(toolRes.isError).toBe(true);
 
-    // Auto-Unlock on Call: calling unexposed tool (chrome_history in "manage" category)
-    // triggers category activation and expands tools/list
-    await client.callTool({
-      name: 'chrome_history',
-      arguments: { query: 'google' },
-    });
-    const afterAutoUnlock = await client.listTools();
-    expect(afterAutoUnlock.tools.length).toBeGreaterThan(14);
-    expect(afterAutoUnlock.tools.some((t: any) => t.name === 'chrome_history')).toBe(true);
-    expect(afterAutoUnlock.tools.some((t: any) => t.name === 'chrome_bookmark_search')).toBe(true);
+      // A known hidden call and a category query leave the public list unchanged.
+      await client.callTool({ name: 'chrome_history', arguments: { query: 'google' } });
+      await client.callTool({ name: 'chrome_tool_docs', arguments: { category: 'manage' } });
+      expect((await client.listTools()).tools).toEqual(tools.tools);
 
-    await client.close();
+      await client.callTool({
+        name: 'chrome_tool_docs',
+        arguments: { names: ['chrome_history'], activateForSession: true },
+      });
+      const selected = (await client.listTools()).tools;
+      expect(selected).toHaveLength(10);
+      expect(selected.some((tool) => tool.name === 'chrome_history')).toBe(true);
+      expect(selected.some((tool) => tool.name === 'chrome_bookmark_search')).toBe(false);
+
+      const invalid = await client.callTool({
+        name: 'chrome_tool_docs',
+        arguments: { names: ['chrome_screenshot', 'unknown'], activateForSession: true },
+      });
+      expect(invalid.isError).toBe(true);
+      expect((await client.listTools()).tools).toEqual(selected);
+
+      await client.callTool({
+        name: 'chrome_tool_docs',
+        arguments: { names: [], activateForSession: true },
+      });
+      expect((await client.listTools()).tools).toEqual(tools.tools);
+    } finally {
+      await client.close();
+    }
   });
 
   test('Full MCP client lifecycle over SSE transport', async () => {

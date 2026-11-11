@@ -61,6 +61,10 @@ export class GrepTool extends BaseBrowserToolExecutor {
       const limit = Math.min(Math.max(1, args.limit ?? 20), 50);
       const searchType = args.searchType || 'interactive_only';
 
+      if (args.isRegex && args.query.length > 500) {
+        return createErrorResponse('Regular expression query is too long (maximum 500 characters)');
+      }
+
       let pattern: RegExp;
       try {
         pattern = args.isRegex

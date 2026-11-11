@@ -122,6 +122,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     if (this.captureData.has(tabId)) {
       console.log(`NetworkDebuggerStartTool: Tab ${tabId} was closed, cleaning up resources.`);
       this.cleanupCapture(tabId);
+      void cdpSessionManager.detach(tabId, 'network-capture').catch(() => {});
     }
   }
 

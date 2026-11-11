@@ -16,6 +16,7 @@ interface HandleDownloadParams {
   tabId?: number;
   guid?: string;
   clickTargetIndex?: number;
+  index?: number;
   frameId?: number;
   filenameContains?: string;
   timeoutMs?: number;
@@ -33,10 +34,11 @@ function validGuid(value: unknown): value is string {
 }
 
 function isScoped(args: HandleDownloadParams): boolean {
+  const clickTargetIndex = args?.clickTargetIndex ?? (args as any)?.index;
   return (
     args?.tabId !== undefined ||
     args?.guid !== undefined ||
-    args?.clickTargetIndex !== undefined ||
+    clickTargetIndex !== undefined ||
     args?.frameId !== undefined
   );
 }
@@ -100,8 +102,9 @@ function scopedArgs(args: HandleDownloadParams):
   });
   if (!positiveInt(args.tabId))
     return blocked('tabId must be a positive integer for a scoped download');
+  const clickTargetIndex = args.clickTargetIndex ?? (args as any).index;
   const hasGuid = args.guid !== undefined;
-  const hasClick = args.clickTargetIndex !== undefined;
+  const hasClick = clickTargetIndex !== undefined;
   if (hasGuid && hasClick) return blocked('guid and clickTargetIndex are mutually exclusive');
   if (args.frameId !== undefined && !hasClick) {
     return blocked('frameId is only valid with clickTargetIndex');
@@ -109,7 +112,7 @@ function scopedArgs(args: HandleDownloadParams):
   if (args.frameId !== undefined && (!Number.isSafeInteger(args.frameId) || args.frameId < 0)) {
     return blocked('frameId must be a non-negative integer');
   }
-  if (hasClick && !positiveInt(args.clickTargetIndex)) {
+  if (hasClick && !positiveInt(clickTargetIndex)) {
     return blocked('clickTargetIndex must be a positive integer');
   }
   if (hasGuid && !validGuid(args.guid)) return blocked('guid must be a 1-128 character string');
@@ -124,7 +127,7 @@ function scopedArgs(args: HandleDownloadParams):
     return {
       tabId: args.tabId,
       guid: hasGuid ? args.guid : undefined,
-      clickTargetIndex: hasClick ? args.clickTargetIndex : undefined,
+      clickTargetIndex: hasClick ? clickTargetIndex : undefined,
       frameId: args.frameId,
       filenameContains: args.filenameContains?.trim() || undefined,
       waitForComplete: args.waitForComplete !== false,
@@ -137,7 +140,7 @@ function scopedArgs(args: HandleDownloadParams):
   return {
     tabId: args.tabId,
     guid: hasGuid ? args.guid : undefined,
-    clickTargetIndex: hasClick ? args.clickTargetIndex : undefined,
+    clickTargetIndex: hasClick ? clickTargetIndex : undefined,
     frameId: args.frameId,
     filenameContains: args.filenameContains?.trim() || undefined,
     waitForComplete: args.waitForComplete !== false,

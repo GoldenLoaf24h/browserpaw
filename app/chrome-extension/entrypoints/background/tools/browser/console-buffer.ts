@@ -331,6 +331,15 @@ class ConsoleBuffer {
   }
 
   private handleTabRemoved(tabId: number): void {
+    const pendingStart = this.starting.get(tabId);
+    if (pendingStart) {
+      void pendingStart
+        .catch(() => {})
+        .finally(() => {
+          void this.stopCapture(tabId, 'tab_closed');
+        });
+      return;
+    }
     if (!this.buffers.has(tabId)) return;
     void this.stopCapture(tabId, 'tab_closed');
   }

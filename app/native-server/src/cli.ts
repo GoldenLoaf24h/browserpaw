@@ -17,7 +17,7 @@ import { runReport } from './scripts/report';
 
 program
   .version(require('../package.json').version)
-  .description('Mcp Chrome Bridge - Local service for communicating with Chrome extension');
+  .description('BrowserPaw - Local service for communicating with Chrome extension');
 
 // Register Native Messaging host
 program
@@ -102,8 +102,8 @@ program
               'yellow',
             ),
           );
-          console.log(colorText('  1. sudo mcp-chrome-bridge register', 'yellow'));
-          console.log(colorText('  2. mcp-chrome-bridge register --system', 'yellow'));
+          console.log(colorText('  1. sudo browserpaw register', 'yellow'));
+          console.log(colorText('  2. browserpaw register --system', 'yellow'));
           process.exit(1);
         }
       }

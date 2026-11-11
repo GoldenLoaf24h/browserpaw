@@ -392,6 +392,7 @@ class CDPSessionManager {
     this.inFlightRequests.delete(tabId);
     this.domainRefCounts.delete(tabId);
     this.activeCommands.delete(tabId);
+    this.tabQueues.delete(tabId);
     if (this.sessions.has(tabId)) {
       console.warn(
         `[CDPSessionManager] Tab ${tabId} disconnected/closed via ${reason}. Cleaning up session.`,

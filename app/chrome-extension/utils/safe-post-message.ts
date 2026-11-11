@@ -63,6 +63,7 @@ export function safePostMessage(
             guess--;
           }
         }
+        guess = Math.max(start + 1, guess);
         slices.push(serialized.slice(start, guess));
         start = guess;
       }

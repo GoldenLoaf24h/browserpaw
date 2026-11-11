@@ -308,7 +308,7 @@ export class SessionTabAffinityManager {
           this.affinityMap.set(sessionId, childTabId);
           modified = true;
           console.log(
-            `[SessionTabAffinity] Auto Tab Affinity Handover: session [${sessionId}]顺延 from tab ${parentTabId} to child tab ${childTabId} (${url || 'about:blank'})`,
+            `[SessionTabAffinity] Auto Tab Affinity Handover: session [${sessionId}] handed over from tab ${parentTabId} to child tab ${childTabId} (${url || 'about:blank'})`,
           );
         }
       }

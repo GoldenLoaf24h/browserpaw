@@ -894,8 +894,14 @@ async function runPhysicalFill(
       }
       const occRes = occResult?.result;
       if (occRes && typeof occRes.x === 'number' && typeof occRes.y === 'number') {
-        const occX: number = occRes.x;
-        const occY: number = occRes.y;
+        let occX: number = occRes.x;
+        let occY: number = occRes.y;
+        if (targetFrameId !== 0) {
+          ({ x: occX, y: occY } = await projectFramePoint(tabId, targetFrameId, {
+            x: occX,
+            y: occY,
+          }));
+        }
         if (targetX !== occX || targetY !== occY) {
           targetX = occX;
           targetY = occY;

@@ -101,20 +101,20 @@ export function cleanDistDir(targetDir: string): void {
 
 export function runBuild(): void {
   // Clean previous build
-  console.log('清理上次构建...');
+  console.log('Cleaning previous build...');
   cleanDistDir(distDir);
 
   // Create dist directory
   fs.mkdirSync(distDir, { recursive: true });
   fs.mkdirSync(path.join(distDir, 'logs'), { recursive: true }); // Create logs directory
-  console.log('dist 和 dist/logs 目录已创建/确认存在');
+  console.log('Created dist and dist/logs directories');
 
   // Compile TypeScript
-  console.log('编译TypeScript...');
+  console.log('Compiling TypeScript...');
   execSync('tsc', { stdio: 'inherit' });
 
   // Copy configuration files
-  console.log('复制配置文件...');
+  console.log('Copying configuration files...');
   const configSourcePath = path.join(__dirname, '..', 'mcp', 'stdio-config.json');
   const configDestPath = path.join(distDir, 'mcp', 'stdio-config.json');
 
@@ -129,11 +129,11 @@ export function runBuild(): void {
       console.error(`Error: Configuration file not found: ${configSourcePath}`);
     }
   } catch (error) {
-    console.error('复制配置文件时出错:', error);
+    console.error('Error copying configuration files:', error);
   }
 
   // Prepare package.json
-  console.log('准备package.json...');
+  console.log('Preparing package.json...');
   const packageJson = require('../../package.json');
 
   // Copy installation instructions
@@ -142,7 +142,7 @@ export function runBuild(): void {
     fs.copyFileSync(pkgReadme, path.join(distDir, 'README.md'));
   }
 
-  console.log('复制内置站点recipes...');
+  console.log('Copying built-in site recipes...');
   const canonicalRecipesDir = path.join(
     __dirname,
     '..',
@@ -160,22 +160,22 @@ export function runBuild(): void {
     copyRecipeDataFiles(canonicalRecipesDir, distRecipesDir);
     console.log(`Copied recipe data files to ${distRecipesDir}`);
   } catch (error) {
-    console.error('复制内置站点recipes时出错:', error);
+    console.error('Error copying built-in site recipes:', error);
     throw error;
   }
 
-  console.log('复制客户端中立的 Agent Skill...');
+  console.log('Copying portable Agent Skill...');
   const canonicalSkillDir = path.join(__dirname, '..', '..', '..', '..', 'skills', 'browserpaw');
   const distSkillDir = path.join(distDir, 'skill', 'browserpaw');
   try {
     copyPortableSkill(canonicalSkillDir, distSkillDir);
     console.log(`Copied portable Agent Skill to ${distSkillDir}`);
   } catch (error) {
-    console.error('复制 Agent Skill 时出错:', error);
+    console.error('Error copying Agent Skill:', error);
     throw error;
   }
 
-  console.log('复制包装脚本...');
+  console.log('Copying wrapper scripts...');
   const scriptsSourceDir = path.join(__dirname, '.');
   try {
     copyHostWrapperScripts(scriptsSourceDir, distDir);
@@ -190,12 +190,12 @@ export function runBuild(): void {
       console.log(`Copied ${guardSrc} to ${guardDest}`);
     }
   } catch (error) {
-    console.error('复制包装脚本时出错:', error);
+    console.error('Error copying wrapper scripts:', error);
     process.exit(1);
   }
 
   // Add executable permissions for key JavaScript files and shell scripts
-  console.log('添加可执行权限...');
+  console.log('Adding executable permissions...');
   const filesToMakeExecutable = ['index.js', 'cli.js', 'run_host.sh']; // cli.js assumed at dist root
 
   filesToMakeExecutable.forEach((file) => {
@@ -215,19 +215,19 @@ export function runBuild(): void {
   // Write node_path.txt immediately after build to ensure Chrome uses the correct Node.js version.
   // This is critical for development mode where dist is deleted on each rebuild.
   // The file points to the Node.js executable used during build/installation
-  console.log('写入 node_path.txt...');
+  console.log('Writing node_path.txt...');
   const nodePathFile = path.join(distDir, 'node_path.txt');
   fs.writeFileSync(nodePathFile, process.execPath, 'utf8');
   console.log(`Saved Node.js path: ${process.execPath}`);
 
-  console.log('✅ 构建完成');
+  console.log('Build completed successfully');
 }
 
 if (!process.env.JEST_WORKER_ID) {
   try {
     runBuild();
   } catch (err) {
-    console.error('构建失败:', err);
+    console.error('Build failed:', err);
     process.exit(1);
   }
 }

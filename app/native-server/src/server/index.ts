@@ -864,7 +864,7 @@ export class Server {
         }
       }
 
-      request.socket.on('close', () => {
+      reply.raw.once('close', () => {
         request.log.info(`SSE client disconnected for session: ${sessionId}`);
         // Streamable HTTP transport: socket close only ends this SSE stream transport,
         // the logical MCP session is kept alive until explicit DELETE or timeout.

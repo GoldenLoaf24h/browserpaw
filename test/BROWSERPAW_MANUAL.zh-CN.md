@@ -129,18 +129,19 @@ console.log('DOM snapshot:', dom.content[0].text);
 
 ---
 
-## 2. 规范工具面（50 个 MCP 工具）
+## 2. 规范工具面（52 个 MCP 工具）
 
-BrowserPaw 暴露 50 个规范 MCP 工具，组织为 8 个功能类别：
+BrowserPaw 暴露 52 个规范 MCP 工具（49 个扩展工具 + 3 个 Native 工具），组织为 9 个功能类别：
 
 1. **自主微循环（1）**：`chrome_act_toward_goal`（本地快速决策循环）。
-2. **导航与标签页（7）**：`chrome_navigate`、`chrome_switch_tab`、`chrome_close_tabs`、`chrome_move_tab`、`get_windows_and_tabs`、`chrome_attach_tab`、`chrome_detach_tab`。
-3. **感知与内容（6）**：`chrome_read_dom`、`chrome_grep`、`chrome_get_markdown`、`chrome_inspect_media`、`chrome_get_dropdown_options`、`chrome_scroll_until_found`。
-4. **交互与表单（13）**：`chrome_interact_index`、`chrome_fill_index`、`chrome_batch_actions`、`chrome_form_pipeline`、`chrome_smart_scroll`、`chrome_keyboard`、`chrome_upload_file`、`chrome_insert_media`、`chrome_undo_last_action`、`chrome_computer`、`chrome_handle_dialog`、`chrome_handle_download`、`chrome_dismiss_overlay`。
-5. **观测与视觉（1）**：`chrome_screenshot`。
-6. **数据与书签（9）**：`chrome_tab_group_create`、`chrome_tab_group_update`、`chrome_tab_group_list`、`chrome_tab_group_ungroup`、`chrome_tab_group_close`、`chrome_history`、`chrome_bookmark_search`、`chrome_bookmark_add`、`chrome_bookmark_delete`。
-7. **诊断与脚本（4）**：`chrome_javascript`、`chrome_tool_docs`、`chrome_doctor`、`chrome_intercept_api`。
-8. **网络与底层 CDP（9）**：`chrome_network_request`、`chrome_network_capture`、`chrome_cdp_execute`、`chrome_console`、`chrome_storage`、`chrome_request_human_intervention`、`performance_start_trace`、`performance_stop_trace`、`performance_analyze_insight`。
+2. **工作流与持久任务（2）**：`chrome_task`（持久化任务与页面生命周期管理）、`chrome_skill`（独立验证的只读站点技能发现与执行）。
+3. **导航与标签页（7）**：`chrome_navigate`、`chrome_switch_tab`、`chrome_close_tabs`、`chrome_move_tab`、`get_windows_and_tabs`、`chrome_attach_tab`、`chrome_detach_tab`。
+4. **感知与内容（6）**：`chrome_read_dom`、`chrome_grep`、`chrome_get_markdown`、`chrome_inspect_media`、`chrome_get_dropdown_options`、`chrome_scroll_until_found`。
+5. **交互与表单（13）**：`chrome_interact_index`、`chrome_fill_index`、`chrome_batch_actions`、`chrome_form_pipeline`、`chrome_smart_scroll`、`chrome_keyboard`、`chrome_upload_file`、`chrome_insert_media`、`chrome_undo_last_action`、`chrome_computer`、`chrome_handle_dialog`、`chrome_handle_download`、`chrome_dismiss_overlay`。
+6. **观测与视觉（1）**：`chrome_screenshot`。
+7. **数据与书签（9）**：`chrome_tab_group_create`、`chrome_tab_group_update`、`chrome_tab_group_list`、`chrome_tab_group_ungroup`、`chrome_tab_group_close`、`chrome_history`、`chrome_bookmark_search`、`chrome_bookmark_add`、`chrome_bookmark_delete`。
+8. **诊断与脚本（4）**：`chrome_javascript`、`chrome_tool_docs`、`chrome_doctor`、`chrome_intercept_api`。
+9. **网络与底层 CDP（9）**：`chrome_network_request`、`chrome_network_capture`、`chrome_cdp_execute`、`chrome_console`、`chrome_storage`、`chrome_request_human_intervention`、`performance_start_trace`、`performance_stop_trace`、`performance_analyze_insight`。
 
 ---
 

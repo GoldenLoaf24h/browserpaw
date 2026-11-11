@@ -533,7 +533,7 @@ export async function registerWithElevatedPermissions(): Promise<void> {
       }
     }
   } catch (error: any) {
-    console.error(colorText(`注册失败: ${error.message}`, 'red'));
+    console.error(colorText(`Registration failed: ${error.message}`, 'red'));
     throw error;
   }
 }

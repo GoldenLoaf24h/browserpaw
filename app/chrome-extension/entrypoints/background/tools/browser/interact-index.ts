@@ -124,6 +124,14 @@ if (typeof chrome !== 'undefined' && chrome?.tabs?.onRemoved?.addListener) {
   } catch {}
 }
 
+if (typeof chrome !== 'undefined' && chrome?.tabs?.onUpdated?.addListener) {
+  try {
+    chrome.tabs.onUpdated.addListener((tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (changeInfo.status === 'loading') lastMousePosMap.delete(tabId);
+    });
+  } catch {}
+}
+
 export { computeHumanizedPoints };
 
 /**
@@ -187,59 +195,89 @@ async function dispatchMouseMovement(
 ): Promise<void> {
   if (!humanize) {
     // Dispatch 5 intermediate approach steps tightly within 35px radius (strictly <= 48px check radius)
-    // with 25ms frame-pacing to prevent Chromium input coalescing from collapsing events (guarantees >= 3 distinct pointermoves)
+
+    // with 25ms frame-pacing to reduce Chromium input coalescing.
+
     const deltas = [
       { dx: -28, dy: -14 },
+
       { dx: -18, dy: -9 },
+
       { dx: -10, dy: -5 },
+
       { dx: -4, dy: -2 },
+
       { dx: 0, dy: 0 },
     ];
+
     for (const d of deltas) {
       await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
         type: 'mouseMoved',
+
         x: Math.round(targetX + d.dx),
+
         y: Math.round(targetY + d.dy),
+
         modifiers: modifierMask,
       });
+
       await new Promise((r) => setTimeout(r, 25));
     }
+
     lastMousePosMap.set(tabId, { x: targetX, y: targetY });
+
     return;
   }
 
   const startPos = lastMousePosMap.get(tabId) || {
     x: Math.max(0, targetX - (15 + Math.floor(Math.random() * 20))),
+
     y: Math.max(0, targetY - (10 + Math.floor(Math.random() * 15))),
   };
 
   const steps = 3 + Math.floor(Math.random() * 3); // 3-5 steps
+
   const points = computeHumanizedPoints(startPos.x, startPos.y, targetX, targetY, steps);
+
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
+
     await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
+
       x: pt.x,
+
       y: pt.y,
+
       modifiers: modifierMask,
     });
+
     await new Promise((r) => setTimeout(r, 12 + Math.floor(Math.random() * 15)));
   }
 
-  // Micro-approach steps within target's direct neighborhood (< 25px radius) to guarantee realistic pointer tracking (avoids NO_POINTER_PATH)
+  // Finish the movement near the target before dispatching the click.
+
   const localDeltas = [
     { dx: -20, dy: -12 },
+
     { dx: -10, dy: -6 },
+
     { dx: -3, dy: -2 },
+
     { dx: 0, dy: 0 },
   ];
+
   for (const d of localDeltas) {
     await cdpSessionManager.sendCommand(tabId, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
+
       x: Math.round(targetX + d.dx),
+
       y: Math.round(targetY + d.dy),
+
       modifiers: modifierMask,
     });
+
     await new Promise((r) => setTimeout(r, 15));
   }
 
@@ -1352,6 +1390,10 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 buttons: 0,
                 clickCount: 1,
                 modifiers: modifierMask,
+              });
+              await animateAgentCursor(tabId, endPoint.x, endPoint.y, {
+                immediate: true,
+                waitForArrival: false,
               });
               lastMousePosMap.set(tabId, { x: endPoint.x, y: endPoint.y });
             } finally {

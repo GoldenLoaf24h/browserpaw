@@ -1,4 +1,16 @@
 import type { PageSettleResult } from 'chrome-mcp-shared';
+
+export interface ConfirmationTrapInfo {
+  detected: boolean;
+  title?: string;
+  buttons?: string[];
+}
+
+declare module 'chrome-mcp-shared' {
+  interface PageSettleResult {
+    trapCheckedInPage?: boolean;
+  }
+}
 import type { executeInPage as ExecuteInPageFn } from '@/entrypoints/background/tools/browser/in-page-engine';
 import type { cdpSessionManager as CDPSessionManagerInstance } from '@/utils/cdp-session-manager';
 
@@ -31,6 +43,8 @@ export function inPageWaitForDOMSettle(
   durationMs: number;
   mutationsObserved: number;
   autocompleteSettled?: boolean;
+  confirmationTrap?: ConfirmationTrapInfo;
+  trapCheckedInPage?: boolean;
 }> {
   let timeoutMs = 1500;
   if (typeof timeoutMsOrOptions === 'object' && timeoutMsOrOptions !== null) {
@@ -71,7 +85,30 @@ export function inPageWaitForDOMSettle(
       isDone = true;
       cleanup();
       const durationMs = Math.round(performance.now() - startTime);
-      resolve({ settled, durationMs, mutationsObserved: mutationCount, autocompleteSettled });
+
+      let confirmationTrap: ConfirmationTrapInfo | undefined;
+      let trapCheckedInPage = false;
+      try {
+        const detectFn = (globalThis as any).__MCP_INPAGE__?.inPageDetectConfirmationTrap;
+        if (typeof detectFn === 'function') {
+          const trapRes = detectFn();
+          trapCheckedInPage = typeof trapRes?.detected === 'boolean';
+          if (trapRes?.detected) {
+            confirmationTrap = trapRes;
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+
+      resolve({
+        settled,
+        durationMs,
+        mutationsObserved: mutationCount,
+        autocompleteSettled,
+        confirmationTrap,
+        trapCheckedInPage,
+      });
     };
 
     // 1. Check for Combobox autocomplete candidate options (browser.py:46-65 pattern)
@@ -222,12 +259,9 @@ async function getCdpSessionManager(): Promise<typeof CDPSessionManagerInstance>
   return cdpSessionManagerCache;
 }
 
-let executeInPageCache: typeof ExecuteInPageFn | null = null;
 async function getExecuteInPage(): Promise<typeof ExecuteInPageFn> {
-  if (executeInPageCache) return executeInPageCache;
   const mod = await import('@/entrypoints/background/tools/browser/in-page-engine');
-  executeInPageCache = mod.executeInPage;
-  return executeInPageCache;
+  return mod.executeInPage;
 }
 
 /**
@@ -281,14 +315,17 @@ export async function waitForPageSettle(
     };
     settleRes.networkSettled = !hasActiveNet;
 
-    // Check for secondary confirmation traps (e.g. "Discard draft?", "放弃帖子？")
-    try {
-      const trapRes = (await executeInPage({ tabId }, 'inPageDetectConfirmationTrap', []))?.[0]
-        ?.result;
-      if (trapRes?.detected) {
-        settleRes.confirmationTrap = trapRes;
-      }
-    } catch {}
+    // Check for secondary confirmation traps (e.g. "Discard draft?", "Discard post?")
+    if (!settleRes.trapCheckedInPage) {
+      try {
+        const trapRes = (
+          await executeInPage<ConfirmationTrapInfo>({ tabId }, 'inPageDetectConfirmationTrap', [])
+        )?.[0]?.result;
+        if (trapRes?.detected) {
+          settleRes.confirmationTrap = trapRes;
+        }
+      } catch {}
+    }
 
     return settleRes;
   } catch {

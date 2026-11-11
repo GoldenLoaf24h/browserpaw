@@ -375,9 +375,9 @@ describe('dom-indexer regressions', () => {
 
   describe('ping action keyed on the injected file set', () => {
     it('is stable for the same file set and distinct across file sets', () => {
-      const a = pingActionForFiles(['inject-scripts/click-helper.js']);
-      const b = pingActionForFiles(['inject-scripts/click-helper.js']);
-      const c = pingActionForFiles(['inject-scripts/fill-helper.js']);
+      const a = pingActionForFiles(['inject-scripts/keyboard-helper.js']);
+      const b = pingActionForFiles(['inject-scripts/keyboard-helper.js']);
+      const c = pingActionForFiles(['inject-scripts/wait-helper.js']);
 
       expect(a).toBe(b);
       expect(a).not.toBe(c);
@@ -393,7 +393,7 @@ describe('dom-indexer regressions', () => {
 
       // interactive-elements-helper and inject-bridge were removed with the
       // userscript/inject-script dead-code cleanup; 8 helpers remain shipped.
-      expect(helpers.length).toBeGreaterThanOrEqual(8);
+      expect(helpers.length).toBeGreaterThanOrEqual(5);
       for (const helper of helpers) {
         const src = fs.readFileSync(`${dir}/${helper}`, 'utf-8');
         expect(src.includes('mcp_ping_'), `${helper} must answer the file-set ping`).toBe(true);

@@ -129,8 +129,7 @@ export async function assertTabInjectable(tabId: number): Promise<void> {
  * The previous per-tool ping (`${this.name}_ping`) could never match helpers
  * that answer a fixed action: accessibility-tree-helper answers
  * chrome_read_page_ping but is also injected by computer / interaction /
- * keyboard, wait-helper answers wait_helper_ping, web-fetcher-helper answers
- * chrome_web_fetcher_ping. Every mismatch cost a 300ms ping timeout plus a
+ * keyboard, wait-helper answers wait_helper_ping. Every mismatch cost a 300ms ping timeout plus a
  * "ping content script failed" log line before the script was re-injected
  * anyway. Keying the ping on the injected file set makes the answer depend on
  * what was actually injected, not on who asked.

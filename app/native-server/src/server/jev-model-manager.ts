@@ -15,6 +15,7 @@ import {
   readdirSync,
   createWriteStream,
   openSync,
+  closeSync,
   unlinkSync,
   promises as fsPromises,
   readFileSync,
@@ -102,6 +103,7 @@ const MODELS_ROOT_DIR = join(getBrowserpawHome(), 'models');
 const DEFAULT_MODEL_NAME = 'decider-2b';
 const BASE_MODELS_PATH = join(MODELS_ROOT_DIR, DEFAULT_MODEL_NAME);
 const CONFIG_FILE = join(getBrowserpawHome(), 'jev-remote.json');
+const cudaAvailabilityCache = new Map<string, boolean>();
 
 // Expected model files with approximate sizes
 const MODEL_FILES = [
@@ -814,6 +816,9 @@ export class JevModelManager {
     if (process.env.NODE_ENV === 'test') {
       return process.env.MOCK_CUDA_AVAILABLE === 'true';
     }
+    if (cudaAvailabilityCache.has(pythonBin)) {
+      return cudaAvailabilityCache.get(pythonBin)!;
+    }
     try {
       const { execSync } = require('node:child_process');
       const out = execSync(`"${pythonBin}" -c "import torch; print(torch.cuda.is_available())"`, {
@@ -822,8 +827,11 @@ export class JevModelManager {
         timeout: 4000,
         windowsHide: true,
       }).trim();
-      return out.toLowerCase().includes('true');
+      const available = out.toLowerCase().includes('true');
+      cudaAvailabilityCache.set(pythonBin, available);
+      return available;
     } catch {
+      cudaAvailabilityCache.set(pythonBin, false);
       return false;
     }
   }
@@ -925,12 +933,6 @@ export class JevModelManager {
     const pythonBin = existsSync(venvPython) ? venvPython : isWin ? 'python' : 'python3';
 
     const logPath = join(bpHome, 'decider-service.log');
-    let logFd: number | undefined;
-    try {
-      logFd = openSync(logPath, 'a');
-    } catch {
-      // Ignore
-    }
 
     const modelDir = join(MODELS_ROOT_DIR, activeModel);
     const deciderRepoDir = join(bpHome, 'decider-repo');
@@ -972,17 +974,33 @@ export class JevModelManager {
           : process.env.PYTHONPATH || '',
       };
 
-      const child = spawn(
-        pythonBin,
-        ['-m', 'uvicorn', 'decider.serve:app', '--host', '127.0.0.1', '--port', '8009'],
-        {
-          detached: true,
-          cwd: existsSync(deciderRepoDir) ? deciderRepoDir : bpHome,
-          stdio: logFd !== undefined ? ['ignore', logFd, logFd] : 'ignore',
-          env,
-          windowsHide: true,
-        },
-      );
+      let logFd: number | undefined;
+      try {
+        logFd = openSync(logPath, 'a');
+      } catch {
+        // Ignore
+      }
+
+      let child: any;
+      try {
+        child = spawn(
+          pythonBin,
+          ['-m', 'uvicorn', 'decider.serve:app', '--host', '127.0.0.1', '--port', '8009'],
+          {
+            detached: true,
+            cwd: existsSync(deciderRepoDir) ? deciderRepoDir : bpHome,
+            stdio: logFd !== undefined ? ['ignore', logFd, logFd] : 'ignore',
+            env,
+            windowsHide: true,
+          },
+        );
+      } finally {
+        if (logFd !== undefined) {
+          try {
+            closeSync(logFd);
+          } catch {}
+        }
+      }
       this.serviceProcess = child;
       this.servicePid = child.pid || null;
       const pidFile = join(bpHome, 'decider-service.pid');
@@ -1691,6 +1709,11 @@ export class JevModelManager {
               }
               downloaded += chunk.length;
               onProgress(downloaded, totalBytes);
+            });
+
+            res.on('error', (err) => {
+              cleanup();
+              reject(err);
             });
 
             res.pipe(fileStream);

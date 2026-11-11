@@ -70,19 +70,11 @@ describe('P0 & P1 Architecture Hardening Verification', () => {
 
     it('verifies auxiliary browser tools do not steal focus on tab creation', async () => {
       const fs = await import('node:fs');
-      const webFetcher = fs.readFileSync(
-        'app/chrome-extension/entrypoints/background/tools/browser/web-fetcher.ts',
-        'utf-8',
-      );
       const consoleTool = fs.readFileSync(
         'app/chrome-extension/entrypoints/background/tools/browser/console.ts',
         'utf-8',
       );
 
-      assert.ok(
-        webFetcher.includes('active: (args as any).background === false') ||
-          webFetcher.includes('active: background === false'),
-      );
       assert.ok(consoleTool.includes('active: background === false'));
     });
 

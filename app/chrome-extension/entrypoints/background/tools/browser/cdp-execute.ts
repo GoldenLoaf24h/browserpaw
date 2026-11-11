@@ -44,6 +44,12 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
     }
 
     const method = args.method.trim();
+    const BLOCKED_METHODS = new Set(['Browser.close', 'Browser.crash', 'Browser.crashGpuProcess']);
+    if (BLOCKED_METHODS.has(method)) {
+      return createErrorResponse(
+        `Security restriction: Execution of dangerous CDP command "${method}" is blocked`,
+      );
+    }
     const commandParams = args.params || {};
     const timeoutMs =
       typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) && args.timeoutMs > 0

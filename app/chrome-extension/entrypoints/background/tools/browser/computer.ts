@@ -838,6 +838,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
             });
             await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
             for (let i = 1; i <= clickCount; i++) {
+              if (i > 1) {
+                await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);
+              }
               const guard = createMousePressGuard(
                 (eventParams) => CDPHelper.dispatchMouseEvent(tabId, eventParams),
                 {

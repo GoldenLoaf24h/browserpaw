@@ -6,7 +6,7 @@ import {
 import { sessionTabAffinity } from '../utils/session-tab-affinity';
 import { windowTool } from '../entrypoints/background/tools/browser/window';
 import { tabGroupCreateTool } from '../entrypoints/background/tools/browser/tab-group';
-import { webFetcherTool } from '../entrypoints/background/tools/browser/web-fetcher';
+import { getMarkdownTool } from '../entrypoints/background/tools/browser/get-markdown';
 import { downloadsWatchdog } from '../entrypoints/background/watchdogs/downloads-watchdog';
 
 describe('Ego Page Ledger & Tab Ownership MV3 Recovery Suite', () => {
@@ -34,6 +34,10 @@ describe('Ego Page Ledger & Tab Ownership MV3 Recovery Suite', () => {
 
     (globalThis as any).chrome = {
       storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => {}),
+        },
         session: {
           get: vi.fn(async (keys?: string | string[]) => {
             if (!keys) return { ...mockSessionStorage };
@@ -169,7 +173,21 @@ describe('Ego Page Ledger & Tab Ownership MV3 Recovery Suite', () => {
         update: vi.fn(),
       },
       scripting: {
-        executeScript: vi.fn(async () => [{ result: { success: true } }]),
+        executeScript: vi.fn(async (opts: any) => [
+          {
+            documentId: 'doc-1',
+            result:
+              opts?.func?.length === 1
+                ? true
+                : {
+                    engineType: 'object',
+                    fnType: 'function',
+                    singleTurn: true,
+                    status: 'success',
+                    value: '# Sample Markdown Content',
+                  },
+          },
+        ]),
       },
     };
 
@@ -371,27 +389,28 @@ describe('Ego Page Ledger & Tab Ownership MV3 Recovery Suite', () => {
   });
 
   // =========================================================================
-  // 5. 主审核心：webFetcherTool 仅在新建自有页面时登记 ownership，复用现有页不登记
+  // 5. 主审核心：getMarkdownTool 访问现有页绝不登记 ownership，自有页保持 owned
   // =========================================================================
-  it('5. webFetcherTool registers ownership only for freshly created tabs, not existing tabs', async () => {
-    // 1. Fetching non-existent URL creates a new tab -> MUST be registered as owned!
-    const freshResult = await webFetcherTool.execute({
+  it('5. getMarkdownTool preserves tab ownership ledger: agent tabs remain owned, user tabs remain unmanaged', async () => {
+    // 1. Fresh agent tab created and registered -> MUST be tracked as owned!
+    tabGroupManager.beginAgentTabCreation();
+    const createdTab = await chrome.tabs.create({
       url: 'https://example-new-fetch.com',
-      textContent: true,
-      background: true,
+      active: false,
+    });
+    tabGroupManager.endAgentTabCreation(createdTab.id);
+    expect(tabGroupManager.isAgentTab(createdTab.id)).toBe(true);
+
+    const freshResult = await getMarkdownTool.execute({
+      tabId: createdTab.id,
     });
     expect(freshResult.isError).toBe(false);
+    expect(tabGroupManager.isAgentTab(createdTab.id)).toBe(true);
 
-    const createdTab = mockTabs.find((t) => t.url === 'https://example-new-fetch.com');
-    expect(createdTab).toBeDefined();
-    expect(tabGroupManager.isAgentTab(createdTab!.id)).toBe(true);
-
-    // 2. Fetching existing user URL (tab 10: https://user-reading.org) -> MUST NOT register ownership!
+    // 2. Reading existing user URL (tab 10: https://user-reading.org) -> MUST NOT register ownership!
     expect(tabGroupManager.isAgentTab(10)).toBe(false);
-    const existingResult = await webFetcherTool.execute({
-      url: 'https://user-reading.org',
-      textContent: true,
-      background: true,
+    const existingResult = await getMarkdownTool.execute({
+      tabId: 10,
     });
     expect(existingResult.isError).toBe(false);
 

@@ -354,9 +354,9 @@ export class NativeMessagingHost {
         reject(error);
       };
 
-      // Pre-check payload size to fail immediately rather than hang until timeout
+      let serialized: string;
       try {
-        JSON.stringify({
+        serialized = JSON.stringify({
           type: messageType,
           payload: messagePayload,
           requestId,
@@ -397,11 +397,14 @@ export class NativeMessagingHost {
       signal?.addEventListener('abort', onAbort, { once: true });
 
       // Send message with requestId to Chrome
-      this.sendMessage({
-        type: messageType, // Define a request type, e.g. 'request_data'
-        payload: messagePayload,
-        requestId: requestId, // <--- Key: include request ID
-      });
+      this.sendMessage(
+        {
+          type: messageType, // Define a request type, e.g. 'request_data'
+          payload: messagePayload,
+          requestId: requestId, // <--- Key: include request ID
+        },
+        serialized,
+      );
     });
   }
 
@@ -463,9 +466,9 @@ export class NativeMessagingHost {
   /**
    * Send message to Chrome extension
    */
-  public sendMessage(message: any): void {
+  public sendMessage(message: any, preSerialized?: string): void {
     try {
-      const messageString = JSON.stringify(message);
+      const messageString = preSerialized ?? JSON.stringify(message);
       const messageBuffer = Buffer.from(messageString);
 
       // Task B8 & ARCH-04: Transparent chunking based on final UTF-8 envelope byteLength

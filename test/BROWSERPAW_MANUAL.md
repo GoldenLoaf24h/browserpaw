@@ -129,19 +129,20 @@ console.log('DOM snapshot:', dom.content[0].text);
 
 ---
 
-## 2. Canonical Tool Surface
+## 2. Canonical Tool Surface (52 MCP Tools)
 
-BrowserPaw exposes its canonical MCP tools in functional categories. Use
+BrowserPaw exposes 52 canonical MCP tools (49 extension tools + 3 Native tools) across functional categories. Use
 `chrome_tool_docs` or `tools/list` for the exact runtime surface:
 
 1. **Autonomous Micro-Loop (1)**: `chrome_act_toward_goal` (local fast-decision loop).
-2. **Navigation & Tabs (7)**: `chrome_navigate`, `chrome_switch_tab`, `chrome_close_tabs`, `chrome_move_tab`, `get_windows_and_tabs`, `chrome_attach_tab`, `chrome_detach_tab`.
-3. **Perception & Content (6)**: `chrome_read_dom`, `chrome_grep`, `chrome_get_markdown`, `chrome_inspect_media`, `chrome_get_dropdown_options`, `chrome_scroll_until_found`.
-4. **Interaction & Forms (13)**: `chrome_interact_index`, `chrome_fill_index`, `chrome_batch_actions`, `chrome_form_pipeline`, `chrome_smart_scroll`, `chrome_keyboard`, `chrome_upload_file`, `chrome_insert_media`, `chrome_undo_last_action`, `chrome_computer`, `chrome_handle_dialog`, `chrome_handle_download`, `chrome_dismiss_overlay`.
-5. **Observation & Vision (1)**: `chrome_screenshot`.
-6. **Data & Bookmarks (9)**: `chrome_tab_group_create`, `chrome_tab_group_update`, `chrome_tab_group_list`, `chrome_tab_group_ungroup`, `chrome_tab_group_close`, `chrome_history`, `chrome_bookmark_search`, `chrome_bookmark_add`, `chrome_bookmark_delete`.
-7. **Diagnostics & Scripting (4)**: `chrome_javascript`, `chrome_tool_docs`, `chrome_doctor`, `chrome_intercept_api`.
-8. **Network & Low-Level CDP (9)**: `chrome_network_request`, `chrome_network_capture`, `chrome_cdp_execute`, `chrome_console`, `chrome_storage`, `chrome_request_human_intervention`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`.
+2. **Workflow & Native Tasks (2)**: `chrome_task` (durable task & page lifecycle management), `chrome_skill` (verified site skill discovery & execution).
+3. **Navigation & Tabs (7)**: `chrome_navigate`, `chrome_switch_tab`, `chrome_close_tabs`, `chrome_move_tab`, `get_windows_and_tabs`, `chrome_attach_tab`, `chrome_detach_tab`.
+4. **Perception & Content (6)**: `chrome_read_dom`, `chrome_grep`, `chrome_get_markdown`, `chrome_inspect_media`, `chrome_get_dropdown_options`, `chrome_scroll_until_found`.
+5. **Interaction & Forms (13)**: `chrome_interact_index`, `chrome_fill_index`, `chrome_batch_actions`, `chrome_form_pipeline`, `chrome_smart_scroll`, `chrome_keyboard`, `chrome_upload_file`, `chrome_insert_media`, `chrome_undo_last_action`, `chrome_computer`, `chrome_handle_dialog`, `chrome_handle_download`, `chrome_dismiss_overlay`.
+6. **Observation & Vision (1)**: `chrome_screenshot`.
+7. **Data & Bookmarks (9)**: `chrome_tab_group_create`, `chrome_tab_group_update`, `chrome_tab_group_list`, `chrome_tab_group_ungroup`, `chrome_tab_group_close`, `chrome_history`, `chrome_bookmark_search`, `chrome_bookmark_add`, `chrome_bookmark_delete`.
+8. **Diagnostics & Scripting (4)**: `chrome_javascript`, `chrome_tool_docs`, `chrome_doctor`, `chrome_intercept_api`.
+9. **Network & Low-Level CDP (9)**: `chrome_network_request`, `chrome_network_capture`, `chrome_cdp_execute`, `chrome_console`, `chrome_storage`, `chrome_request_human_intervention`, `performance_start_trace`, `performance_stop_trace`, `performance_analyze_insight`.
 
 ---
 

@@ -15,10 +15,13 @@ async function main(): Promise<void> {
 
     await registerWithElevatedPermissions();
     console.log(
-      colorText('注册成功！现在Chrome扩展可以通过Native Messaging与本地服务通信。', 'green'),
+      colorText(
+        'Registration successful! The Chrome extension can now communicate with the local service via Native Messaging.',
+        'green',
+      ),
     );
   } catch (error: any) {
-    console.error(colorText(`注册失败: ${error.message}`, 'red'));
+    console.error(colorText(`Registration failed: ${error.message}`, 'red'));
     process.exit(1);
   }
 }

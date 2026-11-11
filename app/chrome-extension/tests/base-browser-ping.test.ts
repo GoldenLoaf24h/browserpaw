@@ -41,7 +41,9 @@ describe('injectContentScript ping handling', () => {
       new Error('Could not establish connection. Receiving end does not exist.'),
     );
 
-    await expect(executor.inject(101, ['inject-scripts/click-helper.js'])).resolves.toBeUndefined();
+    await expect(
+      executor.inject(101, ['inject-scripts/keyboard-helper.js']),
+    ).resolves.toBeUndefined();
 
     expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
     expect(consoleError).not.toHaveBeenCalled();
@@ -53,7 +55,7 @@ describe('injectContentScript ping handling', () => {
       new Error('Cannot access contents of the page'),
     );
 
-    await expect(executor.inject(102, ['inject-scripts/fill-helper.js'])).resolves.toBeUndefined();
+    await expect(executor.inject(102, ['inject-scripts/wait-helper.js'])).resolves.toBeUndefined();
 
     expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
     expect(consoleError).toHaveBeenCalledWith(
