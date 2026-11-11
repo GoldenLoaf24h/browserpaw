@@ -110,14 +110,11 @@ test('checkPackageVersions verifies consistency across monorepo packages', () =>
   const repoRoot = process.cwd();
   const res = checkPackageVersions(repoRoot);
   assert.equal(res.matched, true);
-  assert.equal(res.canonicalVersion, '4.1.2');
-  assert.equal(res.versions.root, '4.1.2');
-  assert.equal(res.versions['native-server'], '4.1.2');
-  assert.equal(res.versions.shared, '4.1.2');
-  assert.equal(res.versions['chrome-extension'], '4.1.2');
-  assert.equal(res.versions['portable-plugin'], '4.1.2');
-  assert.equal(res.versions['hermes-plugin'], '4.1.2');
-  assert.equal(res.versions['claude-plugin'], '4.1.2');
+  const expected = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version;
+  assert.equal(res.canonicalVersion, expected);
+  for (const [name, version] of Object.entries(res.versions)) {
+    assert.equal(version, expected, name);
+  }
 });
 
 test('checkTagReleaseRecords asserts all local git tags have release notes', () => {

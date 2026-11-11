@@ -4,6 +4,8 @@ Thank you for your interest in contributing to BrowserPaw! This document provide
 
 The authoritative acceptance contract is [QUALITY.md](./QUALITY.md). Run `pnpm verify` before delivery; individual test commands below are development checks. Extension delivery additionally requires `pnpm build:deploy`, `pnpm verify:delivery`, and runtime identity confirmation after manual reload.
 
+Document ownership and repository layout are defined in [DOCUMENTATION](./DOCUMENTATION.md). Release preparation follows [RELEASING](./releases/RELEASING.md).
+
 Before editing, read [development boundaries and current release work](./development/DEVELOPMENT.md). Use focused checks while iterating and the complete gate before release. Preserve existing worktree changes; do not clean runtime data or deploy during a documentation-only task.
 
 ## 🎯 How to Contribute
@@ -54,20 +56,22 @@ pnpm dev
 
 ## 🏗️ Project Structure
 
+BrowserPaw adheres to the canonical Repository Layout Specification defined in [`docs/DOCUMENTATION.md`](./DOCUMENTATION.md):
+
 ```
 browserpaw/
-├── app/
-│   ├── chrome-extension/     # Chrome extension MV3 (WXT + Vue 3)
-│   │   ├── entrypoints/      # Background SW, popup, and isolated inpage scripts
-│   │   ├── tests/            # Vitest contracts for extension tools and utilities
-│   │   └── utils/            # CDP session manager, storage managers, ring buffer
+├── app/                      # Primary applications: Chrome MV3 extension & Native bridge server
+│   ├── chrome-extension/     # Chrome extension MV3 (WXT + Vue 3 background SW & tools)
 │   └── native-server/        # Native messaging Fastify bridge & Stdio MCP host
-│       ├── src/mcp/          # MCP protocol implementation (HTTP, SSE, Stdio)
-│       └── src/server/       # Fastify server, auth token validator, native messaging pipe
-├── packages/
-│   └── shared/               # Universal schemas (TOOL_SCHEMAS), profiles (TOOL_CATEGORIES), types
-├── scripts/                  # Code & doc generation utilities (gen-tools-doc.mjs)
-└── docs/                     # Documentation vault (MAP, ARCHITECTURE, TOOLS, TROUBLESHOOTING)
+├── packages/                 # Shared libraries
+│   └── shared/               # Universal schemas (TOOL_SCHEMAS), profiles, coordinate/type definitions
+├── test/                     # Cross-package integration suites, E2E runners, and mock servers (kept in-place)
+├── scripts/                  # Repository lifecycle, verification, and code generation utilities
+├── .artifacts/               # Ephemeral verification outputs, test dumps, delivery reports (excluded from docs)
+├── docs/                     # Documentation vault (README hub, QUALITY, DOCUMENTATION, MAP)
+│   └── archive/              # Isolated historical records, handoffs, and frozen test notes
+├── research/                 # External investigations, spikes, and third-party references (isolated)
+└── releases/                 # Local distribution archives (stable zip artifacts: browserpaw-extension.zip)
 ```
 
 ## 🛠️ Development Workflow
@@ -77,7 +81,7 @@ browserpaw/
 1. **Define the tool schema in `packages/shared/src/tools.ts`**:
    Specify parameters, descriptions, and required fields.
 
-2. **Register the tool name in `packages/shared/src/types.ts`** under `TOOL_NAMES.BROWSER`.
+2. **Register the tool name in `packages/shared/src/tools.ts`** under `TOOL_NAMES.BROWSER`.
 
 3. **Map the tool to a category in `packages/shared/src/tool-profiles.ts`**:
    Add the tool name to `TOOL_CATEGORIES` under one of the 8 canonical categories:
@@ -87,7 +91,7 @@ browserpaw/
 4. **Implement the tool executor in `app/chrome-extension/entrypoints/background/tools/browser/`**:
    Extend `BaseBrowserToolExecutor` and implement `execute(args)`.
 
-5. **Register the executor in `app/chrome-extension/entrypoints/background/tools/browser/index.ts`** in `toolsMap`.
+5. **Register the executor in `app/chrome-extension/entrypoints/background/tools/index.ts`** in `toolsMap`.
 
 6. **Regenerate tool documentation**:
 
@@ -138,6 +142,9 @@ git checkout -b feature/your-feature-name
    - Ensure all existing tests pass
    - Test the Chrome extension manually
    - Verify MCP protocol compatibility
+   - **Authentic Evidence Integrity**: Never hand-edit or fabricate `sourceFingerprint`, `buildId`, delivery hashes, or test `status` fields.
+   - **Documentation Edit Re-verification**: Documentation changes invalidate prior verification fingerprints; rerun the full gate before a release or delivery claim. Focused documentation checks are sufficient during iteration.
+   - **Browser Acceptance vs. Simulated Tests**: Mocked or simulated E2E runs are development checks and do **not** constitute browser acceptance. Real browser verification requires loading into Chrome, performing a manual extension reload in `chrome://extensions`, and confirming matching runtime `buildId` via `chrome_doctor`.
 
 4. **Commit your changes**
 

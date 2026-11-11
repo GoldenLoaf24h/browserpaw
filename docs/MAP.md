@@ -1,6 +1,6 @@
 # 🗺️ BrowserPaw Architecture and Code Map
 
-This map provides architecture and code references. Use [README.md](./README.md) as the single documentation hub and [QUALITY.md](./QUALITY.md) for current acceptance requirements. Reading paths below are technical cross-references rather than a separate acceptance contract.
+This map provides architecture and codebase references. Single Source of Truth authority: [QUALITY.md](./QUALITY.md) owns verification and acceptance gates; [DOCUMENTATION.md](./DOCUMENTATION.md) owns lifecycle and directory layout; [README.md](./README.md) is the documentation hub; [CONTRIBUTING.md](./CONTRIBUTING.md) owns contributor workflows; [releases/](./releases/README.md) manages release notes (governed by `docs/releases/RELEASING.md` and `TEMPLATE.md`).
 
 ---
 
@@ -37,47 +37,26 @@ This map provides architecture and code references. Use [README.md](./README.md)
 
 ## 🗂️ 2. Repository & Monorepo Topology
 
+BrowserPaw adheres to the canonical Repository Layout Specification defined in [`docs/DOCUMENTATION.md`](./DOCUMENTATION.md):
+
 ```text
 mcp-chrome-master/
-├── packages/
-│   └── shared/                  # 🌟 Single Source of Truth
-│       └── src/
-│           ├── tools.ts         # Canonical tool schemas and names
-│           ├── tool-profiles.ts # Core, Crawl, and Full profile definitions
-│           ├── types.ts         # Universal coordinate, batch item & diff result types
-│           └── error-format.ts  # Standardized error reporting with stack control
-│
-├── app/
+├── app/                         # 🚀 Primary executable applications
 │   ├── chrome-extension/        # 🧩 Chrome MV3 Extension (WXT + Vue 3)
-│   │   ├── entrypoints/
-│   │   │   ├── background/      # Main service worker and registered browser tools
-│   │   │   │   └── tools/browser/tab-group-manager.ts # Tab grouping & orphan cleanup
-│   │   │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay
-│   │   │   ├── inpage-engine.ts # Isolated-world DOM indexing & pruning engine
-│   │   │   └── popup/           # Extension popup UI (Agent on/off)
-│   │   └── utils/
-│   │       ├── cdp-session-manager.ts # Session-aware CDP retention (10-min idle)
-│   │       └── snapshot-cache-manager.ts # DOM fingerprint caching & delta diffing
-│   │
-│   └── native-server/           # 🔌 Fastify Native Messaging Bridge
-│       ├── src/index.ts         # Fastify HTTP (127.0.0.1:12306) & Streamable SSE
-│       ├── src/native-messaging-host.ts # StdIO IPC with Chrome (1MB buffer ceiling guard)
-│       └── src/scripts/         # Auto-installer for Native Messaging manifest
-│
-├── docs/                        # 📚 Documentation Vault (MAP, TOOLS, ARCHITECTURE)
+│   │   ├── entrypoints/         # Service worker, isolated inpage scripts & popup
+│   │   └── utils/               # CDP session manager & snapshot cache
+│   └── native-server/           # 🔌 Fastify Native Messaging Bridge & Stdio MCP host
+├── packages/
+│   └── shared/                  # 🌟 Schema SSOT (tools.ts, tool-profiles.ts, types.ts)
+├── test/                        # 🧪 Cross-package integration suites & E2E runners (kept in-place)
+├── scripts/                     # ⚙️ Purpose-driven lifecycle, build, and verification scripts
+├── .artifacts/                  # 🗑️ Ephemeral test dumps & delivery reports (git-ignored)
+├── docs/                        # 📚 Canonical documentation vault
+│   └── archive/                 # 📦 Isolated historical records (handoffs, audits, tests)
+├── research/                    # 🔬 External investigations & third-party spikes (isolated)
+├── releases/                    # 📦 Local distribution archives (stable zip files)
 ├── skills/browserpaw/           # 🧠 Client-neutral Agent Skill
-│   ├── SKILL.md                 # Small entry point
-│   ├── references/              # On-demand operating knowledge
-│   ├── scripts/                 # Diagnostics and repair helpers
-│   └── assets/recipes/           # Static site recipes copied into Native dist
-├── plugins/
-│   ├── browserpaw/              # ChatGPT/Codex portable Agent Plugin
-│   ├── browserpaw-hermes/       # Hermes native plugin and wrapper skill
-│   ├── browserpaw-claude/       # Claude Code plugin
-│   └── browserpaw-dsh/          # DeepSeek Harness Cordis bundle
-├── .agents/plugins/             # ChatGPT/Codex marketplace metadata
-├── .claude-plugin/              # Claude Code marketplace metadata
-└── test/                        # 🧪 Integration & E2E Verification
+└── plugins/                     # 🔌 Client-specific distribution wrappers
 ```
 
 ---
@@ -110,9 +89,9 @@ BrowserPaw supports **Dynamic Profile Layering**, balancing prompt token consump
 ├────────────────────────────────────────────────────────────────────────┤
 │ 🟢 CORE - High-Frequency Semantic & Visual Interaction                │
 │   • Navigation and safe tab selection                                 │
-│   • DOM, markdown, media, grep, and delta perception                   │
-│   • Index-based interaction, fill, and batch actions                   │
-│   • Screenshot and overflow-aware scrolling                            │
+│   • Task and skill lifecycle; DOM reading                            │
+│   • Index-based interaction and fill                                 │
+│   • Nine tools by default; extra tools selected explicitly           │
 │   • Discovery (1): chrome_tool_docs                                    │
 ├────────────────────────────────────────────────────────────────────────┤
 │ 🟡 CRAWL - Lightweight High-Throughput Web Extraction                  │
@@ -130,8 +109,8 @@ BrowserPaw supports **Dynamic Profile Layering**, balancing prompt token consump
 ```
 
 > **Dynamic Profile Switching & On-Demand Tool Unlocking**:
-> Even in `core` or `crawl` profiles, agents can discover and dynamically expose tools for their session without restarting the server via:
-> `chrome_tool_docs({ category: "manage" | "diagnose" | "network" | ..., activateForSession: true })`
+> Even in `core` or `crawl` profiles, agents can discover and select exact additional tools for their session without restarting the server via:
+> Inspect `{category:"manage"}`, then use `chrome_tool_docs({names:["chrome_close_tabs"],activateForSession:true})` to replace temporary extensions; an empty names array resets them.
 > Supported categories: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, `crawl`.
 > Both **Fastify HTTP/SSE** and **Stdio transport** (`mcp-server-stdio.ts`) support dynamic tool exposure.
 

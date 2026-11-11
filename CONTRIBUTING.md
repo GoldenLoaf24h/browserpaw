@@ -1,7 +1,5 @@
 # Contributing to BrowserPaw
 
-Please refer to the centralized contribution guidelines and quality contracts:
+Start with the [contribution guide](docs/CONTRIBUTING.md) for setup, development workflow and review. [DOCUMENTATION](docs/DOCUMENTATION.md) defines document ownership and repository layout.
 
-- **Contribution Guidelines**: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
-- **Engineering Quality & Verification Contract**: [docs/QUALITY.md](docs/QUALITY.md)
-- **Documentation Governance**: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)
+Use [QUALITY](docs/QUALITY.md) for checks and acceptance evidence. Preparing a release additionally requires [RELEASING](docs/releases/RELEASING.md) and its canonical [template](docs/releases/TEMPLATE.md).

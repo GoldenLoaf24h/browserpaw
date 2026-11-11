@@ -21,6 +21,6 @@ Use only these wrapper names. Their schemas are exposed directly by the Hermes p
 | `browserpaw_screenshot`           | Capture page or element          | `targetIndex`, `region`, `format`, `quality`, `fullPage`, `tabId`, `maxWidth`, `maxDimension`, `maxPixels`, `highClarity`, `savePng` |
 | `browserpaw_inspect_media`        | List page media                  | `index`, `tabId`                                                                                                                     |
 | `browserpaw_act_toward_goal`      | Bounded exploratory on-page loop | `goal`, `tabId`, `maxSteps`, `timeoutMs`, `pauseBeforeKeywords`, `verification`                                                      |
-| `browserpaw_tool_docs`            | Read the live schema             | `category`, `activateForSession`                                                                                                     |
+| `browserpaw_tool_docs`            | Read the live schema             | `category` or `names`, `activateForSession`                                                                                          |
 
 For a larger workflow, compose these wrappers through Hermes rather than inventing unavailable BrowserPaw methods.

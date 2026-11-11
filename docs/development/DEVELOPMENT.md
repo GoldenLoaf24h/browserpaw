@@ -1,6 +1,6 @@
 # BrowserPaw Development Boundaries
 
-Start here before changing behavior. [PROJECT.md](../../PROJECT.md) maps responsibilities; [QUALITY.md](../QUALITY.md) owns acceptance; [DOCUMENTATION.md](../DOCUMENTATION.md) owns documentation. Runtime method help and shared schemas resolve parameter questions.
+Start here before changing behavior. Single Source of Truth authority: [PROJECT.md](../../PROJECT.md) maps responsibilities; [QUALITY.md](../QUALITY.md) owns acceptance and verification gates; [DOCUMENTATION.md](../DOCUMENTATION.md) owns documentation lifecycle and repository layout; [CONTRIBUTING.md](../CONTRIBUTING.md) owns contributor workflows; [releases/](../releases/README.md) manages releases (`docs/releases/RELEASING.md`, `TEMPLATE.md`, `pnpm release:check`).
 
 ## Current release work
 
@@ -38,26 +38,30 @@ Machine-local evidence is outside the repository under the workspace `.ego-resea
 ## Verification and deployment
 
 1. Define the observable defect or success condition. For a bug, demonstrate failure before fixing it.
-2. Run focused tests while iterating. Documentation-only changes need documentation, link and generation checks; a generator change also needs its own regression and lint.
-3. Before a release or delivery claim, run the complete `pnpm verify` and `git diff --check`. Source changes invalidate the old gate fingerprint, including documentation changes.
-4. Push the exact release commit and wait for GitHub Actions `CI` to pass on both Linux and Windows. The remote run is mandatory release evidence; local success does not prove a clean-environment build. Tags must not be treated as released while the matching run is failed or pending.
-5. Deploy only when requested. After both local and remote gates pass, deploy the existing output with `node scripts/extension-artifacts.mjs --deploy` and run `pnpm verify:delivery`; avoid a redundant rebuild that changes build identity.
-6. Confirm the actual Native process path and loaded extension buildId. Where automated extension-management access is prohibited, ask for one manual reload after all artifacts are ready.
-7. Verify changed behavior in self-created pages and clean up only those resources. Record build, inputs, result, cleanup and limitations. A long-session fix needs an actual long-session test.
+2. Run focused tests while iterating. Documentation-only changes need documentation, link, and generation checks; a generator change also needs its own regression and lint.
+3. Before a release or delivery claim, run the complete `pnpm verify` and `git diff --check`. **Documentation Edit Invalidation**: Source changes invalidate the old gate fingerprint, and any documentation changes likewise invalidate existing verification fingerprints, requiring re-running `pnpm verify`.
+4. **Authentic Evidence Integrity**: Verification evidence fields (`sourceFingerprint`, `buildId`, delivery hashes, and test `status`) must be emitted directly by automated verification tooling; handcrafting or editing evidence is strictly prohibited.
+5. **Browser Acceptance vs. Simulated Tests**: Mocked or simulated E2E runs are component development checks and do **not** constitute browser acceptance. Real browser verification strictly mandates physical loading into Chrome runtime, manual extension reload in `chrome://extensions` when required, and doctor runtime `buildId` confirmation.
+6. Push the exact release commit and wait for GitHub Actions `CI` to pass on both Linux and Windows. The remote run is mandatory release evidence; local success does not prove a clean-environment build. Tags must not be treated as released while the matching run is failed or pending.
+7. Deploy only when requested. After both local and remote gates pass, deploy the existing output with `node scripts/extension-artifacts.mjs --deploy` and run `pnpm verify:delivery`; avoid a redundant rebuild that changes build identity.
+8. Confirm the actual Native process path and loaded extension buildId. Where automated extension-management access is prohibited, ask for one manual reload after all artifacts are ready.
+9. Verify changed behavior in self-created pages and clean up only those resources. Record build, inputs, result, cleanup and limitations. A long-session fix needs an actual long-session test.
 
 Client plugin validation, installed package contents, runtime connection and real business execution are separate checks. Counts come from schemas and reports. Bytes, tokenizer estimates and cumulative Agent usage must keep their original units. One cold/reuse pair cannot establish a general speedup.
 
 ## Workspace and cleanup
 
-| Location                                                                    | Treatment                                                                                 |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Source, tests, fixtures, canonical skills and manifests                     | Keep; untracked does not mean disposable                                                  |
-| `dist/`, `.output/`, `.wxt/`                                                | Generated; rebuild through scripts, never hand-edit; preserve active Native/build outputs |
-| `.artifacts/verification/`                                                  | Keep the latest gate and evidence needed to explain a failed or delivered build           |
-| Test caches, bytecode, root scratch logs                                    | Remove when identified and unused; record significant cleanup                             |
-| `.claude/`, `.agents/`, linked worktrees and local deployment configuration | Inspect ownership; never delete wholesale as cache                                        |
-| External research, frozen benchmark builds and raw failures                 | Preserve for reproducibility; no bulk purge under a generic cleanup request               |
-| `$BROWSERPAW_HOME/skills` and live task/file ledgers                        | User runtime data, outside static skill synchronization and repository cleanup            |
+| Location                                                                               | Treatment                                                                                 |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Source, tests, fixtures, canonical skills and manifests (`app/`, `packages/`, `test/`) | Keep; untracked does not mean disposable                                                  |
+| `dist/`, `.output/`, `.wxt/`                                                           | Generated; rebuild through scripts, never hand-edit; preserve active Native/build outputs |
+| `.artifacts/`                                                                          | Ephemeral scratch output; keep only latest gate evidence needed to explain delivery/build |
+| `releases/`                                                                            | Keep local prebuilt zip archives with stable filenames (`browserpaw-extension.zip`)       |
+| `docs/archive/`                                                                        | Historical milestone records and frozen test notes; isolated from active navigation       |
+| `research/`                                                                            | External investigations and exploratory spikes; preserve for reproducibility              |
+| Test caches, bytecode, root scratch logs                                               | Remove when identified and unused; record significant cleanup                             |
+| `.claude/`, `.agents/`, linked worktrees and local deployment configuration            | Inspect ownership; never delete wholesale as cache                                        |
+| `$BROWSERPAW_HOME/skills` and live task/file ledgers                                   | User runtime data, outside static skill synchronization and repository cleanup            |
 
 Use pwsh 7 and exact resolved paths. Reject symlink/junction cleanup targets and avoid traversing them. Never bypass a deletion rejected by policy. Do not commit, tag, push, publish, change Native registration or reload Chrome without task authorization.
 

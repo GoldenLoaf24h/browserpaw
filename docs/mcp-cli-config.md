@@ -77,17 +77,15 @@ File: `~/.claude/claude_desktop_config.json`
 
 File: `~/.codex/config.toml`
 
-```json
-{
-  "mcpServers": {
-    "browserpaw": {
-      "url": "http://127.0.0.1:12306/sse",
-      "headers": {
-        "x-mcp-token": "<TOKEN_FROM_~/.chrome-mcp/bridge-token>"
-      }
-    }
-  }
-}
+```toml
+[mcp_servers.browserpaw]
+command = "node"
+# Use absolute paths with forward slashes on all platforms:
+args = ["<ABSOLUTE_PATH_TO_REPO>/app/native-server/dist/mcp/mcp-server-stdio.js"]
+startup_timeout_sec = 60
+
+[mcp_servers.browserpaw.env]
+CHROME_MCP_TOOL_PROFILE = "full"
 ```
 
 ---
@@ -112,7 +110,7 @@ File: `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 
 ---
 
-### 3.5 Hermes Agent
+### 3.4 Hermes Agent
 
 #### Option A: Direct Stdio Configuration in config.yaml (Default & Recommended)
 
@@ -147,7 +145,7 @@ hermes mcp add browserpaw --url http://127.0.0.1:12306/mcp --auth header
 
 ---
 
-### 3.6 OpenAI Codex Plugin Integration
+### 3.5 OpenAI Codex Plugin Integration
 
 BrowserPaw provides an official portable ChatGPT/Codex plugin under `plugins/browserpaw/`:
 
@@ -158,29 +156,29 @@ BrowserPaw provides an official portable ChatGPT/Codex plugin under `plugins/bro
 
 ## 4. Tool Profiles & Dynamic Session Activation
 
-To optimize token consumption, you can configure `CHROME_MCP_TOOL_PROFILE`:
+To reduce the initial schema surface, you can configure `CHROME_MCP_TOOL_PROFILE`:
 
-| Profile              | Best For                                                                                              |
-| :------------------- | :---------------------------------------------------------------------------------------------------- |
-| **`core`** (default) | Daily semantic navigation, 1-based clicks, form fills, screenshots, durable tasks and verified skills |
-| **`crawl`**          | High-throughput content extraction, markdown and links                                                |
-| **`full`**           | Full low-level CDP access, diagnostics, tab groups and storage                                        |
+| Profile              | Best For                                                                                                     |
+| :------------------- | :----------------------------------------------------------------------------------------------------------- |
+| **`core`** (default) | Nine tools: task/skill, navigation, tab inventory/selection, DOM reading, indexed clicks/fills and discovery |
+| **`crawl`**          | High-throughput content extraction, markdown and links                                                       |
+| **`full`**           | Full low-level CDP access, diagnostics, tab groups and storage                                               |
 
 The current canonical surface includes extension-executed tools plus the native-server task, skill, and on-page autonomy tools. Exact profile counts and schema footprints are generated from the shared schemas rather than duplicated in this guide.
 
-### Dynamic Tool Activation Without Restart
+### Exact Tool Discovery Without Restart
 
-Even when running in `core` or `crawl` profiles, agents can dynamically expose hidden tool categories during runtime without restarting the server:
+`chrome_tool_docs({})` returns a short category index. `{category:"manage"}` lists names and purposes without activation. `{names:["chrome_close_tabs"]}` returns complete schemas without activation.
 
-```json
-// Call chrome_tool_docs
-{
-  "category": "manage",
-  "activateForSession": true
-}
-```
+Select tools explicitly using `chrome_tool_docs({names:["chrome_close_tabs"],activateForSession:true})`. This **replaces** temporary extensions; `{names:[],activateForSession:true}` restores the current profile. Category activation returns a migration error. Invalid names cannot partially change the list. HTTP and stdio share the same rules and only effective changes notify `tools/listChanged`.
 
-Supported categories: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, `crawl`. Supported in both **HTTP/SSE** and **Stdio** transports.
+Known hidden tools remain directly callable without expanding the list. Use explicit `full` for clients without list refresh support. Jev configuration, authentication and task ownership still apply.
+
+### CLI Results and Persistent Tasks
+
+`browserpaw --json chrome_screenshot '{"tabId":123}'` preserves complete MCP content, structured results and errors; redirect it to a file instead of printing image base64 into agent context. Plain text mode remains available. Protocol, HTTP and parsing errors exit nonzero; session cleanup is bounded and does not replace the original error.
+
+Each one-shot CLI call creates a separate session. Continue multi-step tasks in the existing [persistent REPL](../skills/browserpaw/references/cli-repl.md); do not automatically take over another session's task. Persistent CLI sessions and image-file delivery remain future migration requirements.
 
 ---
 

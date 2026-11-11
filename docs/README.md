@@ -4,7 +4,16 @@ BrowserPaw connects agents to an existing Chrome session through a local MCP bri
 
 This hub serves as the definitive reference guide for AI Agents (Claude Code, Cursor, Windsurf, Codex) and human engineers.
 
-For development, start with [PROJECT.md](../PROJECT.md) and [development boundaries/current work](./development/DEVELOPMENT.md). Acceptance belongs to [QUALITY.md](./QUALITY.md); document ownership belongs to [DOCUMENTATION.md](./DOCUMENTATION.md). BrowserPaw 4.1.2 is the latest published tag. Historical milestone tables are not current acceptance claims.
+### Single Source of Truth (SSOT) Authority
+
+| Domain                                 | Authoritative Contract                                       | Primary Responsibilities                                                                             |
+| :------------------------------------- | :----------------------------------------------------------- | :--------------------------------------------------------------------------------------------------- |
+| **Developer Rules & Directory Scope**  | [`AGENTS.md`](../AGENTS.md) & [`PROJECT.md`](../PROJECT.md)  | Agent behaviors, directory boundaries, package responsibilities                                      |
+| **Engineering Quality & Verification** | [`QUALITY.md`](./QUALITY.md)                                 | Single canonical verification contract: `pnpm verify`, `build:deploy`, authentic evidence invariants |
+| **Documentation Governance & Layout**  | [`DOCUMENTATION.md`](./DOCUMENTATION.md)                     | Doc ownership, active vs. archive boundaries, translation policy, repository layout spec             |
+| **Contributor Workflow & Standards**   | [`CONTRIBUTING.md`](./CONTRIBUTING.md)                       | Contributor setup, development workflow, conventional commits, security guidelines                   |
+| **Release Management & Distribution**  | [`releases/`](./releases/README.md)                          | Centralized release ledger (`docs/releases/RELEASING.md`, `TEMPLATE.md`, `pnpm release:check`)       |
+| **Development Boundaries & Handoff**   | [`development/DEVELOPMENT.md`](./development/DEVELOPMENT.md) | Cross-layer change checklist, cleanup policy, current active release handoff                         |
 
 ---
 
@@ -23,7 +32,7 @@ graph TD
     Guides --> TestInfra["TEST_INFRA.md (E2E Test Matrix)"]
 
     CoreDocs --> Arch["ARCHITECTURE.md (Dual-Brain & CDP Engine)"]
-    CoreDocs --> Tools["TOOLS.md (Canonical 50-Tool Reference)"]
+    CoreDocs --> Tools["TOOLS.md (Canonical 52-Tool Reference)"]
     CoreDocs --> Map["MAP.md (Codebase Symbols & Dataflows)"]
     CoreDocs --> Config["mcp-cli-config.md (CLI & Stdio Settings)"]
     CoreDocs --> Troubleshoot["TROUBLESHOOTING.md (Diagnosis & Fixes)"]
@@ -89,9 +98,9 @@ graph TD
 
 ### 5. 📦 Archive Directory (`docs/archive/`)
 
-Historical records, phased handoffs, and audit logs are preserved in [`docs/archive/`](./archive/) to keep the active documentation clean and decluttered:
+Historical records, phased handoffs, and audit logs are preserved in the [archive ledger](./archive/README.md) to keep the active documentation clean and decluttered:
 
-- [**`docs/releases/`**](./releases/): Versioned release records and the canonical change history.
+- [**`agents-2026-09/`**](./archive/agents-2026-09/README.md): Completed agent dispatch records and codebase surveys.
 - [**`archive/handoffs/`**](./archive/handoffs/): Milestone handoff records and refactor phase notes.
 - [**`archive/testing/`**](./archive/testing/): Historical manual testing notes and edge-case execution logs.
 - [**`archive/reviews/`**](./archive/reviews/): Deep code reviews, security audits, and dependency evaluations from September 2026.

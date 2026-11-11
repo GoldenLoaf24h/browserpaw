@@ -45,6 +45,9 @@ jobs:
       - name: Check generated skill mirrors
         run: node scripts/sync-skills.mjs --check
 
+      - name: Check release notes specification
+        run: pnpm release:check
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:

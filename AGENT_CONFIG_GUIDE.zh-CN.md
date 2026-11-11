@@ -255,7 +255,7 @@ Claude Code 通过官方插件市场流程安装 BrowserPaw。插件同时打包
 | `chrome_undo_last_action`           | 无                                           | 回滚最近一次导航或表单填写步骤                           | 快速错误恢复                   |
 | `chrome_close_tabs`                 | `tabIds`、`url`、`confirm`                   | 关闭标签页；关闭活动前台标签页需 `confirm: true`         | 标签页清理、关闭任务页面       |
 | `chrome_javascript`                 | `code`、`tabId`                              | 求值 JavaScript，支持顶层 await 和自动返回表达式         | 临时计算、DOM 检查             |
-| `chrome_tool_docs`                  | `category`、`activateForSession`             | 工具类别的动态发现与会话内按需激活                       | 配置档模式下的工具扩展         |
+| `chrome_tool_docs`                  | `category` 或 `names`、`activateForSession`  | 查询类别或参数；按名称替换临时集合，空数组恢复基础列表   | 会话工具发现                   |
 
 ---
 

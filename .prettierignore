@@ -1,38 +1,44 @@
-# 构建输出目录
+# Build output
 dist
 .output
 .wxt
 
-# 依赖
+# Dependencies
 node_modules
 
-# 日志
+# Logs
 logs
 *.log
 
-# 缓存
+# Caches
 .cache
 .temp
 
-# 编辑器配置
+# Editor settings
 .vscode
 !.vscode/extensions.json
 .idea
 
-# 系统文件
+# System files
 .DS_Store
 Thumbs.db
 
-# 打包文件
+# Packaged assets
 *.zip
 *.tar.gz
 
-# 统计文件
+# Statistics
 stats.html
 stats-*.json
 
-# 锁文件
+# Lockfile
 pnpm-lock.yaml
 # Skill sources and mirrors must stay byte-identical (scripts/sync-skills.mjs)
 skills
 plugins/*/skills
+
+# Ephemeral artifacts, historical archives, and external research
+.artifacts
+docs/archive
+research
+releases

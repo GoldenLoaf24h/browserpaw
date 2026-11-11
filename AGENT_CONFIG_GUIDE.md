@@ -239,23 +239,23 @@ To minimize prompt token consumption, maximize responsiveness, and prevent click
 
 ## 5. Canonical Tool Quick Reference
 
-| Tool Name                           | Key Parameters                               | Function & Description                                                    | Recommended Scenario                     |
-| :---------------------------------- | :------------------------------------------- | :------------------------------------------------------------------------ | :--------------------------------------- |
-| `chrome_read_dom`                   | `viewportOnly: true`                         | Pruned DOM tree with document-scoped references and explicit coverage     | **First step on any new page**           |
-| `chrome_interact_index`             | `index` or `coordinate: {x,y}`               | Hardware-level click, hover, double-click, or drag                        | Button clicks, link navigation           |
-| `chrome_fill_index`                 | `index`, `text`, `clear: true`, `pressEnter` | Native physical typing, value clearance, and Enter key submission         | Single-field query and submission        |
-| `chrome_keyboard`                   | `keys` (e.g. `["Enter"]`, `["Ctrl+,"]`)      | Keystrokes, standalone modifiers (Control, Shift), symbol combos (Ctrl+,) | Shortcuts, form navigation, combos       |
-| `chrome_batch_actions`              | `actions: [...]`, `waitForSettle: true`      | Sequential multi-step execution of clicks, fills, waits, and assertions   | **Multi-field forms & complex flows**    |
-| `chrome_screenshot`                 | `grid: true`, `targetIndex`, `format`        | In-memory base64 screenshot with optional coordinate grid ruler           | Canvas, complex captchas, non-DOM UI     |
-| `chrome_upload_file`                | `index` or `clickTargetIndex`, `filePath`    | Uploads local files via OS path injection into file inputs                | File uploads, profile pictures           |
-| `chrome_get_markdown`               | `includeLinks: true`                         | Clean, beautifully formatted markdown extraction                          | Article reading, page summarization      |
-| `chrome_grep`                       | `query`, `searchType`                        | Sub-millisecond regex/text scan across frames and attributes              | Finding elements in large documents      |
-| `chrome_inspect_media`              | `index` or `selector`                        | Extracts raw high-resolution image Data URLs or crops                     | Captchas, charts, raw product photos     |
-| `chrome_request_human_intervention` | `reason`, `timeoutMs`                        | Mounts frosted-glass takeover banner, yielding control to user            | 2FA, slider captchas, sensitive payments |
-| `chrome_undo_last_action`           | none                                         | Rolls back the most recent navigation or form fill step                   | Fast error recovery                      |
-| `chrome_close_tabs`                 | `tabIds`, `url`, `confirm`                   | Closes tabs; requires `confirm: true` to close active foreground tab      | Tab cleanup, closing task pages          |
-| `chrome_javascript`                 | `code`, `tabId`                              | Evaluates JavaScript with top-level await and auto-return expressions     | Ad-hoc calculations, DOM inspection      |
-| `chrome_tool_docs`                  | `category`, `activateForSession`             | Dynamic discovery and on-demand session activation of tool categories     | Profile mode tool expansion              |
+| Tool Name                           | Key Parameters                               | Function & Description                                                                  | Recommended Scenario                     |
+| :---------------------------------- | :------------------------------------------- | :-------------------------------------------------------------------------------------- | :--------------------------------------- |
+| `chrome_read_dom`                   | `viewportOnly: true`                         | Pruned DOM tree with document-scoped references and explicit coverage                   | **First step on any new page**           |
+| `chrome_interact_index`             | `index` or `coordinate: {x,y}`               | Hardware-level click, hover, double-click, or drag                                      | Button clicks, link navigation           |
+| `chrome_fill_index`                 | `index`, `text`, `clear: true`, `pressEnter` | Native physical typing, value clearance, and Enter key submission                       | Single-field query and submission        |
+| `chrome_keyboard`                   | `keys` (e.g. `["Enter"]`, `["Ctrl+,"]`)      | Keystrokes, standalone modifiers (Control, Shift), symbol combos (Ctrl+,)               | Shortcuts, form navigation, combos       |
+| `chrome_batch_actions`              | `actions: [...]`, `waitForSettle: true`      | Sequential multi-step execution of clicks, fills, waits, and assertions                 | **Multi-field forms & complex flows**    |
+| `chrome_screenshot`                 | `grid: true`, `targetIndex`, `format`        | In-memory base64 screenshot with optional coordinate grid ruler                         | Canvas, complex captchas, non-DOM UI     |
+| `chrome_upload_file`                | `index` or `clickTargetIndex`, `filePath`    | Uploads local files via OS path injection into file inputs                              | File uploads, profile pictures           |
+| `chrome_get_markdown`               | `includeLinks: true`                         | Clean, beautifully formatted markdown extraction                                        | Article reading, page summarization      |
+| `chrome_grep`                       | `query`, `searchType`                        | Sub-millisecond regex/text scan across frames and attributes                            | Finding elements in large documents      |
+| `chrome_inspect_media`              | `index` or `selector`                        | Extracts raw high-resolution image Data URLs or crops                                   | Captchas, charts, raw product photos     |
+| `chrome_request_human_intervention` | `reason`, `timeoutMs`                        | Mounts frosted-glass takeover banner, yielding control to user                          | 2FA, slider captchas, sensitive payments |
+| `chrome_undo_last_action`           | none                                         | Rolls back the most recent navigation or form fill step                                 | Fast error recovery                      |
+| `chrome_close_tabs`                 | `tabIds`, `url`, `confirm`                   | Closes tabs; requires `confirm: true` to close active foreground tab                    | Tab cleanup, closing task pages          |
+| `chrome_javascript`                 | `code`, `tabId`                              | Evaluates JavaScript with top-level await and auto-return expressions                   | Ad-hoc calculations, DOM inspection      |
+| `chrome_tool_docs`                  | `category` or `names`, `activateForSession`  | Inspect categories/schemas; replace exact temporary names, or reset with an empty array | Session tool discovery                   |
 
 ---
 

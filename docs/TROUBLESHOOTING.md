@@ -317,11 +317,11 @@ When evaluating JavaScript expressions via `chrome_javascript`, you do not need 
 | `Cannot access a chrome:// URL`                            | Chrome security restricts extensions from debugging internal system pages. | Navigate to a standard `http://`, `https://`, or `file://` URL.           |
 | `executeScript timeout ... renderer not acking`            | Renderer process unresponsive or blocked by native modal dialog.           | Call `chrome_handle_dialog` or refresh target tab.                        |
 | `CDP_DISPATCH_TIMEOUT`                                     | Background tab execution timed out under heavy system throttling.          | Retry action or briefly switch tab to foreground.                         |
-| `Security check failed: Domain changed`                    | Navigation occurred between screenshot capture and coordinate action.      | Call `chrome_read_dom` or `chrome_take_screenshot` to re-align state.     |
+| `Security check failed: Domain changed`                    | Navigation occurred between screenshot capture and coordinate action.      | Call `chrome_read_dom` or `chrome_screenshot` to re-align state.          |
 | `Tool X is not exposed under the ... profile`              | Tool is hidden under active profile (`core`/`crawl`).                      | Call `chrome_tool_docs({ category: "<cat>", activateForSession: true })`. |
 | `Tool X is not a BrowserPaw tool`                          | Non-existent tool name requested.                                          | Consult `tools/list` or `chrome_tool_docs` for the live tool surface.     |
 | `captureScreenshot returned empty data for background tab` | Background tab was closed or discarded by Chrome memory saver.             | Re-open or navigate to target URL.                                        |
-| `Failed to ... index [X] in cross-origin frame`            | Child iframe was unmounted or restricted by sandbox permissions.           | Inspect frame status using `chrome_read_dom({ filter: "interactive" })`.  |
+| `Failed to ... index [X] in cross-origin frame`            | Child iframe was unmounted or restricted by sandbox permissions.           | Inspect frame status using `chrome_read_dom({ viewportOnly: true })`.     |
 | `Message sender rejected / unauthenticated content script` | Security guard blocked unauthorized message sender (`_sender.tab`).        | Ensure requests originate from authentic native bridge channels.          |
 
 ---

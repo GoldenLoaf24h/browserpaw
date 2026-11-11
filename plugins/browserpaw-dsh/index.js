@@ -27,7 +27,6 @@ function resolveServerPort() {
 }
 
 function resolveBridgeToken() {
-  if (process.env.CHROME_MCP_TOKEN?.trim()) return process.env.CHROME_MCP_TOKEN.trim();
   try {
     const tokenPath = path.join(os.homedir(), '.chrome-mcp', 'bridge-token');
     return fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf-8').trim() : undefined;
@@ -49,7 +48,7 @@ export async function apply(ctx) {
   // the real server name instead of restating it.
   //
   // BrowserPaw now advertises tools.listChanged and forwards the notification. Clients that
-  // implement the standard refresh can update after chrome_tool_docs activates a category;
+  // implement the standard refresh can update after chrome_tool_docs replaces selected names;
   // clients that do not should start with a wider CHROME_MCP_TOOL_PROFILE.
   const toolNamingNote =
     `> **DSH tool names**: DSH exposes every BrowserPaw tool as \`mcp__${SERVER_NAME}__<raw name>\`, ` +
@@ -59,13 +58,13 @@ export async function apply(ctx) {
     `\`mcp__${SERVER_NAME}__get_windows_and_tabs\`. Open the tool set first with ` +
     `\`browserpaw_session\` (\`action: "open"\`). The active tool profile announces only a ` +
     `subset of these names. On clients that handle the standard list-changed notification, ` +
-    `call \`mcp__${SERVER_NAME}__chrome_tool_docs\` with \`activateForSession: true\` to ` +
-    `widen the visible set; otherwise restart with \`CHROME_MCP_TOOL_PROFILE=full\`.`;
+    `call \`mcp__${SERVER_NAME}__chrome_tool_docs\` with \`names: ["chrome_screenshot"], activateForSession: true\` to ` +
+    `replace temporary extensions (empty names resets); otherwise restart with \`CHROME_MCP_TOOL_PROFILE=full\`.`;
   ctx.skills.register({
     name: SERVER_NAME,
     source: 'runtime',
     description:
-      'BrowserPaw 浏览器自动化操作技能：执行阶梯、工具选择表、状态机与失败恢复。使用前先调用 browserpaw_session 开启工具集。',
+      'BrowserPaw browser automation skill: execution ladder, tool selection matrix, state machine, and failure recovery. Call browserpaw_session first to enable the toolset.',
     content: `${toolNamingNote}\n\n${skillContent}`,
     resourceBase: { kind: 'directory', path: skillDir },
   });
@@ -95,7 +94,7 @@ export async function apply(ctx) {
       const token = resolveBridgeToken();
       if (!token) {
         throw new Error(
-          'BrowserPaw bridge token not found. Start the native host or set CHROME_MCP_TOKEN.',
+          'BrowserPaw bridge token not found at ~/.chrome-mcp/bridge-token. Start the native host first.',
         );
       }
       // Cordis rejects a bare specifier here: it needs a function or an object carrying
@@ -132,11 +131,15 @@ export async function apply(ctx) {
   ctx.tools.register({
     name: 'browserpaw_session',
     description:
-      '开启/关闭/查看 BrowserPaw 浏览器自动化工具集。action: open | close | status。open 后工具以 mcp__browserpaw__ 前缀出现；用完后务必 close 释放上下文。',
+      'Open, close, or inspect the BrowserPaw browser automation toolset. action: open | close | status. After open, tools appear with the mcp__browserpaw__ prefix; remember to close when done to release context.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['open', 'close', 'status'], description: '操作类型' },
+        action: {
+          type: 'string',
+          enum: ['open', 'close', 'status'],
+          description: 'Action type: open, close, or status',
+        },
       },
     },
     output: {
@@ -147,11 +150,15 @@ export async function apply(ctx) {
       const action = args?.action ?? 'status';
       if (action === 'open') {
         await open();
-        return { ok: true, action, note: 'browserpaw 工具已注入，调用后请 close' };
+        return {
+          ok: true,
+          action,
+          note: 'BrowserPaw tools injected; please call close when finished.',
+        };
       }
       if (action === 'close') {
         await close();
-        return { ok: true, action, note: 'browserpaw 工具已卸载' };
+        return { ok: true, action, note: 'BrowserPaw tools unloaded.' };
       }
       return {
         ok: true,

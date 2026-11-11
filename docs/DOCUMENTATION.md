@@ -1,140 +1,65 @@
-# BrowserPaw Documentation Governance & Architecture 📚
+# Documentation and repository ownership
 
-This document defines the governance rules, directory ownership, lifecycle boundaries, language policies, and versioning standards for all BrowserPaw documentation.
+Use [docs/README.md](./README.md) to find documentation. Update an existing owner before introducing another rulebook.
 
----
+## Rule ownership
 
-## 🏛️ 1. Documentation System Architecture
+| Owner                                       | Responsibility                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [Root AGENTS Manual Notes](../AGENTS.md)    | Agent behavior, authorization and scope; local AGENTS supplement only their directory |
+| [PROJECT](../PROJECT.md)                    | Package responsibilities and architecture boundaries                                  |
+| [QUALITY](./QUALITY.md)                     | Verification commands, evidence integrity, deployment and runtime acceptance          |
+| [CONTRIBUTING](./CONTRIBUTING.md)           | Setup, development workflow, review and commit conventions                            |
+| This document                               | Repository layout, documentation lifecycle and translations                           |
+| [RELEASING](./releases/RELEASING.md)        | Release preparation, template, attachments and publication                            |
+| [DEVELOPMENT](./development/DEVELOPMENT.md) | Current work and cross-layer implementation checklists                                |
+| [TOOLS](./TOOLS.md)                         | Generated reference; source contracts live in `packages/shared/src/tools.ts`          |
 
-BrowserPaw maintains a centralized, single-source documentation model centered around the Documentation Hub at [`docs/README.md`](./README.md).
+Task instructions take precedence over repository guidance. Deeper AGENTS files apply within their directory, not to unrelated packages. Historical reports and external checkouts are evidence, not developer instructions. If two active documents conflict, consult the owner above and correct the duplicate.
 
-### Ownership and update boundaries
+## Repository layout
 
-| Document                                               | Owns                                                             | Avoid duplicating                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------- |
-| Root `AGENTS.md` Manual Notes                          | Enforceable contributor/Agent rules                              | Runtime logs and milestone chronology                       |
-| [PROJECT.md](../PROJECT.md) and its Chinese mirror     | Package responsibilities and skill storage                       | Parameter tables, transient counts and performance promises |
-| [Development boundaries](./development/DEVELOPMENT.md) | Cross-layer change checklist, cleanup policy and current handoff | Complete historical benchmark logs                          |
-| [QUALITY.md](./QUALITY.md)                             | Verification and delivery gates                                  | Per-build pass counts or declarations of runtime readiness  |
-| README and INSTALL                                     | User capabilities and supported installation paths               | Internal research diaries                                   |
-| [TOOLS.md](./TOOLS.md) and static skill mirrors        | Generated contracts                                              | Hand-edited generated parameter tables                      |
-| Release and comparison records                         | Dated implementation and acceptance evidence                     | Undated claims of current stability                         |
+| Location                              | Contents and boundary                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `app/chrome-extension/`               | Browser background worker, in-page execution and popup                                           |
+| `app/native-server/`                  | Native Messaging bridge, local MCP server and CLI                                                |
+| `packages/shared/`                    | Tool schemas, profiles, shared types and protocol helpers                                        |
+| `test/`                               | Cross-package integration and simulated E2E; package unit tests stay in their packages           |
+| `scripts/` and `bin/`                 | Repository automation and executable entry points; keep callers intact when moving files         |
+| `skills/browserpaw/`                  | Canonical client-neutral skill                                                                   |
+| `plugins/`                            | Client adapters and generated skill distributions                                                |
+| `.agents/plugins/`, `.claude-plugin/` | Marketplace discovery metadata, not disposable agent logs                                        |
+| `.agents/ORIGINAL_REQUEST.md`         | Retained test requirement baseline                                                               |
+| `docs/`                               | Current user and developer documentation                                                         |
+| `docs/releases/`                      | Version records, release process, template and unreleased ledger                                 |
+| `docs/archive/`                       | Frozen handoffs, reviews and completed task records                                              |
+| `research/`                           | Research notes and external references; not normative documentation                              |
+| `releases/`                           | Ignored local packaging output and retained versioned builds; new GitHub assets use stable names |
+| `.artifacts/`                         | Ignored scratch output and verification evidence with independent retention needs                |
+| `dist/`, `.output/`, `.wxt/`          | Generated build output; regenerate rather than hand-edit                                         |
 
-Generated `AGENTS.md` files are navigation aids. Put human rules under the exact `## Manual Notes` heading; the generator preserves that section and accepts directory arguments for targeted regeneration. Keep development instructions out of installable skill/plugin trees. New documentation must be linked from its relevant hub; prefer updating an existing owner over creating a parallel rulebook.
+Do not move working source packages merely to make the tree look cleaner. A move must improve ownership or lifecycle separation and update imports, scripts, documentation links and tests together.
 
-```text
-mcp-chrome-master/
-├── README.md                      # Primary repository entry point (English canonical)
-├── README.zh-CN.md                # Simplified Chinese translation of README.md
-├── INSTALL.md                     # Direct installation & setup guide
-├── PROJECT.md                     # Engineering overview & package index
-├── PROJECT.zh-CN.md               # Simplified Chinese translation of PROJECT.md
-├── TEST_INFRA.md                  # Test infrastructure specification
-├── CHANGELOG.md                   # Concise pointer to version release notes
-├── docs/
-│   ├── README.md                  # 🌟 Single documentation hub and global navigation index
-│   ├── QUALITY.md                 # Single engineering verification and quality gate contract
-│   ├── DOCUMENTATION.md           # This document: governance, ownership, lifecycle & standards
-│   ├── ARCHITECTURE.md            # Technical architecture and CDP engine specification
-│   ├── MAP.md                     # Repository symbol mapping, dataflows & code topology
-│   ├── TOOLS.md                   # Auto-generated canonical tool schemas and profiles
-│   ├── TROUBLESHOOTING.md         # Operational diagnostic guide
-│   ├── TROUBLESHOOTING.zh-CN.md   # Simplified Chinese translation of TROUBLESHOOTING.md
-│   ├── CONTRIBUTING.md            # Contributor workflows and pull request protocols
-│   ├── mcp-cli-config.md          # Multi-client configuration snippets
-│   ├── releases/                  # Per-version release records & unreleased ledger
-│   │   ├── README.md              # Version ledger index (known releases & unreleased)
-│   │   ├── unreleased.md          # In-flight changes and upcoming milestone tracker
-│   │   └── v*.md                  # Individual release records mapped to git tags
-│   └── archive/                   # Isolated historical archives (handoffs, audits, tests)
-├── skills/browserpaw/             # Canonical client-neutral Agent Skill
-│   ├── references/                # On-demand operating knowledge
-│   ├── scripts/                   # Diagnostics and repair helpers
-│   └── assets/recipes/            # Static recipes copied into Native dist
-└── plugins/
-    ├── browserpaw/                # ChatGPT/Codex portable plugin
-    ├── browserpaw-hermes/         # Hermes native plugin
-    ├── browserpaw-claude/         # Claude Code plugin
-    └── browserpaw-dsh/            # DeepSeek Harness bundle
-```
+## Active, generated and archived documents
 
----
+- Active documentation describes current behavior and supported commands. Link new documents from the relevant hub; keep local links valid and exclude links to ephemeral `.artifacts/` paths.
+- `docs/TOOLS.md` comes from `node scripts/gen-tools-doc.mjs`. Static skill mirrors come from `node scripts/sync-skills.mjs`; edit their canonical sources.
+- Generated AGENTS files are directory navigation plus package guidance. Put maintained local rules under the exact `## Manual Notes` heading so regeneration preserves them. Use targeted regeneration, such as `node scripts/generate-agents-docs.mjs docs`; a new folder does not need another AGENTS file unless its rules differ.
+- Archive completed records with their context and date under the [archive index](./archive/README.md). Preserve content; update active inbound links or leave a deliberate pointer. Historical paths inside frozen records are not current navigation.
+- Keep archive index links valid. Do not rewrite old release claims to match today's implementation. The version ledger distinguishes published tags from local drafts.
+- Cleanup requires an explicit allowlist: confirm references and ownership before deleting. Preserve research, worktrees, local settings, learned skills, frozen builds and failure evidence. A cache can be regenerated; a unique report cannot.
+- See [QUALITY](./QUALITY.md) for the checks required after changes. Documentation edits invalidate old verification fingerprints; they do not justify altering an old report or automatically deploying.
 
-## 📂 2. Active vs. Archived Boundaries
+## Language and formatting
 
-To prevent cognitive drift and ensure agents always read current contracts, documentation is strictly partitioned:
+English is canonical. Keep existing `*.zh-CN.md` files as complete Chinese mirrors, updating affected sections and links in the same change. Frozen archives retain their original language.
 
-1. **Active Documentation** (`docs/*.md`, root `*.md`):
-   - Represents the current, authoritative state of code, tools, APIs, and workflows.
-   - Must have 100% valid relative markdown links.
-   - Automatically verified by `node scripts/validate-docs.mjs`.
-   - Never references ephemeral execution logs or temporary report dumps (`.artifacts/...`).
+Use one H1, descriptive headings, relative links to repository files, and fenced commands labelled with the actual shell. Keep examples executable and separate expected behavior from measured evidence. Use the repository Prettier configuration on changed active documents only; avoid whole-repository formatting churn.
 
-2. **Archived Documentation** (`docs/archive/**`, `research/**`):
-   - Preserves historical records, refactoring phase handoffs, point-in-time security audits, and deprecated exploratory benchmarks.
-   - Isolated from active navigation paths to avoid conflicting guidance.
-   - Archive index links must remain valid, but internal historical drafts are not subject to forward-evolution changes.
+Development instructions stay outside installable skill/plugin bundles. Client-specific setup belongs in its adapter; `$BROWSERPAW_HOME/skills` is learned runtime data and is never a documentation cleanup target.
 
-3. **Skill and Client Package Documentation**:
-   - `skills/browserpaw/` is the only canonical client-neutral skill. It must not
-     contain Hermes, Claude, Codex, ChatGPT, or DSH installation instructions.
-   - Client-specific manifests, setup text, and tool wrappers belong in their
-     matching package under `plugins/`.
-   - Package READMEs must follow their harness's official layout and installation
-     contract. Cross-client compatibility is summarized in
-     [`development/PLUGIN_COMPATIBILITY.md`](./development/PLUGIN_COMPATIBILITY.md).
-   - `$BROWSERPAW_HOME/skills` is runtime learning data, not repository
-     documentation and not a mirror target for `scripts/sync-skills.mjs`.
+## Release records
 
----
+[RELEASING](./releases/RELEASING.md) and [TEMPLATE](./releases/TEMPLATE.md) are the only release procedure and format. `pnpm release:check` checks new version records; existing historical records remain frozen.
 
-## 🌐 3. Language & Translation Policy
-
-1. **Canonical Language**: English (`*.md`) is the primary canonical source of truth for all technical documentation, schemas, and API contracts. English documents carry no non-English prose.
-2. **Complete Chinese Mirrors**: Every `*.zh-CN.md` path (`README.zh-CN.md`, `PROJECT.zh-CN.md`, `AGENT_CONFIG_GUIDE.zh-CN.md`, `TROUBLESHOOTING.zh-CN.md`, `test/*.zh-CN.md`, and the skills/browserpaw/plugin copies generated by `scripts/sync-skills.mjs`) holds a full Simplified Chinese translation of its English source. Placeholder or redirect-stub content is not permitted; a translation must mirror the source's sections, tables, code blocks, and links.
-3. **Translation Currency**: A change to an English document must be reflected in its Chinese mirror in the same change set. When the two disagree, the English document wins and the mirror is corrected.
-4. **Mirror Generation**: Skill and plugin copies are never edited in place; translate `skills/browserpaw/references/TROUBLESHOOTING.zh-CN.md` and regenerate the mirrors with `node scripts/sync-skills.mjs`. Do not edit installed client caches or client-specific plugin directories as a synchronization mechanism.
-5. **No Forcible Deletion**: Chinese mirrors must never be deleted while inbound links exist. Historical archives under `docs/archive/**` are frozen and keep their original translated content.
-
----
-
-## 🏷️ 4. Release Notes & Version Record Protocol
-
-1. **Per-Version File Invariant**: Every released local git tag must have a corresponding record in `docs/releases/<version>.md` (e.g. `docs/releases/v3.2.7.md`).
-2. **Drafts & Unreleased Changes**:
-   - Working in-progress versions without git tags must be recorded as unreleased or working versions, and must never claim to be released tags.
-   - Local drafts (such as v3.3.0) must explicitly state their status as local unreleased drafts.
-   - Future incremental features are logged in [`docs/releases/unreleased.md`](./releases/unreleased.md).
-3. **Root CHANGELOG**: Root [`CHANGELOG.md`](../CHANGELOG.md) remains a concise reference directing readers to `docs/releases/README.md`, rather than duplicating release notes across multiple locations.
-4. **No Untagged Releases**: Releases must never be claimed or documented as published without an existing git tag or explicit release action.
-
----
-
-## 📝 5. Release Note Template
-
-When preparing a new release record under `docs/releases/`, follow this structure:
-
-```markdown
-# BrowserPaw Release vX.Y.Z 🚀
-
-- **Release Date**: YYYY-MM-DD
-- **Git Commit**: <short-hash>
-- **Git Tag**: `vX.Y.Z`
-- **Status**: Released | Working Draft
-
-## Summary
-
-Brief high-level overview of the release milestone and its primary focus.
-
-## Key Highlights & Features
-
-- Detailed description of major features added.
-
-## Bug Fixes & Hardening
-
-- Bulleted list of resolved issues and architectural hardening.
-
-## Verification & Compatibility
-
-- Supported environments, verified MCP client matrix, and test outcomes.
-```
+Keep one note per published version under `docs/releases/vX.Y.Z.md`, register it in the [release ledger](./releases/README.md), and use [unreleased.md](./releases/unreleased.md) for in-progress changes. Root [CHANGELOG](../CHANGELOG.md) remains a pointer. A local tag or draft alone does not prove a GitHub release was published.

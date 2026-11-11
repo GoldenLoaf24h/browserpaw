@@ -178,7 +178,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 | **Debugger Anti-Hang**          | Immediate physical debugger detach (`timeout-guard`) bypassing refcount underflow                            | Process SIGKILL fallback                                     | Process exit                                         |
 | **Sender & DOM Security**       | Rejects messages with `_sender.tab` or invalid `runtime.id`; programmatic DOM nodes eliminate XSS            | N/A (No browser extension context)                           | N/A (No browser extension context)                   |
 | **Multi-Frame Grounding**       | Multi-frame `chrome_grep` with hierarchical index remapping; cross-origin iframe coordinate guard            | Playwright frame tree                                        | Visual multimodal detection                          |
-| **Dynamic Profile Activation**  | Runtime activation via `chrome_tool_docs` across 8 categories without process restart (HTTP/SSE & Stdio)     | Static tool definitions                                      | Fixed testing API                                    |
+| **Dynamic Profile Activation**  | Exact-name selection via `chrome_tool_docs`; category queries are read-only (HTTP/SSE & Stdio)               | Static tool definitions                                      | Fixed testing API                                    |
 | **In-Page JS Evaluation**       | Top-level await + automatic single-expression `return (...)` wrapping; sanitized output                      | `page.evaluate`                                              | Assertion DSL                                        |
 | **Navigation Settle**           | Event-driven `chrome.tabs.onUpdated` / `onRemoved` listener with settle watchdog                             | `waitForLoadState`                                           | Fixed timeouts / sleep                               |
 
@@ -242,7 +242,7 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Status**: Implemented & Verified (P0)
 - **Context**: The local Fastify HTTP/SSE server binds to port 12306. Any malicious website or script running on localhost could make cross-origin requests to control the browser.
 - **Decision**:
-  1. Generate a cryptographically secure 256-bit token (`TOKEN_FILE`) on native host initialization or read `CHROME_MCP_TOKEN` from environment.
+  1. Generate a cryptographically secure 256-bit token on native host initialization stored exclusively in `~/.chrome-mcp/bridge-token` (the bridge server reads exclusively from this file, rejecting ambient environment tokens).
   2. Validate `Authorization: Bearer <token>` on all Fastify HTTP endpoints and SSE streams.
 - **Consequences**: Complete protection against unauthorized local loopback access and DNS rebinding attacks.
 
@@ -323,12 +323,12 @@ Below is a systematic comparison between **BrowserPaw**, **browser-use**, and **
 - **Status**: Implemented & Verified
 - **Context**: Different AI agent models have vastly different token window budgets. A monolithic MCP server exposing every tool on `tools/list` can overwhelm smaller or faster reasoning models. At the same time, hardcoded static profiles prevented agents from dynamically discovering and invoking advanced debugging or network inspection capabilities when encountering complex edge cases.
 - **Decision**:
-  1. Define 8 comprehensive tool categories in `TOOL_CATEGORIES` across `packages/shared`: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, and `crawl`.
+  1. Define 9 tool categories in `TOOL_CATEGORIES` across `packages/shared`: `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, `workflow`, and `crawl`.
   2. Retain `chrome_tool_docs` as an omni-present introspection tool across all profiles.
-  3. Implement `activateForSession: true` support on both transports:
-     - **Fastify HTTP/SSE**: dynamically registers extra tools to the client's dedicated `McpSessionManager` instance.
-     - **Stdio Transport**: maintains `dynamicExtraTools` set in `mcp-server-stdio.ts`, dynamically expanding both `tools/list` and `tools/call` filters for subsequent RPC requests.
-- **Consequences**: Minimal initial footprint (core ~9.2k, crawl ~6.1k chars/4) with zero-restart, on-demand privilege and capability escalation during autonomous runs.
+  3. Default Core to nine tools. Generate discovery documents in Native from shared definitions, even with the extension disconnected.
+  4. On HTTP and stdio, `names` with `activateForSession:true` atomically replaces the temporary selection; an empty array resets it. Category queries never activate tools. Invalid requests leave the selection unchanged, and only effective list changes notify clients.
+  5. Permit direct calls to known hidden tools without list expansion. Preserve authentication, task isolation and configuration-based Jev gating. Stdio applies a selection only after upstream success and never replays browser actions on reconnect.
+- **Consequences**: Bounded default schema size (26 KiB UTF-8 JSON budget); clients without list refresh can explicitly configure Full. Byte measurements are not measured token savings.
 
 ### ADR-015: Single-Expression JavaScript Auto-Return & Event-Driven Page Load Settle
 

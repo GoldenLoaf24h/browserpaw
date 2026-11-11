@@ -68,3 +68,9 @@ browserpaw.local.json
 !/AGENTS.md
 !/docs/releases/
 !/docs/releases/**
+
+# Future agent task run drafts, preserving requirement ledger and plugin definitions
+/.agents/*
+!/.agents/ORIGINAL_REQUEST.md
+!/.agents/plugins/
+!/.agents/plugins/**

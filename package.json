@@ -1,6 +1,6 @@
 {
   "name": "browserpaw",
-  "version": "4.1.2",
+  "version": "4.2.0",
   "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
   "private": true,
   "author": "hangye",
@@ -19,6 +19,7 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",
+    "release:check": "node scripts/release-notes.mjs",
     "verify:docs": "node scripts/validate-docs.mjs",
     "build:deploy": "pnpm build && node scripts/extension-artifacts.mjs --deploy",
     "verify:delivery": "node scripts/extension-artifacts.mjs --check-deployment",

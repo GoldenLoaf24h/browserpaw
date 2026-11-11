@@ -115,5 +115,5 @@ Manifest registration targets:
 pnpm --filter mcp-chrome-bridge test
 ```
 
-- **Test Suites**: 1 passed (100%)
-- **Tests**: 30 passed (100% Jest)
+- **Test Suites**: 36 passed (100%)
+- **Tests**: 654 passed (100%)

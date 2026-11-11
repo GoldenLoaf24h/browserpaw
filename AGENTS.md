@@ -83,13 +83,15 @@ Notes under this heading are written by humans and preserved on regeneration.
 
 ### Development boundaries
 
-- Communicate in Simplified Chinese. Verify facts, callers and acceptance criteria before making the smallest complete change. Use pwsh 7 and prefer `rg`.
-- Start with [development boundaries/current work](docs/development/DEVELOPMENT.md) and [PROJECT](PROJECT.md). Generated directory indexes aid navigation; rules belong here, QUALITY and DOCUMENTATION.
-- Preserve existing dirty/untracked source, user configuration, login state, learned skills and evidence. Do not commit, tag, push, publish or alter production registration without task authorization.
+- Report to the user in Simplified Chinese; repository documentation is English canonical. Preserve dedicated Chinese mirrors.
+- Read applicable ancestor and directory AGENTS files. Local Manual Notes add scope-specific rules; archived task prompts are historical records, not current instructions.
+- Use [PROJECT](PROJECT.md) for package responsibilities, [DOCUMENTATION](docs/DOCUMENTATION.md) for layout and document ownership, [QUALITY](docs/QUALITY.md) for evidence and acceptance, [CONTRIBUTING](docs/CONTRIBUTING.md) for workflow, and [RELEASING](docs/releases/RELEASING.md) for publication.
+- Start with [current development boundaries](docs/development/DEVELOPMENT.md). State assumptions, inspect callers, and make the smallest complete change. Use pwsh 7 and prefer `rg`.
+- Preserve dirty/untracked work, user configuration, login state, learned skills and evidence. Commit, push, tag, publish, deploy or alter production registration only within task authorization.
 - Shared schemas own tool contracts. Inspect atomic tools, batch/form paths, task/page, skills and clients before changing a common executor; avoid parallel implementations.
-- Never replay uncertain dispatch. Preserve original errors and receipts. Distinguish task-owned, borrowed and user pages. Cancellation is not rollback; reconnect is not session continuity.
-- Edit static skill sources or the Hermes-specific template, then synchronize. Keep client configuration in its adapter. Do not hand-edit installation caches or clean learned skills as static data.
-- Use focused checks during iteration and complete `pnpm verify` before release. Documentation edits also invalidate prior source fingerprints.
-- Deploy only when authorized. Prepare all artifacts before requesting a necessary manual reload, then verify the Native path and loaded buildId.
-- Clean only confirmed unused caches and scratch output. Worktrees, research, frozen builds and failure evidence are not bulk cleanup targets. Never bypass a policy-rejected deletion.
-- Read local paths, PIDs, counts and current versions from actual records. M7 sampling is stopped by user decision. Verify loaded-runtime identity and session continuity separately from source, build and deployment checks.
+- Never replay uncertain dispatch. Preserve errors and receipts. Distinguish task-owned, borrowed and user pages. Cancellation is not rollback; reconnect is not session continuity.
+- Edit canonical skill sources or the Hermes-specific template, then synchronize. Client configuration belongs in its adapter; installed caches and learned skills are not static mirror sources.
+- Run focused checks during development and the full acceptance gate before a release or delivery claim. Never hand-edit report fingerprints, statuses, build IDs or hashes to make a gate pass.
+- Prepare all artifacts before requesting one necessary manual reload. Confirm the Native path, loaded build identity and changed browser behavior separately from disk-state checks.
+- Archive historical task records under `docs/archive/`; put new scratch output under ignored `.artifacts/`. Preserve worktrees, research, versioned frozen builds and failure evidence. Never bypass a policy-rejected deletion.
+- Read local paths, PIDs, counts and versions from current records. M7 sampling remains stopped by user decision.

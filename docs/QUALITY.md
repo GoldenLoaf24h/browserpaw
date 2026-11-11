@@ -2,6 +2,8 @@
 
 This document defines the single canonical acceptance contract for BrowserPaw development, quality verification, and artifact delivery. All contributors, automated pipelines, and AI agents must comply with these verifiable gates before claiming any feature, fix, or release as complete.
 
+Single Source of Truth: This contract owns engineering verification, quality gates, test tier definitions, and evidence integrity rules. Contributor workflows belong in [`docs/CONTRIBUTING.md`](./CONTRIBUTING.md); documentation lifecycle in [`docs/DOCUMENTATION.md`](./DOCUMENTATION.md); release management in [`docs/releases/`](./releases/README.md).
+
 Prerequisites: Node.js ≥ 22.6, the pinned pnpm version from `package.json`, and Python with pytest installed or `uv` to prepare an isolated pytest environment. An explicit `PYTHON` environment variable selects an interpreter that must already provide pytest. Test failures are never retried using a different interpreter.
 
 ## Development checks versus release acceptance
@@ -95,60 +97,35 @@ Validates deployed artifact integrity against the build source:
 - **Artifacts Location**: Diagnostic dumps, execution logs, and delivery reports are generated under `.artifacts/verification/...`.
 - **Ephemeral Status**: Files in `.artifacts/` are generated verification outputs, **not canonical source documentation**. They must never be indexed as active documentation entries in `docs/README.md`.
 - **Evaluation Criteria**: Verification criteria use unified quality invariants (such as 100% test pass rate, 0 broken active links, source/target hash parity) rather than hardcoded transient metrics.
+- **Authentic Evidence Integrity**: Verification evidence fields (`sourceFingerprint`, `buildId`, target delivery hashes, and test `status`) must be emitted directly by automated verification runs. Handcrafting, manual editing, or fabricating evidence is strictly prohibited.
+- **Documentation Edit Invalidation**: Documentation edits invalidate the repository verification fingerprint. Run focused documentation checks during iteration and a fresh `pnpm verify` before claiming full acceptance of the final tree. Documentation edits alone do not imply changed extension bytes or require deployment.
 - **Classification of Assertions**:
-  - **Mock / Simulated**: Verifies isolated component logic, deterministic edge cases, and protocol codecs without external dependencies.
-  - **Live / Integration**: Asserts real Chrome CDP connectivity, native messaging IPC pipes, and authentic memory states.
+  - **Mock / Simulated**: Verifies isolated component logic, deterministic edge cases, and protocol codecs without external dependencies. **Simulated E2E runs are component checks and do NOT constitute browser acceptance.**
+  - **Live / Real Browser Acceptance**: Asserts authentic Chrome CDP connectivity, Native messaging IPC pipes, physical extension load, manual reload in `chrome://extensions`, and runtime `buildId` parity via `chrome_doctor`.
 
 ---
 
 ## 🚫 Negative Behaviors (Strictly Prohibited)
 
 1. **Never substitute disk presence for runtime verification**: Files on disk are never proof of live Chrome in-memory execution.
-2. **Never claim delivery without explicit deployment check**: `verify:delivery` must pass.
-3. **Never break doc links or version records**: Active documentation links must resolve to real files, and package version numbers must align with release documentation.
+2. **Never claim simulated E2E as browser acceptance**: Mocked or headless test passes cannot substitute for real Chrome runtime loading and doctor `buildId` parity.
+3. **Never fabricate or hand-edit verification evidence**: Modifying `sourceFingerprint`, `status`, or delivery hashes by hand is a critical violation of verification integrity.
+4. **Never claim delivery without explicit deployment check**: `pnpm verify:delivery` must pass with 100% hash parity.
+5. **Never break doc links or version records**: Active documentation links must resolve to real files, and package version numbers must align with release documentation.
 
 ---
 
-## Jev Decision Engine Performance & Vision Acceptance Benchmark
+## 🔬 Benchmark & Perception Quality Standards
 
-BrowserPaw specifies a deterministic benchmark suite (`scripts/benchmark-jev-vision.mjs`) to rigorously evaluate the Jev Decision Engine across text-only and multimodal vision capabilities without regression.
+Automated benchmarks (such as `scripts/benchmark-jev-vision.mjs`) and perceptual models must comply with universal quality standards:
 
-### 1. Controlled Comparison Groups
+1. **Zero Fabricated Outcomes**: Benchmark metrics must record real runtime observations. Task completion must be asserted against authentic DOM/in-page state mutations rather than trusting superficial status flags (e.g. `result.status === 'done'`).
+2. **Fail-Closed & Safe Escalation**: Visual fallbacks and model-assisted actions must handle unambiguous, non-destructive targets only; ambiguous, multi-step, or destructive targets must escalate safely. Strict TTL and perceptual freshness checks must reject stale screenshot frames.
+3. **Tab & Session Isolation**: Benchmark runs must operate in dedicated, temporary background tabs and guarantee deterministic cleanup via bounded `finally` handlers. User tabs and ambient sessions must never be closed or modified.
+4. **Non-Invasive Configuration**: Benchmark and test harnesses must inject capabilities via in-memory spies and wrappers only; user disk configuration (such as API keys in `~/.browserpaw/`) must never be modified or overwritten.
 
-The benchmark enforces three pinned comparison groups:
+---
 
-1. **`baseline-1.13-text`**: Model pinned to `jev-1.13.0`, visual fallback unavailable. Evaluates standard text-only baseline performance.
-2. **`candidate-1.14-text`**: Model pinned to `jev-1.14.0` with the visual fallback forced off through a benchmark-only stub. Evaluates text-only candidate performance and prompt compatibility.
-3. **`candidate-1.14-vision`**: Model pinned to `jev-1.14.0` with the visual fallback available. Evaluates multimodal visual grounding (`Box` + `Noul`) with active viewport screenshot capture.
+## Historical benchmark detail
 
-Groups 2 and 3 share a model on purpose: vision availability is the only variable between them. The product has no vision switch — it asks upstream which release answers the endpoint and enables the fallback only for a `box`-capable one — so the text-only group forces the gate off in-memory rather than through configuration.
-
-### 2. Deterministic Local Fixtures
-
-All benchmark scenarios run against deterministic local HTML fixtures served by an ephemeral HTTP loopback server (zero external web dependencies):
-
-- **`search-preview`**: Text input and live filtering preview. Intentionally avoids destructive submit buttons to verify pure input perception without tripping safety pause keywords.
-- **`icon-toolbar`**: Three icon-only action buttons rendered as distinct SVG glyphs without text labels or accessibility names. Verifies visual grounding on non-textual UI elements.
-- **`canvas-interactive`**: HTML5 `<canvas>` rendering interactive rectangular buttons without child DOM elements. Verifies coordinate targeting on canvas controls.
-- **`missing-target`**: Negative guard evaluation. Directs the agent to click a nonexistent target using a non-destructive goal (`Click on the blue calendar icon`); asserts zero triggered events (`__eventsCount === 0`) and graceful escalation without false positives from destructive keyword filters.
-
-### 3. Execution Contracts & Evidence Standards
-
-- **Zero Fabricated Data**: Default runs perform local fixture and environment self-checks without generating synthetic benchmark scores or writing fake result files.
-- **Authentic Metrics & Real Page Outcomes**: Benchmark metrics record real runtime observations:
-  - Task completion verified against actual in-page state changes (DOM input values, click counters, canvas state flags) rather than trusting `result.status === 'done'`.
-  - Successful dispatch does **not** blindly report `done`.
-  - Measured latency percentiles: p50, p95, min, max, and avg.
-  - Step counts, failure reasons, and authentic telemetry (`jevUsage.visionCalls`).
-- **Smoke Nature of the 4 Mixed Fixtures**: The 4 mixed fixtures constitute a functional smoke verification suite across perception pathways (DOM text input, unlabelled icon button, canvas coordinate, missing negative guard); sample size N=4 means p95 latency is indicative smoke data, not a statistical benchmark or performance speedup promise.
-- **Click-Only Fallback & Escalation**: Visual fallback initial release only handles single, unambiguous click/tap targets; it rejects `type`, `fill`, `select`, and multi-step compound goals; complex goals escalate safely. When the text model picks `type` or `select`, vision fallback is never triggered.
-- **Single Visual Click Limit & Post-Dispatch Verification**: At most one visual click per run (`visualClickExecuted`). The subsequent step re-reads the DOM: if the text model confirms `goal_done`, it completes; if the DOM has 0 elements or any additional action is attempted, the engine immediately escalates before acting again.
-- **Tab & Session Isolation with Bounded Cleanup**: Real benchmark runs open dedicated temporary background tabs via `chrome_navigate` (`{ background: true }`), establish an MCP session (`initialize`), and track created tabs in a `Set`. A `finally` block attempts `chrome_close_tabs` for only newly created tabs and `DELETE /mcp`; deletion has a five-second deadline and reports failed or stalled cleanup. Failed tab closures remain tracked for a final retry. User tabs are never included in cleanup. Arbitrary sleeps are eliminated.
-- **In-Memory Configuration Spying**: Group settings (`modelId`, plus a benchmark-only capability stub) are injected into the running process by wrapping `jevModelManager` getters and the engine's capability check only. User disk configuration (`~/.browserpaw/jev-remote.json`) is never modified, preserving API keys and base URLs.
-- **Runtime & SDK Constraints**: Multimodal vision requires Node.js `>=22.6.0`, `@typesafe-ai/sdk` `0.7.0` (pinned), and operates strictly in Remote mode. There is no vision switch and no pinned vision model: the client asks upstream which release answers the configured endpoint and enables the fallback only for one that can answer `box` (Jev 1.14+), reading the version upstream reports rather than matching an alias. Viewport screenshots are constrained to `280..1568px` on every side in PNG/JPEG format.
-- **Box & Noul Guardrails**: Because TypeSafe `Box` returns coordinates regardless of object presence, BrowserPaw enforces strict `Noul` presence (`target_exists >= 0.85`), ambiguity (`target_ambiguous < 0.5`), and destructive action gates before dispatching clicks.
-- **Strict Freshness Validation & Fail-Closed Policy**: Ephemeral screenshot contexts enforce strict TTL. Any drift in tab affinity, URL, document origin, scroll offset, viewport dimensions, or expired frame ID triggers immediate fail-closed rejection without dispatching clicks.
-- **Canvas Perception Boundary Disclosure**: Perceptive signatures compare URL, title, question/progress markers, alerts, and active inputs, but do not compare pixels or the complete layout; canvas/video redraws and changes outside those fields can escape detection. Canvas fixture evaluation relies on internal canvas state (`__canvasState`), never claiming DOM perceptual detection of raw canvas pixel updates.
-- **Initial Jev Capture Deadline**: A real CDP-wrapper regression leaves the first clipped screenshot unacknowledged and verifies helper fallback within 1500 ms plus helper work; document replacement during fallback must reject the frame.
-- **Suspended Frame Regression**: Screenshot tests simulate animation-frame and optional recapture acknowledgements that never resolve. Both active and background capture must complete the single black-bar retry without waiting for the CDP command timeout; background retries do not request animation frames. A stalled optional recapture retains the initial image and reports `cdpCaptureWarning`.
-- **Vision Billing Accounting**: TypeSafe bills images as ordinary input tokens at the same per-token rate as text, with no separate image charge, and `usage.input_tokens` includes image tokens. `estCostUsd` accumulates vision `input_tokens` into the same counter and applies the documented Jev rate ($0.042/1M input tokens), so it covers vision requests; it remains an input-only estimate (output tokens are excluded).
+The [2026-11-05 benchmark contract snapshot](./archive/testing/quality-benchmarks-2026-11-05.md) preserves the former model comparison groups, fixture definitions, regression cases and accounting assumptions. It is historical context, not a current model/version, pricing or acceptance claim. Consult `scripts/benchmark-jev-vision.mjs` and its regression tests for current implementation.

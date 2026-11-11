@@ -9,10 +9,10 @@ This package contains the Google Chrome Manifest V3 extension for **BrowserPaw**
 ```
 app/chrome-extension/
 ├── entrypoints/
-│   ├── background/             # MV3 Service Worker & 48 Tool Executors
+│   ├── background/             # MV3 Service Worker & 49 Tool Executors
 │   │   ├── native-host.ts      # Native Messaging pipe listener & sender authentication guard
 │   │   ├── index.ts            # Extension initialization, keepalive, and error reporting
-│   │   └── tools/browser/      # Executors for all 48 BrowserPaw extension tools (49 total with Native loop)
+│   │   └── tools/browser/      # Executors for all 49 BrowserPaw extension tools (52 total with 3 Native tools: chrome_task, chrome_skill, chrome_act_toward_goal)
 │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay with spring physics
 │   ├── inpage-engine.ts        # Isolated-world DOM indexing, 1-based indexing, WeakRef mapping
 │   └── popup/                  # Extension popup UI (agent toggle and connection monitor)
@@ -94,5 +94,5 @@ The extension test suite runs via Vitest with mocked Chrome MV3 and CDP environm
 pnpm --filter chrome-mcp-server test
 ```
 
-- **Test Files**: 26 passed (100%)
-- **Test Count**: 139 passed (100%)
+- **Test Files**: 150 passed (100%)
+- **Test Count**: 1,789 passed (100%)

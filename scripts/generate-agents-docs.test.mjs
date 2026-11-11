@@ -41,3 +41,56 @@ test('tool profile descriptions do not hardcode drifting schema counts', () => {
     /all 50 canonical tools|Core \(14\).*Full \(50\)|all 50 BrowserPaw tools/,
   );
 });
+
+test('AGENTS generation preserves manual rules and excludes archived and packaged records', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'browserpaw-agents-'));
+  try {
+    const initialized = spawnSync('git', ['init', '--quiet', directory], { encoding: 'utf8' });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const excluded = [
+      'research',
+      'releases',
+      'docs/archive',
+      '.artifacts',
+      'skills/browserpaw',
+      'plugins/browserpaw',
+    ];
+    for (const relativePath of [...excluded, 'scratch']) {
+      fs.mkdirSync(path.join(directory, relativePath), { recursive: true });
+    }
+    for (const relativePath of excluded) {
+      fs.writeFileSync(
+        path.join(directory, relativePath, 'AGENTS.md'),
+        'Historical or packaged text.',
+      );
+    }
+    fs.writeFileSync(
+      path.join(directory, 'AGENTS.md'),
+      '# Existing\n\n## Manual Notes\nKeep this task boundary.\n',
+    );
+    const generated = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL('./generate-agents-docs.mjs', import.meta.url))],
+      { cwd: directory, encoding: 'utf8' },
+    );
+    assert.equal(generated.status, 0, generated.stderr);
+    const content = fs.readFileSync(path.join(directory, 'AGENTS.md'), 'utf8');
+    assert.match(content, /## Manual Notes\nKeep this task boundary\./);
+    assert.ok(!content.includes('scratch/AGENTS.md'));
+    for (const relativePath of excluded) {
+      assert.equal(
+        fs.readFileSync(path.join(directory, relativePath, 'AGENTS.md'), 'utf8'),
+        'Historical or packaged text.',
+      );
+    }
+    const validated = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL('./validate-agents-docs.mjs', import.meta.url))],
+      { cwd: directory, encoding: 'utf8' },
+    );
+    assert.equal(validated.status, 0, validated.stdout + validated.stderr);
+    assert.match(validated.stdout, /All 4 AGENTS.md files PASSED/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

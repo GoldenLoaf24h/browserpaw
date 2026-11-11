@@ -9,7 +9,7 @@ The package is not currently published to npm. DeepSeek Harness installs pnpm-co
 ```sh
 cd plugins/browserpaw-dsh
 npm pack
-dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.0.tgz
+dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.2.0.tgz
 ```
 
 For local development, install the package directory directly:
@@ -59,7 +59,7 @@ The native host and `~/.chrome-mcp/bridge-token` were both in place for that run
 
 **Boundary**: the `desktop` profile is owned exclusively by the Electron host and was not exercised. The 0.2.1-rc.1 bridge result above is historical; a fresh live headless model session against the current package was not completed. Current validation establishes packaging, installation, configuration, and component contracts, not live current-runtime tool execution.
 
-**Tool-profile boundary**: the native host announces its `core` profile by default, while the bundled skill body references the wider canonical set. `chrome_tool_docs` with `activateForSession: true` widens the server-side list, and BrowserPaw advertises `tools.listChanged` and forwards the notification through its bridge. Clients that implement the standard refresh can observe the new list; clients that cannot should run with `CHROME_MCP_TOOL_PROFILE=full`.
+**Tool-profile boundary**: the Native host defaults to nine Core tools. Inspect categories with `chrome_tool_docs({category:"manage"})`, then replace the temporary selection with `{names:["chrome_close_tabs"],activateForSession:true}`; an empty names array resets it. Effective changes emit `tools/listChanged` through HTTP and stdio. Known hidden calls do not expand the list. Clients without refresh support can configure `CHROME_MCP_TOOL_PROFILE=full`.
 
 ## Bundle Manifest Declarations
 
@@ -86,5 +86,5 @@ DeepSeek Harness treats a package as a profile bundle layer only when its `packa
 
 Different agent hosts enforce distinct authentication boundaries:
 
-- **DeepSeek Harness (DSH)**: Operates against a local HTTP MCP bridge. The plugin dynamically resolves the local bridge token from `process.env.CHROME_MCP_TOKEN` or `~/.chrome-mcp/bridge-token` and passes `headers: { 'x-mcp-token': token }` to authenticate with the local server.
+- **DeepSeek Harness (DSH)**: Operates against a local HTTP MCP bridge. The plugin dynamically resolves the local bridge token from `~/.chrome-mcp/bridge-token` and passes `headers: { 'x-mcp-token': token }` to authenticate with the local server.
 - **Hermes Agent (PR #136034)**: Operates credential-free via `ctx.call_mcp('browserpaw', ...)`. The plugin does not read environment tokens or local secret files; access control is enforced host-side via `plugins.entries.browserpaw.mcp_allowlist` in `config.yaml`.

@@ -7,6 +7,8 @@ description: Control and automate the user's active Chrome browser through Brows
 
 BrowserPaw operates the user's Chrome session through MCP. Prefer task-owned pages, observed element references, strict locators, frame-qualified actions, and explicit business verification.
 
+The default MCP profile exposes nine tools. Use `chrome_tool_docs` without arguments for categories, `{category:"observe"}` for names, and `{names:["chrome_screenshot"]}` for complete schemas. Add `activateForSession:true` with names to replace temporary visible tools; empty names resets them. Direct hidden-tool calls never expand the list.
+
 Some clients namespace MCP tool names. Use the names exposed by the current runtime; `chrome_*` is the backend contract. Query the live contract with `chrome_tool_docs` instead of assuming another version's parameters.
 
 ## Core Workflow
@@ -76,6 +78,10 @@ Personal learned skills live under `$BROWSERPAW_HOME/skills` (default `~/.browse
 - Authenticated page API: `chrome_network_request` (verified GET where supported)
 - Visual fallback: `chrome_screenshot` then `chrome_computer`
 - Diagnostics: `chrome_doctor`
+
+## CLI And Persistent Sessions
+
+One-shot `browserpaw` commands open separate MCP sessions. Use `browserpaw repl` for multi-step task continuity; never automatically take over a task from another connection. `browserpaw --json <tool_name> '<json_args>'` preserves the complete result. Redirect image or resource payloads to a file rather than printing base64 into model context. See [CLI and REPL](references/cli-repl.md). CLI-first usage will become the recommendation only after persistent machine-oriented sessions and media delivery are verified.
 
 ## References
 

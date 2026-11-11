@@ -117,3 +117,7 @@ skill_view("browserpaw:browserpaw")
 ## License
 
 GNU Affero General Public License v3.0 (AGPL-3.0)
+
+## Discovery boundary
+
+Hermes uses its own curated static wrappers. This release updates the shared `chrome_tool_docs` contract but does not make that wrapper list dynamically shrink to the nine-tool MCP Core profile. Category queries are read-only; explicit names select temporary tools on transports that support list refresh. Jev remains configuration-dependent.

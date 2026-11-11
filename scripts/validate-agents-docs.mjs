@@ -21,9 +21,11 @@ function findAgentsFiles(dir) {
   const results = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (SKIP_DIRS.includes(entry.name)) continue;
+    if (entry.name.startsWith('.') || SKIP_DIRS.includes(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      const relativePath = path.relative('.', fullPath).replace(/\\/g, '/');
+      if (/^(?:releases|docs\/archive|skills\/browserpaw)(?:\/|$)/.test(relativePath)) continue;
       if (PACKAGED_PLUGIN_DIR.test(path.relative('.', fullPath))) continue;
       if (SKILL_MIRROR_DIR.test(path.relative('.', fullPath) + path.sep)) continue;
       results.push(...findAgentsFiles(fullPath));
@@ -59,7 +61,9 @@ for (const filePath of agentsFiles) {
       const parentRel = match[1];
       const resolvedParent = path.resolve(dir, parentRel);
       if (!fs.existsSync(resolvedParent)) {
-        console.error(`ERROR: Broken parent reference in ${filePath} -> ${parentRel} (resolved to ${resolvedParent})`);
+        console.error(
+          `ERROR: Broken parent reference in ${filePath} -> ${parentRel} (resolved to ${resolvedParent})`,
+        );
         errors++;
       }
     }
@@ -78,7 +82,7 @@ for (const filePath of agentsFiles) {
     '## Subdirectories',
     '## For AI Agents',
     '## Dependencies',
-    '## Manual Notes'
+    '## Manual Notes',
   ];
 
   for (const sec of requiredSections) {

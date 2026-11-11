@@ -315,11 +315,11 @@ chrome_tool_docs({ "category": "manage", "activateForSession": true })
 | `Cannot access a chrome:// URL`                            | Chrome 安全策略限制扩展调试内部系统页面。           | 导航到标准的 `http://`、`https://` 或 `file://` URL。                      |
 | `executeScript timeout ... renderer not acking`            | 渲染进程无响应或被原生模态对话框阻塞。              | 调用 `chrome_handle_dialog` 或刷新目标标签页。                             |
 | `CDP_DISPATCH_TIMEOUT`                                     | 后台标签页执行在系统重度节流下超时。                | 重试动作或短暂把标签页切到前台。                                           |
-| `Security check failed: Domain changed`                    | 截图捕获与坐标动作之间发生了导航。                  | 调用 `chrome_read_dom` 或 `chrome_take_screenshot` 重新对齐状态。          |
+| `Security check failed: Domain changed`                    | 截图捕获与坐标动作之间发生了导航。                  | 调用 `chrome_read_dom` 或 `chrome_screenshot` 重新对齐状态。               |
 | `Tool X is not exposed under the ... profile`              | 工具在当前配置档（`core`/`crawl`）下被隐藏。        | 调用 `chrome_tool_docs({ category: "<cat>", activateForSession: true })`。 |
 | `Tool X is not a BrowserPaw tool`                          | 请求了不存在的工具名。                              | 查阅 `tools/list` 或 `chrome_tool_docs` 获取当前工具面。                   |
 | `captureScreenshot returned empty data for background tab` | 后台标签页被关闭或被 Chrome 内存节省器丢弃。        | 重新打开或导航到目标 URL。                                                 |
-| `Failed to ... index [X] in cross-origin frame`            | 子 iframe 已卸载或被 sandbox 权限限制。             | 用 `chrome_read_dom({ filter: "interactive" })` 检查 frame 状态。          |
+| `Failed to ... index [X] in cross-origin frame`            | 子 iframe 已卸载或被 sandbox 权限限制。             | 用 `chrome_read_dom({ viewportOnly: true })` 检查 frame 状态。             |
 | `Message sender rejected / unauthenticated content script` | 安全守卫拦截了未授权的消息发送方（`_sender.tab`）。 | 确保请求来自真实的原生桥接通道。                                           |
 
 ---

@@ -1,6 +1,6 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -65,7 +65,9 @@ function makeContext({ pluginGate } = {}) {
           typeof output.render !== 'function' ||
           (output.presentationMeta !== undefined && typeof output.presentationMeta !== 'function')
         ) {
-          throw new TypeError(`tool "${name}" must declare output { schema, render, presentationMeta? }`);
+          throw new TypeError(
+            `tool "${name}" must declare output { schema, render, presentationMeta? }`,
+          );
         }
         tools.push(tool);
         return () => {
@@ -112,8 +114,9 @@ async function bootSession({ pluginGate } = {}) {
 }
 
 async function withEnv(overrides, fn) {
+  const merged = { HOME: testHome, USERPROFILE: testHome, ...overrides };
   const saved = new Map();
-  for (const [key, value] of Object.entries(overrides)) {
+  for (const [key, value] of Object.entries(merged)) {
     saved.set(key, process.env[key]);
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -129,6 +132,14 @@ async function withEnv(overrides, fn) {
 }
 
 const noPorts = { CHROME_MCP_PORT: undefined, MCP_HTTP_PORT: undefined };
+
+const testHome = mkdtempSync(join(tmpdir(), 'dsh-test-home-'));
+const testTokenDir = join(testHome, '.chrome-mcp');
+mkdirSync(testTokenDir, { recursive: true });
+writeFileSync(join(testTokenDir, 'bridge-token'), 'test-token');
+after(() => {
+  rmSync(testHome, { recursive: true, force: true });
+});
 
 describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
   it('B-05: resolves the bridge token without process.getBuiltinModule (F-02 static-import shadowing)', () => {
@@ -175,28 +186,34 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
   });
 
   it('B-05: open() honours CHROME_MCP_PORT', async () => {
-    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token', CHROME_MCP_PORT: '45678' }, async () => {
-      const { tool, forks } = await bootSession();
-      await tool.execute({ action: 'open' });
-      assert.equal(forks.length, 1);
-      assert.equal(forks[0].options.url, 'http://127.0.0.1:45678/mcp');
-      assert.equal(forks[0].options.headers['x-mcp-token'], 'test-token');
-      // The client swallows a failed first connection by default and retries in the
-      // background, which would let open() report success with no tool registered.
-      assert.equal(
-        forks[0].options.failOnStartupError,
-        true,
-        'open() must surface a failed first connection instead of retrying silently',
-      );
-    });
+    await withEnv(
+      { ...noPorts, CHROME_MCP_TOKEN: 'test-token', CHROME_MCP_PORT: '45678' },
+      async () => {
+        const { tool, forks } = await bootSession();
+        await tool.execute({ action: 'open' });
+        assert.equal(forks.length, 1);
+        assert.equal(forks[0].options.url, 'http://127.0.0.1:45678/mcp');
+        assert.equal(forks[0].options.headers['x-mcp-token'], 'test-token');
+        // The client swallows a failed first connection by default and retries in the
+        // background, which would let open() report success with no tool registered.
+        assert.equal(
+          forks[0].options.failOnStartupError,
+          true,
+          'open() must surface a failed first connection instead of retrying silently',
+        );
+      },
+    );
   });
 
   it('B-05: open() falls back to MCP_HTTP_PORT and then to the shared default port', async () => {
-    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token', MCP_HTTP_PORT: '45679' }, async () => {
-      const { tool, forks } = await bootSession();
-      await tool.execute({ action: 'open' });
-      assert.equal(forks[0].options.url, 'http://127.0.0.1:45679/mcp');
-    });
+    await withEnv(
+      { ...noPorts, CHROME_MCP_TOKEN: 'test-token', MCP_HTTP_PORT: '45679' },
+      async () => {
+        const { tool, forks } = await bootSession();
+        await tool.execute({ action: 'open' });
+        assert.equal(forks[0].options.url, 'http://127.0.0.1:45679/mcp');
+      },
+    );
 
     await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token' }, async () => {
       const { tool, forks } = await bootSession();
@@ -204,11 +221,14 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
       assert.equal(forks[0].options.url, 'http://127.0.0.1:12306/mcp');
     });
 
-    await withEnv({ ...noPorts, CHROME_MCP_TOKEN: 'test-token', CHROME_MCP_PORT: 'not-a-port' }, async () => {
-      const { tool, forks } = await bootSession();
-      await tool.execute({ action: 'open' });
-      assert.equal(forks[0].options.url, 'http://127.0.0.1:12306/mcp');
-    });
+    await withEnv(
+      { ...noPorts, CHROME_MCP_TOKEN: 'test-token', CHROME_MCP_PORT: 'not-a-port' },
+      async () => {
+        const { tool, forks } = await bootSession();
+        await tool.execute({ action: 'open' });
+        assert.equal(forks[0].options.url, 'http://127.0.0.1:12306/mcp');
+      },
+    );
   });
 
   it('B-05: open() fails loudly instead of reporting ok when no bridge token exists', async () => {
@@ -228,8 +248,16 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
   });
 
   it('F-05: the dead idle state is gone and no timer is ever scheduled', () => {
-    assert.doesNotMatch(pluginSource, /idleTimer|clearIdleTimer/, 'dead idle state must be deleted');
-    assert.doesNotMatch(pluginSource, /setTimeout|setInterval/, 'no idle/auto-close behaviour may be added');
+    assert.doesNotMatch(
+      pluginSource,
+      /idleTimer|clearIdleTimer/,
+      'dead idle state must be deleted',
+    );
+    assert.doesNotMatch(
+      pluginSource,
+      /setTimeout|setInterval/,
+      'no idle/auto-close behaviour may be added',
+    );
   });
 
   it('F-05: open/close lifecycle still works and leaves no timer behind', async () => {
@@ -419,7 +447,9 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
     assert.equal(typeof tool.output?.render, 'function', 'output.render must be a function');
     const rendered = tool.output.render({}, { ok: true, action: 'status', active: false });
     assert.ok(Array.isArray(rendered), 'render must return an array of content blocks');
-    assert.deepEqual(rendered, [{ type: 'text', text: '{"ok":true,"action":"status","active":false}' }]);
+    assert.deepEqual(rendered, [
+      { type: 'text', text: '{"ok":true,"action":"status","active":false}' },
+    ]);
   });
 
   it('S-03: skill registration declares source and passes deferred resolution', async () => {
@@ -432,7 +462,11 @@ describe('browserpaw-dsh plugin contract (B-05 / F-05)', () => {
   it('S-04: session tool parameters specify standard root object JSON Schema', async () => {
     const { tool } = await bootSession();
     assert.equal(tool.parameters?.type, 'object', 'parameters root must declare type "object"');
-    assert.equal(typeof tool.parameters?.properties?.action, 'object', 'parameters.properties.action must exist');
+    assert.equal(
+      typeof tool.parameters?.properties?.action,
+      'object',
+      'parameters.properties.action must exist',
+    );
     assert.deepEqual(
       tool.parameters.properties.action.enum,
       ['open', 'close', 'status'],

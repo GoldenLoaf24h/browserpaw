@@ -6,36 +6,65 @@ An authoritative, step-by-step onboarding guide for **AI Agents** (Codex Desktop
 
 ---
 
-## Overview & Setup Flow
+## 🧭 Overview, Topology & User Choices
 
-1. Install the extension from a release package or build it from source.
-2. Register the Native Messaging Host from the repository build.
-3. Connect an MCP client using Stdio or HTTP transport, or install the DeepSeek Harness plugin.
-4. Optionally configure Jev and pin the extension.
-5. Optionally enable Chromium's silent debugger flag.
-6. Install agent skills if your client supports them.
-7. Run the diagnostic script and resolve any reported issues.
+BrowserPaw connects your AI agent to your **existing, logged-in Google Chrome session** through three cooperating components:
+
+```text
+[AI Agent Client + Skill]
+       │  MCP (Stdio or HTTP 127.0.0.1:12306 + ~/.chrome-mcp/bridge-token)
+       ▼
+[Local Native Messaging Host (Node.js >= 22.6.0 · app/native-server)]
+       │  Chrome Native Messaging IPC (com.chromemcp.nativehost)
+       ▼
+[BrowserPaw Chrome MV3 Extension (chrome://extensions · Active User Profile)]
+```
+
+### Choose Your Setup Options
+
+Every environment is different. Before running commands, choose the option in each row that fits your workflow:
+
+| Decision Dimension               | Option A (Recommended Default)                                                                        | Option B (Alternative)                                                                                    | Option C (Specialized)                                                                    |
+| :------------------------------- | :---------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------- |
+| **1. Extension Source** (§1)     | **Pre-built Release ZIP** (`browserpaw-extension.zip` extracted to a permanent folder)                | **Build from Source** (`pnpm install && pnpm build` → `app/chrome-extension/.output/chrome-mv3`)          | Custom staged directory via `browserpaw.local.json` (`extensionSyncDir`)                  |
+| **2. Client Connection** (§3)    | **Direct Stdio MCP** (`mcp-server-stdio.js` — zero manual token management)                           | **Native Client Plugin** (Codex `.agents/plugins`, Claude `/plugin`, Hermes, or DSH)                      | **Streamable HTTP MCP** (`http://127.0.0.1:12306/mcp` + `x-mcp-token`)                    |
+| **3. Tool Profile** (§3)         | **`core`** (9 tools, default; explicit per-tool discovery)                                            | **`full`** (52 canonical tools; Jev remains configuration-dependent)                                      | **`crawl`** (12 extraction tools)                                                         |
+| **4. Goal Decision Engine** (§4) | **Remote Cloud Jev** (`TYPESAFE_API_KEY` — enables `Noul` ranking & Jev 1.14+ `Box` visual grounding) | **Zero-Key Heuristic Fallback** (works out-of-the-box at zero API cost when no key is set)                | **Local Jev** (`decider-2b` on `127.0.0.1:8009`) or **Off** (51 deterministic tools only) |
+| **5. Debugger Banner UX** (§5)   | **Silent Debugger Flag** (`--silent-debugger-extension-api` — eliminates 36px top-bar jitter)         | **Standard Chrome Banner** (no shortcut change; Chrome displays `"BrowserPaw is debugging this browser"`) | —                                                                                         |
+
+### 🤖 AI Agent Onboarding Protocol (When Assisting a User)
+
+If you are an AI agent executing this guide on behalf of a human user, follow these strict interaction rules:
+
+1. **Never force a single configuration**: Present the choices above (Pre-built Release vs. Source Build, target AI client, `core` vs. `full` tool profile, and optional `TYPESAFE_API_KEY` vs. zero-key Heuristic mode) and respect the user's selection.
+2. **Guide the user through Chrome UI actions**: Scripts cannot load unpacked extensions or click the MV3 reload button inside `chrome://extensions/`. Stage all files on disk **first**, then give the user one concise prompt explaining what to click in Chrome and wait for confirmation (e.g., `"已安装"` / `"已重载"`).
+3. **Verify runtime identity, not just files on disk**: After the user loads or reloads the extension, run `node skills/browserpaw/scripts/doctor.mjs` (or `browserpaw doctor --verbose`) to confirm the live runtime `buildId` and Native Messaging handshake.
 
 ## Prerequisites
 
-- **Source installation:** Node.js `>=22.6.0` and pnpm `12.6.0` (the version declared by this repository's `package.json`).
-- **Release extension installation:** Google Chrome and Node.js `>=22.6.0` for the native server (matching Native engine and repository requirements). The extension ZIP does not include the Native Messaging server or registration script; clone the repository and build it before continuing with Step 2.
-- **Local Jev mode:** Python plus the decider runtime dependencies (uvicorn, torch, and transformers) must be installed in the BrowserPaw virtual environment at ~/.browserpaw/venv, or available to the system Python. If they are unavailable, use Remote mode or Off.
+- **Local Native Messaging Server (Required for all paths):** Google Chrome (or Chromium) and Node.js `>=22.6.0` with `pnpm` (`12.6.0` pinned in `package.json`). Note that `browserpaw-extension.zip` contains only the pre-built Chrome MV3 extension bundle; the Native Messaging server (`app/native-server`) is built and registered from a local repository checkout.
+- **Optional Local Jev Mode:** Python plus the decider runtime dependencies (`uvicorn`, `torch`, and `transformers`) installed in `~/.browserpaw/venv` or system Python. Not required for Remote Cloud Jev, Zero-Key Heuristic fallback, or Off mode.
 
 Commands below are written for a shell opened at the repository root unless noted otherwise.
 
 ---
 
-## Step 1: Install BrowserPaw Chrome Extension
+## 🛠️ Step 1: Install BrowserPaw Chrome Extension
 
-Choose the installation option matching your environment:
+Choose how you want to obtain the unpacked Chrome extension directory, while building the local Native Messaging bridge in your repository checkout:
 
-### Option A: Pre-built Release (Recommended for Most Users — No Build Required)
+### Option A: Pre-built Release Extension (Skip Extension Compilation)
 
-1. Download `browserpaw-extension.zip` from **[GitHub Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest)**.
-2. Extract the ZIP archive into a persistent local folder (e.g., `~/browserpaw-extension` or `D:\browserpaw-extension`).
+1. Download `browserpaw-extension.zip` (and optional `browserpaw-skill.zip`) from **[GitHub Releases](https://github.com/GoldenLoaf24h/browserpaw/releases/latest)**.
+2. Extract `browserpaw-extension.zip` into a **permanent local folder** (for example, `D:\tools\browserpaw-extension` or `~/tools/browserpaw-extension`).
+   > **⚠️ Important:** Chrome runs unpacked extensions directly from the folder you select. **Do not delete, move, or rename this extracted folder** after loading it in Chrome.
+3. In your repository checkout, build the shared contracts and Native Messaging server required for Step 2:
+   ```bash
+   pnpm install
+   pnpm --filter chrome-mcp-shared build && pnpm --filter mcp-chrome-bridge build
+   ```
 
-### Option B: Local Repository Build (For Developers)
+### Option B: Full Local Repository Build (Recommended for Developers)
 
 If you have cloned this repository locally, build the extension package:
 
@@ -53,20 +82,25 @@ Use one unpacked extension directory, and load that same directory in Chrome. Ch
 
 ---
 
-### Loading into Google Chrome
+### 👆 Human Action Required: Load the Extension in Google Chrome
 
-> **AI Agent Guidance:** You can assist the user by opening `chrome://extensions/` in Google Chrome.
+> **🤖 AI Agent Prompt to User:**
+> _"All extension files are ready at `<EXTENSION_FOLDER_PATH>`. Please complete these steps in Google Chrome and let me know your 32-character Extension ID once loaded:_
+> _1. Open `chrome://extensions/` in Chrome and toggle on **Developer mode** (top-right corner)._
+> _2. Click **Load unpacked** (top-left) and select `<EXTENSION_FOLDER_PATH>` (the folder containing `manifest.json`)._
+> _3. Confirm the **BrowserPaw** card is enabled, copy the **32-character ID** shown on the card, and click the puzzle-piece icon in the Chrome toolbar to **Pin** BrowserPaw."_
 
 1. In Google Chrome, navigate to **`chrome://extensions/`**.
 2. Enable **Developer mode** via the toggle switch in the top-right corner.
-3. Either:
-   - Click the **Load unpacked** button and select the extracted extension folder (for local builds on Windows, either your configured local staging directory or `<repo-root>/app/chrome-extension/.output/chrome-mv3`).
-   - Or drag and drop the extension folder directly into the `chrome://extensions/` page.
-4. Verify that **BrowserPaw** appears in your extensions list with its status enabled.
+3. Click **Load unpacked** (or drag and drop the folder) and select the directory containing `manifest.json`:
+   - **Option A:** Your permanent extracted `browserpaw-extension` directory.
+   - **Option B:** `<repo-root>/app/chrome-extension/.output/chrome-mv3` (or your configured `extensionSyncDir`).
+4. Verify that **BrowserPaw** appears with its toggle enabled, and copy its **32-character Extension ID** (default key produces `hbdgbgagpkpjffpklnamcljpakneikee`) for Step 2.
+5. **When Updating Later:** Because MV3 service workers remain resident in memory, after updating extension files on disk you must click the **Reload (`⟳`)** icon on the BrowserPaw card in `chrome://extensions/` once, then verify the loaded `buildId` with `browserpaw doctor --verbose`.
 
 ---
 
-## Step 2: Register Native Messaging Host (One-Time OS Binding)
+## 🔌 Step 2: Register Native Messaging Host (One-Time OS Binding)
 
 The Native Messaging Host provides local IPC between Chrome and your local AI Agent clients.
 
@@ -86,10 +120,14 @@ macOS/Linux:
 export CHROME_EXTENSION_ID='<your-32-character-id>'
 ```
 
-Then, from the repository root in the same shell, run (store installations can run this directly):
+Then, from the repository root in the same shell, run the registration script (or use the CLI with explicit browser flags):
 
 ```bash
+# Standard user-level registration (auto-detects installed browsers):
 node app/native-server/dist/scripts/register-dev.js
+
+# Optional CLI form with explicit target browser (-b chrome|chromium|all, -d detect, -f force, -s system):
+node app/native-server/dist/cli.js register --browser chrome --force
 ```
 
 Re-run registration after changing the unpacked extension ID. Chrome-launched hosts learn their admitted caller's ID from the launch argument for HTTP Origin checks. If you launch the bridge independently, also set `CHROME_EXTENSION_ID` in that process's environment.
@@ -105,9 +143,21 @@ The registration script writes the Native Messaging manifest and browser registr
 
 ---
 
-## Step 3: Connect to Your AI Agent Client
+## 🤝 Step 3: Connect to Your AI Agent Client
 
-BrowserPaw connects via **Direct Stdio** (recommended for Codex Desktop, Hermes, Cursor, Claude Desktop, and CLI agents) or optional **HTTP Transport** (for custom authenticated loopback integrations). Choose your client configuration below:
+BrowserPaw supports **Direct Stdio** (recommended for most clients), **Client-Native Plugins**, and **Streamable HTTP Transport** (`http://127.0.0.1:12306/mcp`).
+
+### Choosing Your Tool Surface Profile (`CHROME_MCP_TOOL_PROFILE`)
+
+You can control how many tool schemas are loaded into your agent's context window by setting `CHROME_MCP_TOOL_PROFILE` in your client's `env` block:
+
+| `CHROME_MCP_TOOL_PROFILE`         | Exposed Tools | Context Footprint                             | When to Choose                                                                                                                                                                                           |
+| :-------------------------------- | :-----------: | :-------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`core`** _(default if omitted)_ |     **9**     | At most 26 KiB UTF-8 JSON                     | Tasks, skills, navigation, tab inventory/selection, DOM reading, indexed interaction/fill, discovery. Select extra tools with `chrome_tool_docs({names:["chrome_screenshot"],activateForSession:true})`. |
+| **`full`**                        |    **52**     | See generated [tool reference](docs/TOOLS.md) | Use when the client cannot refresh `tools/listChanged`. Jev still requires its configured runtime.                                                                                                       |
+| **`crawl`**                       |    **12**     | Read & extraction subset                      | Best for read-only web research, markdown conversion, media inspection, and network capture without mutation tools.                                                                                      |
+
+Choose your client configuration below:
 
 ### 3.1 Codex Desktop & ChatGPT (Stdio vs. Marketplace Plugin)
 
@@ -286,7 +336,7 @@ Installed plugins load at the next Claude Code session, or after `/reload-plugin
 
 - `claude plugin list` shows `browserpaw@browserpaw` with its scope and enabled status.
 - `/mcp` lists the `browserpaw` server as connected.
-- Tools are exposed as `mcp__plugin_browserpaw_browserpaw__chrome_*`. The bundled server starts the full 52-tool profile; Core exposes 16 tools and Crawl exposes 12.
+- Tools are exposed as `mcp__plugin_browserpaw_browserpaw__chrome_*`. The bundled server defaults to Core (9 tools); Crawl has 12 and Full retains 52 canonical definitions.
 
 Type `/browserpaw` to load the operating guide. Its namespaced form is `/browserpaw:browserpaw`.
 
@@ -371,7 +421,7 @@ Use the Desktop CLI shim with the same tarball or local-path commands shown belo
 ```bash
 cd plugins/browserpaw-dsh
 npm pack
-dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.1.2.tgz
+dsh plugin --profile <PROFILE> add ./dsh-browserpaw-4.2.0.tgz
 
 # Or from a local checkout:
 dsh plugin --profile <PROFILE> add "<ABSOLUTE_PATH_TO_REPO>/plugins/browserpaw-dsh"
@@ -397,11 +447,11 @@ browserpaw_session { "action": "open" }
 
 #### Tool-Profile Boundary
 
-The native host announces its `core` profile by default, and a DeepSeek Harness session sees exactly that list. `chrome_tool_docs` with `activateForSession: true` widens the list on the server side; BrowserPaw advertises `tools.listChanged` and forwards that notification through the HTTP and stdio bridge, so clients that implement the standard refresh observe the new list. Use `CHROME_MCP_TOOL_PROFILE=full` when a client cannot refresh its tool table.
+The native host announces `core` by default. Query `chrome_tool_docs({category:"manage"})`, then select exact names with `{names:["chrome_close_tabs"],activateForSession:true}`. This replaces temporary extensions; an empty names array resets them. Only effective list changes emit `tools/listChanged`. Known hidden tools remain callable without growing the list. Use `CHROME_MCP_TOOL_PROFILE=full` for clients without list refresh.
 
 ---
 
-## Step 4: Pin Extension & Configure Jev Decision Engine (Recommended)
+## 🧠 Step 4: Pin Extension & Choose Your Decision Engine Mode
 
 ### 4.1 Pin BrowserPaw to the Chrome Toolbar
 
@@ -416,8 +466,10 @@ BrowserPaw offers an optional **interactive micro-loop**:
 - **Macro Planner**: The host agent performs broad reasoning and decomposes complex goals.
 - **Semantic Micro-Loop**: The Jev Decision Engine (`chrome_act_toward_goal`) performs supported on-page perceive-decide-act steps without a separate MCP request for each internal step. Latency depends on the selected Jev mode, hardware, and page complexity.
 
-**Tri-State Decision Mode**:
-Click the BrowserPaw icon in your Chrome toolbar to open the popup, and select your preferred mode:
+**Choose Your Execution Engine Mode**:
+
+- **Zero-Key Heuristic Fallback (Works Out-of-the-Box, Zero Cost):** Even if you do **not** configure a TypeSafe API key or download local weights, BrowserPaw's deterministic tools and local Heuristic Engine (`heuristic-engine.ts`) work immediately. Whenever `TYPESAFE_API_KEY` / `JEV_API_KEY` is unset or a remote endpoint has a transient failure, semantic candidate ranking automatically falls back to local role, tag, ARIA, and keyword heuristics (note: multimodal `Box` screenshot coordinate grounding is exclusive to Remote Jev 1.14+).
+- **Tri-State Popup Selector (`Local` / `Remote` / `Off`):** Click the pinned BrowserPaw icon in your Chrome toolbar to open the popup and choose your preferred mode:
 
 ---
 
@@ -486,7 +538,7 @@ If you prefer not to use autonomous micro-loops:
 
 ---
 
-## Step 5: Silent Debugger Mode (Zero-Jitter UX Optimization)
+## 🔇 Step 5: Silent Debugger Mode (Optional Zero-Jitter UX)
 
 When Chrome DevTools Protocol (CDP) attaches to a tab, Chromium displays a native warning banner at the top of the viewport:
 
@@ -536,7 +588,7 @@ google-chrome --silent-debugger-extension-api &
 
 ---
 
-## Step 6: Install the Client-Neutral Agent Skill (Optional)
+## 📦 Step 6: Install the Client-Neutral Agent Skill (Optional)
 
 The official plugin packages already include their matching skill. For a standalone
 Agent Skills client, install the same client-neutral `skills/browserpaw/` package with
@@ -572,13 +624,30 @@ same Native Host share that library; it is never copied into a client plugin.
 
 ---
 
-## Step 7: System Preflight Health Check
+## 🩺 Step 7: System Preflight Health Check & Troubleshooting
 
-Verify your complete BrowserPaw installation with the built-in diagnostic doctor:
+Verify your complete 6-layer BrowserPaw installation (Bridge Token, HTTP `127.0.0.1:12306/ping`, Token Auth, Extension Build Parity, Native Host Manifest, and live MCP JSON-RPC handshake) with the diagnostic doctor:
 
 ```bash
+# Full 6-layer diagnostic check:
 node skills/browserpaw/scripts/doctor.mjs
+
+# Auto-repair common local checkout registration/sync issues:
+node skills/browserpaw/scripts/doctor.mjs --fix
+
+# Live runtime doctor via the BrowserPaw CLI shim (includes runtime buildId when --verbose is passed):
+node bin/browserpaw.cjs doctor --verbose
 ```
+
+### Common Troubleshooting Matrix
+
+| Symptom                                                  | Root Cause                                                                                                                                                              | Resolution                                                                                                                                                                                                          |
+| :------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Extension not connected` / `native host has exited`     | The loaded extension's 32-character ID in `chrome://extensions/` is missing from the Native Host manifest's `allowed_origins`, or Chrome has not launched the host yet. | Copy the exact 32-char ID from `chrome://extensions/`, set `CHROME_EXTENSION_ID='<id>'`, re-run `node app/native-server/dist/scripts/register-dev.js`, and click **Reload (`⟳`)** on the BrowserPaw extension card. |
+| Code changes or updated ZIP do not take effect in Chrome | Chrome MV3 service workers run from in-memory cached bundles until explicitly reloaded, or Chrome was loaded from a different directory than the one updated.           | Confirm the path on the BrowserPaw card in `chrome://extensions/`, click **Reload (`⟳`)**, and verify `buildId` parity via `node bin/browserpaw.cjs doctor --verbose`.                                              |
+| Port `12306` conflict (`EADDRINUSE`)                     | Another local service or stale bridge process is bound to `12306`.                                                                                                      | Set `CHROME_MCP_PORT=<custom_port>` in your environment/client config, or terminate the conflicting process.                                                                                                        |
+| `401 Unauthorized` on HTTP MCP (`127.0.0.1:12306/mcp`)   | Missing or mismatched `x-mcp-token` header.                                                                                                                             | Read the active token generated by the server at `~/.chrome-mcp/bridge-token` (`%USERPROFILE%\.chrome-mcp\bridge-token` on Windows) and update your client header.                                                  |
+| Windows MCP stdio fails to spawn `node`                  | Unescaped backslashes (`\`) in JSON/TOML `args` paths.                                                                                                                  | Always use forward slashes (`D:/workspace/.../mcp-server-stdio.js`) or doubled backslashes (`\\`) in client config files.                                                                                           |
 
 ---
 
