@@ -8,9 +8,30 @@ import {
   cleanDistDir,
   copyRecipeDataFiles,
   copyPortableSkill,
+  copyCliClientFiles,
 } from './build';
 
 describe('QUAL-01: build script fail-fast verification', () => {
+  it('copies the shared CLI modules into the Native distribution', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-build-test-'));
+    try {
+      const source = path.resolve(__dirname, '..');
+      copyCliClientFiles(source, tmpDir);
+      for (const name of [
+        'cli-client.cjs',
+        'cli-files.cjs',
+        'cli-session.cjs',
+        'cli-artifacts.cjs',
+      ]) {
+        expect(fs.readFileSync(path.join(tmpDir, name)).toString()).toBe(
+          fs.readFileSync(path.join(source, name)).toString(),
+        );
+      }
+      expect(() => copyCliClientFiles(tmpDir, path.join(tmpDir, 'missing'))).toThrow();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
   it('throws explicitly when required run_host.sh or run_host.bat is missing', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-test-'));
     const srcDir = path.join(tmpDir, 'src');

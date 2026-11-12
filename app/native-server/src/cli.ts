@@ -252,9 +252,14 @@ skillCommand
     }
   });
 
-program.parse(process.argv);
-
-// If no command provided, show help
-if (!process.argv.slice(2).length) {
-  program.outputHelp();
+const { runBrowserCli, isManagementCommand } = require('./cli-client.cjs');
+const cliArgs = process.argv.slice(2);
+if (isManagementCommand(cliArgs)) {
+  program.parse(
+    cliArgs[0] === '--json'
+      ? [process.argv[0], process.argv[1], ...cliArgs.slice(1), '--json']
+      : process.argv,
+  );
+} else {
+  void runBrowserCli(cliArgs);
 }

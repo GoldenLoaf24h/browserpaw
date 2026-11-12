@@ -37,11 +37,16 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['scripts/**/*.{js,mjs,cjs}', 'bin/*.cjs', 'plugins/**/*.{js,mjs,cjs}'],
+    files: [
+      'scripts/**/*.{js,mjs,cjs}',
+      'bin/*.cjs',
+      'plugins/**/*.{js,mjs,cjs}',
+      'app/native-server/src/cli-*.cjs',
+    ],
     languageOptions: { globals: globals.node },
   },
   {
-    files: ['scripts/**/*.cjs', 'bin/*.cjs'],
+    files: ['scripts/**/*.cjs', 'bin/*.cjs', 'app/native-server/src/cli-*.cjs'],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   // Global rule adjustments

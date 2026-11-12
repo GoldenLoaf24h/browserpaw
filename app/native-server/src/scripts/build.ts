@@ -66,6 +66,12 @@ export function copyPortableSkill(canonicalDir: string, destDir: string): void {
   copy(canonicalDir, destDir);
 }
 
+export function copyCliClientFiles(srcDir: string, destDir: string): void {
+  for (const name of ['cli-client.cjs', 'cli-files.cjs', 'cli-session.cjs', 'cli-artifacts.cjs']) {
+    fs.copyFileSync(path.join(srcDir, name), path.join(destDir, name));
+  }
+}
+
 export function assertRequiredRecipeFiles(canonicalDir: string): void {
   const required = [
     'developer.mozilla.org.md',
@@ -112,6 +118,8 @@ export function runBuild(): void {
   // Compile TypeScript
   console.log('Compiling TypeScript...');
   execSync('tsc', { stdio: 'inherit' });
+
+  copyCliClientFiles(path.join(__dirname, '..'), distDir);
 
   // Copy configuration files
   console.log('Copying configuration files...');
