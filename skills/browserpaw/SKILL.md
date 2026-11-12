@@ -81,7 +81,16 @@ Personal learned skills live under `$BROWSERPAW_HOME/skills` (default `~/.browse
 
 ## CLI And Persistent Sessions
 
-One-shot `browserpaw` commands open separate MCP sessions. Use `browserpaw repl` for multi-step task continuity; never automatically take over a task from another connection. `browserpaw --json <tool_name> '<json_args>'` preserves the complete result. Redirect image or resource payloads to a file rather than printing base64 into model context. See [CLI and REPL](references/cli-repl.md). CLI-first usage will become the recommendation only after persistent machine-oriented sessions and media delivery are verified.
+When local command execution is available, use a named CLI session for machine driven multi-step work:
+
+```sh
+browserpaw session create research
+browserpaw session call research chrome_navigate '{"url":"https://example.com"}'
+browserpaw session call research chrome_read_dom '{}'
+browserpaw session close research
+```
+
+`browserpaw --session research <tool> ...` is shorthand for `session call`. Named sessions reuse one MCP session, expire after ten minutes without calls or status pings, and must be closed after the durable task is explicitly finished. An expired or closed session never reconnects, takes over a task, or replays an uncertain action. Use `--artifacts <empty-dir>` for screenshots and other large media; inspect the generated `manifest.json` references while retaining `result.json` for the complete receipt. Use `browserpaw repl` for interactive JavaScript workflows. See [CLI and REPL](references/cli-repl.md).
 
 ## References
 

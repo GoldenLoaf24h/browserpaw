@@ -178,7 +178,7 @@ Known hidden tools remain directly callable without expanding the list. Use expl
 
 `browserpaw --json chrome_screenshot '{"tabId":123}'` preserves complete MCP content, structured results and errors; redirect it to a file instead of printing image base64 into agent context. Plain text mode remains available. Protocol, HTTP and parsing errors exit nonzero; session cleanup is bounded and does not replace the original error.
 
-Each one-shot CLI call creates a separate session. Continue multi-step tasks in the existing [persistent REPL](../skills/browserpaw/references/cli-repl.md); do not automatically take over another session's task. Persistent CLI sessions and image-file delivery remain future migration requirements.
+Each one-shot CLI call creates a separate session. Machine workflows can use `browserpaw session create <name>`, repeated `browserpaw session call <name> <tool> ...`, and `browserpaw session close <name>` to reuse one MCP session across commands. `session status` verifies the connection without browser work. Calls use a local lock, and expired sessions fail without reinitialization or task takeover. Use `--artifacts <empty-dir>` to save the complete `result.json` plus media files and receive a compact `manifest.json` with references. Continue interactive JavaScript workflows in the [persistent REPL](../skills/browserpaw/references/cli-repl.md); neither CLI session closing nor REPL exit rolls back browser actions.
 
 ---
 
