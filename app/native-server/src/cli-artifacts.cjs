@@ -42,10 +42,18 @@ function prepareArtifactDirectory(directory) {
   return { root, release };
 }
 
-function writeArtifactResult(root, result) {
+function writeRawArtifactResult(root, result) {
   assertNoLinks(root);
   const resultPath = path.join(root, 'result.json');
   atomicWrite(resultPath, JSON.stringify(result, null, 2) + '\n');
+  return resultPath;
+}
+
+function writeArtifactManifest(root, manifest) {
+  atomicWrite(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function writeArtifactResult(root, result, resultPath) {
   const artifactsDir = path.join(root, 'artifacts');
   ensureDirectory(artifactsDir);
   let index = 0;
@@ -131,25 +139,13 @@ function writeArtifactResult(root, result) {
       : {}),
     resultPath,
   };
-  atomicWrite(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  writeArtifactManifest(root, manifest);
   return manifest;
-}
-
-function writeArtifactFailure(root, error) {
-  const resultPath = path.join(root, 'result.json');
-  const receipt = {
-    isError: true,
-    error: { message: error.message },
-    resultPath,
-    requestDispatched: true,
-    retry: false,
-  };
-  atomicWrite(path.join(root, 'manifest.json'), JSON.stringify(receipt, null, 2) + '\n');
-  return receipt;
 }
 
 module.exports = {
   prepareArtifactDirectory,
+  writeRawArtifactResult,
+  writeArtifactManifest,
   writeArtifactResult,
-  writeArtifactFailure,
 };

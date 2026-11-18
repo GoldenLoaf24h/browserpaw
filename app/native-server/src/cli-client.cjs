@@ -7,7 +7,8 @@ const { openSessionStore } = require('./cli-session.cjs');
 const {
   prepareArtifactDirectory,
   writeArtifactResult,
-  writeArtifactFailure,
+  writeRawArtifactResult,
+  writeArtifactManifest,
 } = require('./cli-artifacts.cjs');
 
 const CLI_HELP = `BrowserPaw CLI
@@ -57,20 +58,10 @@ function parseOptions(args) {
   const options = { positional: [], json: false };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
-    const command = options.positional[0];
-    const alias = options.session
-      ? options.positional[0]
-      : command === 'session' && options.positional[1] === 'call'
-        ? options.positional[3]
-        : command;
+    const positional = options.positional;
+    const toolOffset = positional[0] === 'session' && positional[1] === 'call' ? 3 : 0;
     const literal =
-      arg === '--json' &&
-      alias === 'fill' &&
-      options.positional.at(-1) !== undefined &&
-      ((options.session && options.positional.length === 2) ||
-        (!options.session && command === 'fill' && options.positional.length === 2) ||
-        (!options.session && command === 'session' && options.positional.length === 5) ||
-        (options.session && options.positional.length === 2));
+      arg === '--json' && positional[toolOffset] === 'fill' && positional.length === toolOffset + 2;
     if (arg === '--') {
       options.positional.push(...args.slice(index + 1));
       break;
@@ -106,9 +97,11 @@ function parseTool(command, rest) {
   if (command === 'click' || command === 'fill') {
     if (!/^\d+$/.test(rest[0] || '') || Number(rest[0]) < 1)
       throw new Error('Index must be a positive integer');
+    if (command === 'fill' && rest.length !== 2)
+      throw new Error('fill requires one text argument; pass an empty string to clear the field');
     return command === 'click'
       ? ['chrome_interact_index', { index: Number(rest[0]), action: 'click' }]
-      : ['chrome_fill_index', { index: Number(rest[0]), text: rest[1] || '' }];
+      : ['chrome_fill_index', { index: Number(rest[0]), text: rest[1] }];
   }
   if (command === 'dom' || command === 'read')
     return ['chrome_read_dom', { deltaOnly: ['true', 'delta'].includes(rest[0]) }];
@@ -171,7 +164,8 @@ function createTransport(port) {
       if (token) headers['x-mcp-token'] = token;
       if (sessionId) headers['mcp-session-id'] = sessionId;
       const req = http.request(
-        { hostname: '127.0.0.1', port, path: '/mcp', method, headers },
+        // The SSE response can advertise keep-alive despite our Connection: close.
+        { hostname: '127.0.0.1', port, path: '/mcp', method, headers, agent: false },
         (res) => {
           let body = '';
           if (onSession && typeof res.headers['mcp-session-id'] === 'string')
@@ -243,12 +237,26 @@ async function initialize(transport, onSession) {
   return response.sessionId;
 }
 
-function emit(result, json, artifacts) {
+function emit(result, json, artifacts, requestDispatched) {
   if (artifacts) {
+    let resultPath;
     try {
-      console.log(JSON.stringify(writeArtifactResult(artifacts.root, result)));
+      resultPath = writeRawArtifactResult(artifacts.root, result);
+      console.log(JSON.stringify(writeArtifactResult(artifacts.root, result, resultPath)));
     } catch (error) {
-      console.log(JSON.stringify(writeArtifactFailure(artifacts.root, error)));
+      const receipt = {
+        isError: true,
+        error: { message: error.message },
+        ...(resultPath ? { resultPath } : {}),
+        requestDispatched,
+        retry: false,
+      };
+      console.log(JSON.stringify(receipt));
+      try {
+        writeArtifactManifest(artifacts.root, receipt);
+      } catch (manifestError) {
+        console.error(`Artifact error manifest unavailable: ${manifestError.message}`);
+      }
       throw error;
     }
   } else if (json) console.log(JSON.stringify(result));
@@ -429,7 +437,7 @@ async function runBrowserCli(args, { nativeCli } = {}) {
     }
     if (result) {
       try {
-        emit(result, options.json, artifacts);
+        emit(result, options.json, artifacts, requestDispatched);
       } catch (error) {
         process.exitCode = 1;
         console.error(

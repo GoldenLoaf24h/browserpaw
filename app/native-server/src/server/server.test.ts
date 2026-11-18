@@ -5,6 +5,7 @@ import nativeMessagingHostInstance from '../native-messaging-host';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import fileHandler, {
   assertSafeUrl,
   assertSafeUrlAsync,
@@ -23,6 +24,8 @@ import {
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { NativeMessageType } from 'chrome-mcp-shared';
 
 jest.mock('node:os', () => {
@@ -66,6 +69,64 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       message: 'pong',
     });
   });
+
+  test('CLI completes the real HTTP handshake and preserves named session identity', async () => {
+    const cli = path.resolve(__dirname, '../../../../bin/browserpaw.cjs');
+    const run = async (...args: string[]) => {
+      const { stdout } = await promisify(execFile)(process.execPath, [cli, '--json', ...args], {
+        env: {
+          ...process.env,
+          HOME: os.homedir(),
+          USERPROFILE: os.homedir(),
+          BROWSERPAW_HOME: os.homedir(),
+          CHROME_MCP_PORT: String(TEST_PORT),
+        },
+        timeout: 4000,
+      });
+      return JSON.parse(stdout);
+    };
+    await expect(run('session', 'create', 'http-test')).resolves.toMatchObject({
+      status: 'active',
+    });
+    try {
+      await expect(run('session', 'status', 'http-test')).resolves.toMatchObject({
+        status: 'active',
+      });
+      await expect(run('session', 'call', 'http-test', 'chrome_tool_docs')).resolves.toMatchObject({
+        isError: false,
+        content: [{ type: 'text', text: expect.stringContaining('categories') }],
+      });
+      const started = await run(
+        'session',
+        'call',
+        'http-test',
+        'chrome_task',
+        JSON.stringify({
+          action: 'start',
+          name: 'Session isolation test',
+        }),
+      );
+      const task = JSON.parse(started.content[0].text).task;
+      expect(task.id).toBeTruthy();
+      const cancel = JSON.stringify({ action: 'cancel', taskId: task.id });
+      try {
+        await expect(run('chrome_task', cancel)).rejects.toMatchObject({
+          code: 1,
+          stdout: expect.stringContaining('owned by another MCP session'),
+        });
+      } finally {
+        await expect(
+          run('session', 'call', 'http-test', 'chrome_task', cancel),
+        ).resolves.toMatchObject({
+          isError: false,
+        });
+      }
+    } finally {
+      await expect(run('session', 'close', 'http-test')).resolves.toMatchObject({
+        status: 'closed',
+      });
+    }
+  }, 20000);
 
   describe('Security: Fastify 12306 Token Authentication (P0 Hardening)', () => {
     test('rejects /mcp request without token with 401 Unauthorized', async () => {
@@ -220,6 +281,10 @@ describe('Fastify MCP Native Server Integration Tests', () => {
       },
     );
     const client = new Client({ name: 'jest-test-client', version: '1.0.0' }, { capabilities: {} });
+    let refresh: Promise<Awaited<ReturnType<Client['listTools']>>> | undefined;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      refresh ??= client.listTools();
+    });
     await client.connect(transport);
     expect(transport.sessionId).toBeDefined();
 
@@ -244,7 +309,12 @@ describe('Fastify MCP Native Server Integration Tests', () => {
         name: 'chrome_tool_docs',
         arguments: { names: ['chrome_history'], activateForSession: true },
       });
-      const selected = (await client.listTools()).tools;
+      // Process the notification and refresh the list even if the POST finishes first.
+      for (let i = 0; !refresh && i < 100; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(refresh).toBeDefined();
+      const selected = (await refresh)!.tools;
       expect(selected).toHaveLength(10);
       expect(selected.some((tool) => tool.name === 'chrome_history')).toBe(true);
       expect(selected.some((tool) => tool.name === 'chrome_bookmark_search')).toBe(false);

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
+const { once } = require('node:events');
 
 const cliPath = path.resolve(__dirname, '../bin/browserpaw.cjs');
 
@@ -72,7 +73,8 @@ function createFixture(t, options = {}) {
         return;
       }
       if (message.method === 'notifications/initialized') {
-        response.writeHead(202);
+        if (options.rejectHandshake) options.beforeReply?.();
+        response.writeHead(options.rejectHandshake ? 400 : 202);
         response.end();
         return;
       }
@@ -82,6 +84,7 @@ function createFixture(t, options = {}) {
         return;
       }
       const result = options.result || { content: [{ type: 'text', text: 'ok' }] };
+      options.beforeReply?.();
       if (options.disconnect) {
         request.socket.destroy();
         return;
@@ -363,8 +366,43 @@ test('artifact extraction failure keeps the complete business error and returns 
   assert.equal(response.code, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'result.json'), 'utf8')), result);
   assert.equal(JSON.parse(response.stdout).isError, true);
+  assert.equal(JSON.parse(response.stdout).resultPath, path.join(output, 'result.json'));
   assert.match(response.stderr, /Artifact delivery failed/);
   assert.equal(fixture.calls.filter(({ message }) => message.method === 'tools/call').length, 1);
+});
+
+test('artifact write failures print a receipt with the actual dispatch and recovery state', async (t) => {
+  for (const [blockedFile, rejectHandshake] of [
+    ['result.json', false],
+    ['manifest.json', false],
+    ['manifest.json', true],
+  ]) {
+    const output = temporary(t);
+    const blockWrite = () => fs.mkdirSync(path.join(output, blockedFile));
+    const fixture = await createFixture(t, {
+      rejectHandshake,
+      beforeReply: blockWrite,
+    });
+    const response = await runCli(fixture.port, temporary(t), [
+      '--artifacts',
+      output,
+      'chrome_read_dom',
+      '{}',
+    ]);
+    assert.equal(response.code, 1);
+    const receipt = JSON.parse(response.stdout);
+    assert.equal(receipt.requestDispatched, !rejectHandshake);
+    assert.equal(receipt.retry, false);
+    assert.equal(
+      receipt.resultPath,
+      blockedFile === 'manifest.json' ? path.join(output, 'result.json') : undefined,
+    );
+    assert.equal(
+      fixture.calls.filter(({ message }) => message.method === 'tools/call').length,
+      rejectHandshake ? 0 : 1,
+    );
+    assert.match(response.stderr, /Artifact delivery failed/);
+  }
 });
 
 test('protocol and network errors retain artifact receipts without replay', async (t) => {
@@ -421,12 +459,35 @@ test('artifact preflight refuses reuse or junctions before dispatch', async (t) 
 
 test('fill aliases preserve option-like literal input values', async (t) => {
   const fixture = await createFixture(t);
-  assert.equal((await runCli(fixture.port, temporary(t), ['fill', '2', '--json'])).code, 0);
-  assert.equal(
-    fixture.calls.find(({ message }) => message.method === 'tools/call').message.params.arguments
-      .text,
-    '--json',
-  );
+  const home = temporary(t);
+  assert.equal((await runCli(fixture.port, home, ['session', 'create', 'work'])).code, 0);
+  for (const prefix of [[], ['--session', 'work'], ['session', 'call', 'work']]) {
+    const before = fixture.calls.length;
+    const rejected = await runCli(fixture.port, home, [
+      ...prefix,
+      'fill',
+      '2',
+      '--artifacts',
+      temporary(t),
+    ]);
+    assert.equal(rejected.code, 1);
+    assert.equal(JSON.parse(rejected.stdout).requestDispatched, false);
+    assert.equal(fixture.calls.length, before);
+    for (const [args, text] of [
+      [['--json'], '--json'],
+      [[''], ''],
+      [['--', '--artifacts'], '--artifacts'],
+    ]) {
+      const response = await runCli(fixture.port, home, [...prefix, 'fill', '2', ...args]);
+      assert.equal(response.code, 0, response.stderr);
+      assert.equal(
+        fixture.calls.findLast(({ message }) => message.method === 'tools/call').message.params
+          .arguments.text,
+        text,
+      );
+    }
+  }
+  assert.equal((await runCli(fixture.port, home, ['session', 'close', 'work'])).code, 0);
 });
 
 test('session closure bounds release timeout and expired sessions can be removed', async (t) => {
@@ -446,7 +507,7 @@ test('session closure bounds release timeout and expired sessions can be removed
   assert.equal((await runCli(fixture.port, home, ['session', 'close', 'work', '--json'])).code, 0);
 });
 
-test('stale lock recovery admits one concurrent owner', async (t) => {
+test('stale lock recovery admits one concurrent owner', { timeout: 10000 }, async (t) => {
   const directory = temporary(t);
   const target = path.join(directory, 'shared.lock');
   fs.writeFileSync(
@@ -455,29 +516,35 @@ test('stale lock recovery admits one concurrent owner', async (t) => {
   );
   const script = `
     const { acquireLock } = require(${JSON.stringify(path.resolve(__dirname, '../app/native-server/src/cli-files.cjs'))});
-    const release = acquireLock(process.argv[1]);
-    process.stdout.write('acquired\\n');
-    setTimeout(() => { release(); process.exit(0); }, 1000);
+    process.channel.ref();
+    process.once('message', () => {
+      try {
+        const release = acquireLock(process.argv[1]);
+        process.once('message', () => { release(); process.disconnect(); });
+        process.send('acquired');
+      } catch (error) {
+        process.send(error.message);
+        process.disconnect();
+      }
+    });
   `;
   const children = Array.from({ length: 6 }, () =>
     spawn(process.execPath, ['-e', script, target], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     }),
   );
-  const results = await Promise.all(
-    children.map(
-      (child) =>
-        new Promise((resolve) => {
-          let stdout = '';
-          let stderr = '';
-          child.stdout.on('data', (chunk) => (stdout += chunk));
-          child.stderr.on('data', (chunk) => (stderr += chunk));
-          child.on('close', (code) => resolve({ code, stdout, stderr }));
-        }),
-    ),
+  t.after(() =>
+    children.forEach((child) => {
+      if (child.exitCode === null) child.kill();
+    }),
   );
-  assert.equal(results.filter((result) => result.stdout.includes('acquired')).length, 1);
-  assert.equal(results.filter((result) => result.code === 0).length, 1);
-  assert.ok(results.some((result) => /Session busy/.test(result.stderr)));
+  const exits = children.map((child) => once(child, 'exit'));
+  const responses = children.map((child) => once(child, 'message'));
+  children.forEach((child) => child.send('start'));
+  const results = (await Promise.all(responses)).map(([message]) => message);
+  assert.equal(results.filter((result) => result === 'acquired').length, 1);
+  assert.equal(results.filter((result) => /Session busy/.test(result)).length, 5);
+  children[results.indexOf('acquired')].send('release');
+  await Promise.all(exits);
   assert.equal(fs.existsSync(target), false);
 });
