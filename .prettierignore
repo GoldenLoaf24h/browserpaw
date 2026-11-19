@@ -36,6 +36,7 @@ pnpm-lock.yaml
 # Skill sources and mirrors must stay byte-identical (scripts/sync-skills.mjs)
 skills
 plugins/*/skills
+docs/COMMANDS.md
 
 # Ephemeral artifacts, historical archives, and external research
 .artifacts

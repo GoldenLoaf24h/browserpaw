@@ -27,14 +27,10 @@ describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
   });
 
   describe('1. P0: Client-Side Auto-Scroll (inPageScrollUntilFound & scroll_until_found)', () => {
-    it('is registered in TOOL_SCHEMAS and has valid schema definition', () => {
-      const toolSchema = TOOL_SCHEMAS.find((s) => s.name === TOOL_NAMES.BROWSER.SCROLL_UNTIL_FOUND);
-      expect(toolSchema).toBeDefined();
-      expect(toolSchema?.name).toBe('chrome_scroll_until_found');
-      expect(toolSchema?.inputSchema.properties.query).toBeDefined();
-      expect(toolSchema?.inputSchema.properties.maxSteps).toBeDefined();
-      expect(toolSchema?.inputSchema.properties.stepPx).toBeDefined();
-      expect(scrollUntilFoundTool.name).toBe(TOOL_NAMES.BROWSER.SCROLL_UNTIL_FOUND);
+    it('keeps the former standalone scroll operation outside the bridge', () => {
+      expect(
+        TOOL_SCHEMAS.some((schema) => schema.name === TOOL_NAMES.BROWSER.SCROLL_UNTIL_FOUND),
+      ).toBe(false);
     });
 
     it('immediately finds and centers an element that is already in viewport', async () => {

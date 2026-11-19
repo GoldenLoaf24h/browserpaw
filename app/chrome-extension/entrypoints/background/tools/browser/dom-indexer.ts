@@ -5961,6 +5961,7 @@ export function inPageFillIndex(
   textToFill: string,
   clear = true,
   pressEnter = false,
+  selectValues?: string[],
 ): {
   success: boolean;
   committed?: boolean;
@@ -5988,6 +5989,36 @@ export function inPageFillIndex(
       success: false,
       index,
       error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
+    };
+  }
+
+  if (selectValues) {
+    if (!(el instanceof HTMLSelectElement) || !el.multiple || el.disabled || !selectValues.length) {
+      return { success: false, index, error: 'Target must be an enabled multiple select.' };
+    }
+    const wanted = new Set(selectValues);
+    const options = Array.from(el.options);
+    const selectable = options.filter(
+      (option) =>
+        wanted.has(option.value) &&
+        !option.disabled &&
+        !(option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled),
+    );
+    if (selectable.length !== wanted.size) {
+      return { success: false, index, error: 'Each value must identify one enabled option.' };
+    }
+    for (const option of options) option.selected = selectable.includes(option);
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    const selected = Array.from(el.selectedOptions, (option) => option.value);
+    const committed =
+      selected.length === wanted.size && selected.every((value) => wanted.has(value));
+    return {
+      success: committed,
+      committed,
+      index,
+      tagName: 'select',
+      filledText: selected.join(', '),
     };
   }
 

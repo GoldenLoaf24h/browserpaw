@@ -1,7 +1,7 @@
 {
-  "name": "browserpaw",
-  "version": "4.2.0",
-  "description": "BrowserPaw - High-efficiency Chrome browser automation MCP server and AI agent skill",
+  "name": "browserpaw-workspace",
+  "version": "5.0.0",
+  "description": "BrowserPaw Chrome automation CLI, extension, and Agent Skill",
   "private": true,
   "author": "hangye",
   "repository": {
@@ -24,22 +24,23 @@
     "build:deploy": "pnpm build && node scripts/extension-artifacts.mjs --deploy",
     "verify:delivery": "node scripts/extension-artifacts.mjs --check-deployment",
     "build:shared": "pnpm --filter chrome-mcp-shared build",
-    "build:native": "pnpm --filter mcp-chrome-bridge build",
+    "build:native": "pnpm --filter browserpaw build",
     "build:extension": "pnpm --filter chrome-mcp-server build && node scripts/sync-extension-dist.mjs",
-    "build": "pnpm -r --filter=\"!browserpaw\" run build && node scripts/sync-extension-dist.mjs",
+    "build": "pnpm -r run build && node scripts/sync-extension-dist.mjs",
     "dev:shared": "pnpm --filter chrome-mcp-shared dev",
-    "dev:native": "pnpm --filter mcp-chrome-bridge dev",
+    "dev:native": "pnpm --filter browserpaw dev",
     "dev:extension": "pnpm --filter chrome-mcp-server dev",
     "dev": "pnpm --filter chrome-mcp-shared build && pnpm -r --parallel dev",
-    "test": "node --experimental-strip-types test/e2e/runner.ts",
-    "test:e2e": "node --experimental-strip-types test/e2e/runner.ts",
-    "lint": "eslint scripts bin --max-warnings=0 && pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:e2e": "node test/live/chrome-cli.mjs",
+    "docs:commands": "node scripts/gen-commands-doc.mjs",
+    "lint": "eslint scripts test/live test/package-smoke.mjs app/native-server/src app/native-server/scripts app/chrome-extension packages/shared/src --max-warnings=0",
     "lint:fix": "pnpm -r lint:fix",
     "format": "pnpm -r format",
     "clean:dist": "node scripts/clean.js dist",
     "clean:modules": "node scripts/clean.js modules",
     "clean": "node scripts/clean.js all",
-    "typecheck": "pnpm -r --filter=\"!browserpaw\" exec tsc --noEmit",
+    "typecheck": "pnpm -r exec tsc --noEmit",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -61,15 +62,12 @@
   },
   "lint-staged": {
     "**/*.{js,jsx,ts,tsx,vue}": [
-      "eslint --fix",
+      "node node_modules/eslint/bin/eslint.js --fix",
       "prettier --write"
     ],
     "**/*.{json,md,yaml,html,css}": [
       "prettier --write"
     ]
   },
-  "license": "AGPL-3.0-or-later",
-  "bin": {
-    "browserpaw": "./bin/browserpaw.cjs"
-  }
+  "license": "AGPL-3.0-or-later"
 }

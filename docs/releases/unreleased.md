@@ -315,7 +315,7 @@ already published 4.1.1 behavior and are retained here as the source ledger.
   - Centralized version records for every historical git tag into [`docs/releases/`](./README.md) with `Tagged (history reconstructed from git)` status.
   - Migrated legacy root release notes to [`docs/releases/v3.2.0.md`](./v3.2.0.md), [`docs/releases/v3.2.7.md`](./v3.2.7.md), [`docs/releases/v3.3.0.md`](./v3.3.0.md) (explicitly marked as local draft), and [`docs/releases/v4.0.0.md`](./v4.0.0.md).
   - Eliminated duplicate root release files and added a concise [`CHANGELOG.md`](../../CHANGELOG.md) pointer.
-- **Installation & Setup Clarity**: Updated [`INSTALL.md`](../../INSTALL.md) to replace hardcoded local deployment paths with explicit configuration instructions via `browserpaw.local.json` (`extensionSyncDir`) or `BROWSERPAW_EXTENSION_SYNC_DIR`.
+- **Installation & Setup Clarity**: Updated [`INSTALL.md`](../../README.md#install) to replace hardcoded local deployment paths with explicit configuration instructions via `browserpaw.local.json` (`extensionSyncDir`) or `BROWSERPAW_EXTENSION_SYNC_DIR`.
 - **Automated Docs Governance**: Implemented [`scripts/validate-docs.mjs`](../../scripts/validate-docs.mjs) and its test suite [`scripts/validate-docs.test.mjs`](../../scripts/validate-docs.test.mjs) verifying markdown link validity, illegal control characters, literal newline escapes, active index coverage, package version parity, and tag record completeness.
 
 ## 2026-10-31: Review follow-up fixes

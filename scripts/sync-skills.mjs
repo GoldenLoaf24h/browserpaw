@@ -4,12 +4,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const canonicalDir = 'skills/browserpaw';
-const hermesTemplateDir = 'plugins/browserpaw-hermes/skill-template';
 const targets = {
   portable: 'plugins/browserpaw/skills/browserpaw',
   claude: 'plugins/browserpaw-claude/skills/browserpaw',
-  dsh: 'plugins/browserpaw-dsh/skills/browserpaw',
-  hermes: 'plugins/browserpaw-hermes/skills/browserpaw',
 };
 
 const clientLeak = /\b(?:Hermes|Claude|Codex|ChatGPT|DSH)\b|mcp__|\.codex-plugin|mcp-skills/;
@@ -126,7 +123,7 @@ function assertCanonical(root) {
   if (!/^name:\s*browserpaw\s*$/m.test(frontmatter(fs.readFileSync(skillPath, 'utf8')))) {
     throw new Error('Canonical SKILL.md frontmatter must declare name: browserpaw');
   }
-  for (const name of ['references', 'scripts', 'assets/recipes']) {
+  for (const name of ['references', 'assets/recipes']) {
     const full = path.join(root, canonicalDir, name);
     if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) {
       throw new Error(`Canonical directory missing: ${name}`);
@@ -171,26 +168,7 @@ function assertPackageIdentity(root) {
     if (actual !== version)
       throw new Error(`${manifest} version ${actual} does not match ${version}`);
   }
-  const yaml = fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/plugin.yaml'), 'utf8');
-  const hermesVersion = yaml.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m)?.[1];
-  if (hermesVersion !== version) {
-    throw new Error(`Hermes plugin version ${hermesVersion} does not match ${version}`);
-  }
-
-  const provides = [...yaml.matchAll(/^\s*-\s*(browserpaw_[a-z0-9_]+)\s*$/gm)].map((m) => m[1]);
-  const init = fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/__init__.py'), 'utf8');
-  const definitions = [...init.matchAll(/^\s*["'](browserpaw_[a-z0-9_]+)["']\s*:/gm)].map(
-    (m) => m[1],
-  );
-  const expectedTools = [...new Set(provides)].sort();
-  const definedTools = [...new Set(definitions)].sort();
-  if (expectedTools.length === 0) {
-    throw new Error('Hermes plugin.yaml must declare at least one browserpaw_* wrapper');
-  }
-  if (JSON.stringify(expectedTools) !== JSON.stringify(definedTools)) {
-    throw new Error('Hermes provides_tools does not match browserpaw_* definitions');
-  }
-  return { version, hermesTools: expectedTools };
+  return { version };
 }
 
 export function syncSkills(root = repoRoot, { check = false } = {}) {
@@ -198,33 +176,11 @@ export function syncSkills(root = repoRoot, { check = false } = {}) {
   assertCanonical(absoluteRoot);
   const identity = assertPackageIdentity(absoluteRoot);
   const canonicalTree = readTree(absoluteRoot, canonicalDir);
-  const hermesTree = readTree(absoluteRoot, hermesTemplateDir);
-  const hermesForbidden = excludedFiles(absoluteRoot, hermesTemplateDir);
-  if (hermesForbidden.length) {
-    throw new Error(`Hermes skill development file must be removed: ${hermesForbidden[0]}`);
-  }
-  const hermesSkill = hermesTree.get('SKILL.md');
-  if (!Buffer.isBuffer(hermesSkill)) {
-    throw new Error('Hermes skill template SKILL.md is missing');
-  }
-  for (const [file, content] of hermesTree) {
-    if (content !== null && textExtensions.has(path.extname(file).toLowerCase())) {
-      if (/chrome_/.test(content.toString('utf8'))) {
-        throw new Error(`Hermes skill must use browserpaw_* wrapper names only: ${file}`);
-      }
-    }
-  }
-  const expected = {
-    portable: canonicalTree,
-    claude: canonicalTree,
-    dsh: canonicalTree,
-    hermes: hermesTree,
-    native: canonicalTree,
-  };
-  const nativeTarget = 'app/native-server/dist/skill/browserpaw';
+  const expected = { portable: canonicalTree, claude: canonicalTree, native: canonicalTree };
+  const nativeTarget = 'app/native-server/dist/v5/skill/browserpaw';
   assertNoLinks(absoluteRoot, path.join(absoluteRoot, nativeTarget));
   const activeTargets = { ...targets };
-  if (fs.existsSync(path.join(absoluteRoot, 'app/native-server/dist'))) {
+  if (fs.existsSync(path.join(absoluteRoot, 'app/native-server/dist/v5'))) {
     activeTargets.native = nativeTarget;
   }
 

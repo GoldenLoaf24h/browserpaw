@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import type { DownloadObservation } from 'chrome-mcp-shared';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -848,7 +848,7 @@ export class BrowserTaskManager {
       this.requireActiveTask(task);
       try {
         this.assertObservedPage(task, target, before);
-        if (name === 'chrome_handle_download')
+        if (name === 'chrome_handle_download' && !callArgs.directUrl)
           assertSourceDownloadRequest(callArgs, before.sourceDownloads);
         await this.refreshDownloads(taskId, before);
       } catch (error) {
@@ -882,7 +882,7 @@ export class BrowserTaskManager {
         if (cancellationReason()) return cancelledResult(undefined, false);
         requestDispatched = true;
         result = await this.call(name, callArgs, sessionId, controller.signal);
-        if (name === 'chrome_handle_download')
+        if (name === 'chrome_handle_download' && !callArgs.directUrl)
           result = verifySourceDownloadResult(callArgs, result);
       } catch (error) {
         const attached = (error as { result?: unknown } | null)?.result;
@@ -1022,9 +1022,12 @@ export class BrowserTaskManager {
       await this.ensureLoaded();
       const name = requiredString(args.name, 'name');
       const now = Date.now();
+      const id = crypto.randomUUID();
       const task: BrowserTask = {
-        id: crypto.randomUUID(),
-        ...(sessionId ? { ownerSessionId: sessionId } : {}),
+        id,
+        ...(sessionId
+          ? { ownerSessionId: sessionId === 'browserpaw-cli:' ? sessionId + id : sessionId }
+          : {}),
         name,
         ...(optionalString(args.goal) ? { goal: optionalString(args.goal) } : {}),
         ...(optionalString(args.browser) ? { browser: optionalString(args.browser) } : {}),

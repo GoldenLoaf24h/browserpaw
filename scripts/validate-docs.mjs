@@ -98,7 +98,6 @@ export function checkPackageVersions(repoRoot) {
     { name: 'shared', file: 'packages/shared/package.json' },
     { name: 'chrome-extension', file: 'app/chrome-extension/package.json' },
     { name: 'portable-plugin', file: 'plugins/browserpaw/plugin.json' },
-    { name: 'hermes-plugin', file: 'plugins/browserpaw-hermes/plugin.yaml', format: 'yaml' },
     { name: 'claude-plugin', file: 'plugins/browserpaw-claude/.claude-plugin/plugin.json' },
   ];
 
@@ -186,7 +185,7 @@ export function checkDocsIndexCoverage(repoRoot) {
     'DOCUMENTATION.md',
     'ARCHITECTURE.md',
     'MAP.md',
-    'TOOLS.md',
+    'COMMANDS.md',
     'TROUBLESHOOTING.md',
     'CONTRIBUTING.md',
     'releases/README.md',

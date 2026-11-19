@@ -392,99 +392,6 @@ export function cancelFileOperation(requestId: string): void {
   fileOperationCallbacks.delete(requestId);
 }
 
-let lastSeenModeRevision = -1;
-interface MirroredJevMode {
-  activeMode?: string;
-  requestedMode?: string;
-  retryAfter?: number | null;
-}
-let confirmedJevState: MirroredJevMode | undefined;
-
-function canUseJev(state?: MirroredJevMode): boolean {
-  return (
-    state?.activeMode === 'local' ||
-    state?.activeMode === 'remote' ||
-    Boolean(
-      state?.activeMode === 'off' &&
-      ['local', 'remote'].includes(state.requestedMode || '') &&
-      typeof state.retryAfter === 'number' &&
-      Number.isFinite(state.retryAfter) &&
-      Date.now() >= state.retryAfter,
-    )
-  );
-}
-
-export function isJevSemanticEnabled(): boolean {
-  return canUseJev(confirmedJevState);
-}
-
-/** Sends one bounded semantic request; cancellation never replays an action. */
-export async function sendJevMatchToNative(
-  payload: any,
-  timeoutMs = 1500,
-  options: { signal?: AbortSignal; deadlineAt?: number } = {},
-): Promise<{
-  success: boolean;
-  status?: 'matched' | 'none' | 'ambiguous' | 'unavailable' | 'cancelled';
-  matchedId?: string | number;
-  confidence?: number;
-  probabilities?: Record<string, number>;
-  model?: string;
-  engine?: string;
-  reason?: string;
-} | null> {
-  const deadlineAt = Math.min(
-    options.deadlineAt ?? Infinity,
-    payload?.deadlineAt ?? Infinity,
-    Date.now() + timeoutMs,
-  );
-  if (options.signal?.aborted || Date.now() >= deadlineAt)
-    return { success: false, status: 'cancelled' };
-  // Deterministic callers must not open a connection just to discover that Jev is off.
-  const stored = await chrome.storage.local.get(['jevModeState', 'jevEngineMode']);
-  if (!canUseJev(stored.jevModeState || { activeMode: stored.jevEngineMode })) {
-    return { success: false, status: 'unavailable', reason: 'jev_disabled' };
-  }
-  if (!nativePort || Date.now() >= deadlineAt) return { success: false, status: 'unavailable' };
-  const requestId = `jev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (result: any) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fileOperationCallbacks.delete(requestId);
-      options.signal?.removeEventListener('abort', abort);
-      resolve(result);
-    };
-    const abort = () => {
-      sendFileOperationToNative({ type: 'cancel_jev_semantic_match', requestId, payload: {} });
-      finish({ success: false, status: 'cancelled' });
-    };
-    const timer = setTimeout(
-      () => {
-        sendFileOperationToNative({
-          type: 'cancel_jev_semantic_match',
-          requestId,
-          payload: { reason: 'timeout' },
-        });
-        finish({ success: false, status: 'unavailable', reason: 'deadline_exceeded' });
-      },
-      Math.max(0, deadlineAt - Date.now()),
-    );
-    options.signal?.addEventListener('abort', abort, { once: true });
-    if (options.signal?.aborted) {
-      abort();
-      return;
-    }
-    const ok = sendFileOperationToNative(
-      { type: 'jev_semantic_match', requestId, payload: { ...payload, deadlineAt } },
-      (response: any) => finish(response?.payload ?? { success: false, status: 'unavailable' }),
-    );
-    if (!ok) finish({ success: false, status: 'unavailable' });
-  });
-}
-
 /**
  * Connect to the native messaging host
  * @returns Whether the connection was initiated successfully
@@ -687,21 +594,6 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
               }
             });
           }
-        } else if (message.type === 'jev_mode_state') {
-          const state = message.payload;
-          if (
-            state &&
-            ['off', 'local', 'remote'].includes(state.activeMode) &&
-            Number.isFinite(state.revision) &&
-            state.revision >= lastSeenModeRevision
-          ) {
-            lastSeenModeRevision = state.revision;
-            confirmedJevState = state;
-            await chrome.storage.local.set({
-              jevModeState: state,
-              jevEngineMode: state.activeMode,
-            });
-          }
         } else if (message.type === 'file_operation_response') {
           const reqId = message.responseToRequestId;
           if (reqId && fileOperationCallbacks.has(reqId)) {
@@ -731,8 +623,6 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
     });
 
     nativePort.onDisconnect.addListener(() => {
-      confirmedJevState = undefined;
-      lastSeenModeRevision = -1;
       clearHandshakeTimer();
       console.warn(ERROR_MESSAGES.NATIVE_DISCONNECTED, chrome.runtime.lastError);
       nativePort = null;

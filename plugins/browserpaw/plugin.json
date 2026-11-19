@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "browserpaw",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "Control your own Chrome browser with BrowserPaw.",
   "author": {
     "name": "BrowserPaw Team",
@@ -10,7 +10,7 @@
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "repository": "https://github.com/GoldenLoaf24h/browserpaw",
   "license": "AGPL-3.0",
-  "keywords": ["browser", "chrome", "automation", "mcp", "agent", "cdp"],
+  "keywords": ["browser", "chrome", "automation", "cli", "agent", "cdp"],
   "extensions": {
     "com.openai": {
       "interface": {

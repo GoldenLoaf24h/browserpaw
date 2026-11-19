@@ -10,11 +10,7 @@ function write(file, content) {
   fs.writeFileSync(file, content);
 }
 
-function tools(count = 18) {
-  return Array.from({ length: count }, (_, index) => `browserpaw_tool_${index + 1}`);
-}
-
-function fixture({ toolCount = 18 } = {}) {
+function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-sync-'));
   write(
     path.join(root, 'skills/browserpaw/SKILL.md'),
@@ -23,23 +19,6 @@ function fixture({ toolCount = 18 } = {}) {
   write(path.join(root, 'skills/browserpaw/references/tools.md'), '# Tools\n\nchrome_navigate\n');
   write(path.join(root, 'skills/browserpaw/scripts/doctor.mjs'), 'console.log("ok");\n');
   write(path.join(root, 'skills/browserpaw/assets/recipes/example.json'), '{"id":"x"}\n');
-  write(
-    path.join(root, 'plugins/browserpaw-hermes/skill-template/SKILL.md'),
-    '---\nname: browserpaw\ndescription: wrapper skill\n---\n\nbrowserpaw_navigate\n',
-  );
-  write(
-    path.join(root, 'plugins/browserpaw-hermes/skill-template/references/tool-matrix.md'),
-    '# Wrapper tools\n\nbrowserpaw_navigate\n',
-  );
-  const names = tools(toolCount);
-  write(
-    path.join(root, 'plugins/browserpaw-hermes/plugin.yaml'),
-    `manifest_version: 1\nname: browserpaw\nversion: '4.0.0'\nprovides_tools:\n${names.map((name) => `  - ${name}`).join('\n')}\n`,
-  );
-  write(
-    path.join(root, 'plugins/browserpaw-hermes/__init__.py'),
-    names.map((name) => `    "${name}": {},`).join('\n'),
-  );
   write(path.join(root, 'package.json'), '{"version":"4.0.0"}\n');
   write(path.join(root, 'plugins/browserpaw/plugin.json'), '{"version":"4.0.0"}\n');
   write(
@@ -55,7 +34,6 @@ try {
   for (const target of [
     'plugins/browserpaw/skills/browserpaw',
     'plugins/browserpaw-claude/skills/browserpaw',
-    'plugins/browserpaw-dsh/skills/browserpaw',
   ]) {
     assert.equal(
       fs.readFileSync(path.join(root, target, 'SKILL.md'), 'utf8'),
@@ -63,23 +41,9 @@ try {
     );
     assert.equal(fs.existsSync(path.join(root, target, 'assets/recipes/example.json')), true);
   }
-  assert.equal(
-    fs.readFileSync(
-      path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/SKILL.md'),
-      'utf8',
-    ),
-    fs.readFileSync(path.join(root, 'plugins/browserpaw-hermes/skill-template/SKILL.md'), 'utf8'),
-  );
-  assert.equal(
-    fs.readFileSync(
-      path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/references/tool-matrix.md'),
-      'utf8',
-    ),
-    '# Wrapper tools\n\nbrowserpaw_navigate\n',
-  );
   assert.deepEqual(syncSkills(root, { check: true }).problems, []);
 
-  const nativeSkill = path.join(root, 'app/native-server/dist/skill/browserpaw');
+  const nativeSkill = path.join(root, 'app/native-server/dist/v5/skill/browserpaw');
   fs.mkdirSync(path.dirname(path.dirname(nativeSkill)), { recursive: true });
   syncSkills(root);
   assert.equal(fs.existsSync(path.join(nativeSkill, 'SKILL.md')), true);
@@ -89,27 +53,19 @@ try {
   assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Orphan/);
   assert.deepEqual(syncSkills(root).problems, []);
   fs.rmSync(nativeSkill, { recursive: true, force: true });
-  assert.match(
-    syncSkills(root, { check: true }).problems.join('\n'),
-    /native: Missing: SKILL\.md/,
-  );
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /native: Missing: SKILL\.md/);
   assert.deepEqual(syncSkills(root).problems, []);
 
   const portableSkill = path.join(root, 'plugins/browserpaw/skills/browserpaw/SKILL.md');
   fs.appendFileSync(portableSkill, 'drift\n');
   assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Content drift: SKILL\.md/);
   write(path.join(root, 'plugins/browserpaw/skills/browserpaw/retired/orphan.md'), 'orphan\n');
-  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Orphan: retired\/orphan\.md/);
-  write(path.join(root, 'plugins/browserpaw/skills/browserpaw/AGENTS.md'), 'internal\n');
-  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Excluded: AGENTS\.md/);
-  fs.appendFileSync(
-    path.join(root, 'plugins/browserpaw-hermes/skills/browserpaw/references/tool-matrix.md'),
-    'drift\n',
-  );
   assert.match(
     syncSkills(root, { check: true }).problems.join('\n'),
-    /hermes: Content drift: references\/tool-matrix\.md/,
+    /Orphan: retired\/orphan\.md/,
   );
+  write(path.join(root, 'plugins/browserpaw/skills/browserpaw/AGENTS.md'), 'internal\n');
+  assert.match(syncSkills(root, { check: true }).problems.join('\n'), /Excluded: AGENTS\.md/);
   fs.rmSync(path.join(root, 'plugins/browserpaw-claude/skills/browserpaw/scripts'), {
     recursive: true,
   });
@@ -144,18 +100,6 @@ try {
   } finally {
     fs.rmSync(badVersionRoot, { recursive: true, force: true });
   }
-
-  const badToolsRoot = fixture({ toolCount: 17 });
-  try {
-    const names = tools(16);
-    write(
-      path.join(badToolsRoot, 'plugins/browserpaw-hermes/plugin.yaml'),
-      `manifest_version: 1\nname: browserpaw\nversion: '4.0.0'\nprovides_tools:\n${names.map((name) => `  - ${name}`).join('\n')}\n`,
-    );
-    assert.throws(() => syncSkills(badToolsRoot, { check: true }), /does not match browserpaw_\* definitions/);
-  } finally {
-    fs.rmSync(badToolsRoot, { recursive: true, force: true });
-  }
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
@@ -186,7 +130,10 @@ try {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   try {
     fs.symlinkSync(path.join(brokenLinkRoot, 'missing-target'), target, 'dir');
-    assert.throws(() => syncSkills(brokenLinkRoot, { check: true }), /Symlink or junction forbidden/);
+    assert.throws(
+      () => syncSkills(brokenLinkRoot, { check: true }),
+      /Symlink or junction forbidden/,
+    );
   } catch (error) {
     if (error.code === 'EPERM' || error.code === 'EACCES') {
       console.log('[SKIP] broken symlink test requires platform link privileges');

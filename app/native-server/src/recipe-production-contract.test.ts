@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
+import { validator } from './schema-validation';
 import { BrowserSkillStore, type SkillBrowser, type SkillDefinition } from './browser-skills';
 import { sanitizeAndLimitOutput } from '../../chrome-extension/utils/output-sanitizer';
 
@@ -760,7 +760,7 @@ describe('bundled recipe production contracts', () => {
 
   it('keeps X ok and empty success schemas mutually exclusive', () => {
     const definition = recipe('x-search-thread');
-    const validate = new AjvJsonSchemaValidator().getValidator(definition.outputSchema);
+    const validate = validator.getValidator(definition.outputSchema);
     const query = 'from:MDNWebDocs';
     const sources = { page: 'https://x.com/search?q=from%3AMDNWebDocs&src=typed_query&f=live' };
     const post = {

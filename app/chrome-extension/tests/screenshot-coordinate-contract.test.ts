@@ -248,13 +248,7 @@ function interactClick(overrides: Record<string, any> = {}) {
 
 describe('Screenshot coordinate contract', () => {
   it('keeps captureId on every schema that accepts screenshot coordinates', () => {
-    for (const name of [
-      'chrome_computer',
-      'chrome_interact_index',
-      'chrome_click_element',
-      'chrome_fill_or_select',
-      'chrome_burst_interact',
-    ]) {
+    for (const name of ['chrome_interact_index']) {
       const tool = RAW_TOOL_SCHEMAS.find((entry) => entry.name === name);
       expect(tool, name).toBeDefined();
       expect(tool!.inputSchema.properties?.captureId, name).toMatchObject({

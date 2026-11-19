@@ -1,18 +1,14 @@
-# Static Recipe Contract
+# Recipes
 
-Static recipes are client-neutral data under `assets/recipes/`. JSON recipes may be loaded by the Native runtime as bundled skills; Markdown host notes are dated hints and are not executable.
+Run `browserpaw recipe list` to discover local and bundled recipes. Use `recipe run ID KEY=VALUE` with the inputs documented by the recipe.
 
-Do not store passwords, cookies, tokens, tab IDs, document IDs, temporary refs, screenshot coordinates, or user input.
+Save a reviewed JSON file with `browserpaw recipe save FILE` and remove user-authored recipes with `browserpaw recipe rm ID`. Each step uses the arguments from `browserpaw help`.
 
-Executable JSON must include:
+```json
+{
+  "id": "read-title",
+  "steps": [["text", "css:{{selector}}"]]
+}
+```
 
-- stable `id` matching the filename
-- exact source URLs and attribution
-- a closed input schema and output contract
-- executable steps with concrete result paths
-- independent verification steps
-- two different validation inputs
-
-Unreviewed JavaScript does not become executable by labeling its source `builtin`. The Native distribution accepts only reviewed bundled program bodies and the fixed `dom-extract` alias. A personal record cannot edit a builtin body.
-
-Allowed automatic read-only steps are tool-specific. Network requests are GET-only and reject bodies or multipart data. DOM observation rejects dismissal and highlighting. Grep rejects automatic scrolling. Screenshots remain in memory and reject disk writes or page-mutating overlays.
+Apply it to the selected task or tab with `browserpaw recipe run read-title selector=h1 --task TASK_ID`. Batch execution stops at the first failure and returns completed step receipts. Keep passwords, tokens, tab IDs, observed refs, and other transient values out of saved recipes.

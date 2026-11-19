@@ -17,12 +17,7 @@ describe('QUAL-01: build script fail-fast verification', () => {
     try {
       const source = path.resolve(__dirname, '..');
       copyCliClientFiles(source, tmpDir);
-      for (const name of [
-        'cli-client.cjs',
-        'cli-files.cjs',
-        'cli-session.cjs',
-        'cli-artifacts.cjs',
-      ]) {
+      for (const name of ['cli-files.cjs']) {
         expect(fs.readFileSync(path.join(tmpDir, name)).toString()).toBe(
           fs.readFileSync(path.join(source, name)).toString(),
         );

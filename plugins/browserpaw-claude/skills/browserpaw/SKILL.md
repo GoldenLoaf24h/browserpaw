@@ -1,104 +1,33 @@
 ---
 name: browserpaw
-description: Control and automate the user's active Chrome browser through BrowserPaw. Use for navigation, search, forms, DOM inspection, extraction, screenshots, downloads, or multi-step browser workflows while preserving the user's sessions and tabs.
+description: Control the user's Chrome or Chromium through the BrowserPaw CLI. Use for navigation, DOM inspection, forms, extraction, screenshots, uploads, downloads, and multi-step browser tasks.
 ---
 
 # BrowserPaw
 
-BrowserPaw operates the user's Chrome session through MCP. Prefer task-owned pages, observed element references, strict locators, frame-qualified actions, and explicit business verification.
+Run `browserpaw status` to confirm the host and extension are connected. Use `browserpaw help` and `browserpaw help COMMAND` to discover syntax at the installed version. If setup is needed, use [troubleshooting](references/TROUBLESHOOTING.md).
 
-The default MCP profile exposes nine tools. Use `chrome_tool_docs` without arguments for categories, `{category:"observe"}` for names, and `{names:["chrome_screenshot"]}` for complete schemas. Add `activateForSession:true` with names to replace temporary visible tools; empty names resets them. Direct hidden-tool calls never expand the list.
+For an npx-only installation, use `npx --yes browserpaw@5.0.0` in place of `browserpaw` throughout.
 
-Some clients namespace MCP tool names. Use the names exposed by the current runtime; `chrome_*` is the backend contract. Query the live contract with `chrome_tool_docs` instead of assuming another version's parameters.
-
-## Core Workflow
-
-1. For multi-step work, start a durable task and open a task-owned page:
-
-   ```json
-   {"action":"start","name":"Research documentation","goal":"Find and verify the requested source"}
-   ```
-
-   Keep the returned task ID, then call `chrome_task` with `action:"open"`, that `taskId`, and the URL. Task pages default to a budget of eight. Reaching it stops further creation; BrowserPaw never closes user pages to make room.
-
-2. Before rediscovering a site, search verified local knowledge:
-
-   ```json
-   {"action":"find","url":"https://example.com","intent":"read the current release"}
-   ```
-
-   Run only the selected verified version with new inputs. No match means normal exploration. Static site notes are hints, not permission to skip live verification.
-
-3. Observe before acting. Use refs returned by the current observation or strict CSS/role/text/label locators. Keep explicit frame targets. On stale refs, navigate, node replacement, or ambiguity, observe again instead of guessing.
-
-4. For predictable multi-step work, prefer batch actions. For exploratory on-page work, use `chrome_act_toward_goal` when its runtime configuration is available. Use screenshots and computer actions only when DOM interaction is insufficient.
-
-5. Verify the business result. A trusted event, HTTP 200, unchanged URL, or selected file is not by itself task completion. For unknown mutation results, observe or hand off; never replay the whole workflow.
-
-6. Finish in `finally`:
-
-   ```json
-   {"action":"finish","taskId":"<taskId>"}
-   ```
-
-   Borrowed pages remain user-owned. Hand off explicit owned pages with `chrome_task` action `handOff`, or finish with `keep:[tabId]`. Cancellation stops later actions but does not roll back dispatched work.
-
-If the current host exposes BrowserPaw's persistent JavaScript facade, the equivalent `browser.task`, `browser.skills`, and `browser.help` methods are documented in the lifecycle reference. MCP actions remain authoritative.
-
-## Task And Skill Learning
-
-Read [Task and skill lifecycle](references/task-skill-lifecycle.md) before using `chrome_task`, `chrome_skill`, downloads, candidate definitions, or recovery flows.
-
-Personal learned skills live under `$BROWSERPAW_HOME/skills` (default `~/.browserpaw/skills`). Static bundled recipes live in `assets/recipes/` and are distributed into the Native runtime. Never persist credentials, cookies, tab/document IDs, temporary refs, coordinates, or user input in a learned skill.
-
-## Browser Rules
-
-- Refs are positive integers, not necessarily sequential. Navigation or node replacement expires them.
-- Prefer background pages and preserve existing tabs unless the user explicitly asks to change them.
-- Use strict locators when refs are unavailable; ambiguity is an error, not permission to choose the first match.
-- Check actionability before dispatch. Disabled, hidden, unstable, persistent-motion, or covered targets should be rejected with a machine-readable reason.
-- Observation scope is part of action safety. A modal, popover or Portal can make background text readable while still blocking background actions; re-observe or target the active scope instead of bypassing the check.
-- Native text fill sends multiline text as one input operation and verifies the field, not a business submission. `pressEnter` is an explicit key step; `submit:true` requires a caller-provided `submitTarget`. Never combine both in one fill.
-- For drafts and external writes, fill and inspect without sending unless the user explicitly authorizes the final action. A disabled button, highlighted button or changed page text is not proof that the business action completed.
-- `clear:false` appends; the default replaces. Preserve whitespace and allow an empty string to clear.
-- Dialog, popup, file chooser, and download events belong to their source tab/document/session. Require an explicit scoped target when more than one is possible.
-- Do not use a browser-wide filename or URL match to claim a task download. Record and wait on a GUID plus source observation, or use one guarded trigger call.
-- CAPTCHA, Cloudflare challenge, 2FA, payment confirmation, and login walls require human intervention unless the user explicitly completes that step.
-- Unknown or timed-out writes are `retry:false`; inspect before deciding whether a new action is safe.
-
-## Quick Reference
-
-- Existing tabs: `get_windows_and_tabs`
-- Navigate: `chrome_navigate` with `background:true`
-- Compact observation: `chrome_read_dom`
-- Article text: `chrome_get_markdown`
-- Search page elements: `chrome_grep` or `chrome_scroll_until_found`
-- Deterministic pipeline: `chrome_batch_actions`
-- Strict candidate takeover: `chrome_interact_index` or `chrome_fill_index`
-- Authenticated page API: `chrome_network_request` (verified GET where supported)
-- Visual fallback: `chrome_screenshot` then `chrome_computer`
-- Diagnostics: `chrome_doctor`
-
-## CLI And Persistent Sessions
-
-When local command execution is available, use a named CLI session for machine driven multi-step work:
-
-```sh
-browserpaw session create research
-browserpaw session call research chrome_navigate '{"url":"https://example.com"}'
-browserpaw session call research chrome_read_dom '{}'
-browserpaw session close research
+```text
+browserpaw task start research --json
+browserpaw open https://example.com --task TASK_ID
+browserpaw observe --task TASK_ID --json
+browserpaw click REF --task TASK_ID
+browserpaw observe --task TASK_ID
+browserpaw task finish --task TASK_ID
 ```
 
-`browserpaw --session research <tool> ...` is shorthand for `session call`. Named sessions reuse one MCP session, expire after ten minutes without calls or status pings, and must be closed after the durable task is explicitly finished. An expired or closed session never reconnects, takes over a task, or replays an uncertain action. Use `--artifacts <empty-dir>` for screenshots and other large media; inspect the generated `manifest.json` references while retaining `result.json` for the complete receipt. Use `browserpaw repl` for interactive JavaScript workflows. See [CLI and REPL](references/cli-repl.md).
+Use the returned task ID throughout. A task owns pages it opens and preserves borrowed pages. To work on a specific existing page, choose its ID from `browserpaw tabs`, then use `--tab ID` or `task borrow ID --task TASK_ID`. Use `task release` to hand back a page.
 
-## References
+Use current observed refs or strict CSS, text, role, and label targets. When a frame ID is known, pass `--frame ID` to a frame-aware action. Observe again after navigation, DOM replacement, or an ambiguous target. For multiline input, use `fill TARGET --input FILE` or pass the literal string after `--`.
 
-- [Tool cheat sheet](references/tool-cheatsheet.md)
-- [Task and skill lifecycle](references/task-skill-lifecycle.md)
-- [Recipe contract](references/recipe-contract.md)
-- [Batch pipelines](references/batch-pipeline.md)
-- [Interactive micro-loop](references/dual-brain-jev.md)
-- [Visual fallback](references/visual-fallback.md)
-- [Troubleshooting](references/TROUBLESHOOTING.md)
-- [Troubleshooting (Chinese)](references/TROUBLESHOOTING.zh-CN.md)
+Read screenshots with the local image viewer using the returned file path. For coordinates, use `click @X,Y --capture ID` from the current screenshot and the same tab. Use a fresh capture after geometry or page changes.
+
+Use `download REF` for a page-triggered download receipt. Use `download --url URL --out DIR` when the file URL is known and a verified local file path is needed.
+
+Check page state before completing the task. Verify the business effect after a write. Use `ask-human` for browser challenges, authentication prompts, or user confirmation. Use `task status` and a fresh observation after exit 4, which indicates an unknown outcome. Cancellation stops later work and keeps effects already dispatched.
+
+For a deterministic workflow, `batch FILE` accepts JSON arrays of command arguments and stops on the first failure. Use `recipe list` to discover existing workflows and provide fresh explicit inputs to `recipe run`. Use `--json` to read receipts and follow file references for large results.
+
+See [commands](references/commands.md) and [recipes](references/recipe-contract.md).

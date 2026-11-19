@@ -65,7 +65,8 @@ describe('W2 & BUG-11 Regression Tests', () => {
 
       const fillSpy = vi.spyOn(fillTool, 'execute').mockResolvedValue({
         content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-        isError: false,InternalError: false,
+        isError: false,
+        InternalError: false,
       });
 
       // Execute computer action='fill' with explicit tabId and sessionId
@@ -202,7 +203,7 @@ describe('W2 & BUG-11 Regression Tests', () => {
   });
 
   describe('BUG-11: argument coercion respects schema types and preserves string fields', () => {
-    it('does not coerce bookmarkId "007" to number 7 and preserves text "false" as string', async () => {
+    it('preserves text "false" as a string', async () => {
       (globalThis as any).chrome = {
         storage: {
           session: {
@@ -214,21 +215,6 @@ describe('W2 & BUG-11 Regression Tests', () => {
           get: vi.fn().mockResolvedValue([{ id: '007', title: 'Test' }]),
         },
       };
-
-      let capturedDeleteArgs: any = null;
-      const bmModule = await import('../entrypoints/background/tools/browser/bookmark');
-      vi.spyOn(bmModule.bookmarkDeleteTool, 'execute').mockImplementation(async (args: any) => {
-        capturedDeleteArgs = { ...args };
-        return { content: [{ type: 'text', text: 'ok' }], isError: false };
-      });
-
-      // Call chrome_bookmark_delete with bookmarkId: '007'
-      await handleCallTool({
-        name: 'chrome_bookmark_delete',
-        args: { bookmarkId: '007' },
-      });
-
-      expect(capturedDeleteArgs.bookmarkId).toBe('007');
 
       let capturedFillArgs: any = null;
       const fillModule = await import('../entrypoints/background/tools/browser/fill-index');
@@ -299,7 +285,12 @@ describe('W2 & BUG-11 Regression Tests', () => {
 
       await handleCallTool({
         name: 'chrome_fill_index',
-        args: { index: 1, text: 'test', sessionId: 'untrusted-spoofed-session', sessionContext: 'untrusted-context' },
+        args: {
+          index: 1,
+          text: 'test',
+          sessionId: 'untrusted-spoofed-session',
+          sessionContext: 'untrusted-context',
+        },
         sessionId: 'transport-principal-real',
       });
 

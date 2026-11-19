@@ -1,8 +1,8 @@
-import { execSync } from 'child_process';
+import { build } from 'tsup';
 import fs from 'fs';
 import path from 'path';
 
-const distDir = path.join(__dirname, '..', '..', 'dist');
+const distDir = path.join(__dirname, '..', '..', 'dist', 'v5');
 
 // QUAL-01: Ensure required host wrapper scripts are verified and copied fail-fast
 export function copyHostWrapperScripts(srcDir: string, destDir: string): void {
@@ -67,7 +67,7 @@ export function copyPortableSkill(canonicalDir: string, destDir: string): void {
 }
 
 export function copyCliClientFiles(srcDir: string, destDir: string): void {
-  for (const name of ['cli-client.cjs', 'cli-files.cjs', 'cli-session.cjs', 'cli-artifacts.cjs']) {
+  for (const name of ['cli-files.cjs']) {
     fs.copyFileSync(path.join(srcDir, name), path.join(destDir, name));
   }
 }
@@ -105,7 +105,7 @@ export function cleanDistDir(targetDir: string): void {
   }
 }
 
-export function runBuild(): void {
+export async function runBuild(): Promise<void> {
   // Clean previous build
   console.log('Cleaning previous build...');
   cleanDistDir(distDir);
@@ -115,34 +115,19 @@ export function runBuild(): void {
   fs.mkdirSync(path.join(distDir, 'logs'), { recursive: true }); // Create logs directory
   console.log('Created dist and dist/logs directories');
 
-  // Compile TypeScript
-  console.log('Compiling TypeScript...');
-  execSync('tsc', { stdio: 'inherit' });
+  await build({
+    entry: { cli: 'src/cli.ts', host: 'src/index.ts' },
+    config: false,
+    format: ['cjs'],
+    outDir: distDir,
+    outExtension: () => ({ js: '.cjs' }),
+    target: 'node22',
+    splitting: false,
+    clean: false,
+    noExternal: [/.*/],
+  });
 
   copyCliClientFiles(path.join(__dirname, '..'), distDir);
-
-  // Copy configuration files
-  console.log('Copying configuration files...');
-  const configSourcePath = path.join(__dirname, '..', 'mcp', 'stdio-config.json');
-  const configDestPath = path.join(distDir, 'mcp', 'stdio-config.json');
-
-  try {
-    // Ensure destination directory exists
-    fs.mkdirSync(path.dirname(configDestPath), { recursive: true });
-
-    if (fs.existsSync(configSourcePath)) {
-      fs.copyFileSync(configSourcePath, configDestPath);
-      console.log(`Copied stdio-config.json to ${configDestPath}`);
-    } else {
-      console.error(`Error: Configuration file not found: ${configSourcePath}`);
-    }
-  } catch (error) {
-    console.error('Error copying configuration files:', error);
-  }
-
-  // Prepare package.json
-  console.log('Preparing package.json...');
-  const packageJson = require('../../package.json');
 
   // Copy installation instructions
   const pkgReadme = path.join(__dirname, '..', '..', 'README.md');
@@ -188,15 +173,6 @@ export function runBuild(): void {
   try {
     copyHostWrapperScripts(scriptsSourceDir, distDir);
     console.log(`Copied wrapper scripts to ${distDir}`);
-
-    // Copy postinstall-guard.js so published npm package has it in dist/scripts
-    const guardSrc = path.join(scriptsSourceDir, 'postinstall-guard.js');
-    const guardDest = path.join(distDir, 'scripts', 'postinstall-guard.js');
-    if (fs.existsSync(guardSrc)) {
-      fs.mkdirSync(path.dirname(guardDest), { recursive: true });
-      fs.copyFileSync(guardSrc, guardDest);
-      console.log(`Copied ${guardSrc} to ${guardDest}`);
-    }
   } catch (error) {
     console.error('Error copying wrapper scripts:', error);
     process.exit(1);
@@ -204,7 +180,7 @@ export function runBuild(): void {
 
   // Add executable permissions for key JavaScript files and shell scripts
   console.log('Adding executable permissions...');
-  const filesToMakeExecutable = ['index.js', 'cli.js', 'run_host.sh']; // cli.js assumed at dist root
+  const filesToMakeExecutable = ['host.cjs', 'cli.cjs', 'run_host.sh'];
 
   filesToMakeExecutable.forEach((file) => {
     const filePath = path.join(distDir, file); // filePath target
@@ -231,11 +207,9 @@ export function runBuild(): void {
   console.log('Build completed successfully');
 }
 
-if (!process.env.JEST_WORKER_ID) {
-  try {
-    runBuild();
-  } catch (err) {
+if (require.main === module) {
+  void runBuild().catch((err) => {
     console.error('Build failed:', err);
-    process.exit(1);
-  }
+    process.exitCode = 1;
+  });
 }

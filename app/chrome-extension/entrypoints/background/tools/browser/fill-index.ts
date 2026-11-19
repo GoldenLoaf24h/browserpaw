@@ -35,6 +35,7 @@ export interface FillIndexParams {
   frameId?: number;
   text?: string;
   value?: string;
+  selectValues?: string[];
   clear?: boolean;
   pressEnter?: boolean;
   submit?: boolean;
@@ -139,6 +140,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
             target: args.index,
             frameId: args.frameId,
             text: textToFill,
+            selectValues: args.selectValues,
             clear: args.clear,
             pressEnter: args.pressEnter,
             submit: args.submit,

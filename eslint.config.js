@@ -9,6 +9,7 @@ export default tseslint.config(
   {
     ignores: [
       'node_modules/',
+      '.artifacts/',
       'docs/archive/**',
       '**/dist/**',
       '**/.output/**',
@@ -39,14 +40,19 @@ export default tseslint.config(
   {
     files: [
       'scripts/**/*.{js,mjs,cjs}',
-      'bin/*.cjs',
+      'test/**/*.mjs',
+      'app/native-server/scripts/*.cjs',
       'plugins/**/*.{js,mjs,cjs}',
       'app/native-server/src/cli-*.cjs',
     ],
     languageOptions: { globals: globals.node },
   },
   {
-    files: ['scripts/**/*.cjs', 'bin/*.cjs', 'app/native-server/src/cli-*.cjs'],
+    files: [
+      'scripts/**/*.cjs',
+      'app/native-server/scripts/*.cjs',
+      'app/native-server/src/cli-*.cjs',
+    ],
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   // Global rule adjustments

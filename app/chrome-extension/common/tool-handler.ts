@@ -1,4 +1,4 @@
-import type { CallToolResult, TextContent, ImageContent } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, TextContent, ImageContent } from 'chrome-mcp-shared';
 
 export interface ToolResult extends CallToolResult {
   content: (TextContent | ImageContent)[];

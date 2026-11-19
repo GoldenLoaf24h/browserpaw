@@ -28,7 +28,7 @@ describe('reserveStdoutForProtocol', () => {
     expect(stderr).toHaveBeenCalled();
   });
 
-  test.each(['index.ts', 'mcp/mcp-server-stdio.ts'])('%s reserves stdout', (entry) => {
+  test.each(['index.ts'])('%s reserves stdout', (entry) => {
     const source = fs.readFileSync(path.join(__dirname, entry), 'utf8');
     expect(source).toContain('reserveStdoutForProtocol();');
   });

@@ -1,5 +1,5 @@
-import { describe, expect, it, jest } from '@jest/globals';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -94,9 +94,16 @@ function released() {
   return result({ success: true });
 }
 
+const testDirectories: string[] = [];
 function testDir(name: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `browserpaw-tasks-${name}-`));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `browserpaw-tasks-${name}-`));
+  testDirectories.push(directory);
+  return directory;
 }
+afterEach(() => {
+  for (const directory of testDirectories.splice(0))
+    fs.rmSync(directory, { recursive: true, force: true });
+});
 
 function failRenameSequence(failures: Array<{ contains: string | string[]; message: string }>) {
   const originalRename = fs.promises.rename.bind(fs.promises);

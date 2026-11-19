@@ -8,8 +8,8 @@
     "directory": "app/chrome-extension"
   },
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
+  "version": "5.0.0",
   "private": true,
-  "version": "4.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -28,7 +28,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.11.0",
     "chrome-mcp-shared": "workspace:*",
     "date-fns": "^4.1.0",
     "vue": "^3.5.13"

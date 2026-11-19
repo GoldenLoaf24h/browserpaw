@@ -39,34 +39,6 @@ describe('tool schema contract', () => {
   });
 
   describe('action enums replace free-form strings', () => {
-    it('chrome_computer.action is a closed enum matching the implementation', () => {
-      const action = propsOf('chrome_computer').action;
-
-      expect(Array.isArray(action.enum)).toBe(true);
-      for (const value of [
-        'left_click',
-        'right_click',
-        'double_click',
-        'triple_click',
-        'left_click_drag',
-        'scroll',
-        'scroll_to',
-        'type',
-        'key',
-        'fill',
-        'fill_form',
-        'hover',
-        'wait',
-        'resize_page',
-        'zoom',
-        'screenshot',
-      ]) {
-        expect(action.enum, `${value} missing from chrome_computer enum`).toContain(value);
-      }
-      // The old description listed these; make sure no phantom value crept in.
-      expect(action.enum).not.toContain('click');
-    });
-
     it('chrome_handle_dialog.action is a closed enum', () => {
       const action = propsOf('chrome_handle_dialog').action;
 
@@ -77,8 +49,6 @@ describe('tool schema contract', () => {
   describe('polymorphic coordinate schemas', () => {
     it('allows array coordinates and does not restrict outer type to object', () => {
       const tools = [
-        { tool: 'chrome_computer', prop: 'coordinates' },
-        { tool: 'chrome_computer', prop: 'startCoordinates' },
         { tool: 'chrome_interact_index', prop: 'coordinate' },
         { tool: 'chrome_smart_scroll', prop: 'coordinate' },
       ];

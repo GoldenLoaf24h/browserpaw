@@ -18,19 +18,14 @@ export type { BrowserLocatorOptions, BrowserLocatorResult };
  * Implements the unified positioning abstraction (P1-4):
  * 1. Supports ref (default 1-based index or string ref), CSS/XPath selector, text/role, and coordinate (fallback).
  * 2. Strict degradation order: ref -> selector -> text/role -> coordinate.
- * 3. Reports actual resolutionPath ('ref' | 'selector' | 'text' | 'role' | 'coordinate' | 'semantic') in response.
- * 4. Plan B Intelligent Positioning: when non-exact text/label/named-role has zero deterministic matches,
- *    invokes Native Jev System One with strictly bounded candidates (<=32).
+ * 3. Reports actual resolutionPath ('ref' | 'selector' | 'text' | 'role' | 'coordinate') in response.
  */
 export async function resolveTargetLocation(
   tabId: number,
   options: BrowserLocatorOptions,
 ): Promise<BrowserLocatorResult> {
   return baseResolveTargetLocation(tabId, options, {
-    semanticEnabled: async () => (await import('../../native-host')).isJevSemanticEnabled(),
     executeInPage: (target, fnName, args) => executeInPage(target, fnName as any, args),
-    sendJevMatch: async (...args) =>
-      (await import('../../native-host')).sendJevMatchToNative(...args),
     coordinateScaler: (tId, x, y) => {
       const ctx = screenshotContextManager.getContext(tId);
       if (ctx) {

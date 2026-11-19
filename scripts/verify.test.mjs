@@ -348,8 +348,9 @@ describe('Verification Runner Core Contract', () => {
       }
     });
 
-    it('exports REQUIRED_STEP_NAMES containing all 14 fixed steps', () => {
-      assert.strictEqual(REQUIRED_STEP_NAMES.length, 14);
+    it('includes the 13 release steps and packaged CLI smoke test', () => {
+      assert.strictEqual(REQUIRED_STEP_NAMES.length, 13);
+      assert.ok(REQUIRED_STEP_NAMES.includes('package-smoke'));
       assert.ok(REQUIRED_STEP_NAMES.includes('node-version-check'));
       assert.ok(REQUIRED_STEP_NAMES.includes('prepare-shared-and-types'));
       assert.ok(REQUIRED_STEP_NAMES.includes('extension-vitest'));
@@ -358,10 +359,10 @@ describe('Verification Runner Core Contract', () => {
   });
 
   describe('8. Project directory enumeration helpers', () => {
-    it('finds script syntax check targets including bin/browserpaw.cjs', () => {
+    it('finds syntax targets including the package assembly script', () => {
       const list = findScriptsForSyntaxCheck(repoRoot);
       assert.ok(list.length > 0, 'Should find scripts for syntax check');
-      assert.ok(list.some((f) => f.includes('browserpaw.cjs')));
+      assert.ok(list.some((f) => f.includes('pack-assets.cjs')));
       assert.ok(list.some((f) => f.includes('verify.mjs')));
     });
 

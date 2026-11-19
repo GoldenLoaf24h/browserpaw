@@ -3,6 +3,7 @@ import type { ToolResult } from '@/common/tool-handler';
 import { downloadsWatchdog } from '../../watchdogs';
 
 export interface WaitForDownloadOptions {
+  id?: number;
   filenameContains?: string;
   waitForComplete?: boolean;
   timeoutMs?: number;
@@ -60,6 +61,7 @@ export async function waitForDownload(opts: WaitForDownloadOptions): Promise<Dow
 
     const matches = (item: chrome.downloads.DownloadItem) => {
       if (!item) return false;
+      if (opts.id !== undefined && opts.id !== item.id) return false;
       if (!filenameContains) return true;
       const name = (item.filename || '').split(/[/\\]/).pop() || '';
       return name.includes(filenameContains) || (item.url || '').includes(filenameContains);
@@ -106,6 +108,7 @@ export async function waitForDownload(opts: WaitForDownloadOptions): Promise<Dow
     const onChanged = (delta: chrome.downloads.DownloadDelta) => {
       try {
         if (isSettled || !delta || typeof delta.id !== 'number') return;
+        if (opts.id !== undefined && opts.id !== delta.id) return;
         chrome.downloads
           .search({ id: delta.id })
           .then((arr) => {
@@ -144,7 +147,7 @@ export async function waitForDownload(opts: WaitForDownloadOptions): Promise<Dow
     const searchStartTime = callTime - lookbackMs;
 
     chrome.downloads
-      .search({ orderBy: ['-startTime'], limit: 30 })
+      .search(opts.id === undefined ? { orderBy: ['-startTime'], limit: 30 } : { id: opts.id })
       .then((arr) => {
         if (isSettled) return;
         const matching = (arr || []).filter((d) => {

@@ -8,8 +8,6 @@ import * as https from 'https';
 import fetch from 'node-fetch';
 
 import * as dns from 'dns';
-import { mediaAssetStore } from './media-asset-store';
-import { getChromeMcpPort, SERVER_CONFIG } from './constant';
 import { FileLeaseStore } from './file-lease-store';
 
 /**
@@ -425,8 +423,6 @@ export class FileHandler {
       base64Data,
       fileName,
       filePath,
-      traceFilePath,
-      insightName,
       assetId,
       leaseId,
       delivery,
@@ -459,11 +455,6 @@ export class FileHandler {
           return await this.readBase64File(filePath);
         }
 
-        case 'readMediaFile': {
-          if (!filePath) return { success: false, error: 'filePath is required' };
-          return await this.readMediaFile(filePath);
-        }
-
         case 'cleanupFile':
           return await this.cleanupFile(filePath);
 
@@ -491,33 +482,6 @@ export class FileHandler {
             leases,
             leaseIds,
           });
-
-        case 'analyzeTrace': {
-          const targetPath = traceFilePath || filePath;
-          if (!targetPath) {
-            return { success: false, error: 'traceFilePath is required' };
-          }
-          const resolvedPath = path.resolve(targetPath);
-          const resolvedTempDir = path.resolve(this.tempDir);
-          const normalizedPath =
-            process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
-          const normalizedTempDir =
-            process.platform === 'win32' ? resolvedTempDir.toLowerCase() : resolvedTempDir;
-          if (!normalizedPath.startsWith(normalizedTempDir + path.sep)) {
-            return {
-              success: false,
-              error: 'Access denied: traceFilePath must be strictly within the temp directory',
-            };
-          }
-          try {
-            // With tsconfig moduleResolution=NodeNext, relative ESM imports need explicit .js extension
-            const { analyzeTraceFile } = await import('./trace-analyzer.js');
-            const res = await analyzeTraceFile(resolvedPath, insightName);
-            return { success: true, ...res };
-          } catch (e: any) {
-            return { success: false, error: e?.message || String(e) };
-          }
-        }
 
         default:
           return {
@@ -764,80 +728,6 @@ export class FileHandler {
       };
     } catch (error) {
       throw new Error(`Failed to verify file: ${error}`);
-    }
-  }
-
-  /**
-   * Read media file from local disk (images, videos, documents)
-   * Supports files up to MAX_DOWNLOAD_SIZE (50MB).
-   */
-  async readMediaFile(filePath: string): Promise<any> {
-    try {
-      assertNotSensitivePath(filePath);
-      const resolvedPath = path.resolve(filePath);
-      if (!fs.existsSync(resolvedPath)) {
-        throw new Error(`Media file does not exist: ${filePath}`);
-      }
-      const stats = fs.statSync(resolvedPath);
-      if (!stats.isFile()) {
-        throw new Error(`Path is not a file: ${filePath}`);
-      }
-      if (stats.size > MAX_DOWNLOAD_SIZE) {
-        throw new Error(`File size (${stats.size} bytes) exceeds limit of 50MB`);
-      }
-      const ext = path.extname(resolvedPath).toLowerCase();
-      const MEDIA_MIMES: Record<string, string> = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.svg': 'image/svg+xml',
-        '.mp4': 'video/mp4',
-        '.webm': 'video/webm',
-        '.pdf': 'application/pdf',
-      };
-      const mimeType = MEDIA_MIMES[ext];
-      if (!mimeType) {
-        throw new Error(
-          `Unsupported media file extension: ${ext}. Only image, video, and PDF files are allowed.`,
-        );
-      }
-
-      if (stats.size > 650 * 1024) {
-        const assetId = crypto.randomUUID();
-        mediaAssetStore.set(assetId, {
-          filePath: resolvedPath,
-          mimeType,
-          fileName: path.basename(resolvedPath),
-        });
-        const port = getChromeMcpPort();
-        return {
-          success: true,
-          filePath: resolvedPath,
-          fileName: path.basename(resolvedPath),
-          size: stats.size,
-          mimeType,
-          mediaUrl: `http://${SERVER_CONFIG.HOST}:${port}/media-asset/${assetId}`,
-        };
-      }
-
-      const buf = await fs.promises.readFile(resolvedPath);
-      const base64 = buf.toString('base64');
-
-      return {
-        success: true,
-        filePath: resolvedPath,
-        fileName: path.basename(resolvedPath),
-        size: stats.size,
-        mimeType,
-        base64Data: base64,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to read media file: ${error instanceof Error ? error.message : String(error)}`,
-      };
     }
   }
 

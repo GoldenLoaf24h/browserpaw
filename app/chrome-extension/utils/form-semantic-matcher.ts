@@ -8,7 +8,8 @@
  * 4. Zero upload of user values or sensitive inputs
  */
 
-import { sendJevMatchToNative } from '../entrypoints/background/native-host';
+const sendJevMatchToNative = async (_request: unknown, _timeout?: number, _options?: unknown) =>
+  null;
 
 export interface MatchCandidate {
   id: string | number;

@@ -1,35 +1,34 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import { rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const mode = process.argv[2] || 'dist';
-const root = process.cwd();
-
-const distTargets = new Set(['dist', '.turbo', '.output']);
-
-function removeDirs(dir, targets) {
-  if (!fs.existsSync(dir)) return;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (targets.has(entry.name)) {
-        try {
-          fs.rmSync(fullPath, { recursive: true, force: true });
-          console.log(`Removed ${fullPath}`);
-        } catch (err) {
-          console.error(`Failed to remove ${fullPath}:`, err);
-        }
-      } else if (entry.name !== 'node_modules' && !entry.name.startsWith('.')) {
-        removeDirs(fullPath, targets);
-      }
-    }
+const build = [
+  '../app/native-server/dist/v5',
+  '../app/chrome-extension/.output',
+  '../app/chrome-extension/.wxt',
+  '../packages/shared/dist',
+];
+const dependencies = [
+  '../node_modules',
+  '../app/native-server/node_modules',
+  '../app/chrome-extension/node_modules',
+  '../packages/shared/node_modules',
+];
+const mode = process.argv[2] ?? 'dist';
+const paths =
+  mode === 'dist'
+    ? build
+    : mode === 'modules'
+      ? dependencies
+      : mode === 'all'
+        ? [...build, ...dependencies]
+        : undefined;
+if (!paths) {
+  console.error('Usage: node scripts/clean.js dist|modules|all');
+  process.exitCode = 2;
+} else {
+  for (const relative of paths) {
+    const path = fileURLToPath(new URL(relative, import.meta.url));
+    rmSync(path, { recursive: true, force: true });
+    console.log(`Cleared ${path}`);
   }
-}
-
-if (mode === 'dist') {
-  removeDirs(root, distTargets);
-} else if (mode === 'modules') {
-  removeDirs(root, new Set(['node_modules']));
-} else if (mode === 'all') {
-  removeDirs(root, new Set(['dist', '.turbo', '.output', 'node_modules']));
 }

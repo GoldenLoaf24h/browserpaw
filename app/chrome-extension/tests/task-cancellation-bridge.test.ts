@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import { BrowserTaskManager, type BrowserCall } from '../../native-server/src/browser-tasks';
 import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-actions';
 import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';

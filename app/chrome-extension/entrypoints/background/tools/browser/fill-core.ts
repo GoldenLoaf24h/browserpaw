@@ -40,6 +40,7 @@ export interface PhysicalFillOptions {
   /** Numeric index from read_dom, or string ref, or CSS selector */
   target: number | string;
   text: string;
+  selectValues?: string[];
   selector?: string;
   ref?: string | number;
   coordinate?: { x: number; y: number };
@@ -584,8 +585,18 @@ async function runPhysicalFill(
     coords?.inputType === 'radio' ||
     coords?.inputType === 'file';
 
+  if (options.selectValues && (coords?.tagName !== 'select' || !numericIndex)) {
+    return {
+      success: false,
+      committed: false,
+      error: 'Multiple values require an observed native select.',
+      filledText: '',
+      isTrusted: false,
+      method: 'widget_native',
+    };
+  }
   if (isSpecialWidget) {
-    if (isCustomCombobox) {
+    if (isCustomCombobox && !options.selectValues) {
       throwIfAborted(signal, 'before custom combobox mutation');
       assertBudget(deadlineAt, 'before custom combobox mutation');
       let comboRes: any = null;
@@ -653,7 +664,12 @@ async function runPhysicalFill(
       const res = await executeWithBudget(
         targetFrameId !== 0 ? { tabId, frameIds: [targetFrameId] } : { tabId },
         'inPageFillIndex',
-        [numericIndex, textToFill, clear !== false],
+        [
+          numericIndex,
+          textToFill,
+          clear !== false,
+          ...(options.selectValues ? [false, options.selectValues] : []),
+        ],
       );
       outcome = res?.[0]?.result;
 

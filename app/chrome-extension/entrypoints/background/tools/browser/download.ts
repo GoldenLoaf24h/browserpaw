@@ -2,6 +2,7 @@ import { createErrorResponse, type ToolCallContext, type ToolResult } from '@/co
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { interactIndexTool } from './interact-index';
+import { isCloudMetadataUrl } from '@/utils/restricted-url';
 import {
   ScopedDownloadError,
   waitForDownload,
@@ -13,6 +14,7 @@ import {
 export { waitForDownload, type WaitForDownloadOptions, type DownloadDetails };
 
 interface HandleDownloadParams {
+  directUrl?: string;
   tabId?: number;
   guid?: string;
   clickTargetIndex?: number;
@@ -152,6 +154,7 @@ class HandleDownloadTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD as any;
 
   async execute(args: HandleDownloadParams, context?: ToolCallContext): Promise<ToolResult> {
+    if (args?.directUrl !== undefined) return this.downloadUrl(args, context);
     if (isScoped(args || {})) return this.executeScoped(args || {}, context);
     const filenameContains = String(args?.filenameContains || '').trim();
     const waitForComplete = args?.waitForComplete !== false;
@@ -169,6 +172,44 @@ class HandleDownloadTool extends BaseBrowserToolExecutor {
       };
     } catch (e: any) {
       return createErrorResponse(`Handle download failed: ${e?.message || String(e)}`);
+    }
+  }
+
+  private async downloadUrl(
+    args: HandleDownloadParams,
+    context?: ToolCallContext,
+  ): Promise<ToolResult> {
+    let id: number | undefined;
+    try {
+      const url = new URL(args.directUrl!);
+      if (!['http:', 'https:'].includes(url.protocol) || isCloudMetadataUrl(url.href))
+        return scopedFailure('Expected an HTTP or HTTPS file URL.', { dispatched: false });
+      if (context?.signal?.aborted)
+        return scopedFailure('Download cancelled before dispatch.', { dispatched: false });
+      id = await chrome.downloads.download({
+        url: url.href,
+        conflictAction: 'uniquify',
+        saveAs: false,
+      });
+      const download = await waitForDownload({
+        id,
+        timeoutMs: args.timeoutMs,
+        signal: context?.signal,
+      });
+      return mergeSource(undefined, {
+        success: true,
+        download,
+        browserCompleted: true,
+        verifiedPath: Boolean(download.filename && download.exists !== false),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return scopedFailure(message, {
+        status:
+          id !== undefined && !message.startsWith('Download interrupted') ? 'unknown' : 'failed',
+        requestDispatched: id !== undefined,
+        ...(id !== undefined ? { downloadId: id } : {}),
+      });
     }
   }
 

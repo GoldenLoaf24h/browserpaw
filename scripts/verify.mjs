@@ -21,8 +21,7 @@ export const REQUIRED_STEP_NAMES = Object.freeze([
   'extension-vitest',
   'native-jest',
   'build',
-  'simulated-e2e',
-  'plugin-pytest',
+  'package-smoke',
   'validate-docs',
   'extension-artifacts-check',
 ]);
@@ -184,9 +183,14 @@ export function findScriptsForSyntaxCheck(root = repoRoot) {
     };
     walk(scriptsDir);
   }
-  const binCli = path.resolve(root, 'bin/browserpaw.cjs');
-  if (fs.existsSync(binCli)) {
-    files.push(binCli);
+  for (const relative of [
+    'app/native-server/scripts/pack-assets.cjs',
+    'app/native-server/src/cli-files.cjs',
+    'test/package-smoke.mjs',
+    'test/live/chrome-cli.mjs',
+  ]) {
+    const file = path.resolve(root, relative);
+    if (fs.existsSync(file)) files.push(file);
   }
   return files.sort();
 }
@@ -487,13 +491,19 @@ export async function executeSteps(root = repoRoot) {
     );
 
     // Step 4: Typecheck root
-    recordStep('typecheck-root', 'pnpm -r --filter="!browserpaw" exec tsc --noEmit', () => {
-      const res = runPnpm(['-r', '--filter=!browserpaw', 'exec', 'tsc', '--noEmit'], { cwd: root });
-      if (res.status !== 0) {
-        throw new Error(`Root tsc failed (exit ${res.status}): \n${res.stdout + res.stderr}`);
-      }
-      return { status: 0 };
-    });
+    recordStep(
+      'typecheck-root',
+      'pnpm -r --filter="!browserpaw-workspace" exec tsc --noEmit',
+      () => {
+        const res = runPnpm(['-r', '--filter=!browserpaw-workspace', 'exec', 'tsc', '--noEmit'], {
+          cwd: root,
+        });
+        if (res.status !== 0) {
+          throw new Error(`Root tsc failed (exit ${res.status}): \n${res.stdout + res.stderr}`);
+        }
+        return { status: 0 };
+      },
+    );
 
     // Step 5: Typecheck extension
     recordStep('typecheck-extension', 'pnpm --dir app/chrome-extension compile', () => {
@@ -627,81 +637,15 @@ export async function executeSteps(root = repoRoot) {
       return { status: 0 };
     });
 
-    // Step 11: Simulated E2E Runner (mock, not live)
-    recordStep('simulated-e2e', 'node --experimental-strip-types test/e2e/runner.ts', () => {
-      const res = spawnSync(
-        process.execPath,
-        ['--experimental-strip-types', 'test/e2e/runner.ts'],
-        {
-          cwd: root,
-          encoding: 'utf-8',
-        },
-      );
-      if (res.error) {
-        throw new Error(`Failed to spawn simulated e2e runner: ${res.error.message}`);
-      }
-      if (res.status !== 0) {
-        throw new Error(
-          `Simulated E2E runner failed (exit ${res.status}): \n${res.stdout + res.stderr}`,
-        );
-      }
-      testCounts.e2e = { mode: 'mock-simulated', exitCode: 0 };
-      return { mode: 'mock-simulated', exitCode: 0 };
+    recordStep('package-smoke', 'node test/package-smoke.mjs', () => {
+      const res = spawnSync(process.execPath, ['test/package-smoke.mjs'], {
+        cwd: root,
+        encoding: 'utf-8',
+      });
+      if (res.status !== 0)
+        throw new Error(`Package smoke failed: ${res.error?.message ?? res.stdout + res.stderr}`);
+      return { status: 0 };
     });
-
-    // Step 12: Python pytest (only fallback to uv on command ENOENT, disallow retry on test failure)
-    recordStep(
-      'plugin-pytest',
-      'pytest plugins/browserpaw-hermes/tests --junitxml=<tmp>',
-      () => {
-      const junitXmlPath = path.join(tempDir, 'pytest-junit.xml');
-      const pyCmd = process.env.PYTHON || 'python';
-      const pyArgs = [
-        '-m',
-        'pytest',
-        'plugins/browserpaw-hermes/tests',
-        `--junitxml=${junitXmlPath}`,
-      ];
-      const probe = spawnSync(pyCmd, ['-c', 'import pytest'], { cwd: root, encoding: 'utf-8' });
-      const useUv = needsIsolatedPytest(probe);
-      if (!useUv && (probe.error || probe.status !== 0)) {
-        throw new Error(
-          `Python pytest dependency check failed: ${probe.error?.message || probe.stdout + probe.stderr}`,
-        );
-      }
-      // Choose a prepared interpreter before executing tests; never retry a failed suite.
-      const res = useUv
-        ? spawnSync(
-            'uv',
-            [
-              'run',
-              '--with',
-              'pytest',
-              'pytest',
-              'plugins/browserpaw-hermes/tests',
-              `--junitxml=${junitXmlPath}`,
-            ],
-            { cwd: root, encoding: 'utf-8' },
-          )
-        : spawnSync(pyCmd, pyArgs, { cwd: root, encoding: 'utf-8' });
-      if (res.error) {
-        throw new Error(`Failed to spawn pytest: ${res.error.message}`);
-      }
-      if (res.status !== 0) {
-        throw new Error(`pytest exited with code ${res.status}: \n${res.stdout + res.stderr}`);
-      }
-      if (!fs.existsSync(junitXmlPath)) {
-        throw new Error(`pytest succeeded with exit 0 but failed to produce junit xml file`);
-      }
-      const rawXml = fs.readFileSync(junitXmlPath, 'utf-8');
-      const parsed = parsePytestJunit(rawXml);
-      testCounts.python = parsed;
-      return {
-        ...parsed,
-        hermesSkipReason: 'Hermes known module integration skip (host not attached)',
-      };
-      },
-    );
 
     // Step 13: Validate docs
     recordStep('validate-docs', 'node scripts/validate-docs.mjs', () => {
@@ -712,6 +656,14 @@ export async function executeSteps(root = repoRoot) {
         throw new Error(
           `validate-docs.mjs failed (exit ${res.status}): \n${res.stdout + res.stderr}`,
         );
+      }
+      for (const relative of ['scripts/gen-commands-doc.mjs', 'scripts/sync-skills.mjs']) {
+        const check = spawnSync(process.execPath, [path.resolve(root, relative), '--check'], {
+          cwd: root,
+          encoding: 'utf-8',
+        });
+        if (check.status !== 0)
+          throw new Error(check.error?.message ?? check.stdout + check.stderr);
       }
       return { status: 0 };
     });

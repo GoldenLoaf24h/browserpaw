@@ -2,10 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { matchSemanticTarget } from './jev/semantic-match';
-import { jevModelManager } from './server/jev-model-manager';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
+import { validator } from './schema-validation';
 import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import {
   DOM_EXTRACTION_PROGRAM,
@@ -70,7 +68,6 @@ interface SkillRecord {
   versions: SkillVersion[];
 }
 
-const validator = new AjvJsonSchemaValidator();
 const allowedTools = new Set([
   'chrome_javascript',
   'chrome_read_dom',
@@ -556,87 +553,13 @@ export class BrowserSkillStore {
       return [top, ...others].slice(0, 3).map((item) => ({ ...item, diagnostics: diag }));
     }
 
-    // Ambiguity exists.
-    // Rule: >32 candidates -> do NOT slice and call model. Fallback to keyword and flag coverage_limited.
-    if (matching.length > 32) {
-      const sorted = [...scored].sort((a, b) => b.score - a.score).slice(0, 3);
-      const diag: SkillFindDiagnostic = {
-        strategy: 'keyword',
-        status: 'unavailable',
-        reason: 'coverage_limited',
-      };
-      return sorted.map((item) => ({ ...item, diagnostics: diag }));
-    }
-
-    // If model is explicitly off, fallback to keyword ranking without model
-    if (jevModelManager.getActiveMode() === 'off') {
-      const sorted = [...scored].sort((a, b) => b.score - a.score).slice(0, 3);
-      const diag: SkillFindDiagnostic = {
-        strategy: 'keyword',
-        status: 'unavailable',
-        reason: 'jev_disabled',
-      };
-      return sorted.map((item) => ({ ...item, diagnostics: diag }));
-    }
-
-    // Run semantic match target
-    const targetResult = await matchSemanticTarget(
-      {
-        query: trimmedIntent || url,
-        intent: trimmedIntent,
-        candidates: matching.map((item) => ({
-          id: item.id,
-          text: `${item.name}: ${item.description}`,
-        })),
-        operation: 'skill',
-      },
-      options?.signal,
-    );
-
-    if (targetResult.status === 'cancelled' || options?.signal?.aborted) {
-      throw Object.assign(new Error('Skill find cancelled'), {
-        status: 'cancelled',
-        retry: false,
-        requestDispatched: false,
-      });
-    }
-
-    if (targetResult.status === 'matched' && targetResult.matchedId) {
-      const matchedItem = scored.find((item) => item.id === targetResult.matchedId);
-      const others = scored
-        .filter((item) => item.id !== targetResult.matchedId)
-        .sort((a, b) => b.score - a.score);
-      const diag: SkillFindDiagnostic = {
-        strategy: 'semantic',
-        status: 'matched',
-        matchedId: targetResult.matchedId,
-        confidence: targetResult.confidence,
-        probabilities: targetResult.probabilities,
-        model: targetResult.model,
-      };
-      const combined = matchedItem ? [matchedItem, ...others] : scored;
-      return combined.slice(0, 3).map((item) => ({ ...item, diagnostics: diag }));
-    }
-
-    if (targetResult.status === 'none') {
-      return [];
-    }
-
-    // Ambiguous or unavailable
-    const diag: SkillFindDiagnostic = {
-      strategy: 'keyword',
-      status: targetResult.status,
-      confidence: targetResult.confidence,
-      probabilities: targetResult.probabilities,
-      model: targetResult.model,
-      reason:
-        targetResult.reason ||
-        (targetResult.status === 'ambiguous' ? 'semantic_ambiguous' : 'model_unavailable'),
-    };
-    return [...scored]
+    return scored
       .sort((a, b) => b.score - a.score)
       .slice(0, 3)
-      .map((item) => ({ ...item, diagnostics: diag }));
+      .map((item) => ({
+        ...item,
+        diagnostics: { strategy: 'keyword', reason: 'ambiguous_keywords' } as SkillFindDiagnostic,
+      }));
   }
   get(id: string, requestedVersion?: number) {
     const record = this.read(id);

@@ -11,7 +11,9 @@ import { createBuildInfo, writeBuildProvenance } from '../../scripts/extension-a
 config({ path: resolve(process.cwd(), '.env') });
 config({ path: resolve(process.cwd(), '.env.local') });
 
-const CHROME_EXTENSION_KEY = process.env.CHROME_EXTENSION_KEY;
+const CHROME_EXTENSION_KEY =
+  process.env.CHROME_EXTENSION_KEY ??
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAjeRNSo9KPde+/H7G9RyKcjZsPTRC3sBfdTRHndgSIFJaeM5WDZRF5xgEmkeW66x6oEr4IeOcWNMbIL8Z33c4kX3PzObV6GyhiaISwSJLfBL3awnFJ1+sQj4lPcAiwpC3ppTTXX7teuDGp0tmxGQlZVS/zHDJqa4xW9AUd02JkCgQ3NLVAzlAwFaqEkNteG1A7SKNExfrVmdm6BAy0HSNFgmgvM76CRP/kUWl9vYOsQHKslCBC56WnUTKAsGaNE7RCKmLIH12LfCMwE7fXkK81Jar7iltUGm8AXUwRL0XJay1+6XqMwgqb4NPF1P4aAKoeNb4kWb1QkDhf1UG/wNaawIDAQAB';
 // Detect dev mode early for manifest-level switches
 const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'production';
 
@@ -62,9 +64,6 @@ export default defineConfig({
       'debugger',
       'storage',
       'tabGroups',
-      'bookmarks',
-      'history',
-      'cookies',
     ],
     host_permissions: ['<all_urls>'],
     action: {

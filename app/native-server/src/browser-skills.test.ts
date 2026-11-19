@@ -3,8 +3,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { BrowserSkillStore, type SkillBrowser, type SkillDefinition } from './browser-skills';
 import { createDomExtractionStep } from './skill-read-program';
-import { JevClientWrapper } from './jev/jev-client';
-import { jevModelManager } from './server/jev-model-manager';
 
 const result = (value: unknown, isError = false) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -485,130 +483,6 @@ describe('verified browser skills', () => {
     }
     await expect(store.propose(definition())).rejects.toThrow(/symbolic|link/i);
     expect(fs.readFileSync(outside, 'utf8')).toBe('untouched');
-  });
-
-  it('resolves find with exact zero-model only on explicit match, models single candidate under ambiguity, and flags coverage_limited above 32', async () => {
-    const modeSpy = jest.spyOn(jevModelManager, 'getActiveMode').mockReturnValue('remote');
-    const querySpy = jest.spyOn(JevClientWrapper.prototype, 'query');
-    try {
-      await store.propose(definition());
-      await store.validate('example-search');
-
-      // 1. Single candidate with explicit keyword match -> zero model
-      querySpy.mockClear();
-      const exactMatch = await store.find('https://example.com/', 'documentation');
-      expect(exactMatch).toHaveLength(1);
-      expect(exactMatch[0].id).toBe('example-search');
-      expect(exactMatch[0].diagnostics).toMatchObject({ strategy: 'exact', status: 'exact' });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      // 2. Single candidate with ambiguous/unmatched intent -> calls model, none yields empty array
-      querySpy.mockClear();
-      querySpy.mockResolvedValueOnce({
-        result: {
-          model: 'jev-test',
-          answers: {
-            matched_target: {
-              type: 'choice',
-              choice: 'none',
-              confidence: 0.95,
-              probabilities: { 'example-search': 0.05, none: 0.95 },
-            },
-          },
-        },
-        errorReason: 'network_error',
-      } as any);
-      const unmatchedSingle = await store.find('https://example.com/', 'book flight ticket');
-      expect(unmatchedSingle).toEqual([]);
-      expect(querySpy).toHaveBeenCalledTimes(1);
-
-      // 3. Add second candidate -> ambiguity
-      const def2 = definition();
-      def2.id = 'example-lookup';
-      def2.name = 'Example quick lookup';
-      def2.description = 'Quick keyword lookup without deep search';
-      def2.keywords = ['lookup', 'quick'];
-      await store.propose(def2);
-      await store.validate('example-lookup');
-      querySpy.mockClear();
-
-      // 3a. Model returns matched choice
-      querySpy.mockResolvedValueOnce({
-        result: {
-          model: 'jev-test',
-          answers: {
-            matched_target: {
-              type: 'choice',
-              choice: 'example-lookup',
-              confidence: 0.95,
-              probabilities: { 'example-search': 0.04, 'example-lookup': 0.95, none: 0.01 },
-            },
-          },
-        },
-        errorReason: 'network_error',
-      } as any);
-      const semanticMatched = await store.find('https://example.com/', 'look up fast');
-      expect(Array.isArray(semanticMatched)).toBe(true);
-      expect(semanticMatched[0].id).toBe('example-lookup');
-      expect(semanticMatched[0].diagnostics).toMatchObject({
-        strategy: 'semantic',
-        status: 'matched',
-        matchedId: 'example-lookup',
-      });
-      expect(querySpy).toHaveBeenCalledTimes(1);
-
-      // 3b. Model returns none -> returns empty array
-      querySpy.mockClear();
-      querySpy.mockResolvedValueOnce({
-        result: {
-          model: 'jev-test',
-          answers: {
-            matched_target: {
-              type: 'choice',
-              choice: 'none',
-              confidence: 0.98,
-              probabilities: { 'example-search': 0.01, 'example-lookup': 0.01, none: 0.98 },
-            },
-          },
-        },
-        errorReason: 'network_error',
-      } as any);
-      const noneResult = await store.find('https://example.com/', 'completely unrelated target');
-      expect(noneResult).toEqual([]);
-
-      // 4. Over 32 candidates -> do not slice to model; fallback to keyword and flag coverage_limited
-      querySpy.mockClear();
-      for (let i = 1; i <= 32; i++) {
-        const extraDef = definition();
-        extraDef.id = `extra-skill-${i}`;
-        extraDef.name = `Extra Skill ${i}`;
-        extraDef.keywords = [`kw${i}`];
-        await store.propose(extraDef);
-        await store.validate(extraDef.id);
-      }
-      querySpy.mockClear();
-      const overLimitResult = await store.find('https://example.com/', 'ambiguous search intent');
-      expect(overLimitResult.length).toBeLessThanOrEqual(3);
-      expect(overLimitResult[0].diagnostics).toMatchObject({
-        strategy: 'keyword',
-        status: 'unavailable',
-        reason: 'coverage_limited',
-      });
-      expect(querySpy).not.toHaveBeenCalled();
-
-      // 5. Invalid URL throws explicitly without silent fallback
-      await expect(store.find('not-a-valid-url', 'search')).rejects.toThrow();
-
-      // 6. Cancelled find throws explicitly, does not return keyword list
-      const abortCtrl = new AbortController();
-      abortCtrl.abort();
-      await expect(
-        store.find('https://example.com/', 'ambiguous search', { signal: abortCtrl.signal }),
-      ).rejects.toThrow(/cancelled/i);
-    } finally {
-      querySpy.mockRestore();
-      modeSpy.mockRestore();
-    }
   });
 
   it('enforces optional version and definitionHash pins on skill run with hash in summary', async () => {

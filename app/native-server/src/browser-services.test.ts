@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import { createBrowserServices } from './browser-services';
 import { BrowserSkillStore } from './browser-skills';
 import { createDomExtractionStep, DOM_EXTRACTION_OUTPUT_SCHEMA } from './skill-read-program';

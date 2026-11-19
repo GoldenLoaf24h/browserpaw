@@ -26,6 +26,7 @@ interface FileUploadToolParams {
   base64Data?: string; // Base64 encoded file data
   fileName?: string; // Optional filename when using base64 or URL
   multiple?: boolean; // Whether to allow multiple files
+  filePaths?: string[];
   tabId?: number; // Target existing tab id
   frameId?: number; // Explicit frame containing the file input
   windowId?: number; // When no tabId, pick active tab from this window
@@ -120,7 +121,7 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
       );
     }
 
-    if (!filePath && !fileUrl && !base64Data) {
+    if (!filePath && !fileUrl && !base64Data && !args.filePaths?.length) {
       return createErrorResponse('One of filePath, fileUrl, or base64Data must be provided');
     }
 
@@ -145,7 +146,9 @@ export class FileUploadTool extends BaseBrowserToolExecutor {
       // Prepare file paths
       let files: string[] = [];
 
-      if (filePath) {
+      if (args.filePaths?.length) {
+        files = args.filePaths;
+      } else if (filePath) {
         // Direct file path provided
         files = [filePath];
       } else if (fileUrl || base64Data) {

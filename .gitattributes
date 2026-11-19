@@ -2,4 +2,4 @@
 
 skills/** text eol=lf
 plugins/**/skills/** text eol=lf
-plugins/browserpaw-hermes/skill-template/** text eol=lf
+app/native-server/src/scripts/run_host.bat text eol=crlf

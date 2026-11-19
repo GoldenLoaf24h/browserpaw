@@ -1,7 +1,7 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
+import { validator } from './schema-validation';
 import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import {
   BrowserTaskManager,
@@ -10,7 +10,6 @@ import {
   type BrowserCall,
 } from './browser-tasks';
 import { BrowserSkillStore, type SkillDefinition } from './browser-skills';
-import { clearSemanticTask } from './jev/semantic-match';
 
 function resolveBundledRecipesDir(): string {
   const candidates = [
@@ -24,7 +23,6 @@ function resolveBundledRecipesDir(): string {
 }
 
 export function createBrowserServices(call: BrowserCall, storageDir?: string) {
-  const validator = new AjvJsonSchemaValidator();
   const tasks = new BrowserTaskManager({ call, storageDir });
   const requireTask = async (
     action: string,
@@ -33,8 +31,6 @@ export function createBrowserServices(call: BrowserCall, storageDir?: string) {
     signal?: AbortSignal,
   ) => {
     const result = await tasks.execute({ action, ...args }, sessionId, signal);
-    if (['finish', 'cancel'].includes(action) && typeof args.taskId === 'string')
-      clearSemanticTask(args.taskId);
     if (!result.ok || !result.task) {
       const { content, ...state } = result;
       throw Object.assign(new Error(result.error || 'Task operation returned no task'), state, {
@@ -79,8 +75,6 @@ export function createBrowserServices(call: BrowserCall, storageDir?: string) {
     let value: unknown;
     if (name === 'chrome_task') {
       const taskResult = await tasks.execute(args, sessionId, signal);
-      if (['finish', 'cancel'].includes(String(args.action)) && typeof args.taskId === 'string')
-        clearSemanticTask(args.taskId);
       if (!taskResult.ok) {
         const { content, ...state } = taskResult;
         return withStructuredPayload(content ? { content } : undefined, state);

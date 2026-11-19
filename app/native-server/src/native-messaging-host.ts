@@ -1,12 +1,10 @@
 import { stdin, stdout } from 'process';
-import { Server } from './server';
-import { v4 as uuidv4 } from 'uuid';
+import type { Server } from './server';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import { NativeMessageType } from 'chrome-mcp-shared';
-import { TIMEOUTS, getChromeMcpPort } from './constant';
+import { TIMEOUTS, getBrowserPawPort } from './constant';
 import fileHandler from './file-handler';
 import { getBridgeToken } from './server/token';
-import { matchSemanticTarget } from './jev/semantic-match';
-import { jevModelManager } from './server/jev-model-manager';
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -15,8 +13,6 @@ interface PendingRequest {
 }
 
 export class NativeMessagingHost {
-  private semanticRequests = new Map<string, AbortController>();
-  private stopModeNotifications?: () => void;
   private associatedServer: Server | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private incomingChunks: Map<
@@ -32,10 +28,6 @@ export class NativeMessagingHost {
   // add message handler to wait for start server
   public start(): void {
     try {
-      this.stopModeNotifications?.();
-      this.stopModeNotifications = jevModelManager.onModeStateChanged((state) => {
-        this.sendMessage({ type: 'jev_mode_state', payload: state });
-      });
       this.setupMessageHandling();
     } catch (error: any) {
       process.exit(1);
@@ -198,8 +190,7 @@ export class NativeMessagingHost {
           // An explicit extension port wins; otherwise honor the same
           // environment configuration (CHROME_MCP_PORT > MCP_HTTP_PORT) that
           // HTTP-only clients resolve.
-          await this.startServer(message.payload?.port || getChromeMcpPort());
-          this.sendMessage({ type: 'jev_mode_state', payload: jevModelManager.getModeState() });
+          await this.startServer(getBrowserPawPort());
           break;
         case NativeMessageType.STOP:
           await this.stopServer();
@@ -211,27 +202,14 @@ export class NativeMessagingHost {
         case 'file_operation':
           await this.handleFileOperation(message);
           break;
-        case 'jev_semantic_match':
-          await this.handleJevSemanticMatch(message);
-          break;
-        case 'cancel_jev_semantic_match':
-          this.semanticRequests
-            .get(message.requestId)
-            ?.abort(
-              message.payload?.reason === 'timeout'
-                ? new DOMException('Semantic request deadline exceeded', 'TimeoutError')
-                : undefined,
-            );
-          break;
         case 'get_server_info':
         case 'get_token':
-          this.sendMessage({ type: 'jev_mode_state', payload: jevModelManager.getModeState() });
           this.sendMessage({
             type: 'server_info_response',
             responseToRequestId: message.requestId,
             payload: {
               isRunning: this.associatedServer?.isRunning ?? false,
-              port: (this.associatedServer as any)?.port || 12306,
+              port: this.associatedServer?.port ?? getBrowserPawPort(),
               token: getBridgeToken(),
             },
           });
@@ -285,26 +263,6 @@ export class NativeMessagingHost {
       } else {
         this.sendError(`File operation failed: ${errorResponse.error}`);
       }
-    }
-  }
-
-  /**
-   * Handle Jev semantic matching requests from the extension (for form pipeline)
-   */
-  private async handleJevSemanticMatch(message: any): Promise<void> {
-    if (typeof message.requestId !== 'string' || this.semanticRequests.has(message.requestId))
-      return;
-    const controller = new AbortController();
-    this.semanticRequests.set(message.requestId, controller);
-    try {
-      const result = await matchSemanticTarget(message.payload, controller.signal);
-      this.sendMessage({
-        type: 'file_operation_response',
-        responseToRequestId: message.requestId,
-        payload: result,
-      });
-    } finally {
-      this.semanticRequests.delete(message.requestId);
     }
   }
 
@@ -420,7 +378,7 @@ export class NativeMessagingHost {
       if (this.associatedServer.isRunning) {
         this.sendMessage({
           type: NativeMessageType.SERVER_STARTED,
-          payload: { port, token: getBridgeToken() },
+          payload: { port: this.associatedServer.port, token: getBridgeToken() },
         });
         return;
       }
@@ -429,7 +387,7 @@ export class NativeMessagingHost {
 
       this.sendMessage({
         type: NativeMessageType.SERVER_STARTED,
-        payload: { port, token: getBridgeToken() },
+        payload: { port: this.associatedServer.port, token: getBridgeToken() },
       });
     } catch (error: any) {
       this.sendError(`Failed to start server: ${error.message}`);
@@ -587,15 +545,15 @@ export class NativeMessagingHost {
    * Clean up resources
    */
   private cleanup(): void {
-    this.stopModeNotifications?.();
-    this.stopModeNotifications = undefined;
-    for (const controller of this.semanticRequests.values()) controller.abort();
-    this.semanticRequests.clear();
     this.isConnected = false;
     // Reject all pending requests
     this.pendingRequests.forEach((pending) => {
       clearTimeout(pending.timeoutId);
-      pending.reject(new Error('Native host is shutting down or Chrome disconnected.'));
+      pending.reject(
+        Object.assign(new Error('Native host is shutting down or Chrome disconnected.'), {
+          requestDispatched: true,
+        }),
+      );
     });
     this.pendingRequests.clear();
     this.incomingChunks.forEach((record) => clearTimeout(record.timer));

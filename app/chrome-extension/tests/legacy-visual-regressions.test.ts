@@ -487,13 +487,6 @@ describe('Visual Drift & Coordinate Precision Verification Suite', () => {
   });
 
   describe('5. Tool Schemas Alignment for Pure Visual & Coordinate Operations', () => {
-    it('verifies chrome_computer schema contains autoSnap boolean parameter', () => {
-      const tool = TOOL_SCHEMAS.find((t: any) => t.name === TOOL_NAMES.BROWSER.COMPUTER);
-      assert.ok(tool);
-      assert.ok(tool.inputSchema.properties.autoSnap, 'autoSnap must exist in chrome_computer');
-      assert.strictEqual(tool.inputSchema.properties.autoSnap.type, 'boolean');
-    });
-
     it('verifies chrome_interact_index schema contains autoSnap boolean parameter', () => {
       const tool = TOOL_SCHEMAS.find((t: any) => t.name === TOOL_NAMES.BROWSER.INTERACT_INDEX);
       assert.ok(tool);
@@ -902,20 +895,12 @@ describe('Visual Drift & Coordinate Precision Verification Suite', () => {
       assert.strictEqual(result.y, 540, 'Y must scale to 50% of 1080 = 540');
     });
 
-    it('chrome_screenshot and chrome_computer schemas accept visual drift parameters', () => {
+    it('screenshot schema accepts visual drift parameters', () => {
       const screenshotSchema = TOOL_SCHEMAS.find((t: any) => t.name === 'chrome_screenshot');
       assert.ok(screenshotSchema);
       const sProps = screenshotSchema.inputSchema.properties;
       assert.ok(sProps.highClarity, 'highClarity must be in chrome_screenshot');
       assert.ok(sProps.grid, 'grid must be in chrome_screenshot');
-
-      const computerSchema = TOOL_SCHEMAS.find((t: any) => t.name === 'chrome_computer');
-      assert.ok(computerSchema);
-      const cProps = computerSchema.inputSchema.properties;
-      assert.ok(cProps.highClarity, 'highClarity must be in chrome_computer');
-      assert.ok(cProps.grid, 'grid must be in chrome_computer');
-      assert.ok(cProps.crop, 'crop must be in chrome_computer');
-      assert.ok(cProps.region, 'region must be in chrome_computer');
     });
   });
 });

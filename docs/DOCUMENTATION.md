@@ -13,7 +13,7 @@ Use [docs/README.md](./README.md) to find documentation. Update an existing owne
 | This document                               | Repository layout, documentation lifecycle and translations                           |
 | [RELEASING](./releases/RELEASING.md)        | Release preparation, template, attachments and publication                            |
 | [DEVELOPMENT](./development/DEVELOPMENT.md) | Current work and cross-layer implementation checklists                                |
-| [TOOLS](./TOOLS.md)                         | Generated reference; source contracts live in `packages/shared/src/tools.ts`          |
+| [TOOLS](./COMMANDS.md)                      | Generated reference; source contracts live in `packages/shared/src/tools.ts`          |
 
 Task instructions take precedence over repository guidance. Deeper AGENTS files apply within their directory, not to unrelated packages. Historical reports and external checkouts are evidence, not developer instructions. If two active documents conflict, consult the owner above and correct the duplicate.
 
@@ -43,7 +43,7 @@ Do not move working source packages merely to make the tree look cleaner. A move
 ## Active, generated and archived documents
 
 - Active documentation describes current behavior and supported commands. Link new documents from the relevant hub; keep local links valid and exclude links to ephemeral `.artifacts/` paths.
-- `docs/TOOLS.md` comes from `node scripts/gen-tools-doc.mjs`. Static skill mirrors come from `node scripts/sync-skills.mjs`; edit their canonical sources.
+- `docs/COMMANDS.md` comes from `node scripts/gen-tools-doc.mjs`. Static skill mirrors come from `node scripts/sync-skills.mjs`; edit their canonical sources.
 - Generated AGENTS files are directory navigation plus package guidance. Put maintained local rules under the exact `## Manual Notes` heading so regeneration preserves them. Use targeted regeneration, such as `node scripts/generate-agents-docs.mjs docs`; a new folder does not need another AGENTS file unless its rules differ.
 - Archive completed records with their context and date under the [archive index](./archive/README.md). Preserve content; update active inbound links or leave a deliberate pointer. Historical paths inside frozen records are not current navigation.
 - Keep archive index links valid. Do not rewrite old release claims to match today's implementation. The version ledger distinguishes published tags from local drafts.

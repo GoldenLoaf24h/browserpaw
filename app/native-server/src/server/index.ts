@@ -1,977 +1,206 @@
-/**
- * HTTP Server - Core server implementation.
- *
- * Responsibilities:
- * - Fastify instance management
- * - Plugin registration (CORS, etc.)
- * - Route delegation to specialized modules
- * - MCP transport handling
- * - Server lifecycle management
- */
-import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import cors from '@fastify/cors';
-import {
-  NATIVE_SERVER_PORT,
-  TIMEOUTS,
-  SERVER_CONFIG,
-  HTTP_STATUS,
-  ERROR_MESSAGES,
-  getAllowedExtensionIds,
-} from '../constant';
-import { NativeMessagingHost } from '../native-messaging-host';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { randomUUID } from 'node:crypto';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { mcpSessionManager } from '../mcp/session-manager';
-import { handleToolCall } from '../mcp/register-tools';
-import { NativeMessageType } from 'chrome-mcp-shared';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { writeFile, rename, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parseCommand, CURRENT_VERSION } from 'chrome-mcp-shared';
+import type { NativeMessagingHost } from '../native-messaging-host';
+import { CommandError, dispatchCommand } from '../command-dispatch';
+import { tryParseCallResult } from '../browser-tasks';
+import { initializeBridgeToken, isValidBridgeToken, TOKEN_DIR } from './token';
 
-import { initializeBridgeToken, getBridgeToken, isValidBridgeToken } from './token';
-import { jevModelManager, JevMode } from './jev-model-manager';
-export { getBridgeToken, isValidBridgeToken, jevModelManager };
+export { getBridgeToken, isValidBridgeToken } from './token';
 
-export function safeWriteError(
-  reply: FastifyReply,
-  statusCode: number,
-  payload: Record<string, unknown> | string,
-): void {
-  const raw = reply.raw;
-  if (raw.writableEnded || raw.destroyed) {
-    return;
-  }
-  if (raw.headersSent) {
-    try {
-      raw.end();
-    } catch {
-      // Socket already closed
-    }
-    return;
+function send(reply: ServerResponse, code: number, payload: unknown) {
+  if (reply.destroyed || reply.writableEnded) return;
+  reply.writeHead(code, { 'content-type': 'application/json' });
+  reply.end(JSON.stringify(payload));
+}
+
+async function body(request: IncomingMessage) {
+  const max = 8 * 1024 * 1024;
+  if (Number(request.headers['content-length']) > max)
+    throw new CommandError('Request body is too large.');
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > max) throw new CommandError('Request body is too large.');
+    chunks.push(chunk);
   }
   try {
-    const body =
-      typeof payload === 'string' ? JSON.stringify({ error: payload }) : JSON.stringify(payload);
-    raw.writeHead(statusCode, {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body),
-    });
-    raw.end(body);
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+    return value as Record<string, unknown>;
   } catch {
-    // Ignore network drop
+    throw new CommandError('Expected a JSON request object.');
   }
 }
-
-// ============================================================
-// Types
-// ============================================================
-
-interface ExtensionRequestPayload {
-  data?: unknown;
-}
-
-import { MediaAssetEntry, mediaAssetStore } from '../media-asset-store';
-export { MediaAssetEntry, mediaAssetStore };
-
-// ============================================================
-// Server Class
-// ============================================================
 
 export class Server {
-  private fastify: FastifyInstance;
-  public isRunning = false;
-  private startPromise: Promise<void> | null = null;
-  private nativeHost: NativeMessagingHost | null = null;
-
-  constructor() {
-    this.fastify = Fastify({ logger: SERVER_CONFIG.LOGGER_ENABLED });
-    this.setupPlugins();
-    this.setupRoutes();
-  }
-
-  /**
-   * Associate NativeMessagingHost instance.
-   */
-  public setNativeHost(nativeHost: NativeMessagingHost): void {
-    this.nativeHost = nativeHost;
-  }
-
-  private setupPlugins(): void {
-    this.fastify.register(cors, {
-      origin: (origin, cb) => {
-        // Allow requests with no origin (e.g., curl, server-to-server)
-        if (!origin) {
-          return cb(null, true);
-        }
-        try {
-          const parsed = new URL(origin);
-          // Strict matching for browser extension origins
-          if (parsed.protocol === 'chrome-extension:') {
-            const extId = parsed.hostname.toLowerCase();
-            const allowedIds = getAllowedExtensionIds().map((id) => id.toLowerCase());
-            if (allowedIds.includes(extId)) {
-              return cb(null, true);
-            }
-            return cb(null, false);
-          }
-        } catch {
-          return cb(null, false);
-        }
-        return cb(null, false);
-      },
-      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      credentials: true,
+  private host: NativeMessagingHost | null = null;
+  private starting?: Promise<void>;
+  private readonly requests = new Map<string, AbortController>();
+  private readonly context = new Set<string>();
+  private readonly discoveryPath = join(TOKEN_DIR, 'host.json');
+  private readonly server = createServer((request, reply) => {
+    void this.dispatch(request, reply).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof CommandError) send(reply, 400, { code: error.code, message });
+      else send(reply, 500, { code: 'command_failed', message });
     });
+  });
 
-    // Global preHandler hook for Fastify 12306 token authorization
-    this.fastify.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
-      // 1. Allow CORS preflight requests
-      if (request.method === 'OPTIONS') {
-        return;
-      }
+  get isRunning() {
+    return this.server.listening;
+  }
 
-      // 1.1 Capability exemption: /media-asset/* allows cross-origin browser asset streaming
-      const pathOnly = (request.raw.url || request.url || '').split('?')[0];
-      const isMediaAsset = pathOnly.startsWith('/media-asset/');
+  get port() {
+    const address = this.server.address();
+    return address && typeof address !== 'string' ? address.port : undefined;
+  }
 
-      // Strict Host header validation using Fastify's robust parsed hostname: Disallow DNS rebinding / host spoofing
-      const host = (request.hostname || '').toLowerCase();
-      const configuredHost = SERVER_CONFIG.HOST.toLowerCase();
-      if (
-        host &&
-        host !== '127.0.0.1' &&
-        host !== 'localhost' &&
-        host !== '::1' &&
-        host !== '[::1]' &&
-        host !== configuredHost
-      ) {
-        return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-          error: 'Forbidden: Invalid or untrusted Host header',
+  setNativeHost(host: NativeMessagingHost) {
+    this.host = host;
+  }
+
+  async start(port: number, host: NativeMessagingHost): Promise<void> {
+    if (this.isRunning) return;
+    if (this.starting) return this.starting;
+    this.host = host;
+    this.starting = (async () => {
+      await initializeBridgeToken();
+      await new Promise<void>((resolve, reject) => {
+        this.server.once('error', reject);
+        this.server.listen(port, '127.0.0.1', () => {
+          this.server.removeListener('error', reject);
+          resolve();
         });
-      }
-
-      // Origin verification: Exact allowed chrome-extension:// origins or requests without Origin (CLI / stdio)
-      // Normal web origins are rejected across the board, EXCEPT for short-lived /media-asset/ capability URLs
-      const rawOrigin = request.headers['origin'];
-      if (rawOrigin && !isMediaAsset) {
-        try {
-          const parsedOrigin = new URL(rawOrigin);
-          // Origin must not carry arbitrary path, query, hash or userinfo
-          if (
-            (parsedOrigin.pathname !== '/' && parsedOrigin.pathname !== '') ||
-            parsedOrigin.search ||
-            parsedOrigin.hash ||
-            parsedOrigin.username ||
-            parsedOrigin.password
-          ) {
-            return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-              error: 'Forbidden: Malformed Origin header',
-            });
-          }
-          if (parsedOrigin.protocol === 'chrome-extension:') {
-            const extId = parsedOrigin.hostname.toLowerCase();
-            const allowedIds = getAllowedExtensionIds().map((id) => id.toLowerCase());
-            const exactExpected = `chrome-extension://${extId}`;
-            const normalizedRaw = rawOrigin.toLowerCase().replace(/\/$/, '');
-            if (!allowedIds.includes(extId) || normalizedRaw !== exactExpected) {
-              return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-                error: 'Forbidden: Extension origin not allowed',
-              });
-            }
-          } else {
-            // Reject normal web origins (including localhost / 127.0.0.1 webpages)
-            return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-              error: 'Forbidden: Web page Origin is not permitted to access this endpoint',
-            });
-          }
-        } catch {
-          return reply.status(HTTP_STATUS.FORBIDDEN || 403).send({
-            error: 'Forbidden: Invalid Origin header',
-          });
-        }
-      }
-
-      // 2. Allow health check endpoint (handshake), temporary media assets, and Jev model routes
-      if (
-        pathOnly === '/ping' ||
-        pathOnly.startsWith('/media-asset/') ||
-        pathOnly === '/jev/model-status' ||
-        (request.method === 'GET' && pathOnly === '/jev/mode-state') ||
-        pathOnly === '/jev/download-progress'
-      ) {
-        return;
-      }
-
-      // 2. Extract candidate token
-      let candidateToken: string | undefined;
-      const authHeader = request.headers['authorization'];
-      if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-        candidateToken = authHeader.slice(7).trim();
-      } else if (typeof request.headers['x-mcp-token'] === 'string') {
-        candidateToken = request.headers['x-mcp-token'].trim();
-      } else if (typeof (request.query as any)?.token === 'string') {
-        candidateToken = (request.query as any).token.trim();
-      }
-
-      if (candidateToken && isValidBridgeToken(candidateToken)) {
-        return;
-      }
-
-      return reply.status(HTTP_STATUS.UNAUTHORIZED || 401).send({
-        error: 'Unauthorized: Valid bridge token required. Provide Authorization: Bearer <token>',
       });
-    });
-  }
-
-  private setupRoutes(): void {
-    // Health check
-    this.setupHealthRoutes();
-
-    // Extension communication
-    this.setupExtensionRoutes();
-
-    // Jev model routes
-    this.setupJevRoutes();
-
-    // MCP routes
-    this.setupMcpRoutes();
-  }
-
-  // ============================================================
-  // Health Routes
-  // ============================================================
-
-  private setupHealthRoutes(): void {
-    this.fastify.get('/ping', async (_request: FastifyRequest, reply: FastifyReply) => {
-      reply.status(HTTP_STATUS.OK).send({
-        status: 'ok',
-        message: 'pong',
-      });
-    });
-  }
-
-  // ============================================================
-  // Extension Routes
-  // ============================================================
-
-  private setupExtensionRoutes(): void {
-    this.fastify.get(
-      '/ask-extension',
-      async (request: FastifyRequest<{ Body: ExtensionRequestPayload }>, reply: FastifyReply) => {
-        if (!this.nativeHost) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-        }
-        if (!this.isRunning) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING });
-        }
-
-        try {
-          const messageType = ((request.query as any)?.type as string) || 'process_data';
-          const extensionResponse = await this.nativeHost.sendRequestToExtensionAndWait(
-            request.query,
-            messageType,
-            TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
-          );
-          return reply.status(HTTP_STATUS.OK).send({ status: 'success', data: extensionResponse });
-        } catch (error: unknown) {
-          const err = error as Error;
-          if (err.message.includes('timed out')) {
-            return reply
-              .status(HTTP_STATUS.GATEWAY_TIMEOUT)
-              .send({ status: 'error', message: ERROR_MESSAGES.REQUEST_TIMEOUT });
-          } else {
-            return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-              status: 'error',
-              message: `Failed to get response from extension: ${err.message}`,
-            });
-          }
-        }
-      },
-    );
-
-    // GET /agent-control: Query current Agent Control switch status
-    this.fastify.get('/agent-control', async (_request: FastifyRequest, reply: FastifyReply) => {
-      if (!this.nativeHost) {
-        return reply
-          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-          .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-      }
-      if (!this.isRunning) {
-        return reply
-          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-          .send({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING });
-      }
-
+      const temporary = this.discoveryPath + '.' + process.pid + '.tmp';
       try {
-        const response = await this.nativeHost.sendRequestToExtensionAndWait(
-          {},
-          'get_agent_control',
-          TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
+        await writeFile(
+          temporary,
+          JSON.stringify({
+            port: this.port,
+            pid: process.pid,
+            version: CURRENT_VERSION,
+            protocol: 1,
+          }),
+          { flag: 'wx', mode: 0o600 },
         );
-        const enabled = response?.agentControlEnabled !== false;
-        return reply.status(HTTP_STATUS.OK).send({ status: 'success', enabled });
-      } catch (error: unknown) {
-        const err = error as Error;
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          status: 'error',
-          message: `Failed to query agent control: ${err.message}`,
-        });
-      }
-    });
-
-    // POST /agent-control: Update Agent Control switch status
-    this.fastify.post(
-      '/agent-control',
-      async (request: FastifyRequest<{ Body: { enabled?: unknown } }>, reply: FastifyReply) => {
-        if (!this.nativeHost) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-        }
-        if (!this.isRunning) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING });
-        }
-
-        try {
-          const raw = (request.body as any)?.enabled;
-          const enabled = raw === true || raw === 'true' || raw === 1 || raw === '1';
-          const response = await this.nativeHost.sendRequestToExtensionAndWait(
-            { enabled },
-            'set_agent_control',
-            TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
-          );
-          return reply.status(HTTP_STATUS.OK).send({
-            status: 'success',
-            enabled: response?.agentControlEnabled ?? enabled,
-          });
-        } catch (error: unknown) {
-          const err = error as Error;
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            status: 'error',
-            message: `Failed to set agent control: ${err.message}`,
-          });
-        }
-      },
-    );
-
-    // POST /reload-extension: Hot reload extension from disk
-    this.fastify.post(
-      '/reload-extension',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        if (!this.nativeHost) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-        }
-        try {
-          const response = await this.nativeHost.sendRequestToExtensionAndWait(
-            {},
-            'reload_extension',
-            TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
-          );
-          return reply.status(HTTP_STATUS.OK).send(response);
-        } catch (error: unknown) {
-          const err = error as Error;
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            status: 'error',
-            message: `Failed to reload extension: ${err.message}`,
-          });
-        }
-      },
-    );
-
-    // GET /media-asset/:assetId: Stream media asset for extension chrome_insert_media
-    this.fastify.get(
-      '/media-asset/:assetId',
-      async (request: FastifyRequest<{ Params: { assetId: string } }>, reply: FastifyReply) => {
-        // Capability URL: Allow browser cross-origin asset loading
-        reply.header('Access-Control-Allow-Origin', '*');
-        reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        const { assetId } = request.params;
-        const entry = mediaAssetStore.get(assetId);
-        if (!entry) {
-          return reply.status(404).send({ error: 'Media asset not found or expired' });
-        }
-        reply.header('Content-Type', entry.mimeType || 'application/octet-stream');
-        reply.header('Content-Disposition', `inline; filename="${entry.fileName}"`);
-        if (entry.buffer) {
-          return reply.send(entry.buffer);
-        }
-        if (entry.filePath) {
-          const fs = await import('fs');
-          return reply.send(fs.createReadStream(entry.filePath));
-        }
-        return reply.status(404).send({ error: 'No media content' });
-      },
-    );
-
-    // POST /eval and POST /execute-script: High-privilege script evaluation for local Hermes / scripts
-    const handleScriptEval = async (
-      request: FastifyRequest<{ Body: { script: string; tabId?: number; timeoutMs?: number } }>,
-      reply: FastifyReply,
-    ) => {
-      jevModelManager.onToolInvocation();
-      if (!this.nativeHost) {
-        return reply
-          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-          .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-      }
-      if (!this.isRunning) {
-        return reply
-          .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-          .send({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING });
-      }
-
-      const script = (request.body as any)?.script ?? (request.body as any)?.code;
-      if (!script || typeof script !== 'string') {
-        return reply
-          .status(HTTP_STATUS.BAD_REQUEST || 400)
-          .send({ error: 'script or code parameter is required in request body' });
-      }
-
-      try {
-        const timeoutMs = (request.body as any)?.timeoutMs || 30000;
-        const response = await this.nativeHost.sendRequestToExtensionAndWait(
-          {
-            name: 'chrome_javascript',
-            args: {
-              code: script,
-              script,
-              ...((request.body as any)?.tabId ? { tabId: (request.body as any).tabId } : {}),
-            },
-          },
-          NativeMessageType.CALL_TOOL,
-          timeoutMs,
-        );
-        return reply.status(HTTP_STATUS.OK).send({ status: 'success', data: response });
-      } catch (error: unknown) {
-        const err = error as Error;
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          status: 'error',
-          message: `Failed to evaluate script: ${err.message}`,
-        });
-      }
-    };
-
-    this.fastify.post('/eval', handleScriptEval);
-    this.fastify.post('/execute-script', handleScriptEval);
-
-    // POST /call-tool: Direct tool invocation through full MCP pipeline (supporting local Jev micro-loop)
-    const handleCallTool = async (
-      request: FastifyRequest<{ Body: { name: string; args?: any; timeoutMs?: number } }>,
-      reply: FastifyReply,
-    ) => {
-      const name = (request.body as any)?.name;
-      const args = (request.body as any)?.args || {};
-
-      if (!name || typeof name !== 'string') {
-        return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Tool name is required' });
-      }
-
-      try {
-        const response = await handleToolCall(name, args);
-        return reply.status(HTTP_STATUS.OK).send({ status: 'success', data: response });
-      } catch (error: any) {
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          status: 'error',
-          message: error?.message || 'Failed to call tool',
-        });
-      }
-    };
-
-    this.fastify.post('/call-tool', handleCallTool);
-  }
-
-  // ============================================================
-  // Jev Model Management & Routing Routes
-  // ============================================================
-
-  private setupJevRoutes(): void {
-    // GET /jev/model-status: Returns model downloaded state, disk path, active mode, and local service health
-    this.fastify.get('/jev/model-status', async (_request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const status = await jevModelManager.getStatus();
-        return reply.status(HTTP_STATUS.OK).send(status);
-      } catch (err: any) {
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          error: err?.message || 'Failed to query Jev model status',
-        });
-      }
-    });
-
-    // GET /jev/models: Returns list of installed local models and current active model
-    this.fastify.get('/jev/models', async (_request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const models = jevModelManager.listModels();
-        const activeModel = jevModelManager.getActiveModel();
-        return reply.status(HTTP_STATUS.OK).send({ models, activeModel });
-      } catch (err: any) {
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          error: err?.message || 'Failed to list models',
-        });
-      }
-    });
-
-    // POST /jev/select-model: Switches active local model
-    this.fastify.post(
-      '/jev/select-model',
-      async (request: FastifyRequest<{ Body: { model: string } }>, reply: FastifyReply) => {
-        const model = (request.body as any)?.model;
-        if (!model || typeof model !== 'string') {
-          return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Model name required' });
-        }
-        jevModelManager.setActiveModel(model);
-        mcpSessionManager.broadcastToolListChanged();
-        return reply
-          .status(HTTP_STATUS.OK)
-          .send({ success: true, activeModel: jevModelManager.getActiveModel() });
-      },
-    );
-
-    // POST /jev/delete-model: Deletes a local model directory and falls back to remaining
-    this.fastify.post(
-      '/jev/delete-model',
-      async (request: FastifyRequest<{ Body: { model: string } }>, reply: FastifyReply) => {
-        const model = (request.body as any)?.model;
-        if (!model || typeof model !== 'string') {
-          return reply.status(HTTP_STATUS.BAD_REQUEST).send({ error: 'Model name required' });
-        }
-        const res = await jevModelManager.deleteModel(model);
-        mcpSessionManager.broadcastToolListChanged();
-        return reply.status(HTTP_STATUS.OK).send(res);
-      },
-    );
-
-    // POST /jev/download-start: Triggers silent network probe and starts background streaming download
-    this.fastify.post(
-      '/jev/download-start',
-      async (
-        request: FastifyRequest<{ Body?: { customUrl?: string; url?: string; model?: string } }>,
-        reply: FastifyReply,
-      ) => {
-        try {
-          const custom =
-            (request.body as any)?.customUrl ||
-            (request.body as any)?.url ||
-            (request.body as any)?.model;
-          const result = jevModelManager.startDownload(custom);
-          return reply.status(HTTP_STATUS.OK).send(result);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            success: false,
-            message: err?.message || 'Failed to start Jev model download',
-          });
-        }
-      },
-    );
-
-    // GET /jev/download-progress: Returns live download progress, percentage, speed, and active file
-    this.fastify.get(
-      '/jev/download-progress',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        try {
-          const progress = jevModelManager.getProgress();
-          return reply.status(HTTP_STATUS.OK).send(progress);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            status: 'error',
-            error: err?.message || 'Failed to query download progress',
-          });
-        }
-      },
-    );
-
-    // POST /jev/download-cancel: Cancels active streaming download and resets state
-    this.fastify.post(
-      '/jev/download-cancel',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        try {
-          const result = jevModelManager.cancelDownload();
-          return reply.status(HTTP_STATUS.OK).send(result);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            success: false,
-            message: err?.message || 'Failed to cancel Jev model download',
-          });
-        }
-      },
-    );
-
-    // GET /jev/mode-state: Returns active mode, revision, disabled reason, and timestamp
-    this.fastify.get('/jev/mode-state', async (_request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const modeState = jevModelManager.getModeState();
-        return reply.status(HTTP_STATUS.OK).send(modeState);
-      } catch (err: any) {
-        return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-          error: err?.message || 'Failed to query Jev mode state',
-        });
-      }
-    });
-
-    // POST /jev/set-mode: Validates configuration and updates active in-memory routing mode
-    this.fastify.post(
-      '/jev/set-mode',
-      async (request: FastifyRequest<{ Body: { mode: JevMode } }>, reply: FastifyReply) => {
-        const mode = (request.body as any)?.mode;
-        if (mode !== 'off' && mode !== 'local' && mode !== 'remote') {
-          return reply.status(HTTP_STATUS.BAD_REQUEST).send({
-            error: 'Invalid Jev mode. Must be one of: "off", "local", "remote"',
-          });
-        }
-        const state = jevModelManager.setActiveMode(mode, undefined, { validate: true });
-        mcpSessionManager.broadcastToolListChanged();
-        return reply.status(HTTP_STATUS.OK).send({
-          success: true,
-          mode: state.activeMode,
-          modeState: state,
-        });
-      },
-    );
-
-    // POST /jev/service-start: Triggers model hot-load and starts background resident service
-    this.fastify.post(
-      '/jev/service-start',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        try {
-          const res = await jevModelManager.ensureLocalServiceRunning();
-          mcpSessionManager.broadcastToolListChanged();
-          return reply.status(HTTP_STATUS.OK).send(res);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            success: false,
-            message: err?.message || 'Failed to start local Jev service',
-          });
-        }
-      },
-    );
-
-    // POST /jev/service-stop: Stops local service and unloads model from GPU VRAM
-    this.fastify.post(
-      '/jev/service-stop',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        try {
-          const res = await jevModelManager.unloadLocalModel();
-          mcpSessionManager.broadcastToolListChanged();
-          return reply.status(HTTP_STATUS.OK).send(res);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            success: false,
-            message: err?.message || 'Failed to stop local Jev service',
-          });
-        }
-      },
-    );
-
-    // POST /jev/service-unload: Alias for service-stop
-    this.fastify.post(
-      '/jev/service-unload',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        try {
-          const res = await jevModelManager.unloadLocalModel();
-          mcpSessionManager.broadcastToolListChanged();
-          return reply.status(HTTP_STATUS.OK).send(res);
-        } catch (err: any) {
-          return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-            success: false,
-            message: err?.message || 'Failed to unload local Jev service',
-          });
-        }
-      },
-    );
-
-    // POST /jev/remote-config: Updates remote Jev configuration.
-    this.fastify.post(
-      '/jev/remote-config',
-      async (
-        request: FastifyRequest<{
-          Body: { baseUrl?: string; apiKey?: string; modelId?: string };
-        }>,
-        reply: FastifyReply,
-      ) => {
-        const body = request.body || {};
-        const updatePayload: {
-          baseUrl?: string;
-          apiKey?: string;
-          modelId?: string;
-        } = {};
-        if (body.baseUrl !== undefined) updatePayload.baseUrl = body.baseUrl;
-        if (body.modelId !== undefined) updatePayload.modelId = body.modelId;
-        // Don't overwrite existing API key if client omitted it, passed masked key, or passed empty string (preserve existing)
-        // Explicit clear requires explicit clearApiKey: true
-        if ((body as any).clearApiKey === true) {
-          updatePayload.apiKey = '';
-        } else if (
-          body.apiKey !== undefined &&
-          body.apiKey.trim().length > 0 &&
-          !body.apiKey.includes('...')
-        ) {
-          updatePayload.apiKey = body.apiKey.trim();
-        }
-        jevModelManager.setRemoteConfig(updatePayload);
-        mcpSessionManager.broadcastToolListChanged();
-        return reply.status(HTTP_STATUS.OK).send({
-          success: true,
-          remoteConfig: jevModelManager.getPublicRemoteConfig(),
-        });
-      },
-    );
-
-    // GET /jev/remote-config: Returns current remote Jev configuration and env detection
-    this.fastify.get(
-      '/jev/remote-config',
-      async (_request: FastifyRequest, reply: FastifyReply) => {
-        const config = jevModelManager.getRemoteConfig();
-        const envKey = (process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || '').trim();
-        const envKeySource = process.env.TYPESAFE_API_KEY
-          ? 'TYPESAFE_API_KEY'
-          : process.env.JEV_API_KEY
-            ? 'JEV_API_KEY'
-            : undefined;
-
-        const maskedApiKey = config.apiKey
-          ? config.apiKey.length > 8
-            ? `${config.apiKey.slice(0, 4)}...${config.apiKey.slice(-4)}`
-            : '********'
-          : '';
-
-        return reply.status(HTTP_STATUS.OK).send({
-          baseUrl: config.baseUrl || '',
-          modelId: config.modelId || 'jev-latest',
-          hasApiKey: Boolean(config.apiKey || envKey),
-          hasConfiguredApiKey: Boolean(config.apiKey),
-          hasEnvApiKey: Boolean(envKey),
-          envKeySource,
-        });
-      },
-    );
-  }
-
-  // ============================================================
-  // MCP Routes
-  // ============================================================
-
-  private setupMcpRoutes(): void {
-    // SSE endpoint
-    this.fastify.get('/sse', async (req, reply) => {
-      reply.hijack();
-      try {
-        const transport = new SSEServerTransport('/messages', reply.raw);
-        const { sessionId } = await mcpSessionManager.createSession(transport, transport.sessionId);
-        reply.raw.on('close', () => {
-          mcpSessionManager.closeSession(sessionId).catch(() => {});
-        });
-        req.raw.on('close', () => {
-          mcpSessionManager.closeSession(sessionId).catch(() => {});
-        });
+        await rename(temporary, this.discoveryPath);
       } catch (error) {
-        safeWriteError(
-          reply,
-          HTTP_STATUS.INTERNAL_SERVER_ERROR,
-          ERROR_MESSAGES.INTERNAL_SERVER_ERROR,
-        );
-      }
-    });
-
-    // SSE messages endpoint
-    this.fastify.post('/messages', async (req, reply) => {
-      reply.hijack();
-      try {
-        const { sessionId } = req.query as { sessionId?: string };
-        const session = sessionId ? mcpSessionManager.getSession(sessionId) : undefined;
-        const transport = session?.transport as SSEServerTransport | undefined;
-        if (!sessionId || !transport) {
-          safeWriteError(reply, HTTP_STATUS.BAD_REQUEST, 'No transport found for sessionId');
-          return;
-        }
-
-        await transport.handlePostMessage(req.raw, reply.raw, req.body);
-      } catch (error) {
-        safeWriteError(
-          reply,
-          HTTP_STATUS.INTERNAL_SERVER_ERROR,
-          ERROR_MESSAGES.INTERNAL_SERVER_ERROR,
-        );
-      }
-    });
-
-    // MCP POST endpoint
-    this.fastify.post('/mcp', async (request, reply) => {
-      reply.hijack();
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      const session = sessionId ? mcpSessionManager.getSession(sessionId) : undefined;
-      let transport: StreamableHTTPServerTransport | undefined = session?.transport as
-        StreamableHTTPServerTransport | undefined;
-
-      const body = request.body;
-      const isInit = Array.isArray(body)
-        ? body.some(isInitializeRequest)
-        : isInitializeRequest(body);
-
-      if (!transport && !sessionId && isInit) {
-        const newSessionId = randomUUID();
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => newSessionId,
-        });
-        await mcpSessionManager.createSession(transport, newSessionId);
-      } else if (!transport) {
-        const status = sessionId ? HTTP_STATUS.NOT_FOUND : HTTP_STATUS.BAD_REQUEST;
-        const message = sessionId
-          ? ERROR_MESSAGES.INVALID_SESSION_ID
-          : ERROR_MESSAGES.INVALID_MCP_REQUEST;
-        const hint = !sessionId
-          ? 'MCP 2024-11-05 Streamable HTTP transport requires an initialize handshake first, followed by passing the mcp-session-id header on subsequent requests.'
-          : 'The specified MCP session ID was not found or has expired. Please re-initialize.';
-        safeWriteError(reply, status, { error: message, hint });
-        return;
-      }
-
-      try {
-        await transport.handleRequest(request.raw, reply.raw, request.body);
-      } catch (error) {
-        safeWriteError(reply, HTTP_STATUS.INTERNAL_SERVER_ERROR, {
-          error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR,
-        });
-      }
-    });
-
-    // MCP GET endpoint (SSE stream)
-    this.fastify.get('/mcp', async (request, reply) => {
-      reply.hijack();
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      const session = sessionId ? mcpSessionManager.getSession(sessionId) : undefined;
-      const transport = session?.transport as StreamableHTTPServerTransport | undefined;
-
-      if (!transport) {
-        safeWriteError(reply, HTTP_STATUS.BAD_REQUEST, {
-          error: ERROR_MESSAGES.INVALID_SSE_SESSION,
-        });
-        return;
-      }
-
-      try {
-        await transport.handleRequest(request.raw, reply.raw);
-      } catch (error) {
-        if (!reply.raw.writableEnded) {
-          try {
-            reply.raw.end();
-          } catch {}
-        }
-      }
-
-      reply.raw.once('close', () => {
-        request.log.info(`SSE client disconnected for session: ${sessionId}`);
-        // Streamable HTTP transport: socket close only ends this SSE stream transport,
-        // the logical MCP session is kept alive until explicit DELETE or timeout.
-      });
-    });
-
-    // MCP DELETE endpoint
-    this.fastify.delete('/mcp', async (request, reply) => {
-      reply.hijack();
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      const session = sessionId ? mcpSessionManager.getSession(sessionId) : undefined;
-      const transport = session?.transport as StreamableHTTPServerTransport | undefined;
-
-      if (!transport) {
-        safeWriteError(reply, HTTP_STATUS.NOT_FOUND, { error: ERROR_MESSAGES.INVALID_SESSION_ID });
-        return;
-      }
-
-      try {
-        await transport.handleRequest(request.raw, reply.raw);
-        if (!reply.raw.writableEnded && !reply.raw.headersSent) {
-          reply.raw.writeHead(HTTP_STATUS.NO_CONTENT);
-          reply.raw.end();
-        } else if (!reply.raw.writableEnded) {
-          reply.raw.end();
-        }
-      } catch (error) {
-        safeWriteError(reply, HTTP_STATUS.INTERNAL_SERVER_ERROR, {
-          error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR,
-        });
+        await this.stop();
+        throw error;
       } finally {
-        if (sessionId) {
-          await mcpSessionManager.closeSession(sessionId);
-        }
-      }
-    });
-  }
-
-  // ============================================================
-  // Server Lifecycle
-  // ============================================================
-
-  public async start(port = NATIVE_SERVER_PORT, nativeHost: NativeMessagingHost): Promise<void> {
-    if (!this.nativeHost) {
-      this.nativeHost = nativeHost;
-    } else if (this.nativeHost !== nativeHost) {
-      this.nativeHost = nativeHost;
-    }
-
-    if (this.isRunning) {
-      return;
-    }
-    if (this.startPromise) return this.startPromise;
-
-    this.startPromise = (async () => {
-      try {
-        await initializeBridgeToken();
-
-        await this.fastify.listen({ port, host: SERVER_CONFIG.HOST });
-
-        // Set port environment variables after successful listen for Chrome MCP URL resolution
-        process.env.CHROME_MCP_PORT = String(port);
-        process.env.MCP_HTTP_PORT = String(port);
-
-        this.isRunning = true;
-
-        // Eager background warm-up of local Jev decider service if model is present and mode is local
-        if (jevModelManager.getActiveMode() === 'local' && jevModelManager.isModelDownloaded()) {
-          jevModelManager.ensureLocalServiceRunning().catch(() => {});
-        }
-      } catch (err) {
-        this.isRunning = false;
-        throw err;
+        await rm(temporary, { force: true });
       }
     })();
     try {
-      await this.startPromise;
+      await this.starting;
     } finally {
-      this.startPromise = null;
+      this.starting = undefined;
     }
   }
 
-  public async stop(): Promise<void> {
+  async stop(): Promise<void> {
+    for (const request of this.requests.values()) request.abort();
+    if (!this.server.listening) return;
+    await new Promise<void>((resolve, reject) => {
+      this.server.close((error) => (error ? reject(error) : resolve()));
+      this.server.closeAllConnections();
+    });
+  }
+
+  private async dispatch(request: IncomingMessage, reply: ServerResponse) {
+    const host = request.headers.host;
+    if (host !== `127.0.0.1:${this.port}` || request.headers.origin)
+      return send(reply, 403, { code: 'forbidden', message: 'Use the local BrowserPaw CLI.' });
+    if (request.method === 'GET' && request.url === '/ping')
+      return send(reply, 200, { status: 'ok' });
+    const token = request.headers['x-browserpaw-token'];
+    if (typeof token !== 'string' || !isValidBridgeToken(token))
+      return send(reply, 401, {
+        code: 'unauthorized',
+        message: 'Local BrowserPaw credentials are invalid.',
+      });
+
+    if (request.method === 'GET' && request.url === '/v1/status') {
+      const connected = this.host?.isConnected === true;
+      const extension = connected
+        ? tryParseCallResult(
+            await dispatchCommand(
+              { name: 'doctor', operands: [], options: {} },
+              AbortSignal.timeout(2500),
+            ),
+          )
+        : undefined;
+      return send(reply, 200, {
+        protocol: 1,
+        version: CURRENT_VERSION,
+        connected,
+        pid: process.pid,
+        port: this.port,
+        extension,
+      });
+    }
+    if (request.method !== 'POST') return send(reply, 404, { code: 'not_found' });
+    if (request.url === '/v1/restart') {
+      if (this.requests.size)
+        return send(reply, 409, { message: 'Browser commands are in flight.' });
+      const host = this.host;
+      if (!host?.isConnected)
+        return send(reply, 503, { message: 'Browser extension is disconnected.' });
+      reply.once('finish', () => {
+        void host
+          .sendRequestToExtensionAndWait({}, 'reload_extension', 2000)
+          .catch((error: unknown) => {
+            console.error('Extension reload was not acknowledged:', error);
+          });
+      });
+      return send(reply, 202, { reloadRequested: true });
+    }
+    if (request.url !== '/v1/run' && request.url !== '/v1/cancel')
+      return send(reply, 404, { code: 'not_found' });
+    const { requestId, argv, input } = await body(request);
+    if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/i.test(requestId))
+      throw new CommandError('Expected a valid request ID.');
+    if (request.url === '/v1/cancel') {
+      const controller = this.requests.get(requestId);
+      controller?.abort();
+      return send(reply, 200, { cancelled: Boolean(controller) });
+    }
+    if (!Array.isArray(argv) || !argv.length || argv.some((part) => typeof part !== 'string'))
+      throw new CommandError('Expected a CLI argument array.');
+    let command;
     try {
-      await mcpSessionManager.closeAllSessions();
-      if (this.fastify.server) {
-        if (typeof (this.fastify.server as any).closeAllConnections === 'function') {
-          (this.fastify.server as any).closeAllConnections();
-        }
-        if (typeof (this.fastify.server as any).closeIdleConnections === 'function') {
-          (this.fastify.server as any).closeIdleConnections();
-        }
-      }
-      if (this.isRunning || (this.fastify.server && (this.fastify.server as any).listening)) {
-        await this.fastify.close();
-      }
-      this.isRunning = false;
-    } catch (err) {
-      this.isRunning = false;
-      throw err;
+      command = parseCommand(argv);
+    } catch (error) {
+      throw new CommandError(error instanceof Error ? error.message : String(error));
     }
-  }
-
-  public getInstance(): FastifyInstance {
-    return this.fastify;
+    const key = command.options.task
+      ? `task:${command.options.task}`
+      : command.options.tab
+        ? `tab:${command.options.tab}`
+        : undefined;
+    if (this.requests.has(requestId) || (key && this.context.has(key)))
+      return send(reply, 409, {
+        code: 'busy',
+        message: 'A command is already running for this page or task.',
+      });
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    this.requests.set(requestId, controller);
+    if (key) this.context.add(key);
+    reply.once('close', abort);
+    try {
+      const result = await dispatchCommand(command, controller.signal, input);
+      send(reply, 200, { result });
+    } finally {
+      reply.removeListener('close', abort);
+      this.requests.delete(requestId);
+      if (key) this.context.delete(key);
+    }
   }
 }
 
-const serverInstance = new Server();
-export default serverInstance;
+export default new Server();

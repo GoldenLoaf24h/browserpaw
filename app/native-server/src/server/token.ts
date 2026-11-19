@@ -3,8 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
-export const TOKEN_DIR = path.join(os.homedir(), '.chrome-mcp');
-export const TOKEN_FILE = path.join(TOKEN_DIR, 'bridge-token');
+export const TOKEN_DIR = path.resolve(
+  process.env.BROWSERPAW_HOME || path.join(os.homedir(), '.browserpaw'),
+);
+export const TOKEN_FILE = path.join(TOKEN_DIR, 'token');
 
 const TOKEN_PATTERN = /^[0-9a-fA-F]{48}$|^[0-9a-fA-F]{64}$/;
 

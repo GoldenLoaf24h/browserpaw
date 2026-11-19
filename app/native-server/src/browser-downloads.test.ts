@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from 'chrome-mcp-shared';
 import type { DownloadObservation } from 'chrome-mcp-shared';
 import { BrowserTaskManager, type BrowserCall } from './browser-tasks';
 
