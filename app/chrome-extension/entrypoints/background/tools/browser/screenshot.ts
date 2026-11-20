@@ -1857,7 +1857,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
   }
 
   private async captureTabPng(tab: chrome.tabs.Tab): Promise<string> {
-    if (!tab.active && tab.id) {
+    let targetIsActive = tab.active === true;
+    if (targetIsActive && tab.id && tab.windowId !== undefined) {
+      if (typeof chrome.tabs.query === 'function') {
+        const activeTab = await chrome.tabs
+          .query({ active: true, windowId: tab.windowId })
+          .then((tabs) => tabs[0])
+          .catch(() => undefined);
+        targetIsActive = activeTab?.id === tab.id;
+      }
+    }
+    if (!targetIsActive && tab.id) {
       // For background tabs, captureVisibleTab would capture whatever tab is currently active
       // in the window, causing an active window data leak. Use CDP Page.captureScreenshot instead.
       const tabId = tab.id;

@@ -67,6 +67,7 @@ interface ConsoleResult {
   messageLimitReached: boolean;
   droppedMessageCount: number;
   droppedExceptionCount: number;
+  truncated: boolean;
 }
 
 // Helper functions
@@ -299,6 +300,10 @@ class ConsoleTool extends BaseBrowserToolExecutor {
           messageLimitReached: read.messageLimitReached,
           droppedMessageCount: read.droppedMessageCount,
           droppedExceptionCount: read.droppedExceptionCount,
+          truncated:
+            read.messageLimitReached ||
+            read.droppedMessageCount > 0 ||
+            read.droppedExceptionCount > 0,
         };
 
         return {
@@ -453,6 +458,8 @@ class ConsoleTool extends BaseBrowserToolExecutor {
     const messages: ConsoleMessage[] = [];
     const exceptions: ConsoleException[] = [];
     let limitReached = false;
+    let droppedMessageCount = 0;
+    let droppedExceptionCount = 0;
 
     try {
       // Get tab information
@@ -469,7 +476,12 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         if (source.tabId !== tabId) return;
 
         if (method === 'Log.entryAdded' && params?.entry) {
-          collectedMessages.push(params.entry);
+          if (collectedMessages.length < maxMessages) {
+            collectedMessages.push(params.entry);
+          } else {
+            droppedMessageCount += 1;
+            limitReached = true;
+          }
         } else if (method === 'Runtime.consoleAPICalled' && params) {
           // Convert Runtime.consoleAPICalled to Log.entryAdded format
           const logEntry = {
@@ -482,13 +494,23 @@ class ConsoleTool extends BaseBrowserToolExecutor {
             stackTrace: params.stackTrace,
             args: params.args,
           };
-          collectedMessages.push(logEntry);
+          if (collectedMessages.length < maxMessages) {
+            collectedMessages.push(logEntry);
+          } else {
+            droppedMessageCount += 1;
+            limitReached = true;
+          }
         } else if (
           method === 'Runtime.exceptionThrown' &&
           includeExceptions &&
           params?.exceptionDetails
         ) {
-          collectedExceptions.push(params.exceptionDetails);
+          if (collectedExceptions.length < maxMessages) {
+            collectedExceptions.push(params.exceptionDetails);
+          } else {
+            droppedExceptionCount += 1;
+            limitReached = true;
+          }
         }
       };
 
@@ -682,8 +704,9 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         messageCount: messages.length,
         exceptionCount: exceptions.length,
         messageLimitReached: limitReached,
-        droppedMessageCount: 0,
-        droppedExceptionCount: 0,
+        droppedMessageCount,
+        droppedExceptionCount,
+        truncated: limitReached,
       };
     } catch (error: any) {
       console.error(`ConsoleTool: Error capturing console messages for tab ${tabId}:`, error);

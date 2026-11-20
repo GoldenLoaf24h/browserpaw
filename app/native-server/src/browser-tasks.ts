@@ -143,13 +143,28 @@ export interface BrowserTaskInventory {
   downloads: Array<DownloadObservation & { browserInstanceId: string }>;
 }
 
+export interface BrowserTaskSummary {
+  id: string;
+  name: string;
+  goal?: string;
+  status: TaskStatus;
+  currentTabId?: number;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt?: number;
+  cancelledAt?: number;
+  pageCount: number;
+  downloadCount: number;
+  pendingCreationCount?: number;
+}
+
 export interface BrowserTaskResult {
   ok: boolean;
   action: string;
   message?: string;
   error?: string;
   task?: BrowserTaskInventory;
-  tasks?: BrowserTaskInventory[];
+  tasks?: BrowserTaskSummary[];
   dispatched?: boolean;
   completedActions?: number;
   created?: BrowserTaskPageInventory;
@@ -651,6 +666,25 @@ function taskInventory(task: BrowserTask): BrowserTaskInventory {
   };
 }
 
+function taskSummary(task: BrowserTask): BrowserTaskSummary {
+  return {
+    id: task.id,
+    name: task.name,
+    ...(task.goal ? { goal: task.goal } : {}),
+    status: task.status,
+    ...(task.currentTabId !== undefined ? { currentTabId: task.currentTabId } : {}),
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}),
+    ...(task.cancelledAt !== undefined ? { cancelledAt: task.cancelledAt } : {}),
+    pageCount: task.pages.length,
+    downloadCount: task.downloads?.length ?? 0,
+    ...(task.pendingCreations.length > 0
+      ? { pendingCreationCount: task.pendingCreations.length }
+      : {}),
+  };
+}
+
 export class BrowserTaskManager {
   private readonly call: BrowserCall;
   private readonly ledgerFile: string;
@@ -695,7 +729,7 @@ export class BrowserTaskManager {
                 .filter(
                   (task) => !task.ownerSessionId || !sessionId || task.ownerSessionId === sessionId,
                 )
-                .map(taskInventory),
+                .map(taskSummary),
             };
           });
         case 'status':
@@ -2963,24 +2997,62 @@ export class BrowserTaskManager {
   }
 
   private async loadLedger(): Promise<void> {
+    let raw: string;
     try {
-      const raw = await fs.promises.readFile(this.ledgerFile, 'utf8');
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed) || parsed.version !== LEDGER_VERSION || !isRecord(parsed.tasks)) {
-        throw new Error(`Unsupported or corrupt task ledger: ${this.ledgerFile}`);
-      }
-      this.ledger = parsed as unknown as TaskLedger;
-      for (const task of Object.values(this.ledger.tasks)) {
-        if (!Array.isArray(task.pendingCreations)) task.pendingCreations = [];
-      }
+      raw = await fs.promises.readFile(this.ledgerFile, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       this.ledger = { version: LEDGER_VERSION, tasks: {} };
+      this.loaded = true;
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const timestamp = new Date().toISOString().replace(/\D/g, '');
+      const quarantine = `${this.ledgerFile}.corrupt.${timestamp}`;
+      await fs.promises.rename(this.ledgerFile, quarantine);
+      console.error(
+        `BrowserPaw task ledger was corrupt; quarantined it at ${quarantine} and started with an empty ledger.`,
+      );
+      this.ledger = { version: LEDGER_VERSION, tasks: {} };
+      this.loaded = true;
+      return;
+    }
+
+    if (!isRecord(parsed) || parsed.version !== LEDGER_VERSION || !isRecord(parsed.tasks)) {
+      throw new Error(`Unsupported or corrupt task ledger: ${this.ledgerFile}`);
+    }
+    this.ledger = parsed as unknown as TaskLedger;
+    for (const task of Object.values(this.ledger.tasks)) {
+      if (!Array.isArray(task.pendingCreations)) task.pendingCreations = [];
+    }
+    const pruned = this.pruneTerminalTasks();
+    if (pruned) {
+      await this.persist();
     }
     this.loaded = true;
   }
 
+  private pruneTerminalTasks(maxTerminalTasks = 30): boolean {
+    const terminal = Object.values(this.ledger.tasks)
+      .filter((task) => task.status === 'finished' || task.status === 'cancelled')
+      .sort(
+        (left, right) =>
+          (right.finishedAt ?? right.updatedAt ?? right.createdAt) -
+          (left.finishedAt ?? left.updatedAt ?? left.createdAt),
+      );
+    const stale = terminal.slice(maxTerminalTasks);
+    for (const item of stale) {
+      delete this.ledger.tasks[item.id];
+    }
+    return stale.length > 0;
+  }
+
   private async persist(): Promise<void> {
+    this.pruneTerminalTasks();
     await fs.promises.mkdir(path.dirname(this.ledgerFile), { recursive: true, mode: 0o700 });
     const tempFile = `${this.ledgerFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
     const body = `${JSON.stringify(this.ledger, null, 2)}\n`;

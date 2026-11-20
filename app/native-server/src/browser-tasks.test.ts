@@ -2762,7 +2762,7 @@ describe('BrowserTaskManager', () => {
       expect(recovered.task?.pendingCreations).toEqual([receipt]);
       const listed = await restarted.execute({ action: 'list' });
       expect(listed.tasks).toEqual([
-        expect.objectContaining({ id: task!.id, pendingCreations: [receipt] }),
+        expect.objectContaining({ id: task!.id, pendingCreationCount: 1 }),
       ]);
 
       const navigations = call.mock.calls.filter(([name]) => name === 'chrome_navigate').length;
@@ -3180,6 +3180,25 @@ describe('BrowserTaskManager', () => {
     expect(listed.tasks).toHaveLength(1);
     expect(status.task?.status).toBe('active');
     expect(call).not.toHaveBeenCalled();
+  });
+
+  it('quarantines a corrupt task ledger and keeps the task subsystem usable', async () => {
+    const storageDir = testDir('corrupt-ledger');
+    fs.writeFileSync(path.join(storageDir, 'tasks.json'), '{"version":1,"tasks":');
+    const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const manager = new BrowserTaskManager({ call: jest.fn<BrowserCall>(), storageDir });
+      expect((await manager.execute({ action: 'list' })).tasks).toEqual([]);
+      expect(
+        fs.readdirSync(storageDir).some((name) => name.startsWith('tasks.json.corrupt.')),
+      ).toBe(true);
+      expect((await manager.execute({ action: 'start', name: 'After recovery' })).ok).toBe(true);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringMatching(/task ledger was corrupt.*started with an empty ledger/),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('persists completed handoffs before a finish request is cancelled', async () => {
@@ -4392,4 +4411,136 @@ describe('BrowserTaskManager', () => {
       ).toBe(false);
     },
   );
+
+  it('prunes old terminal tasks while retaining active tasks and the most recent history', async () => {
+    const storageDir = testDir('prune-terminal');
+    const call = jest.fn<BrowserCall>();
+    const tasks: Record<string, Record<string, unknown>> = {
+      'active-1': {
+        id: 'active-1',
+        name: 'Active task',
+        status: 'active',
+        maxPages: 8,
+        createdAt: 1,
+        updatedAt: 1,
+        pages: [],
+        pendingCreations: [],
+      },
+    };
+    for (let i = 1; i <= 40; i++) {
+      tasks[`done-${i}`] = {
+        id: `done-${i}`,
+        name: `Done ${i}`,
+        status: i % 2 === 0 ? 'finished' : 'cancelled',
+        maxPages: 8,
+        createdAt: i * 10,
+        updatedAt: i * 10,
+        finishedAt: i * 10,
+        pages: [],
+        pendingCreations: [],
+      };
+    }
+    fs.writeFileSync(
+      path.join(storageDir, 'tasks.json'),
+      JSON.stringify({ version: 1, tasks }, null, 2),
+    );
+
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const listed = await manager.execute({ action: 'list' });
+    expect(listed.ok).toBe(true);
+    expect(listed.tasks).toHaveLength(31);
+    expect(listed.tasks?.some((item) => item.id === 'active-1')).toBe(true);
+    expect(listed.tasks?.some((item) => item.id === 'done-40')).toBe(true);
+    expect(listed.tasks?.some((item) => item.id === 'done-1')).toBe(false);
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(storageDir, 'tasks.json'), 'utf8'));
+    expect(Object.keys(persisted.tasks)).toHaveLength(31);
+    expect(persisted.tasks['active-1']).toBeDefined();
+    expect(persisted.tasks['done-40']).toBeDefined();
+    expect(persisted.tasks['done-1']).toBeUndefined();
+  });
+
+  it('returns compact summaries from list without page or download URLs while status keeps full details', async () => {
+    const storageDir = testDir('compact-list');
+    const call = jest.fn<BrowserCall>();
+    const secretPageUrl = 'https://auth.example.test/callback?code=secret-oauth-token-12345';
+    const secretDownloadUrl = 'https://files.example.test/export.csv?sig=secret-download-sig';
+    const secretPendingUrl = 'https://pending.example.test/launch?token=secret-pending-token';
+    fs.writeFileSync(
+      path.join(storageDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: {
+            'task-secret': {
+              id: 'task-secret',
+              name: 'Secret URL task',
+              status: 'active',
+              maxPages: 8,
+              currentTabId: 42,
+              createdAt: 100,
+              updatedAt: 200,
+              pages: [
+                {
+                  tabId: 42,
+                  url: secretPageUrl,
+                  documentId: 'doc-1',
+                  browserInstanceId: 'browser-1',
+                  ownership: 'owned',
+                  state: 'active',
+                  openedAt: 100,
+                  lastVerifiedAt: 200,
+                },
+              ],
+              pendingCreations: [
+                {
+                  requestedUrl: secretPendingUrl,
+                  createdAt: 150,
+                  reason: 'unconfirmed',
+                },
+              ],
+              downloads: [
+                {
+                  downloadId: 7,
+                  url: secretDownloadUrl,
+                  filename: 'export.csv',
+                  state: 'complete',
+                  browserInstanceId: 'browser-1',
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const listed = await manager.execute({ action: 'list' });
+    expect(listed.ok).toBe(true);
+    expect(listed.tasks).toEqual([
+      {
+        id: 'task-secret',
+        name: 'Secret URL task',
+        status: 'active',
+        currentTabId: 42,
+        createdAt: 100,
+        updatedAt: 200,
+        pageCount: 1,
+        downloadCount: 1,
+        pendingCreationCount: 1,
+      },
+    ]);
+    const serialized = JSON.stringify(listed);
+    expect(serialized).not.toContain('secret-oauth-token');
+    expect(serialized).not.toContain('secret-download-sig');
+    expect(serialized).not.toContain('secret-pending-token');
+
+    const status = await manager.execute({ action: 'status', taskId: 'task-secret' });
+    expect(status.ok).toBe(true);
+    expect(status.task?.pages[0]?.url).toBe(secretPageUrl);
+    expect(status.task?.downloads[0]?.url).toBe(secretDownloadUrl);
+    expect(status.task?.pendingCreations[0]?.requestedUrl).toBe(secretPendingUrl);
+  });
 });

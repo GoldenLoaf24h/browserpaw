@@ -8,7 +8,7 @@
     {
       "name": "browserpaw",
       "source": "./plugins/browserpaw-claude",
-      "description": "Control your own Chrome browser from Claude with navigation, DOM perception, form filling, screenshots, and autonomous on-page micro-loops, reusing existing logins, cookies, and extensions.",
+      "description": "Control your own Chrome or Chromium browser from Claude via the BrowserPaw v5 CLI, canonical Agent Skill, and ~/.browserpaw learned workflows while reusing existing logins and extensions.",
       "keywords": ["browser", "chrome", "automation", "cli", "agent", "cdp"]
     }
   ]

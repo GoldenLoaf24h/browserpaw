@@ -223,6 +223,8 @@ export function runCheck(options = {}) {
   const targetReleasesDir = options.releasesDir || path.join(root, 'docs', 'releases');
   const targetTemplate = options.templateFile || path.join(targetReleasesDir, 'TEMPLATE.md');
   const targetReleasing = options.releasingFile || path.join(targetReleasesDir, 'RELEASING.md');
+  const packageFile = path.join(root, 'package.json');
+  const ledgerFile = path.join(targetReleasesDir, 'README.md');
 
   const report = {
     valid: true,
@@ -232,6 +234,31 @@ export function runCheck(options = {}) {
     historicalReleasesSkipped: 0,
     errors: [],
   };
+  let version;
+  try {
+    version = JSON.parse(fs.readFileSync(packageFile, 'utf8')).version;
+  } catch (error) {
+    report.valid = false;
+    report.errors.push(`Unable to read root package version: ${error.message}`);
+  }
+  if (version) {
+    const releaseFile = `v${version}.md`;
+    if (!fs.existsSync(path.join(targetReleasesDir, releaseFile))) {
+      report.valid = false;
+      report.errors.push(`Root package version ${version} has no docs/releases/${releaseFile}`);
+    }
+    const ledger = fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile, 'utf8') : '';
+    const escapedReleaseFile = releaseFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ledgerLink = new RegExp(
+      `\\[[^\\]\\r\\n]+\\]\\((?:<)?(?:\\./)?${escapedReleaseFile}(?:#[^)>\\s]+)?>?\\)`,
+    );
+    if (!ledgerLink.test(ledger)) {
+      report.valid = false;
+      report.errors.push(
+        `docs/releases/README.md must link to ${releaseFile} for root package version ${version}`,
+      );
+    }
+  }
   if (!fs.existsSync(targetReleasing)) {
     report.valid = false;
     report.releasingDocExists = false;
@@ -298,6 +325,7 @@ if (isDirectRun) {
     console.log('✅ Release notes specification check passed:');
     console.log('   - docs/releases/RELEASING.md present');
     console.log('   - docs/releases/TEMPLATE.md valid');
+    console.log('   - docs/releases/README.md links the root package version');
     if (result.newReleasesChecked > 0) {
       console.log(`   - Verified ${result.newReleasesChecked} new release note(s)`);
     } else {

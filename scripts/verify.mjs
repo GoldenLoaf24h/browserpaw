@@ -20,6 +20,7 @@ export const REQUIRED_STEP_NAMES = Object.freeze([
   'root-script-tests',
   'extension-vitest',
   'native-jest',
+  'hermes-pytest',
   'build',
   'package-smoke',
   'validate-docs',
@@ -624,7 +625,59 @@ export async function executeSteps(root = repoRoot) {
       },
     );
 
-    // Step 10: Build without deployment env side-effects. The simulated E2E suite
+    recordStep(
+      'hermes-pytest',
+      'python -m pytest plugins/browserpaw-hermes/tests/test_plugin.py --junitxml=<tmp>',
+      () => {
+        const junitXmlPath = path.join(tempDir, 'pytest-junit.xml');
+        const python = process.env.PYTHON || 'python';
+        const probe = spawnSync(python, ['-c', 'import pytest'], {
+          cwd: root,
+          encoding: 'utf-8',
+        });
+        const useIsolatedPytest = needsIsolatedPytest(probe);
+        if (!useIsolatedPytest && (probe.error || probe.status !== 0)) {
+          throw new Error(
+            `Python pytest dependency check failed: ${probe.error?.message || probe.stdout + probe.stderr}`,
+          );
+        }
+        const res = useIsolatedPytest
+          ? spawnSync(
+              'uv',
+              [
+                'run',
+                '--with',
+                'pytest',
+                'pytest',
+                'plugins/browserpaw-hermes/tests/test_plugin.py',
+                `--junitxml=${junitXmlPath}`,
+              ],
+              { cwd: root, encoding: 'utf-8' },
+            )
+          : spawnSync(
+              python,
+              [
+                '-m',
+                'pytest',
+                'plugins/browserpaw-hermes/tests/test_plugin.py',
+                `--junitxml=${junitXmlPath}`,
+              ],
+              { cwd: root, encoding: 'utf-8' },
+            );
+        if (res.error) throw new Error(`Failed to spawn pytest: ${res.error.message}`);
+        if (res.status !== 0) {
+          throw new Error(`pytest exited with code ${res.status}: \n${res.stdout + res.stderr}`);
+        }
+        if (!fs.existsSync(junitXmlPath)) {
+          throw new Error('pytest succeeded with exit 0 but failed to produce JUnit XML');
+        }
+        const parsed = parsePytestJunit(fs.readFileSync(junitXmlPath, 'utf-8'));
+        testCounts.hermes = parsed;
+        return parsed;
+      },
+    );
+
+    // Step 11: Build without deployment env side-effects. The simulated E2E suite
     // validates the native distribution produced by this build.
     recordStep('build', 'pnpm build (clean env)', () => {
       const cleanEnv = { ...process.env };

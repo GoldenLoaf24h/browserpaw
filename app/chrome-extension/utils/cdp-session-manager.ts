@@ -728,10 +728,29 @@ class CDPSessionManager {
     await this.enableDomain(tabId, 'Network');
   }
 
-  async detach(tabId: number, owner: OwnerTag = 'unknown'): Promise<void> {
+  async detach(
+    tabId: number,
+    owner: OwnerTag = 'unknown',
+    timedOutOwner?: OwnerTag,
+  ): Promise<void> {
     return this.serializeTabOp(tabId, async () => {
       if (owner === 'timeout-guard') {
-        // Anti-hang guard: immediately detach physical debugger and clear session without refCount underflow
+        const state = this.getState(tabId);
+        if (!state) return;
+
+        if (timedOutOwner) {
+          const count = state.owners.get(timedOutOwner) || 0;
+          if (count > 0) {
+            if (count === 1) state.owners.delete(timedOutOwner);
+            else state.owners.set(timedOutOwner, count - 1);
+            state.refCount = Math.max(0, state.refCount - 1);
+          }
+        }
+
+        // Never steal a shared session from another active owner.
+        if (state.refCount > 0) return;
+
+        // Anti-hang guard: the timed-out caller was the last owner.
         this.bumpTabEpoch(tabId);
         this.clearFlightEnables(tabId);
         this.clearFrameSessions(tabId);

@@ -1,0 +1,456 @@
+{
+  "id": "npm-compare",
+  "name": "npm package comparison",
+  "description": "Compare two npm packages using official registry metadata and last-week download metrics.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://registry.npmjs.org/react/latest",
+      "https://api.npmjs.org/downloads/point/last-week/react",
+      "https://www.npmjs.com/package/react",
+      "https://github.com/npm/registry/blob/master/docs/REGISTRY-API.md",
+      "https://github.com/npm/registry/blob/master/docs/download-counts.md"
+    ]
+  },
+  "domains": [
+    "registry.npmjs.org",
+    "api.npmjs.org"
+  ],
+  "keywords": [
+    "npm",
+    "package",
+    "compare",
+    "version",
+    "downloads",
+    "capabilities"
+  ],
+  "startUrl": "https://registry.npmjs.org/{{left}}/latest",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "left": {
+        "type": "string",
+        "pattern": "^(@[a-z0-9][a-z0-9._-]{0,213}/)?[a-z0-9][a-z0-9._-]{0,213}$",
+        "maxLength": 214
+      },
+      "right": {
+        "type": "string",
+        "pattern": "^(@[a-z0-9][a-z0-9._-]{0,213}/)?[a-z0-9][a-z0-9._-]{0,213}$",
+        "maxLength": 214
+      }
+    },
+    "required": [
+      "left",
+      "right"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "left": {
+        "$ref": "#/definitions/packageMetric"
+      },
+      "right": {
+        "$ref": "#/definitions/packageMetric"
+      },
+      "leader": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right",
+          "tie"
+        ]
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "left": {
+            "type": "string",
+            "pattern": "^https://api\\.npmjs\\.org/downloads/point/last-week/"
+          },
+          "right": {
+            "type": "string",
+            "pattern": "^https://api\\.npmjs\\.org/downloads/point/last-week/"
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "left": {
+                "type": "string",
+                "pattern": "^https://registry\\.npmjs\\.org/"
+              },
+              "right": {
+                "type": "string",
+                "pattern": "^https://registry\\.npmjs\\.org/"
+              }
+            },
+            "required": [
+              "left",
+              "right"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "left",
+          "right",
+          "metadata"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "left",
+      "right",
+      "leader",
+      "sources"
+    ],
+    "additionalProperties": false,
+    "definitions": {
+      "packageMetric": {
+        "type": "object",
+        "properties": {
+          "package": {
+            "type": "string",
+            "minLength": 1
+          },
+          "downloads": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "latestVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "license": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repository": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^https?://"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "engines": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "start": {
+            "type": "string",
+            "minLength": 1
+          },
+          "end": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^https://api\\.npmjs\\.org/downloads/point/last-week/"
+          }
+        },
+        "required": [
+          "package",
+          "downloads",
+          "latestVersion",
+          "description",
+          "license",
+          "repository",
+          "engines",
+          "start",
+          "end",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const registryOrigin = 'https://registry.npmjs.org/';\nconst downloadsOrigin = 'https://api.npmjs.org/downloads/point/last-week/';\nconst packagePath = name => encodeURIComponent(name);\nconst loadJson = async (url, label) => {\n  let response;\n  try {\n    response = await fetch(url, { credentials: 'omit', headers: { Accept: 'application/json' } });\n  } catch (error) {\n    throw new Error(label + ' request failed: ' + String(error && error.message || error));\n  }\n  if (!response.ok) throw new Error(label + ' failed with status ' + response.status);\n  let payload;\n  try {\n    payload = await response.json();\n  } catch (error) {\n    throw new Error(label + ' returned invalid JSON: ' + String(error && error.message || error));\n  }\n  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {\n    throw new Error(label + ' returned invalid data');\n  }\n  return { payload, source: String(response.url || url) };\n};\nconst repositoryUrl = value => {\n  let raw = typeof value === 'string' ? value : value && typeof value.url === 'string' ? value.url : '';\n  raw = raw.trim();\n  if (!raw) return null;\n  raw = raw.replace(/^git\\+/, '').replace(/^git:\\/\\/github\\.com\\//i, 'https://github.com/');\n  if (/^github:/i.test(raw)) raw = 'https://github.com/' + raw.slice(7);\n  else if (/^[^/:]+\\/[^/]+$/.test(raw)) raw = 'https://github.com/' + raw;\n  raw = raw.replace(/\\.git(?:#.*)?$/, '');\n  try {\n    const url = new URL(raw);\n    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;\n  } catch {\n    return null;\n  }\n};\nconst loadPackage = async packageName => {\n  const encoded = packagePath(packageName);\n  const [metadata, downloads] = await Promise.all([\n    loadJson(registryOrigin + encoded + '/latest', 'npm metadata for ' + packageName),\n    loadJson(downloadsOrigin + encoded, 'npm downloads for ' + packageName)\n  ]);\n  const manifest = metadata.payload;\n  if (manifest.name !== packageName) {\n    throw new Error('npm metadata name mismatch for ' + packageName + ': ' + String(manifest.name));\n  }\n  const latestVersion = manifest.version;\n  if (typeof latestVersion !== 'string' || !latestVersion) {\n    throw new Error('npm metadata missing version for ' + packageName);\n  }\n  const description = typeof manifest.description === 'string' ? manifest.description.trim() : '';\n  if (!description) throw new Error('npm metadata missing description for ' + packageName + '@' + latestVersion);\n  const rawLicense = manifest.license;\n  const license = typeof rawLicense === 'string' && rawLicense.trim()\n    ? rawLicense.trim()\n    : rawLicense && typeof rawLicense.type === 'string' && rawLicense.type.trim()\n      ? rawLicense.type.trim()\n      : null;\n  const rawEngines = manifest.engines && typeof manifest.engines === 'object' && !Array.isArray(manifest.engines)\n    ? manifest.engines\n    : {};\n  const engines = Object.fromEntries(Object.entries(rawEngines).filter(([, value]) => typeof value === 'string'));\n  if (downloads.payload.package !== packageName) {\n    throw new Error('npm downloads name mismatch for ' + packageName + ': ' + String(downloads.payload.package));\n  }\n  const count = Number(downloads.payload.downloads);\n  if (!Number.isInteger(count) || count < 0) {\n    throw new Error('npm downloads returned an invalid count for ' + packageName);\n  }\n  const start = String(downloads.payload.start || '');\n  const end = String(downloads.payload.end || '');\n  if (!start || !end) throw new Error('npm downloads returned an invalid date range for ' + packageName);\n  return {\n    metric: {\n      package: packageName,\n      downloads: count,\n      latestVersion,\n      description,\n      license,\n      repository: repositoryUrl(manifest.repository),\n      engines,\n      start,\n      end,\n      source: downloads.source\n    },\n    metadataSource: metadata.source\n  };\n};\nconst leftName = String(input.left || '').trim();\nconst rightName = String(input.right || '').trim();\ntry {\n  const [left, right] = await Promise.all([loadPackage(leftName), loadPackage(rightName)]);\n  return {\n    success: true,\n    status: 'ok',\n    left: left.metric,\n    right: right.metric,\n    leader: left.metric.downloads === right.metric.downloads ? 'tie' : left.metric.downloads > right.metric.downloads ? 'left' : 'right',\n    sources: {\n      left: left.metric.source,\n      right: right.metric.source,\n      metadata: { left: left.metadataSource, right: right.metadataSource }\n    }\n  };\n} catch (error) {\n  return { success: false, status: 'api_error', message: String(error && error.message || error), left: leftName, right: rightName };\n}",
+        "timeoutMs": 60000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": [
+    {
+      "tool": "chrome_network_request",
+      "args": {
+        "url": "https://registry.npmjs.org/{{left}}/latest",
+        "method": "GET",
+        "timeout": 30000
+      },
+      "resultPath": "/response/body"
+    },
+    {
+      "tool": "chrome_network_request",
+      "args": {
+        "url": "https://registry.npmjs.org/{{right}}/latest",
+        "method": "GET",
+        "timeout": 30000
+      },
+      "resultPath": "/response/body"
+    }
+  ],
+  "tests": [
+    {
+      "inputs": {
+        "left": "react",
+        "right": "vue"
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "left": {
+            "type": "object",
+            "properties": {
+              "package": {
+                "const": "react"
+              },
+              "downloads": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "latestVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "package",
+              "downloads",
+              "latestVersion",
+              "description"
+            ]
+          },
+          "right": {
+            "type": "object",
+            "properties": {
+              "package": {
+                "const": "vue"
+              },
+              "downloads": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "latestVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "package",
+              "downloads",
+              "latestVersion",
+              "description"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "left",
+          "right"
+        ]
+      },
+      "observe": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "react"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "description"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "vue"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "description"
+          ]
+        }
+      ]
+    },
+    {
+      "inputs": {
+        "left": "express",
+        "right": "fastify"
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "left": {
+            "type": "object",
+            "properties": {
+              "package": {
+                "const": "express"
+              },
+              "downloads": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "latestVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "package",
+              "downloads",
+              "latestVersion",
+              "description"
+            ]
+          },
+          "right": {
+            "type": "object",
+            "properties": {
+              "package": {
+                "const": "fastify"
+              },
+              "downloads": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "latestVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "package",
+              "downloads",
+              "latestVersion",
+              "description"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "left",
+          "right"
+        ]
+      },
+      "observe": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "express"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "description"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "fastify"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "description"
+          ]
+        }
+      ]
+    }
+  ]
+}

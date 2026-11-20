@@ -5,8 +5,9 @@ export interface CommandSpec {
 
 export const COMMANDS = {
   setup: {
-    usage: 'setup [--browser BROWSER] [--skill-dir DIR] [--no-skill]',
-    summary: 'Install the host, extension, and Skill for chrome, chromium, or all.',
+    usage: 'setup [--browser BROWSER] [--skill-scope SCOPE] [--skill-dir DIR] [--no-skill]',
+    summary:
+      'Install or refresh the host and base Skill. Prepare the bundled extension on first setup only.',
   },
   status: {
     usage: 'status',
@@ -27,7 +28,7 @@ export const COMMANDS = {
   tabs: { usage: 'tabs', summary: 'List windows and tabs with IDs.' },
   open: {
     usage: 'open URL [--foreground]',
-    summary: 'Open a new tab. With --task, own the new page.',
+    summary: 'Open a new tab. --foreground applies only to non-task opens.',
   },
   nav: { usage: 'nav URL|back|forward|reload', summary: 'Navigate the selected page.' },
   'tab focus': { usage: 'tab focus ID', summary: 'Bring the selected tab to the foreground.' },
@@ -54,11 +55,11 @@ export const COMMANDS = {
   },
   console: {
     usage: 'console [--level LEVEL] [--clear]',
-    summary: 'Read or clear the selected tab’s console buffer.',
+    summary: 'Read buffered console output; --level error keeps only errors.',
   },
   'network start': {
     usage: 'network start [--filter PATTERN] [--bodies]',
-    summary: 'Start a scoped network recording.',
+    summary: 'Start a scoped network recording; --filter matches captured request URLs.',
   },
   'network stop': {
     usage: 'network stop',
@@ -144,13 +145,34 @@ export const COMMANDS = {
     usage: 'batch FILE|-',
     summary: 'Run JSON argument arrays in order, stopping at the first failure.',
   },
-  'recipe list': { usage: 'recipe list [--url URL]', summary: 'List bundled and saved workflows.' },
+  'recipe list': {
+    usage: 'recipe list [--url URL] [--query TEXT] [--all]',
+    summary: 'List learned skills and saved workflows under ~/.browserpaw.',
+  },
+  'recipe find': {
+    usage: 'recipe find [QUERY...] [--url URL] [--all]',
+    summary: 'Match learned skills and workflows by intent or URL.',
+  },
+  'recipe show': {
+    usage: 'recipe show ID',
+    summary: 'Inspect a learned skill or saved workflow and its inputs.',
+  },
   'recipe run': {
     usage: 'recipe run ID [KEY=VALUE...]',
-    summary: 'Run a saved workflow with explicit inputs.',
+    summary: 'Run a learned skill or saved workflow with typed inputs.',
   },
-  'recipe save': { usage: 'recipe save FILE|-', summary: 'Save a reviewed workflow definition.' },
-  'recipe rm': { usage: 'recipe rm ID', summary: 'Remove a locally saved workflow.' },
+  'recipe save': {
+    usage: 'recipe save FILE|-',
+    summary: 'Save a learned workflow or propose a verified skill in ~/.browserpaw.',
+  },
+  'recipe validate': {
+    usage: 'recipe validate ID',
+    summary: 'Verify and activate a candidate skill in ~/.browserpaw.',
+  },
+  'recipe rm': {
+    usage: 'recipe rm ID',
+    summary: 'Remove a saved workflow or disable a learned skill.',
+  },
 } satisfies Record<string, CommandSpec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -159,6 +181,17 @@ export interface ParsedCommand {
   name: CommandName;
   operands: string[];
   options: CommandOptions;
+}
+
+export function commandLockKey(options: CommandOptions): string | undefined {
+  if (options.task) return `task:${options.task}`;
+  const rawTab = options.tab;
+  const parsedTab = typeof rawTab === 'string' && /^\d+$/.test(rawTab) ? Number(rawTab) : undefined;
+  const normalizedTab =
+    parsedTab !== undefined && Number.isSafeInteger(parsedTab) && parsedTab > 0
+      ? String(parsedTab)
+      : rawTab;
+  return normalizedTab ? `tab:${normalizedTab}` : undefined;
 }
 
 const globalOptions = '--task ID --tab ID --frame ID --json';
@@ -189,16 +222,19 @@ export function parseCommand(argv: readonly string[]): ParsedCommand {
       operands.push(token);
       continue;
     }
-    const key = token.slice(2);
+    const separator = token.indexOf('=');
+    const key = token.slice(2, separator === -1 ? undefined : separator);
+    const inlineValue = separator === -1 ? undefined : token.slice(separator + 1);
     if (!spec.has(key)) throw new Error(`Unknown option ${token} for ${name}.`);
     if (options[key] !== undefined && !repeated.has(key))
       throw new Error(`Repeated option ${token}.`);
     if (!spec.get(key)) {
+      if (inlineValue !== undefined) throw new Error(`Option --${key} does not take a value.`);
       options[key] = true;
       continue;
     }
-    const value = input[++index];
-    if (value === undefined || value.startsWith('--'))
+    const value = inlineValue ?? input[++index];
+    if (value === undefined || (inlineValue === undefined && value.startsWith('--')))
       throw new Error(`Missing value for ${token}.`);
     options[key] = repeated.has(key) ? [...((options[key] as string[]) ?? []), value] : value;
   }
@@ -209,6 +245,11 @@ export const TARGET_HELP =
   'Targets: 12 (observed ref), css:SELECTOR, text:TEXT, role:ROLE[:NAME], label:LABEL, or @X,Y --capture ID. Use --frame ID to select a frame. After navigation or a stale ref, observe again.';
 
 const examples: Partial<Record<CommandName, readonly string[]>> = {
+  setup: [
+    'setup',
+    'setup --skill-scope project',
+    'setup --browser chromium --skill-dir ./custom-skills',
+  ],
   open: ['open https://example.com --task TASK_ID', 'open https://example.com --foreground'],
   observe: ['observe --task TASK_ID --json', 'observe --scope css:main --tab 12'],
   click: ['click 7 --task TASK_ID --frame 0', 'click @120,240 --capture CAPTURE_ID --tab 12'],
@@ -217,13 +258,19 @@ const examples: Partial<Record<CommandName, readonly string[]>> = {
   screenshot: ['screenshot --task TASK_ID --out page.png', 'screenshot --tab 12 --full'],
   batch: ['batch steps.json --task TASK_ID', 'batch - --tab 12'],
   'task finish': ['task finish --task TASK_ID', 'task finish --task TASK_ID --keep 12'],
-  'recipe run': ['recipe run read-title selector=h1 --tab 12'],
+  'recipe find': ['recipe find twitter search', 'recipe find --url https://x.com/search?q=ai'],
+  'recipe show': ['recipe show x-search-thread'],
+  'recipe run': [
+    'recipe run read-title selector=h1 --tab 12',
+    'recipe run x-search-thread query=typescript limit=5',
+  ],
+  'recipe validate': ['recipe validate x-search-thread'],
 };
 
 export function commandHelp(topic?: string): string {
   if (topic === 'targets') return TARGET_HELP;
   if (topic === 'recipes')
-    return 'Save a JSON object with id and steps (arrays of CLI arguments). Use {{key}} for input values supplied to recipe run. Inspect the workflow before running it.';
+    return 'Learned skills and recipes live under ~/.browserpaw. Use recipe find to match by intent or URL, recipe show ID for inputs, recipe run ID key=value to execute, recipe save FILE to save a workflow or propose a verified skill, and recipe validate ID to activate candidates.';
   if (topic && isCommand(topic)) {
     const spec = COMMANDS[topic];
     return [

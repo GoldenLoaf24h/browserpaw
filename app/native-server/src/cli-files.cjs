@@ -2,6 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
+const STALE_LOCK_AGE_MS = 10 * 60 * 1000;
+
 function assertNoLinks(target) {
   let current = path.resolve(target);
   for (;;) {
@@ -71,6 +73,14 @@ function acquireLock(target) {
       return false;
     }
   };
+  const isStaleCorruptLock = () => {
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+    return (
+      Boolean(stat?.isFile()) &&
+      Date.now() - stat.mtimeMs > STALE_LOCK_AGE_MS &&
+      !readLock()
+    );
+  };
   const writeFresh = (allowReapGuard = false) => {
     let descriptor;
     try {
@@ -97,7 +107,8 @@ function acquireLock(target) {
     if (error.code !== 'EEXIST') throw error;
 
     const existing = readLock();
-    if (!existing || !isDead(existing.pid)) throw busy();
+    if (!existing && !isStaleCorruptLock()) throw busy();
+    if (existing && !isDead(existing.pid)) throw busy();
 
     let reapDescriptor;
     try {
@@ -109,7 +120,11 @@ function acquireLock(target) {
     }
     try {
       const confirmed = readLock();
-      if (!confirmed || confirmed.token !== existing.token || !isDead(confirmed.pid)) throw busy();
+      if (existing) {
+        if (!confirmed || confirmed.token !== existing.token || !isDead(confirmed.pid)) throw busy();
+      } else if (confirmed || !isStaleCorruptLock()) {
+        throw busy();
+      }
       fs.rmSync(target, { force: true });
       writeFresh(true);
     } finally {

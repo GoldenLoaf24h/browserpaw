@@ -25,6 +25,8 @@ function fixture() {
     path.join(root, 'plugins/browserpaw-claude/.claude-plugin/plugin.json'),
     '{"version":"4.0.0"}\n',
   );
+  write(path.join(root, 'plugins/browserpaw-dsh/package.json'), '{"version":"4.0.0"}\n');
+  write(path.join(root, 'plugins/browserpaw-hermes/plugin.yaml'), "version: '4.0.0'\n");
   return root;
 }
 
@@ -34,6 +36,8 @@ try {
   for (const target of [
     'plugins/browserpaw/skills/browserpaw',
     'plugins/browserpaw-claude/skills/browserpaw',
+    'plugins/browserpaw-dsh/skills/browserpaw',
+    'plugins/browserpaw-hermes/skills/browserpaw',
   ]) {
     assert.equal(
       fs.readFileSync(path.join(root, target, 'SKILL.md'), 'utf8'),

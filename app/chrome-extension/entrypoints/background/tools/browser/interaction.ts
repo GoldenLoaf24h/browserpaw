@@ -84,6 +84,19 @@ interface Coordinates {
   y: number;
 }
 
+type ToolLocatorOptions = Omit<
+  Parameters<typeof resolveTargetLocation>[1],
+  'coordinate' | 'coordinates'
+> & {
+  coordinate?: Coordinates | PolymorphicCoordinate;
+  coordinates?: Coordinates | PolymorphicCoordinate;
+};
+
+function resolveToolTarget(tabId: number, options: ToolLocatorOptions) {
+  // The locator parses polymorphic input at runtime, but its shared option type exposes only {x,y}.
+  return resolveTargetLocation(tabId, options as Parameters<typeof resolveTargetLocation>[1]);
+}
+
 interface ClickToolParams {
   exact?: boolean;
   label?: string;
@@ -218,7 +231,7 @@ class ClickTool extends BaseBrowserToolExecutor {
       }
 
       // Unified locator & CDP Input click dispatch (P1-4)
-      const loc = await resolveTargetLocation(tabId, {
+      const loc = await resolveToolTarget(tabId, {
         ref: finalRef,
         index: args.index,
         selector: finalSelector,
@@ -420,7 +433,7 @@ class FillTool extends BaseBrowserToolExecutor {
       }
 
       // Unified locator & CDP Input fill dispatch (P1-4)
-      const loc = await resolveTargetLocation(tabId, {
+      const loc = await resolveToolTarget(tabId, {
         ref: finalRef,
         index: args.index,
         selector: finalSelector,

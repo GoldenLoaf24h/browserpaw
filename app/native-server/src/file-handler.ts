@@ -536,19 +536,47 @@ export class FileHandler {
    * Download a file from URL and save to temp directory
    */
   private async downloadFile(fileUrl: string, fileName?: string): Promise<any> {
+    const DOWNLOAD_TIMEOUT_MS = 30000;
+    const controller = new AbortController();
+    let response: any;
+    let fileStream: ReturnType<typeof fs.createWriteStream> | undefined;
+    let filePath: string | undefined;
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      response?.body?.destroy?.();
+      fileStream?.destroy();
+      controller.abort();
+    }, DOWNLOAD_TIMEOUT_MS);
+    const assertSafeDownloadUrl = (url: string) =>
+      new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(controller.signal.reason);
+        if (controller.signal.aborted) {
+          onAbort();
+          return;
+        }
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        void assertSafeUrlAsync(url)
+          .then(() => resolve(), reject)
+          .finally(() => {
+            controller.signal.removeEventListener('abort', onAbort);
+          });
+      });
+
     try {
       let currentUrl = fileUrl;
       const MAX_REDIRECTS = 5;
       let redirectCount = 0;
-      let response: any;
 
       while (true) {
-        await assertSafeUrlAsync(currentUrl);
+        await assertSafeDownloadUrl(currentUrl);
         const parsed = new URL(currentUrl);
         response = await fetch(currentUrl, {
           redirect: 'manual',
           agent: getSafeAgent(parsed),
+          signal: controller.signal,
         });
+        controller.signal.throwIfAborted();
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           try {
             response.body?.destroy?.();
@@ -583,76 +611,85 @@ export class FileHandler {
       }
 
       const candidateName = fileName || this.generateFileName(currentUrl);
-      const { filePath, fileName: finalFileName } = this.getSafeTempFilePath(
-        candidateName,
-        'download',
-      );
+      const destination = this.getSafeTempFilePath(candidateName, 'download');
+      const finalFilePath = destination.filePath;
+      filePath = finalFilePath;
+      const finalFileName = destination.fileName;
+      if (!response.body) throw new Error('Download response has no body');
 
       // Stream response to disk with running size counter to avoid OOM and event loop blocking
-      const fileStream = fs.createWriteStream(filePath);
+      const stream = fs.createWriteStream(finalFilePath);
+      fileStream = stream;
       let downloadedBytes = 0;
 
-      try {
-        await new Promise<void>((resolve, reject) => {
-          let aborted = false;
+      await new Promise<void>((resolve, reject) => {
+        let completed = false;
+        const cleanup = () => {
+          if (completed) return false;
+          completed = true;
+          controller.signal.removeEventListener('abort', onAbort);
+          return true;
+        };
+        const fail = (error: unknown) => {
+          if (!cleanup()) return;
+          response.body.destroy();
+          stream.destroy();
+          controller.abort();
+          reject(error);
+        };
+        const onAbort = () => fail(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
 
-          response.body.on('data', (chunk: Buffer) => {
-            downloadedBytes += chunk.length;
-            if (downloadedBytes > MAX_DOWNLOAD_SIZE) {
-              aborted = true;
-              response.body.destroy();
-              fileStream.destroy();
-              reject(
-                new Error(
-                  `Download exceeded maximum allowed size of ${MAX_DOWNLOAD_SIZE} bytes (50MB)`,
-                ),
-              );
-            }
-          });
-
-          response.body.on('error', (err: Error) => {
-            if (!aborted) {
-              fileStream.destroy();
-              reject(err);
-            }
-          });
-
-          fileStream.on('error', (err: Error) => {
-            if (!aborted) {
-              response.body.destroy();
-              reject(err);
-            }
-          });
-
-          fileStream.on('finish', () => {
-            if (!aborted) {
-              resolve();
-            }
-          });
-
-          response.body.pipe(fileStream);
-        });
-      } catch (streamErr) {
-        try {
-          if (fs.existsSync(filePath)) {
-            await fs.promises.unlink(filePath);
+        response.body.on('data', (chunk: Buffer) => {
+          downloadedBytes += chunk.length;
+          if (downloadedBytes > MAX_DOWNLOAD_SIZE) {
+            fail(
+              new Error(
+                `Download exceeded maximum allowed size of ${MAX_DOWNLOAD_SIZE} bytes (50MB)`,
+              ),
+            );
           }
-        } catch {
-          // ignore cleanup errors
-        }
-        throw streamErr;
-      }
+        });
+
+        response.body.on('error', (err: Error) => {
+          fail(err);
+        });
+
+        stream.on('error', (err: Error) => {
+          fail(err);
+        });
+
+        stream.on('finish', () => {
+          if (cleanup()) resolve();
+        });
+
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        if (controller.signal.aborted) onAbort();
+        response.body.pipe(stream);
+      });
 
       return {
         success: true,
-        filePath: filePath,
+        filePath: finalFilePath,
         fileName: finalFileName,
         size: downloadedBytes,
       };
     } catch (error) {
+      controller.abort();
+      response?.body?.destroy?.();
+      fileStream?.destroy();
+      if (filePath) {
+        try {
+          if (fs.existsSync(filePath)) await fs.promises.unlink(filePath);
+          const parent = path.dirname(filePath);
+          if (parent !== path.resolve(this.tempDir))
+            await fs.promises.rmdir(parent).catch(() => {});
+        } catch {}
+      }
       throw new Error(
-        `Failed to download file from URL: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to download file from URL: ${timedOut ? `Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms` : error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -704,6 +741,7 @@ export class FileHandler {
    */
   private async verifyFile(filePath: string): Promise<any> {
     try {
+      assertNotSensitivePath(filePath);
       // Check if file exists
       if (!fs.existsSync(filePath)) {
         throw new Error(`File does not exist: ${filePath}`);

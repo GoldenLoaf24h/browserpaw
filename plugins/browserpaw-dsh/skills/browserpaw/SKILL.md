@@ -1,0 +1,44 @@
+---
+name: browserpaw
+description: Control the user's Chrome or Chromium through the BrowserPaw CLI and run learned site workflows stored in ~/.browserpaw. Use automatically for live web tasks, logged-in sites, site searches, navigation, DOM inspection, forms, extraction, screenshots, uploads, and downloads.
+---
+
+# BrowserPaw
+
+Run `browserpaw status` to confirm the host and extension are connected. Use `browserpaw help` and `browserpaw help COMMAND` to discover syntax at the installed version. If setup is needed, use [troubleshooting](references/TROUBLESHOOTING.md).
+
+If the CLI reports an update on stderr, tell the user once. Finish the current task before upgrading. Run `browserpaw setup` with the new CLI to refresh the host and its managed base Skills. Ask the user to download, unpack, and load the matching Chrome extension ZIP, then verify with `browserpaw status`. Update plugin-bundled Skills through their Agent's plugin manager.
+
+For an npx-only installation, use `npx --yes browserpaw@5.0.0` in place of `browserpaw` throughout.
+
+## Learned Workflows & Auto-Routing (`~/.browserpaw`)
+
+Before manually browsing a site, check any synced `Learned Workflows` table (at the end of a `browserpaw setup`-managed skill or injected into session context by a host plugin) or run `browserpaw recipe find <query> --url <url>` (works offline against `~/.browserpaw`). When a learned skill or recipe matches the user's request, inspect inputs if needed with `browserpaw recipe show ID` and invoke `browserpaw recipe run ID key=value...` directly without waiting for the user to ask.
+
+If `recipe list --all` shows a bundled or proposed `candidate` skill (for example `x-search-thread`), run `browserpaw recipe validate ID` once while Chrome is connected to verify and activate it.
+
+When you solve a repeatable site workflow that has no learned entry yet (such as a site search or structured page reader), save it into `~/.browserpaw` with `browserpaw recipe save FILE` including `id`, `name`, `description`, `domains`, `keywords`, `inputs`, and `steps` (or propose and validate a verified read-only skill). Saving immediately updates `~/.browserpaw/learned-index.json` (discoverable via `browserpaw recipe find`) and refreshes `browserpaw setup`-managed skills; read-only host plugin skills pick up new entries on the next session or profile restart. Never store passwords, cookies, tokens, tab IDs, or observed refs in saved recipes.
+
+## Interactive Browser Tasks
+
+```text
+browserpaw task start research --json
+browserpaw open https://example.com --task TASK_ID
+browserpaw observe --task TASK_ID --json
+browserpaw click REF --task TASK_ID
+browserpaw observe --task TASK_ID
+browserpaw task finish --task TASK_ID
+```
+
+Use the returned task ID throughout. A task owns pages it opens and preserves borrowed pages. To work on a specific existing page, choose its ID from `browserpaw tabs`, then use `--tab ID` or `task borrow ID --task TASK_ID`. Use `task release` to hand back a page.
+
+Use current observed refs or strict CSS, text, role, and label targets. When a frame ID is known, pass `--frame ID` to a frame-aware action. Observe again after navigation, DOM replacement, or an ambiguous target. For multiline input, use `fill TARGET --input FILE` or pass the literal string after `--`.
+
+Read screenshots with the local image viewer using the returned file path. For coordinates, use `click @X,Y --capture ID` from the current screenshot and the same tab. Use a fresh capture after geometry or page changes.
+
+Use `download REF` for a page-triggered download receipt. Use `download --url URL --out DIR` when the file URL is known and a verified local file path is needed.
+
+Check page state before completing the task. Verify the business effect after a write. Use `ask-human` for browser challenges, authentication prompts, or user confirmation. Use `task status` and a fresh observation after exit 4, which indicates an unknown outcome. Cancellation stops later work and keeps effects already dispatched.
+
+For a one-off deterministic sequence, `batch FILE` accepts JSON arrays of command arguments and stops on the first failure. Use `--json` to read receipts and follow file references for large results.
+See [commands](references/commands.md) and [recipes](references/recipe-contract.md).

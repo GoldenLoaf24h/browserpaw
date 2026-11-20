@@ -36,7 +36,49 @@ it('honors newWindow even when a matching user page already exists', async () =>
   );
   expect(chrome.tabs.update).not.toHaveBeenCalled();
   expect(tabFaviconManager.setAgentFavicon).not.toHaveBeenCalledWith(11);
-  expect(JSON.stringify(result)).toContain('22');
+  const payload = JSON.parse(result.content[0].text as string);
+  expect(payload).toMatchObject({
+    success: true,
+    created: true,
+    tabId: 22,
+    windowId: 2,
+    url,
+  });
+});
+
+it('returns created page identity when agentWindowMode is window and newTab is requested', async () => {
+  const url = 'http://127.0.0.1:43210/';
+  vi.stubGlobal('chrome', {
+    tabs: {
+      query: vi.fn(async () => []),
+      get: vi.fn(async () => ({ id: 88, windowId: 9, url })),
+      update: vi.fn(),
+    },
+    windows: {
+      create: vi.fn(async () => ({ id: 9, tabs: [{ id: 88, windowId: 9, pendingUrl: url }] })),
+    },
+    storage: { local: { get: vi.fn(async () => ({ agentWindowMode: 'window' })) } },
+  });
+  vi.spyOn(navigateTool as any, 'tryGetTab').mockResolvedValue(undefined);
+  vi.spyOn(navigateTool as any, 'waitForTabNavigationComplete').mockResolvedValue(undefined);
+  vi.spyOn(tabFaviconManager, 'setAgentFavicon').mockResolvedValue(undefined);
+
+  const result = await navigateTool.execute({
+    url,
+    newTab: true,
+    background: true,
+    autoGroup: false,
+  });
+  expect(result.isError).toBe(false);
+  const payload = JSON.parse(result.content[0].text as string);
+  expect(payload).toMatchObject({
+    success: true,
+    message: 'Opened URL in new window',
+    created: true,
+    tabId: 88,
+    windowId: 9,
+    url,
+  });
 });
 
 it('reports pending navigation instead of returning the previous page as the destination', async () => {

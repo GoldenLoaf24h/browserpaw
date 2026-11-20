@@ -5639,22 +5639,23 @@ export function inPageGetIndexCropRect(
     effectivePadding = Math.max(effectivePadding, Math.max(100, Math.max(neededPadX, neededPadY)));
   }
 
-  const left = Math.max(0, Math.round(rawRect.left + frameOffsetX - effectivePadding));
-  const top = Math.max(0, Math.round(rawRect.top + frameOffsetY - effectivePadding));
-  const maxW =
-    typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0
-      ? Math.max(1, window.innerWidth - left)
-      : undefined;
-  const maxH =
-    typeof window !== 'undefined' &&
-    typeof window.innerHeight === 'number' &&
-    window.innerHeight > 0
-      ? Math.max(1, window.innerHeight - top)
-      : undefined;
-  const rawWidth = Math.round(rawRect.width + effectivePadding * 2);
-  const rawHeight = Math.round(rawRect.height + effectivePadding * 2);
-  const width = Math.max(1, maxW !== undefined ? Math.min(rawWidth, maxW) : rawWidth);
-  const height = Math.max(1, maxH !== undefined ? Math.min(rawHeight, maxH) : rawHeight);
+  // Clamp in the element's own frame before projecting into each parent viewport.
+  // A subframe is often much smaller than its top-level offset, so subtracting that
+  // offset from the subframe viewport would collapse every crop to one pixel.
+  const hasViewportWidth = typeof window.innerWidth === 'number' && window.innerWidth > 0;
+  const hasViewportHeight = typeof window.innerHeight === 'number' && window.innerHeight > 0;
+  const localLeft = Math.max(0, rawRect.left - effectivePadding);
+  const localTop = Math.max(0, rawRect.top - effectivePadding);
+  const localRight = hasViewportWidth
+    ? Math.min(window.innerWidth, rawRect.right + effectivePadding)
+    : rawRect.right + effectivePadding;
+  const localBottom = hasViewportHeight
+    ? Math.min(window.innerHeight, rawRect.bottom + effectivePadding)
+    : rawRect.bottom + effectivePadding;
+  const left = Math.max(0, Math.round(localLeft + frameOffsetX));
+  const top = Math.max(0, Math.round(localTop + frameOffsetY));
+  const width = Math.max(1, Math.round(localRight - localLeft));
+  const height = Math.max(1, Math.round(localBottom - localTop));
 
   return {
     success: true,

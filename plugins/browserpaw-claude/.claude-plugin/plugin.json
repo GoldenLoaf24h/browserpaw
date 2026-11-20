@@ -2,7 +2,7 @@
   "name": "browserpaw",
   "displayName": "BrowserPaw",
   "version": "5.0.0",
-  "icon": "./.claude-plugin/icon.png",
+  "icon": "./assets/icon.png",
   "description": "BrowserPaw Agent Skill for navigation, page observation, form interaction, and screenshots through the BrowserPaw CLI.",
   "author": {
     "name": "BrowserPaw Team",

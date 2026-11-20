@@ -3,8 +3,15 @@ import { access, readFile, mkdir, copyFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { commandHelp, parseCommand, CURRENT_VERSION, DEFAULT_SERVER_PORT } from 'chrome-mcp-shared';
+import {
+  commandHelp,
+  parseCommand,
+  CURRENT_VERSION,
+  DEFAULT_SERVER_PORT,
+  GITHUB_REPO_URL,
+} from 'chrome-mcp-shared';
 import type { ParsedCommand } from 'chrome-mcp-shared';
+import { checkForCliUpdate } from './cli-update';
 import { readBridgeToken } from './server/token';
 
 type Fields = Record<string, unknown>;
@@ -231,6 +238,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
   let command: ParsedCommand | undefined;
   let accepted = false;
   let knownResult: BackendResult | undefined;
+  let update: ReturnType<typeof checkForCliUpdate> | undefined;
   const controller = new AbortController();
   const requestId = randomUUID();
   const interrupt = () => {
@@ -284,14 +292,91 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     }
     command = parseCommand(argv);
     json = command.options.json === true;
+    if (command.name !== 'setup' && command.name !== 'uninstall') update = checkForCliUpdate();
     if (
       !command.options.task &&
       process.env.BROWSERPAW_TASK &&
-      !['task start', 'task list', 'status', 'doctor', 'setup', 'uninstall'].includes(command.name)
+      ![
+        'task start',
+        'task list',
+        'status',
+        'doctor',
+        'setup',
+        'uninstall',
+        'recipe list',
+        'recipe find',
+        'recipe show',
+      ].includes(command.name)
     ) {
       const end = argv.indexOf('--');
       argv.splice(end === -1 ? argv.length : end, 0, '--task', process.env.BROWSERPAW_TASK);
       command = parseCommand(argv);
+    }
+    if (['recipe list', 'recipe find', 'recipe show'].includes(command.name)) {
+      const { browserPawHome, findLearnedWorkflows, listLearnedWorkflows, showLearnedWorkflow } =
+        await import('./learned-recipes.js');
+      const homeDir = browserPawHome();
+      if (command.name === 'recipe list') {
+        if (command.operands.length)
+          return failure(
+            2,
+            'invalid_arguments',
+            'Usage: browserpaw recipe list [--url URL] [--query TEXT] [--all].',
+          );
+        const url = typeof command.options.url === 'string' ? command.options.url : undefined;
+        const query = typeof command.options.query === 'string' ? command.options.query : undefined;
+        writeReceipt(
+          {
+            ok: true,
+            command: command.name,
+            outcome: 'done',
+            data: listLearnedWorkflows(homeDir, {
+              includeCandidates: Boolean(command.options.all),
+              url,
+              query,
+            }),
+          },
+          json,
+        );
+        return 0;
+      }
+      if (command.name === 'recipe find') {
+        const url = typeof command.options.url === 'string' ? command.options.url : undefined;
+        const query = command.operands.join(' ').trim();
+        writeReceipt(
+          {
+            ok: true,
+            command: command.name,
+            outcome: 'done',
+            data: findLearnedWorkflows(homeDir, {
+              includeCandidates: Boolean(command.options.all),
+              url,
+              query,
+            }),
+          },
+          json,
+        );
+        return 0;
+      }
+      if (command.operands.length !== 1)
+        return failure(2, 'invalid_arguments', 'Usage: browserpaw recipe show ID.');
+      const inspected = showLearnedWorkflow(command.operands[0], homeDir);
+      if (!inspected)
+        return failure(
+          1,
+          'recipe_not_found',
+          `Unknown learned skill or recipe: ${command.operands[0]}.`,
+        );
+      writeReceipt(
+        {
+          ok: true,
+          command: command.name,
+          outcome: 'done',
+          data: { ...inspected.summary, definition: inspected.definition },
+        },
+        json,
+      );
+      return 0;
     }
     if (['setup', 'uninstall', 'doctor'].includes(command.name)) {
       if (command.operands.length)
@@ -316,19 +401,30 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
         return failure(
           3,
           'version_mismatch',
-          'CLI, host, and extension versions differ. Run browserpaw setup and reload.',
+          `BrowserPaw requires the ${CURRENT_VERSION} host and extension. Run setup with the matching CLI to update the host and Skill. For a mismatched extension, manually install ${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip and reload it.`,
           data,
         );
       }
-      const installation = await readFile(resolve(outputRoot(), '..', 'installation.json'), 'utf8')
-        .then((value) => JSON.parse(value) as Fields)
-        .catch((error) => {
-          if (error.code !== 'ENOENT') throw error;
-          return undefined;
-        });
+      const syncDir =
+        !process.env.BROWSERPAW_HOME && process.env.BROWSERPAW_EXTENSION_SYNC_DIR?.trim()
+          ? resolve(process.env.BROWSERPAW_EXTENSION_SYNC_DIR)
+          : undefined;
+      const extensionDir = syncDir ?? resolve(outputRoot(), '..', 'extension');
+      const readExtensionJson = (file: string) =>
+        readFile(join(extensionDir, file), 'utf8')
+          .then((value) => JSON.parse(value) as Fields)
+          .catch((error) => {
+            if (error.code !== 'ENOENT') throw error;
+            return undefined;
+          });
+      const localManifest = await readExtensionJson('manifest.json');
+      const localBuild =
+        localManifest?.version === CURRENT_VERSION
+          ? await readExtensionJson('browserpaw-build.json')
+          : undefined;
       if (
-        installation?.buildId &&
-        installation.buildId !== (data.extension as Fields | undefined)?.buildId
+        localBuild?.buildId &&
+        localBuild.buildId !== (data.extension as Fields | undefined)?.buildId
       )
         return failure(
           3,
@@ -437,5 +533,17 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     return failure(4, 'outcome_unknown', message);
   } finally {
     process.removeListener('SIGINT', interrupt);
+    const latest = await update;
+    if (latest) {
+      console.error(
+        [
+          `BrowserPaw ${latest} is available (installed: ${CURRENT_VERSION}).`,
+          'Finish the current task before upgrading with your existing installation method.',
+          `Global npm: npm install -g browserpaw@${latest}, then browserpaw setup.`,
+          `npx: npx browserpaw@${latest} setup. Setup refreshes the host and managed base Skills.`,
+          `Chrome extension (manual download, unpack and load): ${GITHUB_REPO_URL}/releases/download/v${latest}/browserpaw-extension.zip`,
+        ].join('\n'),
+      );
+    }
   }
 }

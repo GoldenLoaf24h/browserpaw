@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseCommand, CURRENT_VERSION } from 'chrome-mcp-shared';
+import { setTimeout as delay } from 'node:timers/promises';
+import { commandLockKey, parseCommand, CURRENT_VERSION } from 'chrome-mcp-shared';
 import type { NativeMessagingHost } from '../native-messaging-host';
 import { CommandError, dispatchCommand } from '../command-dispatch';
 import { tryParseCallResult } from '../browser-tasks';
@@ -68,13 +69,25 @@ export class Server {
     this.host = host;
     this.starting = (async () => {
       await initializeBridgeToken();
-      await new Promise<void>((resolve, reject) => {
-        this.server.once('error', reject);
-        this.server.listen(port, '127.0.0.1', () => {
-          this.server.removeListener('error', reject);
-          resolve();
-        });
-      });
+      const maxAttempts = port > 0 ? 15 : 1;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            this.server.once('error', reject);
+            this.server.listen(port, '127.0.0.1', () => {
+              this.server.removeListener('error', reject);
+              resolve();
+            });
+          });
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE' && attempt < maxAttempts) {
+            await delay(150);
+            continue;
+          }
+          throw error;
+        }
+      }
       const temporary = this.discoveryPath + '.' + process.pid + '.tmp';
       try {
         await writeFile(
@@ -155,6 +168,9 @@ export class Server {
           .sendRequestToExtensionAndWait({}, 'reload_extension', 2000)
           .catch((error: unknown) => {
             console.error('Extension reload was not acknowledged:', error);
+          })
+          .finally(() => {
+            void this.stop().catch(() => {});
           });
       });
       return send(reply, 202, { reloadRequested: true });
@@ -177,11 +193,7 @@ export class Server {
     } catch (error) {
       throw new CommandError(error instanceof Error ? error.message : String(error));
     }
-    const key = command.options.task
-      ? `task:${command.options.task}`
-      : command.options.tab
-        ? `tab:${command.options.tab}`
-        : undefined;
+    const key = commandLockKey(command.options);
     if (this.requests.has(requestId) || (key && this.context.has(key)))
       return send(reply, 409, {
         code: 'busy',

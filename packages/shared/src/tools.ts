@@ -226,7 +226,6 @@ export const TOOL_NAMES = {
     SCROLL_UNTIL_FOUND: 'chrome_scroll_until_found',
   },
   NATIVE: {
-    ACT_TOWARD_GOAL: 'chrome_act_toward_goal',
     TASK: 'chrome_task',
     SKILL: 'chrome_skill',
   },
@@ -766,6 +765,10 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
           type: 'string',
           description:
             'URL to capture network requests from. For action="start". If not provided, uses the current active tab.',
+        },
+        requestUrlPattern: {
+          type: 'string',
+          description: 'Optional URL pattern used to filter captured request URLs.',
         },
         maxCaptureTime: {
           type: 'number',

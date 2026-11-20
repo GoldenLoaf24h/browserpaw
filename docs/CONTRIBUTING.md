@@ -24,6 +24,7 @@ We welcome contributions in many forms:
 ### Prerequisites
 
 - **Node.js 22.6+** and **pnpm** (use the version pinned in `package.json`)
+- **Python 3.9+** with `pytest` for the Hermes plugin gate
 - **Chrome/Chromium** browser for testing
 - **Git** for version control
 - **TypeScript** knowledge
@@ -60,11 +61,11 @@ BrowserPaw adheres to the canonical Repository Layout Specification defined in [
 
 ```
 browserpaw/
-├── app/                      # Primary applications: Chrome MV3 extension & Native bridge server
+├── app/                      # Primary applications: Chrome MV3 extension & Native Messaging host
 │   ├── chrome-extension/     # Chrome extension MV3 (WXT + Vue 3 background SW & tools)
-│   └── native-server/        # Native messaging Fastify bridge & Stdio MCP host
+│   └── native-server/        # v5 CLI and loopback Native Messaging host
 ├── packages/                 # Shared libraries
-│   └── shared/               # Universal schemas (TOOL_SCHEMAS), profiles, coordinate/type definitions
+│   └── shared/               # CLI command registry, browser schemas and shared protocol types
 ├── test/                     # Cross-package integration suites, E2E runners, and mock servers (kept in-place)
 ├── scripts/                  # Repository lifecycle, verification, and code generation utilities
 ├── .artifacts/               # Ephemeral verification outputs, test dumps, delivery reports (excluded from docs)
@@ -141,7 +142,7 @@ git checkout -b feature/your-feature-name
 3. **Test your changes**
    - Ensure all existing tests pass
    - Test the Chrome extension manually
-   - Verify MCP protocol compatibility
+   - Verify the CLI, Native loopback protocol and extension integration
    - **Authentic Evidence Integrity**: Never hand-edit or fabricate `sourceFingerprint`, `buildId`, delivery hashes, or test `status` fields.
    - **Documentation Edit Re-verification**: Documentation changes invalidate prior verification fingerprints; rerun the full gate before a release or delivery claim. Focused documentation checks are sufficient during iteration.
    - **Browser Acceptance vs. Simulated Tests**: Mocked or simulated E2E runs are development checks and do **not** constitute browser acceptance. Real browser verification requires loading into Chrome, performing a manual extension reload in `chrome://extensions`, and confirming matching runtime `buildId` via `chrome_doctor`.
@@ -176,7 +177,7 @@ When reporting bugs, please include:
 - **Expected behavior**: What should happen
 - **Actual behavior**: What actually happens
 - **Screenshots/logs**: If applicable
-- **MCP client**: Which MCP client you're using (Claude Desktop, etc.)
+- **Client integration**: The Agent host, plugin or shell integration in use
 
 ## 💡 Feature Requests
 
@@ -196,15 +197,15 @@ For feature requests, please provide:
 - Use `console.log` statements for debugging
 - Monitor the native messaging connection in the background script
 
-### Testing MCP Protocol
+### Testing the CLI and Native Protocol
 
-- Use MCP Inspector for protocol debugging
-- Test with different MCP clients (Claude Desktop, custom clients)
-- Verify tool schemas and responses match MCP specifications
+- Use `browserpaw help`, `browserpaw status` and `browserpaw doctor` for offline and live diagnostics
+- Test raw browser commands and JSON receipts from a shell
+- Verify Native loopback and extension responses through the existing test suites
 
 ## 📚 Resources
 
-- [Model Context Protocol Specification](https://modelcontextprotocol.io/)
+- [Chrome Native Messaging documentation](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
 - [Chrome Extension Development](https://developer.chrome.com/docs/extensions/)
 - [WXT Framework Documentation](https://wxt.dev/)
 - [TypeScript Handbook](https://www.typescriptlang.org/docs/)

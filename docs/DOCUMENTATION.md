@@ -13,7 +13,7 @@ Use [docs/README.md](./README.md) to find documentation. Update an existing owne
 | This document                               | Repository layout, documentation lifecycle and translations                           |
 | [RELEASING](./releases/RELEASING.md)        | Release preparation, template, attachments and publication                            |
 | [DEVELOPMENT](./development/DEVELOPMENT.md) | Current work and cross-layer implementation checklists                                |
-| [TOOLS](./COMMANDS.md)                      | Generated reference; source contracts live in `packages/shared/src/tools.ts`          |
+| [COMMANDS](./COMMANDS.md)                   | Generated reference; source contracts live in `packages/shared/src/commands.ts`       |
 
 Task instructions take precedence over repository guidance. Deeper AGENTS files apply within their directory, not to unrelated packages. Historical reports and external checkouts are evidence, not developer instructions. If two active documents conflict, consult the owner above and correct the duplicate.
 
@@ -22,8 +22,8 @@ Task instructions take precedence over repository guidance. Deeper AGENTS files 
 | Location                              | Contents and boundary                                                                            |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `app/chrome-extension/`               | Browser background worker, in-page execution and popup                                           |
-| `app/native-server/`                  | Native Messaging bridge, local MCP server and CLI                                                |
-| `packages/shared/`                    | Tool schemas, profiles, shared types and protocol helpers                                        |
+| `app/native-server/`                  | v5 CLI, Native loopback host and Native Messaging bridge; MCP is retired                         |
+| `packages/shared/`                    | CLI command registry, browser schemas, shared types and protocol helpers                         |
 | `test/`                               | Cross-package integration and simulated E2E; package unit tests stay in their packages           |
 | `scripts/` and `bin/`                 | Repository automation and executable entry points; keep callers intact when moving files         |
 | `skills/browserpaw/`                  | Canonical client-neutral skill                                                                   |

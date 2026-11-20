@@ -64,6 +64,7 @@ export default defineConfig({
       'debugger',
       'storage',
       'tabGroups',
+      'alarms',
     ],
     host_permissions: ['<all_urls>'],
     action: {

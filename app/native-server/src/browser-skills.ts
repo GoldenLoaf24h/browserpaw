@@ -502,9 +502,14 @@ export class BrowserSkillStore {
     }
 
     // Do not catch invalid URL: let new URL throw explicitly
-    const hostname = new URL(url).hostname;
+    const hostname = new URL(url).hostname.toLowerCase();
 
-    const matching = this.list().filter((item) => item.domains.includes(hostname));
+    const matching = this.list().filter((item) =>
+      item.domains.some((domain) => {
+        const normalized = domain.toLowerCase();
+        return hostname === normalized || hostname.endsWith(`.${normalized}`);
+      }),
+    );
     if (matching.length === 0) {
       return [];
     }

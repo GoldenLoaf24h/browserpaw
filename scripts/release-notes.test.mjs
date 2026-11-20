@@ -219,6 +219,50 @@ test('runCheck passes on repository baseline without errors', () => {
   assert.ok(report.historicalReleasesSkipped >= 35);
 });
 
+test('runCheck requires the root package version and its release ledger entry', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bp-release-ledger-'));
+  const releasesDir = path.join(tempDir, 'docs', 'releases');
+  try {
+    fs.mkdirSync(releasesDir, { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'package.json'), JSON.stringify({ version: '5.0.0' }));
+    fs.writeFileSync(
+      path.join(releasesDir, 'v5.0.0.md'),
+      VALID_RELEASE_CONTENT.replaceAll('v4.2.0', 'v5.0.0'),
+    );
+    fs.writeFileSync(path.join(releasesDir, 'README.md'), '# Release Ledger\n');
+
+    const missingLink = runCheck({
+      repoRoot: tempDir,
+      releasesDir,
+      templateFile,
+      releasingFile: path.join(repoRoot, 'docs', 'releases', 'RELEASING.md'),
+    });
+    assert.equal(missingLink.valid, false);
+    assert.ok(missingLink.errors.some((error) => error.includes('must link to v5.0.0.md')));
+
+    fs.writeFileSync(path.join(releasesDir, 'README.md'), '[v5.0.0](./v5.0.0.md)\n');
+    const linked = runCheck({
+      repoRoot: tempDir,
+      releasesDir,
+      templateFile,
+      releasingFile: path.join(repoRoot, 'docs', 'releases', 'RELEASING.md'),
+    });
+    assert.equal(linked.valid, true, linked.errors.join(', '));
+
+    fs.rmSync(path.join(releasesDir, 'v5.0.0.md'));
+    const missingNote = runCheck({
+      repoRoot: tempDir,
+      releasesDir,
+      templateFile,
+      releasingFile: path.join(repoRoot, 'docs', 'releases', 'RELEASING.md'),
+    });
+    assert.equal(missingNote.valid, false);
+    assert.ok(missingNote.errors.some((error) => error.includes('has no docs/releases/v5.0.0.md')));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('CLI execution exits 0 on valid repository check', () => {
   const res = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'release-notes.mjs')], {
     cwd: repoRoot,

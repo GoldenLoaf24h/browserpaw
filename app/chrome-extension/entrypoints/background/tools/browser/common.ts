@@ -565,7 +565,13 @@ class NavigateTool extends BaseBrowserToolExecutor {
         if (newWindow && newWindow.id !== undefined) {
           console.log(`URL opened in new Window ID: ${newWindow.id}`);
 
-          const firstTab = newWindow.tabs?.[0];
+          let firstTab = newWindow.tabs?.[0];
+          if (!firstTab?.id) {
+            try {
+              const queried = await chrome.tabs.query({ windowId: newWindow.id });
+              firstTab = queried?.[0];
+            } catch {}
+          }
           if (firstTab?.id && sessionId) {
             sessionTabAffinity.setAffinity(sessionId, firstTab.id);
           }
@@ -599,6 +605,15 @@ class NavigateTool extends BaseBrowserToolExecutor {
             }
           }
 
+          let resolvedTabUrl = firstTab?.url || (firstTab as any)?.pendingUrl;
+          if (!resolvedTabUrl && firstTab?.id !== undefined) {
+            try {
+              const freshTab = await chrome.tabs.get(firstTab.id);
+              resolvedTabUrl = freshTab?.url || freshTab?.pendingUrl;
+            } catch {}
+          }
+          const finalUrl = resolvedTabUrl || url;
+
           return {
             content: [
               {
@@ -606,13 +621,22 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 text: JSON.stringify({
                   success: true,
                   message: 'Opened URL in new window',
+                  created: true,
+                  ...(firstTab?.id !== undefined ? { tabId: firstTab.id } : {}),
                   windowId: newWindow.id,
+                  url: finalUrl,
                   tabs: newWindow.tabs
                     ? newWindow.tabs.map((tab) => ({
                         tabId: tab.id,
-                        url: tab.url || (tab as any).pendingUrl || url,
+                        url:
+                          (tab.id === firstTab?.id ? finalUrl : undefined) ||
+                          tab.url ||
+                          (tab as any).pendingUrl ||
+                          url,
                       }))
-                    : [],
+                    : firstTab?.id !== undefined
+                      ? [{ tabId: firstTab.id, url: finalUrl }]
+                      : [],
                 }),
               },
             ],
@@ -699,6 +723,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 text: JSON.stringify({
                   success: true,
                   message: 'Opened URL in new tab in existing window',
+                  created: true,
                   tabId: newTab.id,
                   windowId: targetWindow.id,
                   url: finalUrl,
@@ -725,6 +750,8 @@ class NavigateTool extends BaseBrowserToolExecutor {
               if (typeof createdTab.id === 'number')
                 tabGroupManager.registerAgentTab(createdTab.id);
             }
+            const fallbackTab = fallbackWindow.tabs?.[0];
+            const fallbackUrl = fallbackTab?.url || (fallbackTab as any)?.pendingUrl || url;
 
             return {
               content: [
@@ -734,8 +761,9 @@ class NavigateTool extends BaseBrowserToolExecutor {
                     success: true,
                     message: 'Opened URL in new window',
                     created: true,
-                    tabId: fallbackWindow.tabs?.[0]?.id,
+                    tabId: fallbackTab?.id,
                     windowId: fallbackWindow.id,
+                    url: fallbackUrl,
                     tabs: fallbackWindow.tabs
                       ? fallbackWindow.tabs.map((tab) => ({
                           tabId: tab.id,

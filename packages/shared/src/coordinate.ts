@@ -19,8 +19,7 @@ export type PolymorphicCoordinate =
   | [number, number, number, number]
   | string
   | null
-  | undefined
-  | any;
+  | undefined;
 
 export interface UnifiedCoordinateOptions {
   viewportWidth?: number;
@@ -44,7 +43,7 @@ export interface ParsedCoordinate {
  * Parse any polymorphic multimodal coordinate into standard CSS viewport pixels { x, y }.
  */
 export function parseUnifiedCoordinate(
-  raw: PolymorphicCoordinate,
+  raw: unknown,
   options?: UnifiedCoordinateOptions,
 ): ParsedCoordinate | null {
   if (raw === null || raw === undefined) {
@@ -64,7 +63,7 @@ export function parseUnifiedCoordinate(
         .map((s) => parseFloat(s))
         .filter((n) => !isNaN(n));
       if (parts.length === 2 || parts.length === 4) {
-        return parseUnifiedCoordinate(parts as any, options);
+        return parseUnifiedCoordinate(parts, options);
       }
       return null;
     }
@@ -90,54 +89,55 @@ export function parseUnifiedCoordinate(
 
   // Handle nested wrapper objects
   if (typeof raw === 'object' && !Array.isArray(raw)) {
-    if (Array.isArray(raw.box_2d) && raw.box_2d.length === 4) {
-      const maxVal = Math.max(...raw.box_2d.map(Number));
+    const object = raw as Record<string, unknown>;
+    if (Array.isArray(object.box_2d) && object.box_2d.length === 4) {
+      const maxVal = Math.max(...object.box_2d.map(Number));
       const boxOpts: UnifiedCoordinateOptions = {
         ...options,
         pointFormat: options?.pointFormat || 'gemini',
         scale: options?.scale || (maxVal > 1 ? '1000' : 'fraction'),
       };
-      return parseUnifiedCoordinate(raw.box_2d, boxOpts);
+      return parseUnifiedCoordinate(object.box_2d, boxOpts);
     }
-    if (raw.point) {
-      const isArr = Array.isArray(raw.point);
-      const maxVal = isArr ? Math.max(...raw.point.map(Number)) : 0;
+    if (object.point) {
+      const point = object.point;
+      const maxVal = Array.isArray(point) ? Math.max(...point.map(Number)) : 0;
       const pointOpts: UnifiedCoordinateOptions = {
         ...options,
         pointFormat: options?.pointFormat || 'gemini',
-        scale: options?.scale || (isArr && maxVal > 1 ? '1000' : undefined),
+        scale: options?.scale || (maxVal > 1 ? '1000' : undefined),
       };
-      return parseUnifiedCoordinate(raw.point, pointOpts);
+      return parseUnifiedCoordinate(point, pointOpts);
     }
     if (
-      typeof raw.xmin === 'number' &&
-      typeof raw.xmax === 'number' &&
-      typeof raw.ymin === 'number' &&
-      typeof raw.ymax === 'number'
+      typeof object.xmin === 'number' &&
+      typeof object.xmax === 'number' &&
+      typeof object.ymin === 'number' &&
+      typeof object.ymax === 'number'
     ) {
       // Explicit named bounding box
-      return parseUnifiedCoordinate([raw.ymin, raw.xmin, raw.ymax, raw.xmax], options);
+      return parseUnifiedCoordinate([object.ymin, object.xmin, object.ymax, object.xmax], options);
     }
 
     const rawX =
-      typeof raw.x === 'number'
-        ? raw.x
-        : typeof raw.left === 'number'
-          ? raw.left
-          : typeof raw.x === 'string' && !isNaN(Number(raw.x))
-            ? Number(raw.x)
-            : typeof raw.left === 'string' && !isNaN(Number(raw.left))
-              ? Number(raw.left)
+      typeof object.x === 'number'
+        ? object.x
+        : typeof object.left === 'number'
+          ? object.left
+          : typeof object.x === 'string' && !isNaN(Number(object.x))
+            ? Number(object.x)
+            : typeof object.left === 'string' && !isNaN(Number(object.left))
+              ? Number(object.left)
               : undefined;
     const rawY =
-      typeof raw.y === 'number'
-        ? raw.y
-        : typeof raw.top === 'number'
-          ? raw.top
-          : typeof raw.y === 'string' && !isNaN(Number(raw.y))
-            ? Number(raw.y)
-            : typeof raw.top === 'string' && !isNaN(Number(raw.top))
-              ? Number(raw.top)
+      typeof object.y === 'number'
+        ? object.y
+        : typeof object.top === 'number'
+          ? object.top
+          : typeof object.y === 'string' && !isNaN(Number(object.y))
+            ? Number(object.y)
+            : typeof object.top === 'string' && !isNaN(Number(object.top))
+              ? Number(object.top)
               : undefined;
 
     if (

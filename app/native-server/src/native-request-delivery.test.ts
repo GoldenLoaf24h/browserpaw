@@ -1,4 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals';
+import { NativeMessageType } from 'chrome-mcp-shared';
 import { NativeMessagingHost } from './native-messaging-host';
 
 describe('Native request delivery evidence', () => {
@@ -48,7 +49,16 @@ describe('Native request delivery evidence', () => {
       const error = await rejected;
       expect(error).toMatchObject({ requestDispatched: true });
       expect(error).not.toHaveProperty('dispatched');
-      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(2);
+      const [original, cancellation] = send.mock.calls.map(([message]) => message as any);
+      expect(original).toMatchObject({ type: 'call_tool' });
+      expect(
+        send.mock.calls.filter(([message]) => (message as any)?.type === 'call_tool'),
+      ).toHaveLength(1);
+      expect(cancellation).toEqual({
+        type: NativeMessageType.CANCEL_TOOL,
+        payload: { requestId: original.requestId },
+      });
     } finally {
       jest.useRealTimers();
     }

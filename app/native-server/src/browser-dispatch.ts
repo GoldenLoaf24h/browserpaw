@@ -1,6 +1,7 @@
-import { NativeMessageType, type CallToolResult } from 'chrome-mcp-shared';
+import { NativeMessageType, TOOL_NAMES, type CallToolResult } from 'chrome-mcp-shared';
 import host from './native-messaging-host';
 import { createBrowserServices } from './browser-services';
+import { assertNotSensitivePath } from './file-handler';
 import {
   assertSourceDownloadRequest,
   tryParseCallResult,
@@ -32,12 +33,19 @@ async function extension(
       throw new Error(response.error || 'Task page control failed');
     return { content: [{ type: 'text', text: JSON.stringify(response.data) }] };
   }
+  const explicitTimeout = Number(args.timeout ?? args.timeoutMs);
+  const requestedTimeout =
+    Number.isFinite(explicitTimeout) && explicitTimeout > 0
+      ? Math.min(explicitTimeout, 300000)
+      : name === TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD
+        ? 60000
+        : undefined;
+  const transportTimeout =
+    requestedTimeout === undefined ? timeoutMs : Math.max(timeoutMs, requestedTimeout + 30000);
   const response = await host.sendRequestToExtensionAndWait(
     { name, args: { ...args, ...(sessionId ? { sessionId } : {}) }, sessionId },
     NativeMessageType.CALL_TOOL,
-    name === 'chrome_handle_download'
-      ? Math.max(timeoutMs, Math.min(Number(args.timeoutMs) || 60000, 300000) + 30000)
-      : timeoutMs,
+    transportTimeout,
     signal,
   );
   if (response.status !== 'success') {
@@ -87,6 +95,12 @@ export async function handleBrowserCall(
 ): Promise<CallToolResult> {
   try {
     signal.throwIfAborted();
+    if (name === TOOL_NAMES.BROWSER.FILE_UPLOAD) {
+      const filePaths = Array.isArray(args.filePaths) ? args.filePaths : [];
+      for (const candidate of [args.filePath, ...filePaths]) {
+        if (typeof candidate === 'string') assertNotSensitivePath(candidate);
+      }
+    }
     if (name === 'chrome_task' || name === 'chrome_skill') {
       services ??= createBrowserServices(extension);
       return await services.execute(name, args, sessionId, signal);

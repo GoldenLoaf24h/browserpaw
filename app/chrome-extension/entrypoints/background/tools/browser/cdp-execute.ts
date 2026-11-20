@@ -5,6 +5,8 @@ import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import { tabFaviconManager } from './tab-favicon';
 import { tabGroupManager } from './tab-group-manager';
 
+let cdpExecuteLeaseSequence = 0;
+
 export interface CdpExecuteTarget {
   tabId?: number;
   targetId?: string;
@@ -135,12 +137,19 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
     let timeoutTimer: any;
     let isTimedOut = false;
     let attachedSpecificTarget = false;
+    let standardTabOwner: string | undefined;
 
     try {
       const commandPromise = (async () => {
         // Route through cdpSessionManager if targeting a standard tab
         if (targetTabId !== undefined && !specificTargetId) {
-          return await cdpSessionManager.sendCommand(targetTabId, method, commandParams);
+          standardTabOwner = `cdp-execute:${targetTabId}:${method}:${++cdpExecuteLeaseSequence}`;
+          await cdpSessionManager.attach(targetTabId, standardTabOwner);
+          try {
+            return await cdpSessionManager.sendCommand(targetTabId, method, commandParams);
+          } finally {
+            await cdpSessionManager.detach(targetTabId, standardTabOwner).catch(() => {});
+          }
         }
         // Direct chrome.debugger fallback for out-of-process targetId
         if (specificTargetId && typeof chrome !== 'undefined' && chrome.debugger?.attach) {
@@ -160,10 +169,14 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
       const timeoutPromise = new Promise((_, reject) => {
         timeoutTimer = setTimeout(async () => {
           isTimedOut = true;
-          // Official ChatGPT Anti-Hang Guard: force-detach if stuck
-          if (targetTabId !== undefined && args.preserveDebuggerOnTimeout !== true) {
+          // Release this call's lease; physical detach is safe only when no other owner remains.
+          if (
+            targetTabId !== undefined &&
+            standardTabOwner &&
+            args.preserveDebuggerOnTimeout !== true
+          ) {
             try {
-              await cdpSessionManager.detach(targetTabId, 'timeout-guard');
+              await cdpSessionManager.detach(targetTabId, 'timeout-guard', standardTabOwner);
             } catch {}
           }
           if (

@@ -24,8 +24,10 @@
     "prepack": "node scripts/pack-assets.cjs"
   },
   "files": [
+    "LICENSE",
     "dist/v5/cli.cjs",
     "dist/v5/host.cjs",
+    "dist/v5/index.cjs",
     "dist/v5/cli-files.cjs",
     "dist/v5/run_host.bat",
     "dist/v5/run_host.sh",

@@ -348,8 +348,9 @@ describe('Verification Runner Core Contract', () => {
       }
     });
 
-    it('includes the 13 release steps and packaged CLI smoke test', () => {
-      assert.strictEqual(REQUIRED_STEP_NAMES.length, 13);
+    it('includes the 14 release steps and packaged CLI smoke test', () => {
+      assert.strictEqual(REQUIRED_STEP_NAMES.length, 14);
+      assert.ok(REQUIRED_STEP_NAMES.includes('hermes-pytest'));
       assert.ok(REQUIRED_STEP_NAMES.includes('package-smoke'));
       assert.ok(REQUIRED_STEP_NAMES.includes('node-version-check'));
       assert.ok(REQUIRED_STEP_NAMES.includes('prepare-shared-and-types'));

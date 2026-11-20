@@ -1,0 +1,51 @@
+{
+  "name": "dsh-browserpaw",
+  "version": "5.0.0",
+  "description": "DeepSeek Harness bundle for BrowserPaw: installs the browserpaw CLI and registers the canonical BrowserPaw Agent Skill.",
+  "type": "module",
+  "main": "index.js",
+  "license": "AGPL-3.0-or-later",
+  "author": "hangye",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GoldenLoaf24h/browserpaw.git",
+    "directory": "plugins/browserpaw-dsh"
+  },
+  "bugs": {
+    "url": "https://github.com/GoldenLoaf24h/browserpaw/issues"
+  },
+  "homepage": "https://github.com/GoldenLoaf24h/browserpaw/tree/main/plugins/browserpaw-dsh#readme",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis-plugin",
+    "browserpaw",
+    "cli",
+    "agent-skill",
+    "browser-automation"
+  ],
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "!**/AGENTS.md",
+    "!**/tests",
+    "!**/__pycache__",
+    "!**/*.test.*"
+  ],
+  "dependencies": {
+    "browserpaw": "^5.0.0"
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0",
+    "node": ">=22.6.0"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

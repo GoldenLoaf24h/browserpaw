@@ -5,7 +5,6 @@ import {
   isNewerVersion,
   checkVersionUpdate,
   formatAgentUpdateNotice,
-  AgentUpdateNotifier,
   MemoryVersionCacheStorage,
   VersionCacheEntry,
 } from 'chrome-mcp-shared';

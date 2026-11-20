@@ -16,6 +16,7 @@ interface NetworkCaptureToolParams {
   maxCaptureTime?: number;
   inactivityTimeout?: number;
   includeStatic?: boolean;
+  requestUrlPattern?: string;
 }
 
 /**
@@ -56,6 +57,13 @@ function isDebuggerCaptureActiveOnTab(tabId: number): boolean {
 
 function isWebRequestCaptureActiveOnTab(tabId: number): boolean {
   return networkCaptureStartTool.captureData.has(tabId);
+}
+
+function hasRetainedResultOnTab(tabId: number): boolean {
+  return (
+    networkDebuggerStartTool.hasTerminalResult(tabId) ||
+    networkCaptureStartTool.hasTerminalResult(tabId)
+  );
 }
 
 const tabCaptureSessions = new Map<number, string>();
@@ -148,6 +156,7 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       maxCaptureTime: args.maxCaptureTime,
       inactivityTimeout: args.inactivityTimeout,
       includeStatic: args.includeStatic,
+      requestUrlPattern: args.requestUrlPattern,
     } as any);
 
     // Only register session ownership if start actually succeeded
@@ -188,7 +197,9 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       );
       if (
         targetTab?.id &&
-        (isDebuggerCaptureActiveOnTab(targetTab.id) || isWebRequestCaptureActiveOnTab(targetTab.id))
+        (isDebuggerCaptureActiveOnTab(targetTab.id) ||
+          isWebRequestCaptureActiveOnTab(targetTab.id) ||
+          hasRetainedResultOnTab(targetTab.id))
       ) {
         targetTabId = targetTab.id;
       }
@@ -204,6 +215,32 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
     const webActive = isWebRequestCaptureActiveOnTab(targetTabId);
 
     if (!debuggerActive && !webActive) {
+      let retainedBackend: NetworkCaptureBackend | null = null;
+      if (args?.needResponseBody === true) {
+        retainedBackend = networkDebuggerStartTool.hasTerminalResult(targetTabId)
+          ? 'debugger'
+          : null;
+      } else if (args?.needResponseBody === false) {
+        retainedBackend = networkCaptureStartTool.hasTerminalResult(targetTabId)
+          ? 'webRequest'
+          : null;
+      } else if (networkDebuggerStartTool.hasTerminalResult(targetTabId)) {
+        retainedBackend = 'debugger';
+      } else if (networkCaptureStartTool.hasTerminalResult(targetTabId)) {
+        retainedBackend = 'webRequest';
+      }
+
+      if (retainedBackend) {
+        const delegateStop =
+          retainedBackend === 'debugger' ? networkDebuggerStopTool : networkCaptureStopTool;
+        const result = await delegateStop.execute({ tabId: targetTabId } as any);
+        tabCaptureSessions.delete(targetTabId);
+        return decorateJsonResult(result, {
+          backend: retainedBackend,
+          needResponseBody: retainedBackend === 'debugger',
+          tabId: targetTabId,
+        });
+      }
       return createErrorResponse(`No active network captures found on tab ${targetTabId}.`);
     }
 

@@ -99,6 +99,8 @@ export function checkPackageVersions(repoRoot) {
     { name: 'chrome-extension', file: 'app/chrome-extension/package.json' },
     { name: 'portable-plugin', file: 'plugins/browserpaw/plugin.json' },
     { name: 'claude-plugin', file: 'plugins/browserpaw-claude/.claude-plugin/plugin.json' },
+    { name: 'dsh-plugin', file: 'plugins/browserpaw-dsh/package.json' },
+    { name: 'hermes-plugin', file: 'plugins/browserpaw-hermes/plugin.yaml', format: 'yaml' },
   ];
 
   let canonicalVersion = null;

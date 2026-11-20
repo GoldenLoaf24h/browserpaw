@@ -8,6 +8,7 @@ Welcome to the **BrowserPaw** release archive. This directory contains individua
 
 | Version        | Status         | Release Notes                    | Description                                                         |
 | :------------- | :------------- | :------------------------------- | :------------------------------------------------------------------ |
+| **v5.0.0** | Local candidate | [v5.0.0.md](./v5.0.0.md) | CLI-first BrowserPaw, Native loopback host, Chrome MV3 connector and unified Agent Skills/plugins |
 | **v4.2.0** | Local preparation | [v4.2.0.md](./v4.2.0.md) | Nine-tool MCP default, exact discovery, CLI receipts and historical cleanup |
 | **Unreleased** | In Development | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates        |
 | **v3.3.0**     | Local Draft    | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance |

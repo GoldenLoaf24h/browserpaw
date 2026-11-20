@@ -56,6 +56,7 @@ describe('CdpExecuteTool (Industrial 1:1 Parity with Official CDP Engine)', () =
   });
 
   it('routes standard tabId via cdpSessionManager', async () => {
+    vi.spyOn(cdpSessionManager, 'attach').mockResolvedValueOnce();
     vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValueOnce({
       windowId: 42,
       bounds: { left: 0, top: 0, width: 1280, height: 800 },
@@ -75,6 +76,7 @@ describe('CdpExecuteTool (Industrial 1:1 Parity with Official CDP Engine)', () =
   });
 
   it('triggers anti-hang detach guard on command timeout', async () => {
+    vi.spyOn(cdpSessionManager, 'attach').mockResolvedValueOnce();
     const detachSpy = vi.spyOn(cdpSessionManager, 'detach').mockResolvedValueOnce(undefined as any);
     vi.spyOn(cdpSessionManager, 'sendCommand').mockImplementationOnce(
       () => new Promise((resolve) => setTimeout(resolve, 500)),
@@ -90,6 +92,10 @@ describe('CdpExecuteTool (Industrial 1:1 Parity with Official CDP Engine)', () =
     expect(res.isError).toBe(true);
     expect((res.content[0] as any).text).toContain('Timed out after 40ms');
     // Verifies official anti-hang guard detached the frozen session
-    expect(detachSpy).toHaveBeenCalledWith(1, 'timeout-guard');
+    expect(detachSpy).toHaveBeenCalledWith(
+      1,
+      'timeout-guard',
+      expect.stringMatching(/^cdp-execute:1:Page\.navigate:/),
+    );
   });
 });

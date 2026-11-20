@@ -16,17 +16,19 @@
       "interface": {
         "displayName": "BrowserPaw",
         "shortDescription": "Automate your Chrome session",
-        "longDescription": "Use your everyday Chrome through a controllable, readable, and verifiable local automation service while reusing existing sessions and authentication.",
+        "longDescription": "Automate your everyday Chrome or Chromium session through the BrowserPaw CLI and self-learning site workflows while reusing existing logins and extensions.",
         "developerName": "BrowserPaw Team",
         "category": "Productivity",
         "capabilities": [
           "Browser Automation",
-          "DOM Accessibility Tree",
-          "CDP Control",
+          "CLI Workflow Control",
+          "Learned Site Recipes",
           "Session Reuse"
         ],
         "websiteURL": "https://github.com/GoldenLoaf24h/browserpaw",
-        "defaultPrompt": ["Open Chrome and inspect my active webpage"]
+        "defaultPrompt": ["Open Chrome and inspect my active webpage"],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png"
       }
     }
   }

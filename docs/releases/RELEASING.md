@@ -93,7 +93,7 @@ gh release edit $releaseTag --draft=false --latest=true
 gh release view $releaseTag --json url,tagName,name,isDraft,isPrerelease,assets
 ```
 
-Confirm it is published, inspect the resulting page and attachments, and report its URL. If the release needs a correction, update the canonical version note and the remote body together; do not silently rewrite previous release claims.
+Confirm the release is public and its extension ZIP can be downloaded before making the matching CLI version available on npm's `latest` tag. The update notice directs users to that ZIP. Keep any corrections to the canonical release note and public release body in sync.
 
 ## Automation boundary
 

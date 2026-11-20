@@ -2,7 +2,14 @@ import { describe, expect, it, jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultSkillTargetRoot, installSkill } from './skill-install';
+import {
+  defaultSkillTargetRoot,
+  installSkill,
+  projectSkillTargetRoot,
+  resolveSkillTargetRoot,
+  syncInstalledSkillRouting,
+  upgradeInstalledSkill,
+} from './skill-install';
 
 function sourceFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-source-'));
@@ -20,6 +27,72 @@ function sourceFixture() {
 }
 
 describe('BrowserPaw neutral skill installer', () => {
+  it('refreshes an older managed project Skill in place and skips a newer or unmanaged Skill', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-upgrade-'));
+    const sourceDir = sourceFixture();
+    try {
+      const { installedPath } = installSkill({
+        sourceDir,
+        scope: 'project',
+        cwd: project,
+        version: '5.0.0',
+      });
+      fs.writeFileSync(path.join(sourceDir, 'references', 'tools.md'), '# New commands\n');
+      expect(upgradeInstalledSkill(installedPath, { sourceDir, version: '5.1.0' })).toMatchObject({
+        installedPath,
+        scope: 'project',
+        version: '5.1.0',
+      });
+      expect(fs.readFileSync(path.join(installedPath, 'references', 'tools.md'), 'utf8')).toBe(
+        '# New commands\n',
+      );
+      expect(upgradeInstalledSkill(installedPath, { sourceDir, version: '5.0.0' })).toBeUndefined();
+      fs.unlinkSync(path.join(installedPath, '.browserpaw-skill.json'));
+      expect(upgradeInstalledSkill(installedPath, { sourceDir, version: '5.2.0' })).toBeUndefined();
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed Learned Workflows marker blocks without rewriting the Skill', () => {
+    const sourceDir = sourceFixture();
+    const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-markers-'));
+    const start = '<!-- browserpaw:learned:start -->';
+    const end = '<!-- browserpaw:learned:end -->';
+    try {
+      const installed = installSkill({ sourceDir, targetRoot, version: '5.0.0' });
+      const skillFile = path.join(installed.installedPath, 'SKILL.md');
+      const original = fs.readFileSync(skillFile, 'utf8');
+      const entries = [
+        {
+          id: 'example',
+          kind: 'recipe' as const,
+          name: 'Example',
+          description: 'Example workflow',
+          domains: ['example.com'],
+          command: 'browserpaw recipe run example',
+        },
+      ];
+
+      for (const suffix of [
+        `\n${start}\n`,
+        `\n${end}\n`,
+        `\n${end}\n${start}\n`,
+        `\n${start}\n${end}\n${start}\n${end}\n`,
+      ]) {
+        fs.writeFileSync(skillFile, `${original.trimEnd()}${suffix}`);
+        expect(() => syncInstalledSkillRouting(installed.installedPath, entries)).toThrow(
+          /Malformed BrowserPaw Learned Workflows markers.*run setup again/,
+        );
+        expect(fs.readFileSync(skillFile, 'utf8')).toBe(`${original.trimEnd()}${suffix}`);
+      }
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
+
   it('uses ~/.agents/skills/browserpaw by default and supports custom skills roots', () => {
     expect(defaultSkillTargetRoot()).toBe(path.join(os.homedir(), '.agents', 'skills'));
     const sourceDir = sourceFixture();
@@ -35,12 +108,83 @@ describe('BrowserPaw neutral skill installer', () => {
       expect(marker).toMatchObject({
         name: 'browserpaw',
         version: '4.0.0',
+        scope: 'custom',
         source: 'bundled:skills/browserpaw',
+        baseDescription: 'neutral',
       });
       expect(fs.readdirSync(targetRoot).filter((name) => name.includes('staging'))).toEqual([]);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('supports standard user/project scopes and syncs learned routing idempotently', () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-skill-project-'));
+    const sourceDir = sourceFixture();
+    try {
+      expect(projectSkillTargetRoot(projectRoot)).toBe(path.join(projectRoot, '.agents', 'skills'));
+      expect(resolveSkillTargetRoot({ scope: 'global' })).toEqual({
+        targetRoot: defaultSkillTargetRoot(),
+        scope: 'user',
+      });
+      expect(resolveSkillTargetRoot({ scope: 'project', cwd: projectRoot })).toEqual({
+        targetRoot: path.join(projectRoot, '.agents', 'skills'),
+        scope: 'project',
+      });
+      expect(() => resolveSkillTargetRoot({ scope: 'project', targetRoot: projectRoot })).toThrow(
+        /not both/,
+      );
+      expect(() => resolveSkillTargetRoot({ scope: 'workspace' })).toThrow(/user or project/);
+
+      const installed = installSkill({
+        sourceDir,
+        scope: 'project',
+        cwd: projectRoot,
+        version: '5.0.0',
+      });
+      expect(installed.scope).toBe('project');
+      expect(installed.installedPath).toBe(
+        path.join(projectRoot, '.agents', 'skills', 'browserpaw'),
+      );
+
+      const entries = [
+        {
+          id: 'x-search-thread',
+          kind: 'skill' as const,
+          name: 'X search results reader',
+          description: 'Read visible X search results',
+          domains: ['x.com', 'twitter.com'],
+          command: 'browserpaw recipe run x-search-thread query=<query>',
+        },
+      ];
+      expect(syncInstalledSkillRouting(installed.installedPath, entries)).toBe(true);
+      const firstSync = fs.readFileSync(path.join(installed.installedPath, 'SKILL.md'), 'utf8');
+      expect(firstSync).toContain('x-search-thread (x.com/twitter.com)');
+      expect(firstSync).toContain('browserpaw recipe run x-search-thread query=<query>');
+
+      expect(syncInstalledSkillRouting(installed.installedPath, entries)).toBe(true);
+      const secondSync = fs.readFileSync(path.join(installed.installedPath, 'SKILL.md'), 'utf8');
+      expect(secondSync).toBe(firstSync);
+
+      expect(syncInstalledSkillRouting(installed.installedPath, [])).toBe(true);
+      const cleared = fs.readFileSync(path.join(installed.installedPath, 'SKILL.md'), 'utf8');
+      expect(cleared).not.toContain('x-search-thread');
+      expect(cleared).toContain('description: "neutral"');
+
+      const unmarked = path.join(projectRoot, 'unmarked');
+      fs.mkdirSync(unmarked, { recursive: true });
+      fs.writeFileSync(
+        path.join(unmarked, 'SKILL.md'),
+        '---\nname: custom\ndescription: keep\n---\n',
+      );
+      expect(syncInstalledSkillRouting(unmarked, entries)).toBe(false);
+      expect(fs.readFileSync(path.join(unmarked, 'SKILL.md'), 'utf8')).toContain(
+        'description: keep',
+      );
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
     }
   });
 

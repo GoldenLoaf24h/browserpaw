@@ -7,6 +7,8 @@ const canonicalDir = 'skills/browserpaw';
 const targets = {
   portable: 'plugins/browserpaw/skills/browserpaw',
   claude: 'plugins/browserpaw-claude/skills/browserpaw',
+  dsh: 'plugins/browserpaw-dsh/skills/browserpaw',
+  hermes: 'plugins/browserpaw-hermes/skills/browserpaw',
 };
 
 const clientLeak = /\b(?:Hermes|Claude|Codex|ChatGPT|DSH)\b|mcp__|\.codex-plugin|mcp-skills/;
@@ -161,12 +163,18 @@ function assertCanonical(root) {
 function assertPackageIdentity(root) {
   const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   for (const manifest of [
-    'plugins/browserpaw/plugin.json',
-    'plugins/browserpaw-claude/.claude-plugin/plugin.json',
+    { file: 'plugins/browserpaw/plugin.json', format: 'json' },
+    { file: 'plugins/browserpaw-claude/.claude-plugin/plugin.json', format: 'json' },
+    { file: 'plugins/browserpaw-dsh/package.json', format: 'json' },
+    { file: 'plugins/browserpaw-hermes/plugin.yaml', format: 'yaml' },
   ]) {
-    const actual = JSON.parse(fs.readFileSync(path.join(root, manifest), 'utf8')).version;
+    const raw = fs.readFileSync(path.join(root, manifest.file), 'utf8');
+    const actual =
+      manifest.format === 'yaml'
+        ? raw.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m)?.[1]
+        : JSON.parse(raw).version;
     if (actual !== version)
-      throw new Error(`${manifest} version ${actual} does not match ${version}`);
+      throw new Error(`${manifest.file} version ${actual} does not match ${version}`);
   }
   return { version };
 }
@@ -176,7 +184,13 @@ export function syncSkills(root = repoRoot, { check = false } = {}) {
   assertCanonical(absoluteRoot);
   const identity = assertPackageIdentity(absoluteRoot);
   const canonicalTree = readTree(absoluteRoot, canonicalDir);
-  const expected = { portable: canonicalTree, claude: canonicalTree, native: canonicalTree };
+  const expected = {
+    portable: canonicalTree,
+    claude: canonicalTree,
+    dsh: canonicalTree,
+    hermes: canonicalTree,
+    native: canonicalTree,
+  };
   const nativeTarget = 'app/native-server/dist/v5/skill/browserpaw';
   assertNoLinks(absoluteRoot, path.join(absoluteRoot, nativeTarget));
   const activeTargets = { ...targets };

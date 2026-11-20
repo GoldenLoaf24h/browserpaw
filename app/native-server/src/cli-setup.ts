@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -13,22 +14,25 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
-import { HOST_NAME, CURRENT_VERSION, type ParsedCommand } from 'chrome-mcp-shared';
+import { HOST_NAME, CURRENT_VERSION, GITHUB_REPO_URL, type ParsedCommand } from 'chrome-mcp-shared';
 import { BrowserType, getBrowserConfig } from './scripts/browser-config';
-import { installSkill } from './skill-install';
+import { installSkill, upgradeInstalledSkill, type InstalledSkillScope } from './skill-install';
+import { loadLearnedWorkflows, syncLearnedRouting } from './learned-recipes';
 import type { requestHost as hostRequest } from './command-client';
 
 const installationRoot = () =>
   resolve(process.env.BROWSERPAW_HOME || join(homedir(), '.browserpaw'));
 const files = ['host.cjs', 'run_host.bat', 'run_host.sh'];
+type SkillMode = 'managed' | 'disabled' | 'plugin';
 
 interface Installation {
   version: string;
   browsers: BrowserType[];
+  skillMode?: SkillMode;
   skillPath?: string;
+  skillScope?: InstalledSkillScope;
+  skillPaths?: string[];
   extensionId: string;
-  buildId?: string;
 }
 
 function readJson(path: string) {
@@ -135,6 +139,8 @@ function installHost(destination: string) {
   for (const file of files) {
     const source = join(__dirname, file);
     replace(file, readFileSync(source), statSync(source).mode & 0o777);
+    if (file === 'run_host.sh' && process.platform !== 'win32')
+      chmodSync(join(destination, file), 0o755);
   }
   replace('node_path.txt', Buffer.from(process.execPath + '\n'), 0o600);
   replaceDirectory(join(destination, 'recipes'), (staging) =>
@@ -149,34 +155,58 @@ export async function manageInstallation(command: ParsedCommand, requestHost: ty
   if (command.name === 'uninstall') {
     if (!previous) return { installed: false };
     for (const browser of previous.browsers) unregister(root, browser, previous.extensionId);
-    if (previous.skillPath) {
-      const marker = readJson(join(previous.skillPath, '.browserpaw-skill.json'));
-      if (marker?.name === 'browserpaw')
-        rmSync(previous.skillPath, { recursive: true, force: true });
+    const managedSkills = new Set<string>([
+      ...(Array.isArray(previous.skillPaths) ? previous.skillPaths : []),
+      ...(previous.skillPath ? [previous.skillPath] : []),
+    ]);
+    for (const candidate of managedSkills) {
+      const marker = readJson(join(candidate, '.browserpaw-skill.json'));
+      if (marker?.name === 'browserpaw') rmSync(candidate, { recursive: true, force: true });
     }
     for (const target of ['host', 'extension'])
       rmSync(join(root, target), { recursive: true, force: true });
     rmSync(recordPath, { force: true });
     if (command.options.purge) {
-      for (const target of ['tasks.json', 'skills', 'recipes', 'out', 'logs', 'token', 'host.json'])
+      for (const target of [
+        'tasks.json',
+        'skills',
+        'recipes',
+        'learned-index.json',
+        'out',
+        'logs',
+        'token',
+        'host.json',
+      ])
         rmSync(join(root, target), { recursive: true, force: true });
     }
     return { installed: false, dataPreserved: !command.options.purge };
   }
   if (command.name === 'doctor') {
     if (command.options.fix && !previous) throw new Error('Run browserpaw setup first.');
-    if (command.options.fix && previous)
+    if (command.options.fix && previous) {
       for (const browser of previous.browsers) register(root, browser, previous.extensionId);
+      syncLearnedRouting(root);
+    }
     const installedHost = existsSync(join(root, 'host', 'host.cjs'));
     const extension = join(root, 'extension');
     const host = await requestHost('status', undefined, 4000)
       .then(async (response) => (response.ok ? await response.json() : undefined))
       .catch(() => undefined);
+    const learnedCount = loadLearnedWorkflows(root, { includeCandidates: false }).length;
     return {
       installed: previous?.version,
       hostPresent: installedHost,
       extension,
       extensionPresent: existsSync(join(extension, 'manifest.json')),
+      ...(previous?.skillPath
+        ? {
+            skillPath: previous.skillPath,
+            skillScope: previous.skillScope ?? 'user',
+            skillPresent: existsSync(join(previous.skillPath, 'SKILL.md')),
+          }
+        : {}),
+      learnedHome: root,
+      learnedCount,
       host,
       registeredBrowsers:
         previous?.browsers.map((browser) => {
@@ -194,11 +224,15 @@ export async function manageInstallation(command: ParsedCommand, requestHost: ty
           : 'Run browserpaw status.',
     };
   }
-  const browser = command.options.browser ?? 'chrome';
-  if (browser !== 'chrome' && browser !== 'chromium' && browser !== 'all')
+  const browser = command.options.browser;
+  if (browser !== undefined && browser !== 'chrome' && browser !== 'chromium' && browser !== 'all')
     throw new Error('Use --browser chrome, chromium, or all.');
   const browsers =
-    browser === 'all' ? [BrowserType.CHROME, BrowserType.CHROMIUM] : [browser as BrowserType];
+    browser === 'all'
+      ? [BrowserType.CHROME, BrowserType.CHROMIUM]
+      : browser
+        ? [browser as BrowserType]
+        : (previous?.browsers ?? [BrowserType.CHROME]);
   const extensionSource = join(__dirname, 'extension');
   const extension = readJson(join(extensionSource, 'manifest.json'));
   if (typeof extension?.key !== 'string')
@@ -219,72 +253,130 @@ export async function manageInstallation(command: ParsedCommand, requestHost: ty
   assertNoLinks(root);
   const unlock = acquireLock(join(root, '.installation.lock'));
   try {
-    for (const name of ['host', 'extension']) {
+    const managedArtifactDirectory = (name: 'host' | 'extension') => {
+      const directory = join(root, name);
+      if (name === 'host') return files.some((file) => existsSync(join(directory, file)));
+      try {
+        return readJson(join(directory, 'manifest.json'))?.name === 'browserpaw';
+      } catch {
+        return false;
+      }
+    };
+    for (const name of ['host', 'extension'] as const) {
       const entry = lstatSync(join(root, name), { throwIfNoEntry: false });
-      if (entry && (!entry.isDirectory() || entry.isSymbolicLink() || !previous))
+      if (
+        entry &&
+        (!entry.isDirectory() ||
+          entry.isSymbolicLink() ||
+          (!previous && !managedArtifactDirectory(name)))
+      )
         throw new Error(
           `Existing directory is outside the managed installation: ${join(root, name)}`,
         );
     }
     let skillPath = previous?.skillPath;
-    if (!command.options['no-skill'])
-      skillPath = installSkill({
+    let skillScope = previous?.skillScope;
+    const skillPaths = new Set<string>([
+      ...(Array.isArray(previous?.skillPaths) ? previous.skillPaths : []),
+      ...(previous?.skillPath ? [previous.skillPath] : []),
+    ]);
+    const updatedSkillPaths: string[] = [];
+    const requestedScope =
+      typeof command.options['skill-scope'] === 'string'
+        ? command.options['skill-scope']
+        : undefined;
+    const requestedDir =
+      typeof command.options['skill-dir'] === 'string' ? command.options['skill-dir'] : undefined;
+    if (command.options['no-skill'] && (requestedScope || requestedDir)) {
+      throw new Error('Do not combine --no-skill with --skill-scope or --skill-dir.');
+    }
+    const usesPluginSkill = previous?.skillMode === 'plugin' && !requestedScope && !requestedDir;
+    let skillMode: SkillMode = command.options['no-skill']
+      ? 'disabled'
+      : usesPluginSkill
+        ? 'plugin'
+        : 'managed';
+    if (!command.options['no-skill'] && !usesPluginSkill) {
+      const installedSkill = installSkill({
         force: true,
-        targetRoot:
-          typeof command.options['skill-dir'] === 'string'
-            ? command.options['skill-dir']
-            : skillPath
-              ? dirname(skillPath)
-              : undefined,
-      }).installedPath;
-    const build = readJson(join(extensionSource, 'browserpaw-build.json'));
-    const priorPid = previous ? readJson(join(root, 'host.json'))?.pid : undefined;
-    writeJson(recordPath, {
-      version: CURRENT_VERSION,
-      browsers,
-      skillPath,
-      extensionId,
-      buildId: build?.buildId,
-    });
+        version: CURRENT_VERSION,
+        ...(requestedScope ? { scope: requestedScope } : {}),
+        ...(requestedDir
+          ? { targetRoot: requestedDir }
+          : !requestedScope && skillPath
+            ? { targetRoot: dirname(skillPath) }
+            : {}),
+      });
+      skillPath = installedSkill.installedPath;
+      skillScope =
+        requestedScope || requestedDir
+          ? installedSkill.scope
+          : (previous?.skillScope ?? installedSkill.scope);
+      skillMode = 'managed';
+      skillPaths.add(skillPath);
+      updatedSkillPaths.push(skillPath);
+      for (const candidate of skillPaths) {
+        if (
+          candidate !== skillPath &&
+          upgradeInstalledSkill(candidate, { version: CURRENT_VERSION })
+        ) {
+          updatedSkillPaths.push(candidate);
+        }
+      }
+    }
+    const extensionTarget = join(root, 'extension');
+    const manifestPath = join(extensionTarget, 'manifest.json');
+    let hasValidManifest = false;
+    if (existsSync(manifestPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+          name?: unknown;
+        };
+        hasValidManifest =
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          typeof parsed.name === 'string' &&
+          parsed.name.trim().length > 0;
+      } catch {
+        hasValidManifest = false;
+      }
+    }
+    const extensionPrepared = !previous || !hasValidManifest;
+    if (extensionPrepared) {
+      replaceDirectory(extensionTarget, (target) =>
+        cpSync(extensionSource, target, { recursive: true }),
+      );
+    }
     installHost(join(root, 'host'));
-    replaceDirectory(join(root, 'extension'), (target) =>
-      cpSync(extensionSource, target, { recursive: true }),
-    );
     for (const browser of browsers) register(root, browser, extensionId);
     for (const browser of previous?.browsers ?? []) {
       if (!browsers.includes(browser)) unregister(root, browser, previous!.extensionId);
     }
-    const restart = previous
-      ? await requestHost('restart', {}, 4000).catch(() => undefined)
-      : undefined;
-    let reconnected = false;
-    if (restart?.ok) {
-      const deadline = Date.now() + 5000;
-      while (Date.now() < deadline) {
-        const status = await requestHost('status', undefined, 700)
-          .then((response) => (response.ok ? response.json() : undefined))
-          .catch(() => undefined);
-        if (
-          status?.connected &&
-          status.pid !== priorPid &&
-          status.extension?.buildId === build?.buildId
-        ) {
-          reconnected = true;
-          break;
-        }
-        await delay(200);
-      }
-    }
+    const routing = syncLearnedRouting(root, [...skillPaths]);
+    writeJson(recordPath, {
+      version: CURRENT_VERSION,
+      browsers,
+      skillMode,
+      skillPath,
+      skillScope,
+      skillPaths: [...skillPaths],
+      extensionId,
+    });
+    const releaseAsset = `${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip`;
     return {
       installed: true,
       extension: join(root, 'extension'),
       extensionId,
       skillPath,
-      reloadRequested: restart?.ok ?? false,
-      reconnected,
-      next: reconnected
-        ? 'BrowserPaw is connected. Run browserpaw status to inspect the loaded build.'
-        : 'Open chrome://extensions, enable Developer mode, then load the installed extension directory or reload it if already loaded.',
+      updatedSkillPaths,
+      ...(skillScope ? { skillScope } : {}),
+      learnedHome: root,
+      learnedCount: routing.workflowCount,
+      extensionPrepared,
+      ...(previous && !extensionPrepared ? { releaseAsset } : {}),
+      next: extensionPrepared
+        ? 'Open chrome://extensions, enable Developer mode, then load the installed extension directory.'
+        : 'If the extension version differs, download and unpack the release ZIP from releaseAsset. Load it in chrome://extensions or reload after replacing the files in the loaded directory. Reload an already matching extension to reconnect the host, then run browserpaw status.',
     };
   } finally {
     unlock();

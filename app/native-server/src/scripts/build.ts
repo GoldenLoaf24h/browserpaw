@@ -127,6 +127,7 @@ export async function runBuild(): Promise<void> {
     noExternal: [/.*/],
   });
 
+  fs.copyFileSync(path.join(distDir, 'host.cjs'), path.join(distDir, 'index.cjs'));
   copyCliClientFiles(path.join(__dirname, '..'), distDir);
 
   // Copy installation instructions
@@ -180,7 +181,7 @@ export async function runBuild(): Promise<void> {
 
   // Add executable permissions for key JavaScript files and shell scripts
   console.log('Adding executable permissions...');
-  const filesToMakeExecutable = ['host.cjs', 'cli.cjs', 'run_host.sh'];
+  const filesToMakeExecutable = ['host.cjs', 'index.cjs', 'cli.cjs', 'run_host.sh'];
 
   filesToMakeExecutable.forEach((file) => {
     const filePath = path.join(distDir, file); // filePath target

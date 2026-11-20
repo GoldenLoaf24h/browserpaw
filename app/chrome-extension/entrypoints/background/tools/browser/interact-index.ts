@@ -757,18 +757,34 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               for (const pt of scaledPoints) {
                 throwIfAborted(signal, 'before sequence click press');
                 await assertCaptureBinding();
-                await dispatchMousePressRelease(
-                  (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
+                const pointGuard = createMousePressGuard(
+                  (params) => {
+                    actionDispatched = true;
+                    return raceCdp(tabId, 'Input.dispatchMouseEvent', params);
+                  },
                   {
+                    type: 'mouseReleased',
+                    x: pt.x,
+                    y: pt.y,
+                    button: 'left',
+                    buttons: 0,
+                    clickCount: 1,
+                  },
+                );
+                try {
+                  await pointGuard.press({
                     type: 'mousePressed',
                     x: pt.x,
                     y: pt.y,
                     button: 'left',
                     buttons: 1,
                     clickCount: 1,
-                  },
-                );
-                dispatched++;
+                  });
+                  dispatched++;
+                  await pointGuard.release();
+                } finally {
+                  await pointGuard.compensate();
+                }
                 if (dispatched < scaledPoints.length) {
                   await new Promise((r) => setTimeout(r, interval));
                 }
@@ -776,11 +792,33 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             });
             lastMousePosMap.set(tabId, { x: scaledPoints.at(-1)!.x, y: scaledPoints.at(-1)!.y });
           } catch (burstErr) {
-            if (burstErr instanceof DialogOpenedError) {
+            const failureMessage = `click_sequence failed after ${dispatched} points: ${
+              burstErr instanceof Error ? burstErr.message : String(burstErr)
+            }`;
+            if (burstErr instanceof DialogOpenedError && !actionDispatched) {
               return createDialogInterruptResponse(burstErr);
             }
-            return createErrorResponse(
-              `click_sequence failed after ${dispatched} points: ${burstErr instanceof Error ? burstErr.message : String(burstErr)}`,
+            return createInteractionErrorResponse(
+              failureMessage,
+              makeInteractionOutcome(
+                actionDispatched ? 'unknown' : 'not_dispatched',
+                'not_requested',
+                failureMessage,
+                dispatched,
+              ),
+              {
+                status: actionDispatched ? 'unknown' : 'blocked',
+                requestDispatched: actionDispatched,
+                retry: !actionDispatched,
+                action: 'click_sequence',
+                pointsDispatched: dispatched,
+                ...(burstErr instanceof DialogOpenedError
+                  ? {
+                      requiresDialogAction: true,
+                      dialog: burstErr.dialog,
+                    }
+                  : {}),
+              },
             );
           } finally {
             if (shouldLockScroll) {
@@ -1677,17 +1715,15 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                     await new Promise((r) => setTimeout(r, rightPrePress));
                   }
                   throwIfAborted(signal, 'before right_click press');
-                  await dispatchMousePressRelease(
+                  let contextMenuProbeArmed = false;
+                  let trustedContextMenu: boolean | undefined;
+                  try {
+                    await executeInPage(targetScope, 'inPageArmDeliveryProbe', [['contextmenu']]);
+                    contextMenuProbeArmed = true;
+                  } catch {}
+
+                  const rightClickGuard = createMousePressGuard(
                     (params) => raceCdp(tabId, 'Input.dispatchMouseEvent', params),
-                    {
-                      type: 'mousePressed',
-                      x,
-                      y,
-                      button: 'right',
-                      buttons: 2,
-                      clickCount: 1,
-                      modifiers: modifierMask,
-                    },
                     {
                       type: 'mouseReleased',
                       x,
@@ -1698,26 +1734,54 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       modifiers: modifierMask,
                     },
                   );
-
-                  // Secondary guarantee for right_click: contextmenu synthetic event
                   try {
+                    await rightClickGuard.press({
+                      type: 'mousePressed',
+                      x,
+                      y,
+                      button: 'right',
+                      buttons: 2,
+                      clickCount: 1,
+                      modifiers: modifierMask,
+                    });
+                    actionDispatched = true;
+                    await rightClickGuard.release();
+                  } finally {
+                    await rightClickGuard.compensate();
+                    if (contextMenuProbeArmed) {
+                      try {
+                        const probe = (
+                          await executeInPage(targetScope, 'inPageReadDeliveryProbe', [true])
+                        )?.[0]?.result;
+                        if (probe?.missing !== true) {
+                          trustedContextMenu = Boolean(probe?.delivered);
+                        }
+                      } catch {}
+                    }
+                  }
+
+                  // Only synthesize contextmenu when the trusted CDP click's
+                  // capture-phase probe confirmed that no event was delivered.
+                  if (contextMenuProbeArmed && trustedContextMenu === false) {
                     const targetSubframeScope =
                       targetFrameId && targetFrameId !== 0
                         ? { tabId, frameIds: [targetFrameId] }
                         : { tabId };
-                    if (typeof args.index === 'number') {
-                      await executeInPage(targetSubframeScope, 'inPageInteractIndex', [
-                        args.index,
-                        'right_click',
-                      ]);
-                    } else {
-                      await executeInPage(targetSubframeScope, 'inPageDispatchSyntheticClick', [
-                        x,
-                        y,
-                        'right_click',
-                      ]);
-                    }
-                  } catch {}
+                    try {
+                      if (typeof args.index === 'number') {
+                        await executeInPage(targetSubframeScope, 'inPageInteractIndex', [
+                          args.index,
+                          'right_click',
+                        ]);
+                      } else {
+                        await executeInPage(targetSubframeScope, 'inPageDispatchSyntheticClick', [
+                          x,
+                          y,
+                          'right_click',
+                        ]);
+                      }
+                    } catch {}
+                  }
                 } else if (action === 'hover') {
                   // Mouse movement already dispatched above
                 }

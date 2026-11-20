@@ -1,10 +1,30 @@
-import { readFile, mkdir, copyFile, readdir, rm } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { mkdir, copyFile, rm } from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseCommand, type ParsedCommand } from 'chrome-mcp-shared';
 import { handleBrowserCall } from './browser-dispatch';
 import { tryParseCallResult } from './browser-tasks';
-import { TOKEN_DIR } from './server/token';
+import {
+  browserPawHome,
+  coerceWorkflowInputs,
+  expandRecipeSteps,
+  findLearnedWorkflows,
+  formatRunCommand,
+  isVerifiedSkillPayload,
+  listLearnedWorkflows,
+  loadLearnedWorkflows,
+  matchLearnedWorkflows,
+  parseRecipeKeyValues,
+  recipesDirectory,
+  savedRecipeFilePath,
+  savedRecipeInputs,
+  schemaToInputSpecs,
+  showLearnedWorkflow,
+  skillsDirectory,
+  syncLearnedRouting,
+  validateSavedRecipe,
+  type SavedRecipe,
+} from './learned-recipes';
 
 type Fields = Record<string, unknown>;
 type BackendResult = Awaited<ReturnType<typeof handleBrowserCall>>;
@@ -65,6 +85,61 @@ function failed(result: BackendResult) {
   );
 }
 
+function truncateTextResult(result: BackendResult, maxChars: number): BackendResult {
+  const data = tryParseCallResult(result);
+  const extracted =
+    data?.extractedData &&
+    typeof data.extractedData === 'object' &&
+    !Array.isArray(data.extractedData)
+      ? (data.extractedData as Fields)
+      : undefined;
+  const resultEntry = Array.isArray(data?.results)
+    ? data.results.find(
+        (entry): entry is Fields =>
+          Boolean(entry) &&
+          typeof entry === 'object' &&
+          !Array.isArray(entry) &&
+          (entry as Fields).variableName === 'text',
+      )
+    : undefined;
+  let contentIndex: number | undefined = result.content?.findIndex(
+    (block) => block.type === 'text' && typeof block.text === 'string',
+  );
+  if (contentIndex !== undefined && contentIndex < 0) contentIndex = undefined;
+  const contentBlock = contentIndex === undefined ? undefined : result.content?.[contentIndex];
+  const original =
+    (typeof extracted?.text === 'string' ? extracted.text : undefined) ??
+    (typeof resultEntry?.value === 'string' ? resultEntry.value : undefined) ??
+    (contentBlock?.type === 'text' ? contentBlock.text : undefined);
+  if (original === undefined) return result;
+
+  const text = original.slice(0, maxChars);
+  const truncated = text.length !== original.length;
+  const updatedData = data ? { ...data } : undefined;
+  if (updatedData && extracted && typeof extracted.text === 'string')
+    updatedData.extractedData = { ...extracted, text };
+  if (updatedData && resultEntry) {
+    updatedData.results = (updatedData.results as Fields[]).map((entry) =>
+      entry === resultEntry || entry.variableName === 'text' ? { ...entry, value: text } : entry,
+    );
+  }
+  const content = result.content?.map((block, index) => {
+    if (updatedData && index === 0 && block.type === 'text')
+      return { ...block, text: JSON.stringify(updatedData) };
+    if (!updatedData && index === contentIndex) return { ...block, text };
+    return block;
+  });
+  return {
+    ...result,
+    ...(content ? { content } : {}),
+    structuredContent: {
+      ...(updatedData ?? {}),
+      truncated,
+      originalChars: original.length,
+    },
+  };
+}
+
 function argumentCount(command: ParsedCommand, minimum: number, maximum = minimum) {
   if (command.operands.length < minimum || command.operands.length > maximum)
     throw new CommandError(`Incorrect operands. Run browserpaw help ${command.name}.`);
@@ -84,8 +159,11 @@ const withoutPage = new Set([
   'tab close',
   'batch',
   'recipe list',
+  'recipe find',
+  'recipe show',
   'recipe run',
   'recipe save',
+  'recipe validate',
   'recipe rm',
   'doctor',
 ]);
@@ -168,20 +246,27 @@ export async function dispatchCommand(
     case 'doctor':
       argumentCount(command, 0);
       return run('chrome_doctor', { verbose: true }, false);
-    case 'open':
+    case 'open': {
       argumentCount(command, 1);
       if (taskId && options.foreground)
         throw new CommandError('Open the task page in the background, then use tab focus.');
-      return taskId
+      const opened = await (taskId
         ? task('open', { url: first })
         : run(
             'chrome_navigate',
             { url: first, newTab: true, background: !options.foreground },
             false,
-          );
-    case 'nav':
+          ));
+      return attachMatchedRecipes(opened, first);
+    }
+    case 'nav': {
       argumentCount(command, 1);
-      return run('chrome_navigate', first === 'reload' ? { refresh: true } : { url: first });
+      const navigated = await run(
+        'chrome_navigate',
+        first === 'reload' ? { refresh: true } : { url: first },
+      );
+      return attachMatchedRecipes(navigated, first);
+    }
     case 'tab focus':
       argumentCount(command, 1);
       return run('chrome_switch_tab', { tabId: integer(first, 'Tab ID'), background: false });
@@ -200,12 +285,19 @@ export async function dispatchCommand(
         ...(options.max ? { limit: integer(options.max, 'Limit') } : {}),
         ...(options.delta ? { deltaOnly: true } : {}),
       });
-    case 'text':
+    case 'text': {
       argumentCount(command, 0, 1);
-      if (options['max-chars']) integer(options['max-chars'], 'Character limit');
-      return first
+      const maxChars =
+        options['max-chars'] === undefined
+          ? undefined
+          : integer(options['max-chars'], 'Character limit');
+      const result = first
         ? batchAction({ type: 'extract', ...target(first), property: 'text', variableName: 'text' })
         : run('chrome_get_markdown');
+      return maxChars === undefined
+        ? result
+        : result.then((value) => truncateTextResult(value, maxChars));
+    }
     case 'find':
       argumentCount(command, 1);
       return run('chrome_grep', {
@@ -390,7 +482,7 @@ export async function dispatchCommand(
       return run('chrome_network_capture', {
         action: name === 'network show' ? 'status' : name.split(' ')[1],
         needResponseBody: !!options.bodies,
-        url: options.filter,
+        requestUrlPattern: options.filter,
       });
     case 'eval':
       argumentCount(command, options.file ? 0 : 1);
@@ -480,66 +572,313 @@ export async function dispatchCommand(
     }
     case 'recipe list': {
       argumentCount(command, 0);
-      const bundled = await run('chrome_skill', {
-        action: options.url ? 'find' : 'list',
-        url: options.url,
-      });
-      const directory = join(TOKEN_DIR, 'recipes');
-      const files = await readdir(directory).catch((error) => {
-        if (error.code !== 'ENOENT') throw error;
-        return [] as string[];
-      });
+      const homeDir = browserPawHome();
+      const url = typeof options.url === 'string' ? options.url : undefined;
+      const query = typeof options.query === 'string' ? options.query : undefined;
+      try {
+        return {
+          content: [],
+          structuredContent: listLearnedWorkflows(homeDir, {
+            includeCandidates: Boolean(options.all),
+            url,
+            query,
+          }),
+        };
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case 'recipe find': {
+      argumentCount(command, 0, Infinity);
+      const homeDir = browserPawHome();
+      const url = typeof options.url === 'string' ? options.url : undefined;
+      const query = command.operands.join(' ').trim();
+      try {
+        return {
+          content: [],
+          structuredContent: findLearnedWorkflows(homeDir, {
+            includeCandidates: Boolean(options.all),
+            url,
+            query,
+          }),
+        };
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case 'recipe show': {
+      argumentCount(command, 1);
+      const homeDir = browserPawHome();
+      let inspected;
+      try {
+        inspected = showLearnedWorkflow(first, homeDir);
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      if (!inspected) {
+        return {
+          content: [{ type: 'text', text: `Unknown learned skill or recipe: ${first}.` }],
+          structuredContent: {
+            success: false,
+            code: 'recipe_not_found',
+            error: `Unknown learned skill or recipe: ${first}.`,
+          },
+          isError: true,
+        };
+      }
       return {
-        ...bundled,
+        content: [],
         structuredContent: {
-          saved: files
-            .filter((name) => /^[a-z][a-z0-9-]{0,63}\.json$/.test(name))
-            .map((name) => name.slice(0, -5)),
+          ...inspected.summary,
+          definition: inspected.definition,
         },
       };
     }
     case 'recipe run': {
       argumentCount(command, 1, Infinity);
-      const inputs = Object.fromEntries(
-        command.operands.slice(1).map((part) => {
-          const index = part.indexOf('=');
-          if (index < 1) throw new CommandError('Recipe inputs use KEY=VALUE.');
-          return [part.slice(0, index), part.slice(index + 1)];
-        }),
+      const homeDir = browserPawHome();
+      let rawInputs: Record<string, string>;
+      try {
+        rawInputs = parseRecipeKeyValues(command.operands.slice(1));
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      let inspected;
+      try {
+        inspected = showLearnedWorkflow(first, homeDir);
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      if (!inspected) {
+        return {
+          content: [{ type: 'text', text: `Unknown learned skill or recipe: ${first}.` }],
+          structuredContent: {
+            success: false,
+            code: 'recipe_not_found',
+            error: `Unknown learned skill or recipe: ${first}.`,
+          },
+          isError: true,
+        };
+      }
+      if (inspected.summary.kind === 'skill') {
+        const skillResult = await run('chrome_skill', { action: 'get', id: first });
+        const skillMeta = tryParseCallResult(skillResult);
+        if ((skillMeta?.status ?? inspected.summary.status) === 'candidate') {
+          return {
+            content: [],
+            structuredContent: {
+              success: false,
+              status: 'blocked',
+              code: 'skill_unvalidated',
+              error: `Skill ${first} is a candidate and has not been validated yet. Run browserpaw recipe validate ${first} first.`,
+            },
+            isError: true,
+          };
+        }
+        if (failed(skillResult)) return skillResult;
+        let coercedInputs: Record<string, unknown>;
+        try {
+          const inputSchema = (skillMeta?.definition as Fields | undefined)?.inputSchema;
+          coercedInputs = coerceWorkflowInputs(
+            rawInputs,
+            inputSchema ? schemaToInputSpecs(inputSchema) : inspected.summary.inputs,
+          );
+        } catch (error) {
+          throw new CommandError(error instanceof Error ? error.message : String(error));
+        }
+        return run('chrome_skill', { action: 'run', id: first, inputs: coercedInputs });
+      }
+      const definition = inspected.definition as SavedRecipe;
+      let steps: string[][];
+      try {
+        const coercedInputs = coerceWorkflowInputs(rawInputs, definition.inputs);
+        steps = expandRecipeSteps(recipeSteps(definition.steps), coercedInputs);
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      const needsAutoTask =
+        !options.task && !options.tab && steps.some((step) => step[0] === 'open');
+      if (!needsAutoTask) return runBatch(steps, options, signal);
+
+      const started = await handleBrowserCall(
+        'chrome_task',
+        { action: 'start', name: `Recipe: ${first}` },
+        taskPrefix,
+        signal,
       );
-      const saved = await readFile(recipePath(first), 'utf8').catch((error) => {
-        if (error.code !== 'ENOENT') throw error;
-        return undefined;
-      });
-      if (!saved) return run('chrome_skill', { action: 'run', id: first, inputs });
-      const definition = object(saved);
-      const steps = recipeSteps(definition.steps).map((step) =>
-        step.map((part) =>
-          part.replace(/\{\{([a-zA-Z0-9_-]+)\}\}/g, (_match, key: string) => {
-            if (!Object.hasOwnProperty.call(inputs, key))
-              throw new CommandError(`Missing recipe input ${key}.`);
-            return inputs[key];
-          }),
-        ),
-      );
-      return runBatch(steps, options, signal);
+      const startedData = tryParseCallResult(started);
+      const autoTaskId = (startedData?.task as Fields | undefined)?.id;
+      if (failed(started) || typeof autoTaskId !== 'string') return started;
+      let batchResult: BackendResult | undefined;
+      let batchError: unknown;
+      try {
+        batchResult = await runBatch(steps, { ...options, task: autoTaskId }, signal);
+      } catch (error) {
+        batchError = error;
+      }
+      let cleanupError: string | undefined;
+      try {
+        const finished = await handleBrowserCall(
+          'chrome_task',
+          { action: 'finish', taskId: autoTaskId },
+          taskPrefix + autoTaskId,
+          AbortSignal.timeout(15000),
+        );
+        if (failed(finished)) {
+          const data = tryParseCallResult(finished);
+          const errorBlock = finished.content?.find((block) => block.type === 'text');
+          cleanupError = String(
+            data?.error ??
+              data?.message ??
+              (errorBlock?.type === 'text' ? errorBlock.text : undefined) ??
+              'chrome_task finish failed',
+          );
+        }
+      } catch (error) {
+        cleanupError = error instanceof Error ? error.message : String(error);
+      }
+      if (batchError) {
+        return {
+          content: [],
+          structuredContent: {
+            success: false,
+            status: 'failed',
+            taskId: autoTaskId,
+            error: batchError instanceof Error ? batchError.message : String(batchError),
+            ...(cleanupError
+              ? {
+                  cleanupPending: true,
+                  cleanupError,
+                  recovery: `browserpaw task finish ${autoTaskId}`,
+                }
+              : {}),
+          },
+          isError: true,
+        };
+      }
+      const data = tryParseCallResult(batchResult!) ?? {};
+      if (!cleanupError)
+        return { ...batchResult!, structuredContent: { ...data, taskId: autoTaskId } };
+      return {
+        ...batchResult!,
+        isError: true,
+        structuredContent: {
+          ...data,
+          taskId: autoTaskId,
+          cleanupPending: true,
+          cleanupError,
+          recovery: `browserpaw task finish ${autoTaskId}`,
+          ...(!failed(batchResult!)
+            ? {
+                success: false,
+                status: 'cleanup_pending',
+                error: `Recipe completed, but task cleanup failed: ${cleanupError}. Run browserpaw task finish ${autoTaskId}.`,
+              }
+            : {}),
+        },
+      };
     }
     case 'recipe save': {
       argumentCount(command, 1);
       if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new CommandError('Expected a recipe object with id and steps.');
-      const definition = input as Fields;
-      const path = recipePath(definition.id);
-      batchCommands(recipeSteps(definition.steps), {});
+      if (isVerifiedSkillPayload(input)) {
+        const proposed = await run('chrome_skill', { action: 'propose', definition: input });
+        if (failed(proposed)) return proposed;
+        const data = tryParseCallResult(proposed) ?? {};
+        return {
+          ...proposed,
+          structuredContent: {
+            ...data,
+            kind: 'skill',
+            next: `Run browserpaw recipe validate ${String(data.id ?? (input as Fields).id)} to verify and activate.`,
+          },
+        };
+      }
+      const homeDir = browserPawHome();
+      let validated: SavedRecipe;
+      let path: string;
+      try {
+        validated = validateSavedRecipe(input);
+        path = savedRecipeFilePath(validated.id, homeDir);
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      const skillCollision = loadLearnedWorkflows(homeDir, { includeCandidates: true }).find(
+        (workflow) => workflow.id === validated.id && workflow.kind === 'skill',
+      );
+      if (skillCollision)
+        throw new CommandError(
+          `Recipe ID ${validated.id} is already used by a built-in or active Skill. Choose a distinct ID such as ${validated.id}-recipe and save again.`,
+          'recipe_id_conflict',
+        );
       const { ensureDirectory, atomicWrite } = require('./cli-files.cjs');
-      ensureDirectory(join(TOKEN_DIR, 'recipes'));
-      atomicWrite(path, JSON.stringify(definition, null, 2) + '\n');
-      return { content: [], structuredContent: { id: definition.id, path } };
+      ensureDirectory(recipesDirectory(homeDir));
+      atomicWrite(path, JSON.stringify(validated, null, 2) + '\n');
+      const routing = syncLearnedRouting(homeDir);
+      return {
+        content: [],
+        structuredContent: {
+          id: validated.id,
+          kind: 'recipe',
+          path,
+          command: formatRunCommand(validated.id, savedRecipeInputs(validated)),
+          learnedCount: routing.workflowCount,
+          routingSynced: routing.syncedSkillPaths,
+        },
+      };
     }
-    case 'recipe rm':
+    case 'recipe validate': {
       argumentCount(command, 1);
-      await rm(recipePath(first), { force: true });
-      return { content: [], structuredContent: { id: first, removed: true } };
+      const validated = await run('chrome_skill', { action: 'validate', id: first });
+      if (failed(validated)) return validated;
+      const routing = syncLearnedRouting(browserPawHome());
+      const data = tryParseCallResult(validated) ?? {};
+      return {
+        ...validated,
+        structuredContent: {
+          ...data,
+          learnedCount: routing.workflowCount,
+          routingSynced: routing.syncedSkillPaths,
+        },
+      };
+    }
+    case 'recipe rm': {
+      argumentCount(command, 1);
+      const homeDir = browserPawHome();
+      let filePath: string;
+      try {
+        filePath = savedRecipeFilePath(first, homeDir);
+      } catch (error) {
+        throw new CommandError(error instanceof Error ? error.message : String(error));
+      }
+      const canonical = showLearnedWorkflow(first, homeDir);
+      let removedKind: 'recipe' | 'skill' | undefined;
+      const hadSavedRecipe = existsSync(filePath);
+      if (canonical?.summary.kind === 'skill') {
+        const disabled = await run('chrome_skill', { action: 'disable', id: first });
+        if (failed(disabled)) return disabled;
+        removedKind = 'skill';
+      } else if (hadSavedRecipe) {
+        await rm(filePath, { force: true });
+        removedKind = 'recipe';
+      } else if (existsSync(join(skillsDirectory(homeDir), `${first}.json`))) {
+        const disabled = await run('chrome_skill', { action: 'disable', id: first });
+        if (failed(disabled)) return disabled;
+        removedKind = 'skill';
+      }
+      const routing = syncLearnedRouting(homeDir);
+      return {
+        content: [],
+        structuredContent: {
+          id: first,
+          removed: true,
+          ...(removedKind ? { kind: removedKind } : {}),
+          learnedCount: routing.workflowCount,
+          routingSynced: routing.syncedSkillPaths,
+        },
+      };
+    }
     default:
       throw new CommandError(`Unsupported browser command ${name}.`);
   }
@@ -547,12 +886,27 @@ export async function dispatchCommand(
 
 const batchExcluded = new Set(['setup', 'uninstall', 'help', 'batch']);
 
-function recipePath(id: unknown) {
-  if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(id))
-    throw new CommandError(
-      'Recipe ID must begin with a lowercase letter and contain only letters, digits, or hyphens.',
-    );
-  return join(TOKEN_DIR, 'recipes', id + '.json');
+function attachMatchedRecipes(result: BackendResult, url: string): BackendResult {
+  if (failed(result) || !/^https?:\/\//i.test(url)) return result;
+  try {
+    const active = loadLearnedWorkflows(browserPawHome(), { includeCandidates: false });
+    const matches = matchLearnedWorkflows(active, { url }).slice(0, 3);
+    if (!matches.length) return result;
+    const data = tryParseCallResult(result) ?? {};
+    return {
+      ...result,
+      structuredContent: {
+        ...data,
+        matchedRecipes: matches.map((item) => ({
+          id: item.id,
+          name: item.name,
+          command: item.command,
+        })),
+      },
+    };
+  } catch {
+    return result;
+  }
 }
 
 function recipeSteps(input: unknown): string[][] {
@@ -577,7 +931,12 @@ function batchCommands(input: unknown, options: ParsedCommand['options']) {
       throw new CommandError(`Command ${parsed.name} is unavailable inside a batch.`);
     return {
       ...parsed,
-      options: { task: options.task, tab: options.tab, frame: options.frame, ...parsed.options },
+      options: {
+        ...parsed.options,
+        ...(options.task === undefined ? {} : { task: options.task }),
+        ...(options.tab === undefined ? {} : { tab: options.tab }),
+        ...(options.frame === undefined ? {} : { frame: options.frame }),
+      },
     } as ParsedCommand;
   });
 }

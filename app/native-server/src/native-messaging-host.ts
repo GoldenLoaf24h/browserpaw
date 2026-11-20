@@ -6,10 +6,12 @@ import { TIMEOUTS, getBrowserPawPort } from './constant';
 import fileHandler from './file-handler';
 import { getBridgeToken } from './server/token';
 
+const CANCEL_ACK_TIMEOUT_MS = 5000;
+
 interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason?: any) => void;
-  timeoutId: NodeJS.Timeout;
+  timeoutId?: NodeJS.Timeout;
 }
 
 export class NativeMessagingHost {
@@ -287,16 +289,29 @@ export class NativeMessagingHost {
     return new Promise((resolve, reject) => {
       const requestId = uuidv4(); // Generate unique request ID
       let settled = false;
+      let timeoutId: NodeJS.Timeout | undefined;
       const onAbort = () => {
         if (settled) return;
-        // The extension stops at its next action boundary. Do not reject here:
-        // the in-flight request may still have already dispatched a mutation.
         this.sendMessage({
           type: NativeMessageType.CANCEL_TOOL,
           payload: { requestId },
         });
+        if (settled) return;
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          this.pendingRequests.delete(requestId);
+          rejectOnce(
+            Object.assign(new Error('Request cancellation was not acknowledged by Chrome'), {
+              requestDispatched: true,
+              code: 'cancellation_unacknowledged',
+            }),
+          );
+        }, CANCEL_ACK_TIMEOUT_MS);
+        const pending = this.pendingRequests.get(requestId);
+        if (pending) pending.timeoutId = timeoutId;
       };
       const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
         signal?.removeEventListener('abort', onAbort);
       };
       const resolveOnce = (value: any) => {
@@ -337,8 +352,12 @@ export class NativeMessagingHost {
         return;
       }
 
-      const timeoutId = setTimeout(() => {
-        this.pendingRequests.delete(requestId); // Remove from Map after timeout
+      timeoutId = setTimeout(() => {
+        this.sendMessage({
+          type: NativeMessageType.CANCEL_TOOL,
+          payload: { requestId },
+        });
+        this.pendingRequests.delete(requestId);
         rejectOnce(
           Object.assign(new Error(`Request timed out after ${timeoutMs}ms`), {
             requestDispatched: true,

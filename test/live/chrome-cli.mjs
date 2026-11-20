@@ -18,6 +18,7 @@ const root = await mkdtemp(join(tmpdir(), 'browserpaw-v5-live-'));
 const env = {
   ...process.env,
   BROWSERPAW_HOME: join(root, 'data'),
+  BROWSERPAW_NO_UPDATE_CHECK: '1',
   HOME: root,
   APPDATA: join(root, 'AppData'),
   ...(process.platform === 'win32' ? { USERPROFILE: root } : {}),
@@ -159,7 +160,9 @@ try {
     );
   }
   registered = true;
-  const setup = await run('setup', ['setup', '--no-skill']);
+  const setup = await run('setup', ['setup']);
+  assert.equal(setup.skillScope, 'user');
+  assert.ok(setup.skillPath.endsWith(join('.agents', 'skills', 'browserpaw')));
   const build = JSON.parse(await readFile(join(setup.extension, 'browserpaw-build.json'), 'utf8'));
   fixture.listen(0, '127.0.0.1');
   await once(fixture, 'listening');
@@ -266,10 +269,26 @@ try {
   );
   await task('batch', ['batch', batch]);
   const recipe = join(root, 'recipe.json');
-  await writeFile(recipe, JSON.stringify({ id: 'test-fixture', steps: [['text', 'css:#reveal']] }));
+  await writeFile(
+    recipe,
+    JSON.stringify({
+      id: 'test-fixture',
+      name: 'Fixture Reveal Reader',
+      description: 'Read reveal button text from the local test fixture',
+      keywords: ['fixture', 'reveal'],
+      steps: [['text', 'css:#reveal']],
+    }),
+  );
   await task('recipe-save', ['recipe', 'save', recipe]);
+  const foundRecipe = await run('recipe-find', ['recipe', 'find', 'reveal']);
+  assert.equal(foundRecipe.matches[0].id, 'test-fixture');
+  const syncedSkill = await readFile(join(setup.skillPath, 'SKILL.md'), 'utf8');
+  assert.match(syncedSkill, /test-fixture/);
+  assert.match(syncedSkill, /browserpaw recipe run test-fixture/);
   await task('recipe-run', ['recipe', 'run', 'test-fixture']);
   await task('recipe-remove', ['recipe', 'rm', 'test-fixture']);
+  const clearedSkill = await readFile(join(setup.skillPath, 'SKILL.md'), 'utf8');
+  assert.doesNotMatch(clearedSkill, /test-fixture/);
   const screenshot = join(output, `screenshot-${build.buildId}.png`);
   const position = await task('coordinate-target', [
     'eval',
@@ -331,17 +350,21 @@ try {
   assert.equal(afterRestart.pid, restarted.pid);
   assert.equal(dispatched, 1);
   await run('close-after-reconnect', ['tab', 'close', String(interruptedTab.tabId)]);
-  const upgrade = await run('setup-reload', ['setup', '--no-skill']);
-  assert.equal(upgrade.reloadRequested, true);
-  report.automaticUpgradeReconnect = upgrade.reconnected;
-  if (upgrade.reconnected) {
-    const upgraded = await run('status-after-reload', ['status']);
-    assert.notEqual(upgraded.pid, restarted.pid);
-    assert.equal(upgraded.extension.buildId, build.buildId);
-    await run('unowned-close', ['tab', 'close', String(external.tabId)]);
-  } else {
-    assert.match(upgrade.next, /reload it/);
-  }
+  const extensionFile = join(setup.extension, 'browserpaw-build.json');
+  const extensionBefore = await readFile(extensionFile, 'utf8');
+  const markerFile = join(setup.skillPath, '.browserpaw-skill.json');
+  const marker = JSON.parse(await readFile(markerFile, 'utf8'));
+  await writeFile(markerFile, JSON.stringify({ ...marker, version: '4.99.0' }));
+  const upgrade = await run('setup-updates-skill', ['setup']);
+  assert.equal(upgrade.extensionPrepared, false);
+  assert.deepEqual(upgrade.updatedSkillPaths, [setup.skillPath]);
+  assert.equal(JSON.parse(await readFile(markerFile, 'utf8')).version, marker.version);
+  assert.equal(await readFile(extensionFile, 'utf8'), extensionBefore);
+  assert.match(upgrade.releaseAsset, /browserpaw-extension\.zip$/);
+  const statusAfterSetup = await run('setup-leaves-loaded-extension-running', ['status']);
+  assert.equal(statusAfterSetup.pid, restarted.pid);
+  assert.equal(statusAfterSetup.extension.buildId, build.buildId);
+  await run('unowned-close', ['tab', 'close', String(external.tabId)]);
   report.status = 'passed';
 } finally {
   fixture.close();

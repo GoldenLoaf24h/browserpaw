@@ -10,6 +10,7 @@ interface NetworkDebuggerStartToolParams {
   maxCaptureTime?: number;
   inactivityTimeout?: number; // Inactivity timeout (milliseconds)
   includeStatic?: boolean; // if include static resources
+  requestUrlPattern?: string;
 }
 
 // Network request object interface
@@ -41,6 +42,9 @@ const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const MAX_RESPONSE_BODY_SIZE_BYTES = 1 * 1024 * 1024; // 1MB
 const DEFAULT_MAX_CAPTURE_TIME_MS = 3 * 60 * 1000; // 3 minutes
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 60 * 1000; // 1 minute
+const TERMINAL_RESULT_TTL_MS = 5 * 60 * 1000;
+const MAX_TERMINAL_RESULTS = 10;
+const MAX_REQUEST_URL_PATTERN_CHARS = 200;
 
 // WebSocket capture: frames are high-volume (a busy page can emit thousands),
 // so cap per connection and per frame. Text frames are kept verbatim up to
@@ -48,6 +52,30 @@ const DEFAULT_INACTIVITY_TIMEOUT_MS = 60 * 1000; // 1 minute
 // blob would dominate the capture and is rarely useful to an agent.
 const MAX_WS_FRAMES_PER_CONNECTION = 200;
 const MAX_WS_FRAME_CHARS = 4000;
+const MAX_WS_CONNECTIONS = 100;
+const MAX_TOTAL_WS_FRAMES = 2000;
+
+function matchesRequestUrlPattern(url: string, pattern?: string): boolean {
+  const trimmed = pattern?.trim();
+  if (!trimmed) return true;
+
+  const regexMatch = trimmed.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (regexMatch) {
+    const source = regexMatch[1];
+    const nestedQuantifier = /\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)(?:[+*]|\{\d*,?\d*\})/;
+    if (source.length <= MAX_REQUEST_URL_PATTERN_CHARS && !nestedQuantifier.test(source)) {
+      try {
+        const regex = new RegExp(source, regexMatch[2]);
+        regex.lastIndex = 0;
+        return regex.test(String(url || '').slice(0, 8192));
+      } catch {}
+    }
+  }
+
+  return String(url || '')
+    .toLowerCase()
+    .includes(trimmed.toLowerCase());
+}
 
 interface WebSocketFrameInfo {
   requestId: string;
@@ -67,6 +95,7 @@ interface WebSocketConnectionInfo {
   receivedCount: number;
   frames: WebSocketFrameInfo[];
   framesTruncated?: boolean;
+  framesTruncatedCount?: number;
   closed?: boolean;
 }
 
@@ -93,6 +122,7 @@ function wsFrameType(opcode: number): WebSocketFrameInfo['type'] {
 class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   name = 'chrome_network_debugger_start';
   private captureData: Map<number, any> = new Map(); // tabId -> capture data
+  public terminalResults = new Map<number, { result: any; expiresAt: number }>();
   private captureTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> max capture timer
   private inactivityTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> inactivity timer
   private lastActivityTime: Map<number, number> = new Map(); // tabId -> timestamp of last network activity
@@ -101,6 +131,42 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   private static MAX_REQUESTS_PER_CAPTURE = 100; // Max requests to store to prevent memory issues
   public static instance: NetworkDebuggerStartTool | null = null;
   public static listenersInitialized = false;
+
+  private pruneTerminalResults(now = Date.now()): void {
+    for (const [tabId, entry] of this.terminalResults) {
+      if (entry.expiresAt <= now) this.terminalResults.delete(tabId);
+    }
+  }
+
+  private retainTerminalResult(tabId: number, result: any): void {
+    this.pruneTerminalResults();
+    this.terminalResults.set(tabId, {
+      result,
+      expiresAt: Date.now() + TERMINAL_RESULT_TTL_MS,
+    });
+    while (this.terminalResults.size > MAX_TERMINAL_RESULTS) {
+      const oldest = this.terminalResults.keys().next().value;
+      if (oldest === undefined) break;
+      this.terminalResults.delete(oldest);
+    }
+  }
+
+  public hasTerminalResult(tabId: number): boolean {
+    this.pruneTerminalResults();
+    return this.terminalResults.has(tabId);
+  }
+
+  public takeTerminalResult(tabId: number): any | undefined {
+    this.pruneTerminalResults();
+    const entry = this.terminalResults.get(tabId);
+    if (!entry) return undefined;
+    this.terminalResults.delete(tabId);
+    return entry.result;
+  }
+
+  public getRemainingCaptureTabIds(): number[] {
+    return Array.from(this.captureData.keys());
+  }
 
   constructor() {
     super();
@@ -124,6 +190,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       this.cleanupCapture(tabId);
       void cdpSessionManager.detach(tabId, 'network-capture').catch(() => {});
     }
+    this.terminalResults.delete(tabId);
   }
 
   /**
@@ -162,6 +229,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
         maxCaptureTime: openerCaptureInfo.maxCaptureTime,
         inactivityTimeout: openerCaptureInfo.inactivityTimeout,
         includeStatic: openerCaptureInfo.includeStatic,
+        requestUrlPattern: openerCaptureInfo.requestUrlPattern,
       });
 
       console.log(`NetworkDebuggerStartTool: Successfully extended capture to new tab ${newTabId}`);
@@ -181,9 +249,10 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       maxCaptureTime: number;
       inactivityTimeout: number;
       includeStatic: boolean;
+      requestUrlPattern?: string;
     },
   ): Promise<void> {
-    const { maxCaptureTime, inactivityTimeout, includeStatic } = options;
+    const { maxCaptureTime, inactivityTimeout, includeStatic, requestUrlPattern } = options;
 
     // If already capturing, stop first
     if (this.captureData.has(tabId)) {
@@ -196,6 +265,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     try {
       // Get tab information
       const tab = await chrome.tabs.get(tabId);
+      this.terminalResults.delete(tabId);
 
       // Attach via shared manager (handles conflicts and refcount)
       await cdpSessionManager.attach(tabId, 'network-capture');
@@ -218,8 +288,12 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
         maxCaptureTime,
         inactivityTimeout,
         includeStatic,
+        requestUrlPattern,
         requests: {},
         webSockets: {},
+        webSocketFrameCount: 0,
+        webSocketFramesTruncated: 0,
+        webSocketConnectionsTruncated: 0,
         limitReached: false,
       });
 
@@ -241,7 +315,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
             console.log(
               `NetworkDebuggerStartTool: Max capture time (${maxCaptureTime}ms) reached for tab ${tabId}.`,
             );
-            await this.stopCapture(tabId, true); // Auto-stop due to max time
+            await this.stopCapture(tabId, true, 'max_capture_time');
           }, maxCaptureTime),
         );
       }
@@ -311,6 +385,12 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     if (!requestId) return;
 
     if (!captureInfo.webSockets) captureInfo.webSockets = {};
+    if (captureInfo.webSockets[requestId]) return;
+    if (Object.keys(captureInfo.webSockets).length >= MAX_WS_CONNECTIONS) {
+      captureInfo.webSocketConnectionsTruncated =
+        (captureInfo.webSocketConnectionsTruncated || 0) + 1;
+      return;
+    }
     captureInfo.webSockets[requestId] = {
       requestId,
       url: url || '',
@@ -354,10 +434,17 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     if (direction === 'sent') connection.sentCount += 1;
     else connection.receivedCount += 1;
 
-    if (connection.frames.length < MAX_WS_FRAMES_PER_CONNECTION) {
+    const totalFrames = captureInfo.webSocketFrameCount || 0;
+    if (
+      connection.frames.length < MAX_WS_FRAMES_PER_CONNECTION &&
+      totalFrames < MAX_TOTAL_WS_FRAMES
+    ) {
       connection.frames.push(frame);
+      captureInfo.webSocketFrameCount = totalFrames + 1;
     } else {
       connection.framesTruncated = true;
+      connection.framesTruncatedCount = (connection.framesTruncatedCount || 0) + 1;
+      captureInfo.webSocketFramesTruncated = (captureInfo.webSocketFramesTruncated || 0) + 1;
     }
   }
 
@@ -424,7 +511,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     console.log(`NetworkDebuggerStartTool: Stopping capture due to inactivity for tab ${tabId}.`);
     // Potentially, we might want to notify the client/user that this happened.
     // For now, just stop and make the results available if StopTool is called.
-    await this.stopCapture(tabId, true); // Pass a flag indicating it's an auto-stop
+    await this.stopCapture(tabId, true, 'inactivity_timeout');
   }
 
   /**
@@ -472,6 +559,10 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     if (!captureInfo) return;
 
     const { requestId, request, timestamp, type, loaderId, frameId } = params;
+
+    if (!matchesRequestUrlPattern(request.url, captureInfo.requestUrlPattern)) {
+      return;
+    }
 
     // Initial filtering by URL (ads, analytics) and extension (if !includeStatic)
     if (
@@ -710,7 +801,11 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   }
 
   // isAutoStop is true if stop was triggered by timeout, false if by user/explicit call
-  async stopCapture(tabId: number, isAutoStop: boolean = false): Promise<any> {
+  async stopCapture(
+    tabId: number,
+    isAutoStop: boolean = false,
+    autoStopReason?: 'max_capture_time' | 'inactivity_timeout',
+  ): Promise<any> {
     const captureInfo = this.captureData.get(tabId);
     if (!captureInfo) {
       return { success: false, message: 'No capture in progress for this tab.' };
@@ -797,16 +892,20 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       webSockets: webSocketConnections,
       webSocketCount: webSocketConnections.length,
       webSocketFrameCount,
+      webSocketFramesTruncated: captureInfo.webSocketFramesTruncated || 0,
+      webSocketConnectionsTruncated: captureInfo.webSocketConnectionsTruncated || 0,
       requestCount: processedRequests.length, // Actual stored requests
       totalRequestsReceivedBeforeLimit: captureInfo.limitReached
         ? NetworkDebuggerStartTool.MAX_REQUESTS_PER_CAPTURE
         : processedRequests.length,
       requestLimitReached: !!captureInfo.limitReached,
-      stoppedBy: isAutoStop
-        ? this.lastActivityTime.get(tabId)
-          ? 'inactivity_timeout'
-          : 'max_capture_time'
-        : 'user_request',
+      stoppedBy: isAutoStop ? autoStopReason || 'max_capture_time' : 'user_request',
+      ...(isAutoStop
+        ? {
+            autoStopped: true,
+            stoppedReason: autoStopReason || 'max_capture_time',
+          }
+        : {}),
       tabUrl: captureInfo.tabUrl,
       tabTitle: captureInfo.tabTitle,
     };
@@ -815,6 +914,9 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       `NetworkDebuggerStartTool: Capture stopped for tab ${tabId}. ${resultData.requestCount} requests processed. Limit reached: ${resultData.requestLimitReached}. Stopped by: ${resultData.stoppedBy}`,
     );
 
+    if (isAutoStop) {
+      this.retainTerminalResult(tabId, resultData);
+    }
     this.cleanupCapture(tabId); // Final cleanup of all internal states for this tab
 
     return {
@@ -913,6 +1015,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       maxCaptureTime = DEFAULT_MAX_CAPTURE_TIME_MS,
       inactivityTimeout = DEFAULT_INACTIVITY_TIMEOUT_MS,
       includeStatic = false,
+      requestUrlPattern,
     } = args;
 
     console.log(
@@ -973,6 +1076,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
           maxCaptureTime,
           inactivityTimeout,
           includeStatic,
+          requestUrlPattern,
         });
       } catch (error: any) {
         return createErrorResponse(
@@ -992,6 +1096,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
               maxCaptureTime,
               inactivityTimeout,
               includeStatic,
+              requestUrlPattern,
               maxRequests: NetworkDebuggerStartTool.MAX_REQUESTS_PER_CAPTURE,
             }),
           },
@@ -1046,14 +1151,12 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
       `NetworkDebuggerStopTool: Found ${ongoingCaptures.length} ongoing captures: ${ongoingCaptures.join(', ')}`,
     );
 
-    if (ongoingCaptures.length === 0) {
-      return createErrorResponse('No active network captures found in any tab.');
-    }
-
     let primaryTabId: number;
 
     if (typeof args?.tabId === 'number') {
       if (!startTool['captureData'].has(args.tabId)) {
+        const retained = startTool.takeTerminalResult(args.tabId);
+        if (retained) return this.makeStopResponse(startTool, args.tabId, retained);
         return createErrorResponse(`No active network captures found on tab ${args.tabId}.`);
       }
       primaryTabId = args.tabId;
@@ -1062,10 +1165,28 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
       const activeTabId = activeTabs[0]?.id;
       if (activeTabId && startTool['captureData'].has(activeTabId)) {
         primaryTabId = activeTabId;
+      } else if (activeTabId && startTool.hasTerminalResult(activeTabId)) {
+        return this.makeStopResponse(
+          startTool,
+          activeTabId,
+          startTool.takeTerminalResult(activeTabId)!,
+        );
       } else if (ongoingCaptures.length === 1) {
         primaryTabId = ongoingCaptures[0];
-      } else {
+      } else if (ongoingCaptures.length > 1) {
         primaryTabId = ongoingCaptures[0];
+      } else {
+        const retainedTabId = Array.from(startTool.terminalResults.keys())
+          .reverse()
+          .find((tabId) => startTool.hasTerminalResult(tabId));
+        if (retainedTabId === undefined) {
+          return createErrorResponse('No active network captures found in any tab.');
+        }
+        return this.makeStopResponse(
+          startTool,
+          retainedTabId,
+          startTool.takeTerminalResult(retainedTabId)!,
+        );
       }
     }
 
@@ -1102,6 +1223,15 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
       );
     }
 
+    return this.makeStopResponse(startTool, tabId, resultData);
+  }
+
+  private makeStopResponse(
+    startTool: NetworkDebuggerStartTool,
+    tabId: number,
+    resultData: any,
+  ): ToolResult {
+    const remainingCaptures = startTool.getRemainingCaptureTabIds();
     return {
       content: [
         {
@@ -1116,6 +1246,11 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
             commonRequestHeaders: resultData.commonRequestHeaders || {},
             commonResponseHeaders: resultData.commonResponseHeaders || {},
             requests: resultData.requests || [],
+            webSockets: resultData.webSockets || [],
+            webSocketCount: resultData.webSocketCount || 0,
+            webSocketFrameCount: resultData.webSocketFrameCount || 0,
+            webSocketFramesTruncated: resultData.webSocketFramesTruncated || 0,
+            webSocketConnectionsTruncated: resultData.webSocketConnectionsTruncated || 0,
             captureStartTime: resultData.captureStartTime,
             captureEndTime: resultData.captureEndTime,
             totalDurationMs: resultData.totalDurationMs,
@@ -1123,6 +1258,8 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
             remainingCaptures: remainingCaptures,
             totalRequestsReceived: resultData.totalRequestsReceived || resultData.requestCount || 0,
             requestLimitReached: resultData.requestLimitReached || false,
+            autoStopped: resultData.autoStopped === true,
+            stoppedReason: resultData.stoppedReason,
           }),
         },
       ],
