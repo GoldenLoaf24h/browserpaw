@@ -1,4 +1,4 @@
-import type { CallToolResult, ParsedCommand } from 'chrome-mcp-shared';
+import { isProfileCommand, type CallToolResult, type ParsedCommand } from 'chrome-mcp-shared';
 
 export type CommandRun = (
   backend: string,
@@ -25,6 +25,20 @@ export function integer(value: unknown, label: string, min = 1, max = Number.MAX
 export function argumentCount(command: ParsedCommand, minimum: number, maximum = minimum) {
   if (command.operands.length < minimum || command.operands.length > maximum)
     throw new CommandError(`Incorrect operands. Run browserpaw help ${command.name}.`);
+}
+
+const CLI_ONLY_COMMANDS = new Set(['setup', 'status', 'uninstall', 'help', 'search', 'batch']);
+
+export function assertBatchStep({ name, options }: ParsedCommand): void {
+  if (
+    CLI_ONLY_COMMANDS.has(name) ||
+    isProfileCommand(name) ||
+    name.startsWith('recipe ') ||
+    options.file ||
+    options.input ||
+    (name !== 'screenshot' && name !== 'download' && options.out)
+  )
+    throw new CommandError(`Command ${name} is unavailable inside a batch.`);
 }
 
 export function parseTarget(value: string): Record<string, unknown> {

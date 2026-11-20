@@ -5,7 +5,7 @@ description: Control the user's Chrome or Chromium through the BrowserPaw CLI an
 
 # BrowserPaw
 
-Run `browserpaw status` to confirm the host and extension are connected. Use `browserpaw help` and `browserpaw help COMMAND` to discover syntax at the installed version. If setup is needed, use [troubleshooting](references/TROUBLESHOOTING.md).
+Run `browserpaw status` to confirm the host and extension are connected. Use `browserpaw search KEYWORD` to find a command offline and `browserpaw help COMMAND` to check its syntax. If setup is needed, use [troubleshooting](references/TROUBLESHOOTING.md).
 
 For browser history, bookmarks, or site storage, use `browserpaw help data` and [browser data](references/browser-data.md). For network, performance, or CDP work, use `browserpaw help debug` and [debugging](references/debugging.md).
 

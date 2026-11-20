@@ -358,21 +358,6 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
     expect(formSrc).not.toMatch(/void animateAgentCursorClick\(/);
     expect(formSrc).toMatch(/await interactIndexTool\.execute\(\s*\{/);
     expect(formSrc).not.toContain('Input.dispatchMouseEvent');
-
-    // 5. computer.ts
-    const computerPath = path.resolve(
-      __dirname,
-      '../entrypoints/background/tools/browser/computer.ts',
-    );
-    const computerSrc = fs.readFileSync(computerPath, 'utf-8');
-    expect(computerSrc).not.toMatch(/void animateAgentCursorClick\(/);
-    expect(computerSrc).toContain(
-      'await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);',
-    );
-    expect(computerSrc).toContain('animateAgentCursor(tabId, end.x, end.y,');
-    expect(computerSrc).toContain('await cursorDragArrivalPromise;');
-    expect(computerSrc).toContain('await setAgentCursorNote(tabId, typeNote);');
-    expect(computerSrc).toContain('await setAgentCursorNote(tabId, keyNote);');
   });
 
   it('verifies background agent-cursor lifecycle cleanup on tab removal and reload', async () => {
@@ -442,16 +427,6 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
     const interactionSrc = fs.readFileSync(interactionPath, 'utf-8').replace(/\r\n/g, '\n');
     // Legacy click delegates physical dispatch to the shared interact-index executor.
     expect(interactionSrc).toMatch(/await interactIndexTool\.execute\(\s*\{/);
-
-    // 4. computer.ts double_click / triple_click
-    const computerPath = path.resolve(
-      __dirname,
-      '../entrypoints/background/tools/browser/computer.ts',
-    );
-    const computerSrc = fs.readFileSync(computerPath, 'utf-8').replace(/\r\n/g, '\n');
-    expect(computerSrc).toContain(
-      'for (let i = 1; i <= clickCount; i++) {\n              await animateAgentCursorClick(tabId, coord.x, coord.y, clickNote);',
-    );
   });
 
   it('verifies safe 350ms arrival timeout ceiling is enforced across tools without premature clipping', () => {
@@ -467,12 +442,6 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
       'utf-8',
     );
     expect(fillCoreSrc).not.toContain('timeoutMs: 200');
-
-    const computerSrc = fs.readFileSync(
-      path.resolve(__dirname, '../entrypoints/background/tools/browser/computer.ts'),
-      'utf-8',
-    );
-    expect(computerSrc).not.toContain('timeoutMs: 250');
 
     const batchSrc = fs.readFileSync(
       path.resolve(__dirname, '../entrypoints/background/tools/browser/batch-actions.ts'),

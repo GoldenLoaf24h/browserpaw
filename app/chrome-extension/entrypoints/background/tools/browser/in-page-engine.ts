@@ -1,4 +1,4 @@
-import { resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
+import { formatErrorForAgent } from 'chrome-mcp-shared';
 /**
  * Dispatcher for in-page entrypoints registered by entrypoints/inpage-engine.ts.
  *
@@ -90,7 +90,7 @@ async function raceInjection<T>(p: Promise<T>, what: string, ms = EXECUTE_TIMEOU
           () =>
             reject(
               new Error(
-                `executeScript timeout (${what}, ${ms}ms): renderer not acking — a native dialog may be open, call ${resolveToolName('handle_dialog')} first`,
+                `executeScript timeout (${what}, ${ms}ms): renderer not acking — a native dialog may be open, call browserpaw dialog first`,
               ),
             ),
           ms,

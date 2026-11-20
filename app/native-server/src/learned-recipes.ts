@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseCommand } from 'chrome-mcp-shared';
+import { assertBatchStep } from './command-utils';
 import { syncInstalledSkillRouting, type LearnedRoutingEntry } from './skill-install';
 
 export type RecipeInputType = 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array';
@@ -53,7 +54,6 @@ export interface RoutingSyncResult {
 const RECIPE_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const DOMAIN_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
 const PLACEHOLDER_PATTERN = /\{\{([a-zA-Z0-9_-]+)\}\}/g;
-const BATCH_EXCLUDED = new Set(['setup', 'uninstall', 'help', 'batch']);
 const INPUT_TYPES = new Set<RecipeInputType>([
   'string',
   'integer',
@@ -230,14 +230,7 @@ export function validateSavedRecipe(input: unknown): SavedRecipe {
         );
     }
     const parsed = parseCommand(args);
-    if (
-      BATCH_EXCLUDED.has(parsed.name) ||
-      parsed.name.startsWith('recipe ') ||
-      parsed.options.file ||
-      parsed.options.input
-    ) {
-      throw new Error(`Command ${parsed.name} is unavailable inside a batch.`);
-    }
+    assertBatchStep(parsed);
     for (const index of TARGET_ARGUMENTS.get(parsed.name) ?? []) {
       const target = parsed.operands[index] ?? '';
       if (/^\d+$/.test(target))

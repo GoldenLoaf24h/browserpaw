@@ -471,18 +471,14 @@ export async function executeSteps(root = repoRoot) {
       'prepare-shared-and-types',
       'pnpm --filter chrome-mcp-shared build && pnpm --dir app/chrome-extension exec wxt prepare',
       () => {
-        const cleanEnv = { ...process.env };
-        delete cleanEnv.BROWSERPAW_EXTENSION_SYNC_DIR;
         const resShared = runPnpm(['--filter', 'chrome-mcp-shared', 'build'], {
           cwd: root,
-          env: cleanEnv,
         });
         if (resShared.status !== 0) {
           throw new Error(`Shared package build failed: ${resShared.stdout + resShared.stderr}`);
         }
         const resWxt = runPnpm(['--dir', 'app/chrome-extension', 'exec', 'wxt', 'prepare'], {
           cwd: root,
-          env: cleanEnv,
         });
         if (resWxt.status !== 0) {
           throw new Error(`Extension wxt prepare failed: ${resWxt.stdout + resWxt.stderr}`);
@@ -677,12 +673,9 @@ export async function executeSteps(root = repoRoot) {
       },
     );
 
-    // Step 11: Build without deployment env side-effects. The simulated E2E suite
-    // validates the native distribution produced by this build.
-    recordStep('build', 'pnpm build (clean env)', () => {
-      const cleanEnv = { ...process.env };
-      delete cleanEnv.BROWSERPAW_EXTENSION_SYNC_DIR;
-      const res = runPnpm(['build'], { cwd: root, env: cleanEnv });
+    // Step 11: Build the local distribution for the package smoke test.
+    recordStep('build', 'pnpm build', () => {
+      const res = runPnpm(['build'], { cwd: root });
       if (res.error) throw new Error(`Failed to spawn pnpm build: ${res.error.message}`);
       if (res.status !== 0) {
         throw new Error(`pnpm build failed (exit ${res.status}): \n${res.stdout + res.stderr}`);

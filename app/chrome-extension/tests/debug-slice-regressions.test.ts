@@ -67,11 +67,11 @@ describe('debug slice network regressions', () => {
           requestTime: 1,
         },
         two: {
-          requestId: 'two',
+          requestId: '1',
           url: 'https://cdn.example.test/app.js',
           method: 'GET',
           type: 'Script',
-          status: 200,
+          status: 500,
           requestTime: 2,
         },
       },
@@ -93,6 +93,27 @@ describe('debug slice network regressions', () => {
       recording: true,
       requests: [{ id: 'one', method: 'GET', status: 200 }],
     });
+    const filtered = JSON.parse(
+      text(
+        await networkCaptureTool.execute({
+          action: 'list',
+          status: 500,
+          tabId: tab.id,
+        }),
+      ),
+    );
+    expect(filtered.requests).toHaveLength(1);
+    expect(filtered.requests[0].id).toBe('1');
+    expect(filtered.requests[0]).not.toHaveProperty('index');
+    const exact = await networkCaptureTool.execute({
+      action: 'show',
+      tabId: tab.id,
+      requestId: filtered.requests[0].id,
+    });
+    expect(JSON.parse(text(exact)).request.url).toBe('https://cdn.example.test/app.js');
+    expect(
+      (await networkCaptureTool.execute({ action: 'show', tabId: tab.id, requestId: '2' })).isError,
+    ).toBe(true);
 
     const show = await networkCaptureTool.execute({
       action: 'show',

@@ -393,10 +393,6 @@ const METADATA = {
         desc: 'Direct raw Chrome DevTools Protocol execution escape hatch',
       },
       { name: 'common.ts', desc: 'Shared helper functions for browser tool executors' },
-      {
-        name: 'computer.ts',
-        desc: 'Anthropic Computer Use API adapter for mouse and keyboard events',
-      },
       { name: 'console-buffer.ts', desc: 'In-memory ring buffer capturing console messages' },
       { name: 'console.ts', desc: 'Tool returning captured browser console logs' },
       { name: 'dialog.ts', desc: 'Handles JavaScript alert, confirm, and prompt dialogs' },
@@ -444,7 +440,6 @@ const METADATA = {
         desc: 'Clicks, hovers, or double-clicks elements by numeric index',
       },
       { name: 'interaction.ts', desc: 'Core interaction primitives' },
-      { name: 'intercept-api.ts', desc: 'Intercepts and mocks fetch / XHR network calls' },
       {
         name: 'javascript.ts',
         desc: 'Evaluates JavaScript expressions in the target page context',
@@ -492,7 +487,6 @@ const METADATA = {
         name: 'tool-docs.ts',
         desc: 'Provides dynamic tool schema docs and activates tools for session',
       },
-      { name: 'undo-action.ts', desc: 'Reverts the most recent user action where supported' },
       {
         name: 'unified-locator.ts',
         desc: 'Polymorphic element resolver (index, css, xpath, text)',
@@ -679,10 +673,6 @@ const METADATA = {
     purpose:
       'High-resilience utility classes supporting CDP session management with ref counting, DOM fingerprint delta diffing, coordinate parsing, popup protection, and tab affinity.',
     keyFiles: [
-      {
-        name: 'action-history-manager.ts',
-        desc: 'Tracks historical actions for undo and state recovery',
-      },
       {
         name: 'action-network-capture.ts',
         desc: 'Captures network requests triggered during specific actions',

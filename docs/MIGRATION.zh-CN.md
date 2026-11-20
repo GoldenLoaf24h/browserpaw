@@ -129,4 +129,6 @@ browserpaw recipe find 搜索
 | `chrome_skill`                                      | `browserpaw recipe list\|find\|show\|run\|save\|validate\|rm`                          | 在 `~/.browserpaw` 下管理自学习站点技能与 CLI 配方并自动同步路由                |
 | `chrome_tool_docs`                                  | `browserpaw help` / `browserpaw help COMMAND`                                          | 内置离线命令帮助，无需联网或启动浏览器即可查询语法                              |
 
+用 `browserpaw window list` 查看窗口 ID，用 `browserpaw select TARGET` 列出可选项。此前 v5 候选版的 `tabs --windows` 和 `select TARGET --list` 仍可供现有脚本使用。执行 `network show ID` 时，ID 取自 `network list` 返回的 `requests[].id`。
+
 更多细节请参考 [命令参考](COMMANDS.md)、[Agent 技能说明](../skills/browserpaw/SKILL.md) 与 [故障排查](TROUBLESHOOTING.zh-CN.md)。

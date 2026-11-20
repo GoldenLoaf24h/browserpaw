@@ -34,7 +34,7 @@ describe('Screenshot assetIndex cache route strictness', () => {
     expect(res.isError).toBe(true);
     const text = (res.content[0] as any).text;
     expect(text).toContain('Asset 999');
-    expect(text).toContain('read_dom');
+    expect(text).toContain('browserpaw observe');
 
     // MUST NOT broadcast to all frames with global index
     const broadcastCalls = executeSpy.mock.calls.filter(

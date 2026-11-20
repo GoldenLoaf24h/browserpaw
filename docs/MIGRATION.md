@@ -127,4 +127,6 @@ Use this mapping when updating Agent skills, automation scripts, or manual workf
 | `chrome_skill`                                      | `browserpaw recipe list\|find\|show\|run\|save\|validate\|rm`                          | Stores and routes learned workflows under `~/.browserpaw`                            |
 | `chrome_tool_docs`                                  | `browserpaw help` / `browserpaw help COMMAND`                                          | Offline command discovery built into the installed CLI                               |
 
+Use `browserpaw window list` for window IDs and `browserpaw select TARGET` to read available choices. The earlier v5 candidate spellings `tabs --windows` and `select TARGET --list` remain accepted for existing scripts. Pass an ID from `network list` (`requests[].id`) to `network show ID`.
+
 Run `browserpaw help data` for history, bookmarks, downloads, storage and cookies. Run `browserpaw help debug` for network, console, performance, emulation, PDF and CDP. See [Commands](COMMANDS.md), the [Agent Skill](../skills/browserpaw/SKILL.md), and [Troubleshooting](TROUBLESHOOTING.md) for full details.

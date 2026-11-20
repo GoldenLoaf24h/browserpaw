@@ -6,7 +6,7 @@ import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
  * invisible to the agent:
  * - chrome_interact_index implements drag (action + end/steps/holdMs/dnd) but
  *   the schema only listed 4 actions, so the capability was undiscoverable.
- * - chrome_computer and chrome_handle_dialog accepted free-form strings for
+ * - chrome_handle_dialog accepted free-form strings for
  *   action, so an invalid value could only be caught at runtime.
  */
 const byName = new Map(TOOL_SCHEMAS.map((t: any) => [t.name, t]));

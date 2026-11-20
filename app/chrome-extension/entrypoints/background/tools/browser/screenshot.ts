@@ -1,7 +1,7 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { projectFramePoint } from '@/utils/frame-coordinates';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
+import { TOOL_NAMES, formatErrorForAgent } from 'chrome-mcp-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import {
   canvasToDataURL,
@@ -671,7 +671,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         const route = cachedSnap?.valid ? cachedSnap.assetRoutes?.get(args.assetIndex) : undefined;
         if (!route) {
           return createErrorResponse(
-            `Asset ${args.assetIndex} route not found in snapshot cache. Run ${resolveToolName('read_dom')} to refresh assets.`,
+            `Asset ${args.assetIndex} route not found in snapshot cache. Run browserpaw observe to refresh assets.`,
           );
         }
         const assetResults = await executeInPage(
@@ -683,7 +683,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         if (!asset?.rect) {
           return createErrorResponse(
             asset?.reason ||
-              `Asset ${args.assetIndex} not found. Run ${resolveToolName('read_dom')} to list assets.`,
+              `Asset ${args.assetIndex} not found. Run browserpaw observe to list assets.`,
           );
         }
         if (asset.dataUrl && asset.dataUrl.startsWith('data:')) {
@@ -1426,7 +1426,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           height: frame.height,
         };
       } else {
-        // Update screenshot context for coordinate scaling by tools like chrome_computer
+        // Update the context used by screenshot-coordinate actions.
         try {
           if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
             let hostname = '';

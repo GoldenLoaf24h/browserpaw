@@ -6,8 +6,6 @@
  * NOT happen, while a definite failure still keeps the original fallback.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { computerTool } from '../entrypoints/background/tools/browser/computer';
-import { keyboardTool } from '../entrypoints/background/tools/browser/keyboard';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
 import * as fillCoreModule from '../entrypoints/background/tools/browser/fill-core';
 import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
@@ -87,106 +85,6 @@ function installActiveTabChrome(tabId: number) {
     debugger: { onEvent: { addListener: vi.fn(), removeListener: vi.fn() } },
   };
 }
-
-describe('A-14 computer.type: uncertain insertText must not fall back to DOM typing', () => {
-  const tabId = 9301;
-
-  beforeEach(() => {
-    installActiveTabChrome(tabId);
-    passthroughSession();
-  });
-
-  it('fails closed and never calls keyboardTool when insertText times out', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
-      new CdpDispatchTimeoutError('Input.insertText'),
-    );
-    const keyboardSpy = vi.spyOn(keyboardTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: '{"success":true}' }],
-      isError: false,
-    } as any);
-
-    const res = await computerTool.execute({
-      action: 'type',
-      text: 'hello world',
-      tabId,
-      autoGroup: false,
-    } as any);
-
-    expect(keyboardSpy).not.toHaveBeenCalled();
-    expect(res.isError).toBe(true);
-    expect((res.content[0] as any).text).toMatch(/outcome unknown/i);
-  });
-
-  it('keeps the DOM keyboard fallback when insertText fails definitively', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
-      new Error('Input.insertText rejected: debugger detached before dispatch'),
-    );
-    const keyboardSpy = vi.spyOn(keyboardTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: '{"success":true,"via":"dom_fallback"}' }],
-      isError: false,
-    } as any);
-
-    const res = await computerTool.execute({
-      action: 'type',
-      text: 'hello',
-      tabId,
-      autoGroup: false,
-    } as any);
-
-    expect(keyboardSpy).toHaveBeenCalledTimes(1);
-    expect(res.isError).toBe(false);
-  });
-});
-
-describe('A-14 computer.key: uncertain key dispatch must not fall back to DOM keyboard', () => {
-  const tabId = 9302;
-
-  beforeEach(() => {
-    installActiveTabChrome(tabId);
-    passthroughSession();
-  });
-
-  it('fails closed and never calls keyboardTool when key dispatch times out', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
-      new CdpDispatchTimeoutError('Input.dispatchKeyEvent'),
-    );
-    const keyboardSpy = vi.spyOn(keyboardTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: '{"success":true}' }],
-      isError: false,
-    } as any);
-
-    const res = await computerTool.execute({
-      action: 'key',
-      text: 'Enter',
-      tabId,
-      autoGroup: false,
-    } as any);
-
-    expect(keyboardSpy).not.toHaveBeenCalled();
-    expect(res.isError).toBe(true);
-    expect((res.content[0] as any).text).toMatch(/outcome unknown/i);
-  });
-
-  it('keeps the DOM keyboard fallback when key dispatch fails definitively', async () => {
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockRejectedValue(
-      new Error('Input.dispatchKeyEvent rejected: target detached before dispatch'),
-    );
-    const keyboardSpy = vi.spyOn(keyboardTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: '{"success":true,"via":"dom_fallback"}' }],
-      isError: false,
-    } as any);
-
-    const res = await computerTool.execute({
-      action: 'key',
-      text: 'Enter',
-      tabId,
-      autoGroup: false,
-    } as any);
-
-    expect(keyboardSpy).toHaveBeenCalledTimes(1);
-    expect(res.isError).toBe(false);
-  });
-});
 
 describe('A-14 fill-core explicit submit: one click, never an Enter fallback', () => {
   const tabId = 9401;

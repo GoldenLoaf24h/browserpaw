@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { consoleTool } from '../entrypoints/background/tools/browser/console';
 import { consoleBuffer } from '../entrypoints/background/tools/browser/console-buffer';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
-import { RAW_TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
+import { TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
 
 /**
  * P2-1: the persistent console buffer had no stop entry point, so a tab kept its
@@ -121,7 +121,7 @@ describe('P2-1: console buffer stop entry point', () => {
   });
 
   it('advertises stop in the shared tool schema', () => {
-    const schema = RAW_TOOL_SCHEMAS.find((s) => s.name === 'chrome_console');
+    const schema = TOOL_SCHEMAS.find((s) => s.name === 'chrome_console');
     expect(schema).toBeDefined();
     const modeSchema = (schema as any).inputSchema.properties.mode;
     expect(modeSchema.enum).toContain('stop');

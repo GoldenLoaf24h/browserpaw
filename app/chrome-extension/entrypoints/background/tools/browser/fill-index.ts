@@ -1,8 +1,7 @@
-import { actionHistoryManager } from '@/utils/action-history-manager';
 import { type ToolCallContext, ToolResult } from '@/common/tool-handler';
 import { throwIfAborted } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
+import { TOOL_NAMES, formatErrorForAgent } from 'chrome-mcp-shared';
 import { executeInPage } from './in-page-engine';
 import { computePerceptiveDelta } from './dom-indexer';
 import { waitForPageSettle } from '@/utils/action-watchdog';
@@ -100,7 +99,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
       });
       if (!tab.id) {
         return createInteractionErrorResponse(
-          `No active tab found for ${resolveToolName('fill_index')}`,
+          `No active tab found for browserpaw fill`,
           makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
           { status: 'blocked', requestDispatched: false },
         );
@@ -328,7 +327,7 @@ export class FillIndexTool extends BaseBrowserToolExecutor {
       }
       return attachActionReceipt(
         createInteractionErrorResponse(
-          `Error executing ${resolveToolName('fill_index')}: ${formatErrorForAgent(error)}`,
+          `Error executing browserpaw fill: ${formatErrorForAgent(error)}`,
           makeInteractionOutcome('unknown', 'not_requested', 'unclassified_fill_error'),
           { status: 'unknown', retry: false },
         ),

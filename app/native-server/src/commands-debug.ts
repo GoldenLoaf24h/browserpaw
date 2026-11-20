@@ -163,7 +163,7 @@ export function dispatchDebug(
       if (options.out && !first)
         throw new CommandError('network show --out requires a captured request ID.');
       return run('chrome_network_capture', {
-        action: first ? 'show' : 'status',
+        action: first ? 'show' : 'list',
         ...(first ? { requestId: first } : {}),
         ...(options.out ? { outputPath: options.out } : {}),
       }).then((result) => filterNetworkShow(command, result));

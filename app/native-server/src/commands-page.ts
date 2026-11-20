@@ -124,7 +124,6 @@ export function dispatchPage(
   const [first, second] = command.operands;
 
   if (name === 'tabs') {
-    if (options.windows) argumentCount(command, 0);
     const limit = limitOption(command, 50);
     if (options.content) {
       argumentCount(command, 1, Infinity);
@@ -139,11 +138,6 @@ export function dispatchPage(
       );
     }
     return withInventory(run, (windows) => {
-      if (options.windows)
-        return json({
-          windowCount: windows.length,
-          windows: windows.map(windowSummary),
-        });
       if (command.operands.length === 0)
         return {
           content: [{ type: 'text', text: JSON.stringify({ windows }) }],
@@ -316,11 +310,6 @@ export function dispatchPage(
     if (!target.index && !target.selector)
       throw new CommandError('Media inspection requires an observed ref or css:SELECTOR.');
     return run('chrome_inspect_media', target);
-  }
-
-  if (name === 'select' && options.list) {
-    argumentCount(command, 1);
-    return;
   }
 
   if (name === 'scroll' && (options.until !== undefined || options.selector !== undefined)) {

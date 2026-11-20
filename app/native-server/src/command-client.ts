@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   commandHelp,
+  searchCommands,
   isProfileCommand,
   parseCommand,
   CURRENT_VERSION,
@@ -361,6 +362,50 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     }
     command = parseCommand(argv);
     json = command.options.json === true;
+    if (command.name === 'search') {
+      const { options, operands } = command;
+      const query = operands.join(' ').trim();
+      if (!query)
+        return failure(2, 'invalid_arguments', 'Provide keywords. Run browserpaw help search.');
+      if (options.task || options.tab || options.frame)
+        return failure(2, 'invalid_arguments', 'Command search does not accept a page or task.');
+      const limit = options.limit === undefined ? 8 : Number(options.limit);
+      if (
+        (options.limit !== undefined && !/^\d+$/.test(String(options.limit))) ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 50
+      )
+        return failure(2, 'invalid_arguments', '--limit must be an integer from 1 to 50.');
+      const matches = searchCommands(query);
+      const items = matches.slice(0, limit);
+      if (json)
+        writeReceipt(
+          {
+            ok: true,
+            command: 'search',
+            outcome: 'done',
+            data: { query, totalMatches: matches.length, items },
+          },
+          true,
+        );
+      else if (!items.length)
+        console.log('No matching commands. Try another keyword or run browserpaw help.');
+      else {
+        console.log(
+          items
+            .map(({ usage, summary, example }) =>
+              [usage, `  ${summary}`, ...(example ? [`  Example: ${example}`] : [])].join('\n'),
+            )
+            .join('\n\n'),
+        );
+        if (items.length < matches.length)
+          console.log(
+            `\nShowing ${items.length} of ${matches.length} matches. Refine the query or increase --limit.`,
+          );
+      }
+      return 0;
+    }
     if (command.name !== 'setup' && command.name !== 'uninstall') update = checkForCliUpdate();
     if (
       !command.options.task &&

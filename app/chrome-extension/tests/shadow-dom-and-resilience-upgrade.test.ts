@@ -299,7 +299,7 @@ describe('BrowserPaw Shadow DOM & Core Resilience Architectural Upgrade (Plan 2)
       const text = res.content[0].text;
       expect(text).toContain('Browser Navigation / Network Error');
       expect(text).toContain('chrome-error://chromewebdata/');
-      expect(text).toContain('browserpaw_navigate');
+      expect(text).toContain('browserpaw nav');
     });
   });
 });

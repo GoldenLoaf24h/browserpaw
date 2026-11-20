@@ -6,6 +6,7 @@ import type { CallToolResult } from 'chrome-mcp-shared';
 import { parseCommand } from 'chrome-mcp-shared';
 import { handleBrowserCall } from './browser-dispatch';
 import { dispatchCommand } from './command-dispatch';
+import { validateSavedRecipe } from './learned-recipes';
 
 jest.mock('./browser-dispatch', () => ({
   handleBrowserCall: jest.fn(),
@@ -23,6 +24,18 @@ function result(data: unknown, isError = false): CallToolResult {
 describe('BrowserPaw CLI dispatch regressions', () => {
   let homeDir: string;
   let previousHome: string | undefined;
+
+  it.each([
+    { step: ['history', 'search', 'example.com'], name: 'history search' },
+    { step: ['pdf', '--out', 'page.pdf'], name: 'pdf' },
+  ])('rejects $name at recipe save and batch dispatch', async ({ step, name }) => {
+    const error = `Command ${name} is unavailable inside a batch.`;
+    expect(() => validateSavedRecipe({ id: 'audit-recipe', steps: [step] })).toThrow(error);
+    await expect(
+      dispatchCommand(parseCommand(['batch', '-']), new AbortController().signal, [step]),
+    ).rejects.toThrow(error);
+    expect(mockedBrowserCall).not.toHaveBeenCalled();
+  });
 
   beforeEach(() => {
     previousHome = process.env.BROWSERPAW_HOME;

@@ -135,10 +135,4 @@ describe('page command dispatch', () => {
       },
     });
   });
-
-  it('leaves select --list on the coordinator dispatcher', async () => {
-    const run = jest.fn(async () => result({})) as CommandRun;
-    expect(dispatchPage(command('select', ['12'], { list: true }), run)).toBeUndefined();
-    expect(run).not.toHaveBeenCalled();
-  });
 });

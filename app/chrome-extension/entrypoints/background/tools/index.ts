@@ -1,6 +1,6 @@
 import { createErrorResponse, type ToolCallContext } from '@/common/tool-handler';
 import { ERROR_MESSAGES } from '@/common/constants';
-import { formatErrorForAgent, normalizeIncomingToolName, TOOL_SCHEMAS } from 'chrome-mcp-shared';
+import { formatErrorForAgent, TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import * as browserTools from './browser';
 import { tabFaviconManager } from './browser/tab-favicon';
 import { logUnexpectedToolError } from '@/utils/restricted-url';
@@ -9,9 +9,7 @@ const tools = { ...browserTools } as any;
 // Only schemas declared in TOOL_SCHEMAS are callable. Some modules export
 // internal-only instances — network capture start/stop are invoked directly by
 // network-capture.ts, and userscript/inject-script register page listeners
-// without being part of the public surface. Deriving the map from the declared
-// schemas keeps the callable set exactly equal to tools/list, so an undeclared
-// export can never become an invisible, unvalidated entry point.
+// without being extension bridge entry points.
 const declaredToolNames = new Set(TOOL_SCHEMAS.map((t) => t.name));
 const toolSchemasMap = new Map(TOOL_SCHEMAS.map((t) => [t.name, t]));
 const toolsMap = new Map(
@@ -78,15 +76,12 @@ export const handleCallTool = async (param: ToolCallParam, context?: ToolCallCon
     );
   }
 
-  const normalized = normalizeIncomingToolName(param.name);
-  const canonicalName = normalized.canonicalBackendName || param.name;
-  const tool = toolsMap.get(canonicalName) || toolsMap.get(param.name);
+  const tool = toolsMap.get(param.name);
   if (!tool) {
     return createErrorResponse(`Tool ${param.name} not found`);
   }
 
-  const schema =
-    toolSchemasMap.get(normalized.canonicalBackendName) || toolSchemasMap.get(param.name);
+  const schema = toolSchemasMap.get(param.name);
   const schemaProperties = (schema?.inputSchema as any)?.properties || {};
 
   try {

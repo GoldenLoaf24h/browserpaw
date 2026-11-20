@@ -11,6 +11,7 @@ const markdown = [
   '# BrowserPaw commands',
   '',
   'Run `browserpaw help COMMAND` for help from the installed version.',
+  'Use `browserpaw search KEYWORD...` to find commands by name, purpose, or option. Common English and Chinese keywords work, such as `browserpaw search network throttling`, `browserpaw search export bookmarks`, and `browserpaw search 导出书签 --limit 3 --json`.',
   'Page commands take `--tab ID` or `--task ID`. Use `--frame ID` on frame-aware commands.',
   '`--json` emits a single receipt. Use `--` before an argument starting with a dash.',
   '',

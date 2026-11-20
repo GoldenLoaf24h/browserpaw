@@ -1,5 +1,4 @@
 import {
-  resolveToolName,
   type IndexedElement,
   type PageAsset,
   type PrunedDOMTreeResult,
@@ -11,7 +10,7 @@ import {
 /**
  * Standard structured self-healing guidance when an element is not found or expired
  */
-export const DIAGNOSTIC_REFRESH_GUIDANCE = `ACTION REQUIRED: Please call '${resolveToolName('read_dom')}' to refresh the index tree before re-attempting interaction`;
+export const DIAGNOSTIC_REFRESH_GUIDANCE = `ACTION REQUIRED: Please call 'browserpaw observe' to refresh the index tree before re-attempting interaction`;
 
 /**
  * Isolated symbol to store element index map in the extension's execution context.
@@ -4234,7 +4233,7 @@ export function inPageDOMPruner(options?: {
         attributes.id ||
         cand.node.textContent?.replace(/\s+/g, ' ').trim().slice(0, 60) ||
         'select';
-      const readPath = `${resolveToolName('get_dropdown_options')} index=${assignedIndex}`;
+      const readPath = `browserpaw select ${assignedIndex}`;
       const message = `${omitted} enabled options omitted for select "${selectName}" (showing ${omittedOptions.shown} of ${omittedOptions.total}); use ${readPath} to read all`;
       treeOutputItems.push({
         type: 'marker',
@@ -4306,7 +4305,7 @@ export function inPageDOMPruner(options?: {
 
   if (pages_down > 0 || pages_up > 0) {
     treeString =
-      `[Scroll Guidance: ${pages_up} pages above, ${pages_down} pages below. Use ${resolveToolName('interact_index')} / scroll to reveal more content.]\n` +
+      `[Scroll Guidance: ${pages_up} pages above, ${pages_down} pages below. Use browserpaw click / scroll to reveal more content.]\n` +
       treeString;
   }
 

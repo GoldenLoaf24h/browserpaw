@@ -1,111 +1,5 @@
 import type { Tool } from './operation-types';
 
-export type ToolNamespacePrefix = 'browserpaw_' | 'chrome_';
-
-// Default canonical prefix aligned with current environment prefix (browserpaw_)
-let activePrefix: ToolNamespacePrefix = 'browserpaw_';
-
-// Check environment variables if available (e.g. Node.js runtime)
-if (typeof process !== 'undefined' && process?.env) {
-  const configuredPrefix = process.env.BROWSERPAW_TOOL_PREFIX || process.env.CHROME_MCP_TOOL_PREFIX;
-  if (configuredPrefix) setActiveToolPrefix(configuredPrefix);
-}
-
-function normalizeToolPrefix(prefix: string): ToolNamespacePrefix {
-  const normalized = prefix.endsWith('_') ? prefix : `${prefix}_`;
-  if (normalized !== 'browserpaw_' && normalized !== 'chrome_') {
-    throw new Error('Unsupported tool prefix; use browserpaw or chrome.');
-  }
-  return normalized;
-}
-
-/**
- * Get the currently active tool prefix.
- */
-export function getActiveToolPrefix(): ToolNamespacePrefix {
-  return activePrefix;
-}
-
-/**
- * Dynamically set the active tool prefix.
- */
-export function setActiveToolPrefix(prefix: ToolNamespacePrefix | string): void {
-  activePrefix = normalizeToolPrefix(prefix);
-}
-
-/**
- * Extract the base name from a supported tool name (e.g. 'chrome_read_dom' -> 'read_dom', 'browserpaw_read_dom' -> 'read_dom').
- */
-export function getBaseToolName(toolIdentifier: string): string {
-  if (!toolIdentifier || typeof toolIdentifier !== 'string') return toolIdentifier;
-  if (toolIdentifier.startsWith('browserpaw_')) {
-    return toolIdentifier.slice('browserpaw_'.length);
-  }
-  if (toolIdentifier.startsWith('chrome_')) {
-    return toolIdentifier.slice('chrome_'.length);
-  }
-  return toolIdentifier;
-}
-
-export const NON_CHROME_TOOLS: ReadonlySet<string> = new Set([
-  'get_windows_and_tabs',
-  'performance_start_trace',
-  'performance_stop_trace',
-  'performance_analyze_insight',
-]);
-
-/**
- * Resolve a tool's canonical runtime name based on active namespace prefix.
- * Examples:
- *   resolveToolName('read_dom') => 'browserpaw_read_dom'
- *   resolveToolName('chrome_read_dom') => 'browserpaw_read_dom'
- *   resolveToolName('get_windows_and_tabs') => 'browserpaw_get_windows_and_tabs'
- */
-export function resolveToolName(toolIdentifier: string, prefixOverride?: string): string {
-  const prefix = prefixOverride !== undefined ? normalizeToolPrefix(prefixOverride) : activePrefix;
-
-  const baseName = getBaseToolName(toolIdentifier);
-
-  if (NON_CHROME_TOOLS.has(baseName)) {
-    return prefix === 'chrome_' ? baseName : `${prefix}${baseName}`;
-  }
-
-  return `${prefix}${baseName}`;
-}
-
-/**
- * Normalize an incoming tool name to the internal backend name used by the extension / native host.
- */
-export function normalizeIncomingToolName(name: string): {
-  canonicalBackendName: string;
-  prefix: ToolNamespacePrefix | '';
-} {
-  if (!name || typeof name !== 'string') {
-    return { canonicalBackendName: name, prefix: '' };
-  }
-  if (name.startsWith('browserpaw_')) {
-    const raw = name.slice('browserpaw_'.length);
-    if (NON_CHROME_TOOLS.has(raw)) {
-      return { canonicalBackendName: raw, prefix: 'browserpaw_' };
-    }
-    return {
-      canonicalBackendName: 'chrome_' + raw,
-      prefix: 'browserpaw_',
-    };
-  }
-  if (name.startsWith('chrome_')) {
-    const raw = name.slice('chrome_'.length);
-    if (NON_CHROME_TOOLS.has(raw)) {
-      return { canonicalBackendName: raw, prefix: 'chrome_' };
-    }
-    return { canonicalBackendName: name, prefix: 'chrome_' };
-  }
-  if (NON_CHROME_TOOLS.has(name)) {
-    return { canonicalBackendName: name, prefix: '' };
-  }
-  return { canonicalBackendName: 'chrome_' + name, prefix: '' };
-}
-
 const EXPLICIT_TARGET_SCHEMA = {
   type: 'object',
   properties: {
@@ -136,38 +30,6 @@ const EXPLICIT_TARGET_SCHEMA = {
   ],
 } as const;
 
-/**
- * Rewrites any tool references inside an agent-facing text/prompt/error to the target prefix.
- */
-export function alignToolReferences(text: string, targetPrefix: string = activePrefix): string {
-  if (!text || typeof text !== 'string') return text;
-  const pfx = normalizeToolPrefix(targetPrefix || activePrefix);
-
-  if (pfx === 'chrome_') {
-    return text.replace(/\bbrowserpaw_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
-      if (NON_CHROME_TOOLS.has(tool)) {
-        return tool;
-      }
-      return `chrome_${tool}`;
-    });
-  }
-
-  let result = text
-    .replace(/\bchrome_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
-      return `${pfx}${tool}`;
-    })
-    .replace(/\bbrowserpaw_([a-zA-Z0-9_]+)\b/g, (_match, tool) => {
-      return `${pfx}${tool}`;
-    });
-
-  for (const nonChromeTool of NON_CHROME_TOOLS) {
-    const regex = new RegExp(`(?<!(?:browserpaw_|chrome_))\\b${nonChromeTool}\\b`, 'g');
-    result = result.replace(regex, `${pfx}${nonChromeTool}`);
-  }
-
-  return result;
-}
-
 export const TOOL_NAMES = {
   BROWSER: {
     GET_WINDOWS_AND_TABS: 'get_windows_and_tabs',
@@ -188,7 +50,6 @@ export const TOOL_NAMES = {
     JAVASCRIPT: 'chrome_javascript',
     CONSOLE: 'chrome_console',
     FILE_UPLOAD: 'chrome_upload_file',
-    COMPUTER: 'chrome_computer',
     HANDLE_DIALOG: 'chrome_handle_dialog',
     HANDLE_DOWNLOAD: 'chrome_handle_download',
     PERFORMANCE_START_TRACE: 'performance_start_trace',
@@ -210,9 +71,7 @@ export const TOOL_NAMES = {
     GET_LINKS: 'chrome_get_links',
     INSPECT_MEDIA: 'chrome_inspect_media',
     REQUEST_HUMAN_INTERVENTION: 'chrome_request_human_intervention',
-    UNDO_LAST_ACTION: 'chrome_undo_last_action',
     DOCTOR: 'chrome_doctor',
-    INTERCEPT_API: 'chrome_intercept_api',
     CDP_EXECUTE: 'chrome_cdp_execute',
     GREP: 'chrome_grep',
     FORM_PIPELINE: 'chrome_form_pipeline',
@@ -225,7 +84,7 @@ export const TOOL_NAMES = {
   },
 };
 
-export const RAW_TOOL_SCHEMAS: Tool[] = [
+const schemas: Tool[] = [
   ...[
     [TOOL_NAMES.BROWSER.HISTORY, 'Read or remove visited URLs.'],
     [TOOL_NAMES.BROWSER.BOOKMARKS, 'Read or organize bookmarks.'],
@@ -771,9 +630,15 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'stop', 'status'],
-          description: 'Action to perform: "start" begins capture, "stop" ends and returns results',
+          enum: ['start', 'stop', 'list', 'show', 'clear', 'status'],
+          description: 'Start or stop capture, list requests, show one request, or clear results.',
         },
+        requestId: { type: 'string', description: 'Captured request ID for show.' },
+        outputPath: { type: 'string', description: 'Output path for show response body.' },
+        method: { type: 'string', description: 'HTTP method filter for list.' },
+        status: { type: 'integer', description: 'HTTP status filter for list.' },
+        resourceType: { type: 'string', description: 'Resource type filter for list.' },
+        limit: { type: 'integer', description: 'Maximum requests included in list (up to 100).' },
         needResponseBody: {
           type: 'boolean',
           description:
@@ -2169,48 +2034,13 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
   },
 ];
 
-function alignSchemaDescriptions(schema: any): any {
-  if (!schema || typeof schema !== 'object') return schema;
-  if (Array.isArray(schema)) {
-    return schema.map(alignSchemaDescriptions);
-  }
-  const copy: any = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === 'description' && typeof value === 'string') {
-      copy[key] = alignToolReferences(value);
-    } else if (typeof value === 'object' && value !== null) {
-      copy[key] = alignSchemaDescriptions(value);
-    } else {
-      copy[key] = value;
-    }
-  }
-  return copy;
-}
-
-// Retained in RAW_TOOL_SCHEMAS for legacy contract test compatibility only.
-export const PURGED_TOOL_NAMES = new Set([
-  'chrome_click_element',
-  'chrome_burst_interact',
-  'chrome_fill_or_select',
-  'chrome_get_web_content',
-  'chrome_get_links',
-]);
-
-export const TOOL_SCHEMAS: Tool[] = RAW_TOOL_SCHEMAS.filter(
-  (tool) => !PURGED_TOOL_NAMES.has(tool.name),
-).map((tool) =>
-  alignSchemaDescriptions({
-    ...tool,
-    inputSchema: {
-      ...tool.inputSchema,
-      properties: {
-        ...tool.inputSchema.properties,
-        taskId: {
-          type: 'string',
-          description:
-            'Optional durable task identity; restricts this operation to its verified pages.',
-        },
-      },
+export const TOOL_SCHEMAS: Tool[] = schemas.map((tool) => ({
+  ...tool,
+  inputSchema: {
+    ...tool.inputSchema,
+    properties: {
+      ...tool.inputSchema.properties,
+      taskId: { type: 'string', description: 'Durable task identity for verified pages.' },
     },
-  }),
-);
+  },
+}));

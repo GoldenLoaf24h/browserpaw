@@ -5,6 +5,7 @@ import { isProfileCommand, parseCommand, type ParsedCommand } from 'chrome-mcp-s
 import { handleBrowserCall } from './browser-dispatch';
 import {
   argumentCount,
+  assertBatchStep,
   CommandError,
   integer,
   parseTarget,
@@ -854,8 +855,6 @@ export async function dispatchCommand(
   }
 }
 
-const batchExcluded = new Set(['setup', 'uninstall', 'help', 'batch']);
-
 function attachMatchedRecipes(result: BackendResult, url: string): BackendResult {
   if (failed(result) || !/^https?:\/\//i.test(url)) return result;
   try {
@@ -892,15 +891,7 @@ function recipeSteps(input: unknown): string[][] {
 function batchCommands(input: unknown, options: ParsedCommand['options']) {
   return recipeSteps(input).map((args) => {
     const parsed = parseCommand(args);
-    if (
-      batchExcluded.has(parsed.name) ||
-      isProfileCommand(parsed.name) ||
-      parsed.name.startsWith('recipe ') ||
-      parsed.options.file ||
-      parsed.options.input ||
-      (parsed.name !== 'screenshot' && parsed.name !== 'download' && parsed.options.out)
-    )
-      throw new CommandError(`Command ${parsed.name} is unavailable inside a batch.`);
+    assertBatchStep(parsed);
     return {
       ...parsed,
       options: {

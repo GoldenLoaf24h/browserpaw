@@ -5,7 +5,7 @@ import {
 } from '../../../../common/tool-handler';
 import { throwIfAborted, waitWithAbort, TaskCancelledError } from '../../../../utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName, type CaptureNetworkOptions } from 'chrome-mcp-shared';
+import { TOOL_NAMES, type CaptureNetworkOptions } from 'chrome-mcp-shared';
 import { cdpSessionManager } from '../../../../utils/cdp-session-manager';
 import {
   raceCdp,
@@ -408,7 +408,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
     }
     if (!hasIndex && !hasCoord && !hasPoints && !hasPath) {
       return blockedError(
-        `Either index (positive 1-based integer) or coordinate ({ x: number, y: number }) must be provided for ${resolveToolName('interact_index')}`,
+        `Either index (positive 1-based integer) or coordinate ({ x: number, y: number }) must be provided for browserpaw click`,
         'missing_target',
       );
     }
@@ -477,10 +477,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       });
       const tabId = tab.id;
       if (!tabId) {
-        return blockedError(
-          `No active tab found for ${resolveToolName('interact_index')}`,
-          'no_active_tab',
-        );
+        return blockedError(`No active tab found for browserpaw click`, 'no_active_tab');
       }
       if (args.frameId !== undefined && (!Number.isSafeInteger(args.frameId) || args.frameId < 0)) {
         return blockedError('frameId must be a non-negative safe integer', 'invalid_frame_id');
@@ -1003,7 +1000,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               return createErrorResponse(
                 (coordResult?.error ||
                   `Element with index [${args.index}] not found in active DOM index map`) +
-                  `. Hint: Element may reside inside a dynamic or closed ShadowRoot. Try calling ${resolveToolName('javascript')} to inspect or dispatch, or re-scan with ${resolveToolName('read_dom')}.`,
+                  `. Hint: Element may reside inside a dynamic or closed ShadowRoot. Try calling browserpaw eval to inspect or dispatch, or re-scan with browserpaw observe.`,
               );
             }
           } else {
@@ -1233,7 +1230,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                 netCapture.dispose();
                 return createTargetOccludedResponse(
                   new StalePageError(
-                    `Element [${args.index}] click intercepted by ${interceptRes.description}. Please dismiss or interact with the overlay/dialog first. Hint: If this is an open modal, interact with its buttons to dismiss. If it is a captcha or human verification, call ${resolveToolName('request_human_intervention')}.`,
+                    `Element [${args.index}] click intercepted by ${interceptRes.description}. Please dismiss or interact with the overlay/dialog first. Hint: If this is an open modal, interact with its buttons to dismiss. If it is a captcha or human verification, call browserpaw ask-human.`,
                   ),
                 );
               }
@@ -1813,11 +1810,11 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               } catch {}
               if (isCaptcha) {
                 return createErrorResponse(
-                  `[CAPTCHA_BLOCKED: Slider / human verification detected] The page is blocked by anti-bot verification. Call ${resolveToolName('request_human_intervention')} to let the user solve it.`,
+                  `[CAPTCHA_BLOCKED: Slider / human verification detected] The page is blocked by anti-bot verification. Call browserpaw ask-human to let the user solve it.`,
                 );
               }
               return createErrorResponse(
-                `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}. Hint: If a native dialog is open, call ${resolveToolName('handle_dialog')}. If this is a slider or captcha verification, call ${resolveToolName('request_human_intervention')}.`,
+                `${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}. Hint: If a native dialog is open, call browserpaw dialog. If this is a slider or captcha verification, call browserpaw ask-human.`,
               );
             }
             if (cdpErr instanceof TaskCancelledError) {
@@ -2081,7 +2078,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       }
       return attachActionReceipt(
         createInteractionErrorResponse(
-          `Error executing ${resolveToolName('interact_index')}: ${error instanceof Error ? error.message : String(error)}`,
+          `Error executing browserpaw click: ${error instanceof Error ? error.message : String(error)}`,
           makeInteractionOutcome(
             actionDispatched ? 'unknown' : 'not_dispatched',
             'not_requested',

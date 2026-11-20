@@ -143,8 +143,7 @@ describe('compact form semantics', () => {
       expect(indexedOptions).toHaveLength(50);
       expect(res.treeString).toContain('label="Choice"');
       expect(res.treeString).toContain('50 enabled options omitted');
-      expect(res.treeString).toContain('get_dropdown_options');
-      expect(res.treeString).toContain('index=');
+      expect(res.treeString).toContain('browserpaw select 12');
       expect(res.treeString).not.toContain('Option 100');
     } finally {
       restore();

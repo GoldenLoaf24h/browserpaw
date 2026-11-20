@@ -2,7 +2,6 @@ import { type ToolCallContext, type ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import {
   TOOL_NAMES,
-  resolveToolName,
   type BatchActionItem,
   type BatchActionResult,
   type CaptureNetworkOptions,
@@ -277,7 +276,7 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
       });
       if (!tab.id) {
         return createInteractionErrorResponse(
-          `No active tab found for ${resolveToolName('batch_actions')}`,
+          `No active tab found for browserpaw batch`,
           makeInteractionOutcome('not_dispatched', 'not_requested', 'no_active_tab', 0),
           { status: 'blocked', requestDispatched: false },
         );

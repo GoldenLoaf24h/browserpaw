@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BaseBrowserToolExecutor } from '../entrypoints/background/tools/base-browser';
-import { computerTool } from '../entrypoints/background/tools/browser/computer';
 import { fillTool } from '../entrypoints/background/tools/browser/interaction';
 import { sessionTabAffinity, startHandoverTracking } from '../utils/session-tab-affinity';
 import { handleCallTool } from '../entrypoints/background/tools/index';
@@ -42,111 +41,6 @@ describe('W2 & BUG-11 Regression Tests', () => {
       await expect(executor.execute({ tabId: 999, sessionId: 'sess-1' })).rejects.toThrow(
         /tab.*999.*not found/i,
       );
-    });
-  });
-
-  describe('BUG-03: computer tool delegates must forward resolved target tabId, sessionId, and windowId', () => {
-    it('forwards resolved tabId, sessionId, and windowId to fill and fill_form delegations', async () => {
-      const targetTab = { id: 777, windowId: 88, active: false };
-      (globalThis as any).chrome = {
-        tabs: {
-          get: vi.fn(async (id: number) => {
-            if (id === 777) return targetTab;
-            throw new Error('Not found');
-          }),
-          query: vi.fn(async () => [targetTab]),
-        },
-        storage: {
-          session: {
-            get: vi.fn().mockResolvedValue({ agentControlEnabled: true }),
-          },
-        },
-      };
-
-      const fillSpy = vi.spyOn(fillTool, 'execute').mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-        isError: false,
-        InternalError: false,
-      });
-
-      // Execute computer action='fill' with explicit tabId and sessionId
-      await computerTool.execute({
-        action: 'fill',
-        ref: 'e1',
-        value: 'hello',
-        tabId: 777,
-        sessionId: 'sess-comp',
-      } as any);
-
-      expect(fillSpy).toHaveBeenCalled();
-      const lastCallArg = fillSpy.mock.calls[0][0] as any;
-      expect(lastCallArg.tabId).toBe(777);
-      expect(lastCallArg.sessionId).toBe('sess-comp');
-      expect(lastCallArg.windowId).toBe(88);
-
-      // Test computer action='click' delegation
-      const interactionModule = await import('../entrypoints/background/tools/browser/interaction');
-      const clickSpy = vi.spyOn(interactionModule.clickTool, 'execute').mockResolvedValue({
-        content: [{ type: 'text', text: 'ok' }],
-        isError: false,
-      });
-      await computerTool.execute({
-        action: 'left_click',
-        ref: 'button_1',
-        tabId: 777,
-        sessionId: 'sess-comp',
-      } as any);
-      expect(clickSpy).toHaveBeenCalled();
-      const clickArg = clickSpy.mock.calls[0][0] as any;
-      expect(clickArg.tabId).toBe(777);
-      expect(clickArg.sessionId).toBe('sess-comp');
-      expect(clickArg.windowId).toBe(88);
-
-      // Test computer action='type' delegation
-      const kbModule = await import('../entrypoints/background/tools/browser/keyboard');
-      const kbSpy = vi.spyOn(kbModule.keyboardTool, 'execute').mockResolvedValue({
-        content: [{ type: 'text', text: 'ok' }],
-        isError: false,
-      });
-      await computerTool.execute({
-        action: 'type',
-        text: 'hello',
-        tabId: 777,
-        sessionId: 'sess-comp',
-      } as any);
-      expect(kbSpy).toHaveBeenCalled();
-      const typeArg = kbSpy.mock.calls[0][0] as any;
-      expect(typeArg.tabId).toBe(777);
-      expect(typeArg.sessionId).toBe('sess-comp');
-      expect(typeArg.windowId).toBe(88);
-
-      // Test computer action='key' delegation
-      kbSpy.mockClear();
-      await computerTool.execute({
-        action: 'key',
-        text: 'Enter',
-        tabId: 777,
-        sessionId: 'sess-comp',
-      } as any);
-      expect(kbSpy).toHaveBeenCalled();
-      const keyArg = kbSpy.mock.calls[0][0] as any;
-      expect(keyArg.tabId).toBe(777);
-      expect(keyArg.sessionId).toBe('sess-comp');
-      expect(keyArg.windowId).toBe(88);
-
-      // Test computer action='fill_form' delegation
-      fillSpy.mockClear();
-      await computerTool.execute({
-        action: 'fill_form',
-        tabId: 777,
-        sessionId: 'sess-comp',
-        elements: [{ ref: 'input_1', value: 'Alice' }],
-      } as any);
-      expect(fillSpy).toHaveBeenCalled();
-      const formArg = fillSpy.mock.calls[0][0] as any;
-      expect(formArg.tabId).toBe(777);
-      expect(formArg.sessionId).toBe('sess-comp');
-      expect(formArg.windowId).toBe(88);
     });
   });
 

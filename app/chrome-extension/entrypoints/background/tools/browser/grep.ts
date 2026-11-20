@@ -1,10 +1,5 @@
 import { BaseBrowserToolExecutor } from '../base-browser';
-import {
-  TOOL_NAMES,
-  resolveToolName,
-  type IndexedElement,
-  type PrunedDOMTreeResult,
-} from 'chrome-mcp-shared';
+import { TOOL_NAMES, type IndexedElement, type PrunedDOMTreeResult } from 'chrome-mcp-shared';
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { executeInPage } from './in-page-engine';
 
@@ -361,7 +356,7 @@ export class GrepTool extends BaseBrowserToolExecutor {
                   : {}),
                 ...(textFallbackMatches
                   ? {
-                      note: `No interactive elements matched query "${args.query}". Displaying matches found in deep page text. Use ${resolveToolName('interact_index')} with coordinate or consult ${resolveToolName('read_dom')} for target context.`,
+                      note: `No interactive elements matched query "${args.query}". Displaying matches found in deep page text. Use browserpaw click with coordinate or consult browserpaw observe for target context.`,
                     }
                   : {}),
               },

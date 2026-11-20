@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screenshotTool } from '../entrypoints/background/tools/browser/screenshot';
-import { computerTool } from '../entrypoints/background/tools/browser/computer';
+import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as agentCursor from '../entrypoints/background/tools/browser/agent-cursor';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
@@ -218,7 +218,7 @@ describe('Screenshot capture validity', () => {
     });
     vi.spyOn(screenshotTool as any, 'injectContentScript').mockResolvedValue(undefined);
     vi.spyOn(screenshotTool as any, 'sendMessageToTab').mockResolvedValue({ success: true });
-    vi.spyOn(computerTool as any, 'resolveAffinityTab').mockResolvedValue({
+    vi.spyOn(interactIndexTool as any, 'resolveAffinityTab').mockResolvedValue({
       id: tabId,
       windowId: 1,
       active: true,
@@ -394,13 +394,15 @@ describe('Screenshot capture validity', () => {
     const { captureId } = capturePayload;
     dispatchedEvents = [];
 
-    const result = await computerTool.execute({
-      action: 'left_click',
+    const result = await interactIndexTool.execute({
+      action: 'click',
       captureId,
-      coordinates: { x: 100, y: 100 },
+      coordinateSpace: 'screenshot',
+      coordinate: { x: 100, y: 100 },
       tabId,
       autoSnap: false,
-      dwellMs: 0,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(false);
@@ -428,13 +430,15 @@ describe('Screenshot capture validity', () => {
     for (const state of invalidStates) {
       currentState = state;
       dispatchedEvents = [];
-      const result = await computerTool.execute({
-        action: 'left_click',
+      const result = await interactIndexTool.execute({
+        action: 'click',
         captureId,
         coordinateSpace: 'screenshot',
-        coordinates: { x: 100, y: 100 },
+        coordinate: { x: 100, y: 100 },
         tabId,
         autoSnap: false,
+        includeDelta: false,
+        skipLock: true,
       } as any);
 
       expect(result.isError).toBe(true);
@@ -448,13 +452,16 @@ describe('Screenshot capture validity', () => {
     currentState = { ...baseState, scrollY: 99 };
     dispatchedEvents = [];
 
-    const result = await computerTool.execute({
-      action: 'left_click_drag',
+    const result = await interactIndexTool.execute({
+      action: 'drag',
+      coordinateSpace: 'screenshot',
       captureId,
-      startCoordinates: { x: 100, y: 100 },
-      coordinates: { x: 200, y: 200 },
+      coordinate: { x: 100, y: 100 },
+      end: { coordinate: { x: 200, y: 200 } },
       tabId,
       autoSnap: false,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(true);
@@ -466,12 +473,14 @@ describe('Screenshot capture validity', () => {
     currentState = { ...baseState, scrollY: 99 };
     dispatchedEvents = [];
 
-    const result = await computerTool.execute({
-      action: 'left_click',
+    const result = await interactIndexTool.execute({
+      action: 'click',
       coordinateSpace: 'screenshot',
-      coordinates: { x: 100, y: 100 },
+      coordinate: { x: 100, y: 100 },
       tabId,
       autoSnap: false,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(true);
@@ -488,12 +497,15 @@ describe('Screenshot capture validity', () => {
     currentState = { ...baseState };
     dispatchedEvents = [];
 
-    const result = await computerTool.execute({
-      action: 'left_click',
+    const result = await interactIndexTool.execute({
+      action: 'click',
       captureId: firstId,
-      coordinates: { x: 100, y: 100 },
+      coordinateSpace: 'screenshot',
+      coordinate: { x: 100, y: 100 },
       tabId,
       autoSnap: false,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(true);
@@ -507,12 +519,15 @@ describe('Screenshot capture validity', () => {
     await Promise.resolve();
     dispatchedEvents = [];
 
-    const result = await computerTool.execute({
-      action: 'left_click',
+    const result = await interactIndexTool.execute({
+      action: 'click',
       captureId,
-      coordinates: { x: 100, y: 100 },
+      coordinateSpace: 'screenshot',
+      coordinate: { x: 100, y: 100 },
       tabId,
       autoSnap: false,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(true);
@@ -560,12 +575,15 @@ describe('Screenshot capture validity', () => {
       reason: expect.stringMatching(/cropped screenshots/i),
     });
     dispatchedEvents = [];
-    const result = await computerTool.execute({
-      action: 'left_click',
+    const result = await interactIndexTool.execute({
+      action: 'click',
       captureId: payload.captureId,
-      coordinates: { x: 50, y: 50 },
+      coordinateSpace: 'screenshot',
+      coordinate: { x: 50, y: 50 },
       tabId,
       autoSnap: false,
+      includeDelta: false,
+      skipLock: true,
     } as any);
 
     expect(result.isError).toBe(true);

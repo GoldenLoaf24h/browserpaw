@@ -13,7 +13,7 @@ browserpaw network stop --tab 12
 browserpaw console --tab 12 --level error,warning --grep checkout
 ```
 
-Network recording uses webRequest for metadata. `--bodies` uses Chrome's debugger for textual bodies. Capture filters limit the events recorded, while list filters narrow the view. `network clear` clears captured events for the selected page. A response body can be absent when Chrome has not finished loading it, it exceeded the capture limits, or it was binary. Treat captures as local diagnostics.
+Use the string from `requests[].id` in `network list` as `REQUEST_ID`. The same ID selects the request after filtering or sorting. Network recording uses webRequest for metadata. `--bodies` uses Chrome's debugger for textual bodies. Capture filters limit the events recorded, while list filters narrow the view. `network clear` clears captured events for the selected page. A response body can be absent when Chrome has not finished loading it, it exceeded the capture limits, or it was binary. Treat captures as local diagnostics.
 
 ## Performance, emulation, and PDF
 

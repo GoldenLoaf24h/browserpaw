@@ -84,7 +84,13 @@ try {
   const work = join(sandbox, 'work');
   mkdirSync(work);
   const browserpawHome = join(sandbox, 'home');
-  const env = { ...process.env, BROWSERPAW_HOME: browserpawHome, BROWSERPAW_NO_UPDATE_CHECK: '1' };
+  const env = {
+    ...process.env,
+    BROWSERPAW_HOME: browserpawHome,
+    BROWSERPAW_NO_UPDATE_CHECK: '1',
+    BROWSERPAW_TOOL_PREFIX: 'obsolete-prefix',
+    CHROME_MCP_TOOL_PREFIX: 'obsolete-prefix',
+  };
   const execute = (...args) =>
     execFileSync(process.execPath, [cli, ...args], {
       encoding: 'utf8',
@@ -94,7 +100,26 @@ try {
     });
   assert.equal(execute('--version').trim(), manifest.version);
   assert.match(execute('help'), /task start.*observe/);
-  assert.match(execute('help', 'network', 'show'), /captured network events/);
+  assert.match(execute('help', 'network', 'show'), /recorded ID/);
+  assert.match(execute('search', 'network', 'response', 'body'), /browserpaw network show/);
+  assert.equal(
+    JSON.parse(execute('search', 'network', 'throttling', '--limit', '1', '--json')).data.items[0]
+      .name,
+    'emulate',
+  );
+  assert.match(execute('search', 'screenshot', '--', '--full'), /browserpaw screenshot/);
+  const discovery = JSON.parse(execute('--json', 'search', '导出书签', '--limit', '1'));
+  assert.equal(discovery.command, 'search');
+  assert.equal(discovery.data.items.length, 1);
+  assert.equal(discovery.data.items[0].name, 'bookmark export');
+  assert.deepEqual(
+    JSON.parse(execute('search', 'no-matching-command-xyz', '--json')).data.items,
+    [],
+  );
+  assert.throws(
+    () => execute('search', '--json'),
+    (error) => error.status === 2 && JSON.parse(error.stdout).error.code === 'invalid_arguments',
+  );
   const found = JSON.parse(execute('recipe', 'find', '推特搜索', '--all', '--json'));
   assert.equal(found.ok, true);
   assert.equal(found.data.matches[0].id, 'x-search-thread');

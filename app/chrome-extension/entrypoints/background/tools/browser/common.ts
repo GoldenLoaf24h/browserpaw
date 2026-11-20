@@ -1,5 +1,4 @@
 import { isCloudMetadataUrl, restrictedUrlErrorMessage } from '@/utils/restricted-url';
-import { actionHistoryManager } from '@/utils/action-history-manager';
 import { tabGroupManager } from './tab-group-manager';
 import { tabFaviconManager } from './tab-favicon';
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
@@ -164,13 +163,6 @@ class NavigateTool extends BaseBrowserToolExecutor {
         console.log('Refreshing current active tab');
         const targetTab = await this.resolveAffinityTab({ tabId, windowId, sessionId });
         if (!targetTab.id) return createErrorResponse('No target tab found to refresh');
-        if (targetTab.url && targetTab.id) {
-          actionHistoryManager.pushAction(targetTab.id, {
-            type: 'navigate',
-            prevUrl: targetTab.url,
-            timestamp: Date.now(),
-          });
-        }
         const targetTabId = targetTab.id;
 
         await this.navigateAndWait(targetTabId, () => chrome.tabs.reload(targetTabId));

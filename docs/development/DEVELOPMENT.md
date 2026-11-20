@@ -1,6 +1,6 @@
 # BrowserPaw development
 
-Run `pnpm install --frozen-lockfile` and `pnpm verify`. Use `BROWSERPAW_EXTENSION_SYNC_DIR=""` for builds that should stay in the repository. Build and package with `pnpm build` and `npm pack` from the Native package directory.
+Run `pnpm install --frozen-lockfile` and `pnpm verify`. Builds stay in the repository. Build and package with `pnpm build` and `npm pack` from the Native package directory.
 
 The shared command registry drives help and generated Markdown. After editing it, run `pnpm build:shared`, `pnpm docs:commands`, and `node scripts/sync-skills.mjs`. Edit the Skill in the canonical directory.
 
@@ -17,8 +17,7 @@ Change shared browser behavior through existing locator, task, or extension exec
 Chrome MV3 extension reloads commonly appear to fail or keep serving old UI (for example showing retired v4/Jev popup chunks after clicking Reload) due to five concrete mechanics in this repository and Chrome MV3:
 
 1. **Build is intentionally separated from deployment (`pnpm verify` and `pnpm build` do not sync `browserpaw.local.json`)**:
-   - `pnpm verify` deletes `BROWSERPAW_EXTENSION_SYNC_DIR` from its child environment and writes only inside `app/chrome-extension/.output/chrome-mv3` (and `app/native-server/dist/v5/extension`).
-   - `pnpm build` and `pnpm build:extension` run `scripts/sync-extension-dist.mjs`, which reads **only** the `BROWSERPAW_EXTENSION_SYNC_DIR` environment variable and silently skips syncing when it is unset. It does **not** read `browserpaw.local.json`, and it only clears `chunks/` and `assets/` (leaving deleted top-level files behind).
+   - `pnpm verify`, `pnpm build`, and `pnpm build:extension` build locally. They do not deploy when an extension target is configured.
    - To sync a build into Chrome's loaded unpacked folder (configured via `browserpaw.local.json` `extensionSyncDir` or `BROWSERPAW_EXTENSION_SYNC_DIR`), always run `pnpm build:deploy` followed by `pnpm verify:delivery`. `--deploy` prunes obsolete files tracked in the prior `browserpaw-build.json`, copies the new build, and checks SHA-256 hashes; `--check-deployment` enforces exact file-set and hash parity.
 2. **Split load paths across development and CLI setup**:
    - Three directories can exist simultaneously: `app/chrome-extension/.output/chrome-mv3` (repo build output), the local sync target in `browserpaw.local.json`, and `~/.browserpaw/extension` (populated by `browserpaw setup`).

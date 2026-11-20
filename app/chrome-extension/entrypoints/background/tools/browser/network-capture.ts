@@ -116,65 +116,7 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
           networkDebuggerStartTool as unknown as { terminalResults: Map<number, { result: any }> }
         ).terminalResults.get(tab.id)?.result ??
         networkCaptureStartTool.terminalResults.get(tab.id)?.result;
-      if (
-        !recording &&
-        !retained &&
-        (action === 'list' || action === 'show' || action === 'clear')
-      ) {
-        const history = await this.tabHistory(tab.id);
-        if (action === 'clear')
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  tabId: tab.id,
-                  cleared: false,
-                  message: 'No active or retained capture.',
-                }),
-              },
-            ],
-            isError: false,
-          };
-        if (!history.length)
-          return createErrorResponse(
-            `No active, retained, or page-helper network capture found on tab ${tab.id}. Start network start before inspecting traffic.`,
-          );
-        if (action === 'show') {
-          if (!args.requestId)
-            return createErrorResponse('Use network show ID to inspect one captured request.');
-          const item = history.find((entry: any) => String(entry.requestId) === args.requestId);
-          if (!item) return createErrorResponse(`Network request ${args.requestId} was not found.`);
-          return this.showNetworkRequest(tab.id, item, args.outputPath);
-        }
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ tabId: tab.id, recording: false, requests: history }),
-            },
-          ],
-          isError: false,
-        };
-      }
       const requests = recording?.requests ?? retained?.requests ?? {};
-      if (action === 'status') {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                tabId: tab.id,
-                recording: Boolean(recording),
-                requestCount: Object.keys(requests).length,
-                requests: Object.values(requests),
-              }),
-            },
-          ],
-          isError: false,
-        };
-      }
       if (action === 'clear') {
         if (recording?.requests) recording.requests = {};
         if (retained?.requests) retained.requests = {};
@@ -189,10 +131,26 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
         }
         return {
           content: [
-            { type: 'text', text: JSON.stringify({ success: true, tabId: tab.id, cleared: true }) },
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                tabId: tab.id,
+                cleared: Boolean(recording || retained),
+              }),
+            },
           ],
           isError: false,
         };
+      }
+      let entries = Object.values(requests) as Array<Record<string, any>>;
+      if (action === 'show') {
+        const requestId = args.requestId;
+        if (!requestId)
+          return createErrorResponse('Use network show ID to inspect one captured request.');
+        const item = entries.find((entry) => String(entry.requestId) === requestId);
+        if (!item) return createErrorResponse(`Network request ${requestId} was not found.`);
+        return this.showNetworkRequest(tab.id, item, args.outputPath);
       }
       const method = typeof args.method === 'string' ? args.method.toUpperCase() : undefined;
       const status = Number(args.status);
@@ -202,7 +160,6 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
         Number.isSafeInteger(args.limit) && Number(args.limit) > 0
           ? Math.min(Number(args.limit), 100)
           : 100;
-      let entries = Object.values(requests) as Array<Record<string, any>>;
       if (args.requestUrlPattern)
         entries = entries.filter((entry) => {
           const pattern = String(args.requestUrlPattern);
@@ -227,21 +184,12 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       if (type)
         entries = entries.filter((entry) => String(entry.type || '').toLowerCase() === type);
       entries.sort((a, b) => Number(a.requestTime || 0) - Number(b.requestTime || 0));
-      if (action === 'show') {
-        const requestId = args.requestId;
-        if (!requestId)
-          return createErrorResponse('Use network show ID to inspect one captured request.');
-        const item = entries.find(
-          (entry, index) =>
-            String(entry.requestId) === requestId || String(index + 1) === requestId,
-        );
-        if (!item) return createErrorResponse(`Network request ${requestId} was not found.`);
-        return this.showNetworkRequest(tab.id, item, args.outputPath);
-      }
-      if (action === 'list')
-        entries = entries.slice(0, limit).map((entry, index) => ({
-          id: entry.requestId,
-          index: index + 1,
+      const payload = {
+        tabId: tab.id,
+        recording: Boolean(recording),
+        requestCount: entries.length,
+        requests: entries.slice(0, limit).map((entry) => ({
+          id: String(entry.requestId),
           method: entry.method,
           url: entry.url,
           status: entry.statusCode ?? entry.status,
@@ -256,11 +204,7 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
                 truncated: entry.responseBody.includes('[Response truncated'),
               }
             : undefined,
-        }));
-      const payload = {
-        tabId: tab.id,
-        recording: Boolean(recording),
-        requests: entries,
+        })),
       };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false };
     }
@@ -319,22 +263,6 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
     }
 
     return decorateJsonResult(result, { backend, needResponseBody: wantBody, tabId });
-  }
-
-  private async tabHistory(tabId: number) {
-    try {
-      await this.injectContentScript(tabId, ['inject-scripts/network-helper.js']);
-      const response = await this.sendMessageToTab(
-        tabId,
-        { action: 'GET_NETWORK_HISTORY' },
-        undefined,
-        10000,
-      );
-      const entries = Array.isArray(response?.requests) ? response.requests : [];
-      return entries;
-    } catch {
-      return [];
-    }
   }
 
   private showNetworkRequest(tabId: number, item: Record<string, any>, outputPath?: string) {

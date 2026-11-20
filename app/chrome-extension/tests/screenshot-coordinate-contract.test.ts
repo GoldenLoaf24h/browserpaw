@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { computerTool } from '../entrypoints/background/tools/browser/computer';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import { clickTool, fillTool } from '../entrypoints/background/tools/browser/interaction';
 import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
@@ -13,7 +12,7 @@ import {
   inPageReadScreenshotState,
   type ScreenshotPageStateProbe,
 } from '../utils/screenshot-validity';
-import { RAW_TOOL_SCHEMAS, TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
+import { TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
 
 const tabId = 6206;
 const tab = {
@@ -206,13 +205,9 @@ beforeEach(() => {
 
   vi.spyOn(agentCursor, 'animateAgentCursor').mockResolvedValue(undefined);
   vi.spyOn(agentCursor, 'animateAgentCursorClick').mockResolvedValue(undefined);
-  vi.spyOn(computerTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
   vi.spyOn(interactIndexTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
   vi.spyOn(clickTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
   vi.spyOn(fillTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
-  vi.spyOn(computerTool as any, 'safeExecuteScript').mockResolvedValue({
-    result: { success: true, target: { tagName: 'BUTTON' } },
-  });
 });
 
 afterEach(() => {
@@ -221,17 +216,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
-function computerClick(overrides: Record<string, any> = {}) {
-  return computerTool.execute({
-    action: 'left_click',
-    coordinateSpace: 'screenshot',
-    coordinates: { x: 100, y: 100 },
-    tabId,
-    autoSnap: false,
-    ...overrides,
-  } as any);
-}
 
 function interactClick(overrides: Record<string, any> = {}) {
   return interactIndexTool.execute({
@@ -249,7 +233,7 @@ function interactClick(overrides: Record<string, any> = {}) {
 describe('Screenshot coordinate contract', () => {
   it('keeps captureId on every schema that accepts screenshot coordinates', () => {
     for (const name of ['chrome_interact_index']) {
-      const tool = RAW_TOOL_SCHEMAS.find((entry) => entry.name === name);
+      const tool = TOOL_SCHEMAS.find((entry) => entry.name === name);
       expect(tool, name).toBeDefined();
       expect(tool!.inputSchema.properties?.captureId, name).toMatchObject({
         type: 'string',
@@ -259,17 +243,6 @@ describe('Screenshot coordinate contract', () => {
       );
     }
     expect(TOOL_SCHEMAS.some((tool) => tool.name === 'chrome_burst_interact')).toBe(false);
-  });
-
-  it('rejects computer screenshot coordinates without a captureId before dispatch', async () => {
-    seedCapture();
-    page.scrollY = 99;
-
-    const result = await computerClick();
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/captureId|fresh screenshot/i);
-    expect(dispatched).toEqual([]);
   });
 
   it('rejects interact screenshot coordinates without a captureId before dispatch', async () => {
@@ -287,36 +260,26 @@ describe('Screenshot coordinate contract', () => {
     seedCapture();
     page.scrollY = 99;
 
-    const computerResult = await computerClick({
-      coordinateSpace: 'viewport',
-      coordinates: { x: 40, y: 50 },
-    });
     const interactResult = await interactClick({
       coordinateSpace: 'viewport',
       coordinate: { x: 60, y: 70 },
     });
 
-    expect(computerResult.isError).toBe(false);
     expect(interactResult.isError).toBe(false);
     expect(mouseEvents('mousePressed')).toEqual([
-      expect.objectContaining({ params: expect.objectContaining({ x: 40, y: 50 }) }),
       expect.objectContaining({ params: expect.objectContaining({ x: 60, y: 70 }) }),
     ]);
   });
 
-  it('accepts an explicit captureId for screenshot coordinates in both executors', async () => {
+  it('accepts an explicit captureId for screenshot coordinates', async () => {
     const capture = seedCapture();
 
-    const computerResult = await computerClick({ captureId: capture.captureId });
     const interactResult = await interactClick({ captureId: capture.captureId });
 
-    expect(computerResult.isError).toBe(false);
     expect(interactResult.isError).toBe(false);
-    const computerPayload = JSON.parse(computerResult.content[0].text as string);
     const interactPayload = JSON.parse(interactResult.content[0].text as string);
-    expect(computerPayload).toMatchObject({ captureValidated: true, captureId: capture.captureId });
     expect(interactPayload).toMatchObject({ captureValidated: true, captureId: capture.captureId });
-    expect(mouseEvents('mousePressed')).toHaveLength(2);
+    expect(mouseEvents('mousePressed')).toHaveLength(1);
   });
 
   it.each([
@@ -325,65 +288,36 @@ describe('Screenshot coordinate contract', () => {
     ['DPR change', () => (page.dpr = 2.5), /device pixel ratio changed/i],
     ['scroll change', () => (page.scrollY = 21), /scroll changed/i],
     ['same-document DOM change', () => (page.domRevision += 1), /DOM changed/i],
-  ])('fails closed before either executor dispatches after %s', async (_label, mutate, reason) => {
+  ])('fails closed before dispatch after %s', async (_label, mutate, reason) => {
     const capture = seedCapture();
     mutate();
 
-    const computerResult = await computerClick({ captureId: capture.captureId });
     const interactResult = await interactClick({ captureId: capture.captureId });
 
-    expect(computerResult.isError).toBe(true);
     expect(interactResult.isError).toBe(true);
-    expect(computerResult.content[0].text).toMatch(reason);
     expect(interactResult.content[0].text).toMatch(reason);
     expect(dispatched).toEqual([]);
   });
 
-  it('rejects a superseded captureId in both executors', async () => {
+  it('rejects a superseded captureId', async () => {
     const first = seedCapture();
     seedCapture();
 
-    const computerResult = await computerClick({ captureId: first.captureId });
     const interactResult = await interactClick({ captureId: first.captureId });
 
-    expect(computerResult.isError).toBe(true);
     expect(interactResult.isError).toBe(true);
-    expect(computerResult.content[0].text).toMatch(/not found or superseded/i);
     expect(interactResult.content[0].text).toMatch(/not found or superseded/i);
     expect(dispatched).toEqual([]);
   });
 
-  it('rejects when the DOM observer continuity is lost before either executor dispatches', async () => {
+  it('rejects when the DOM observer continuity is lost before dispatch', async () => {
     const capture = seedCapture();
     forceObserverLoss = true;
 
-    const computerResult = await computerClick({ captureId: capture.captureId });
     const interactResult = await interactClick({ captureId: capture.captureId });
 
-    expect(computerResult.isError).toBe(true);
     expect(interactResult.isError).toBe(true);
-    expect(computerResult.content[0].text).toMatch(/observer continuity/i);
     expect(interactResult.content[0].text).toMatch(/observer continuity/i);
-    expect(dispatched).toEqual([]);
-  });
-
-  it.each([
-    ['left_click', { coordinates: { x: 100, y: 100 } }],
-    ['double_click', { coordinates: { x: 100, y: 100 } }],
-    ['right_click', { coordinates: { x: 100, y: 100 } }],
-    ['hover', { coordinates: { x: 100, y: 100 } }],
-    ['left_click_drag', { startCoordinates: { x: 100, y: 100 }, coordinates: { x: 200, y: 200 } }],
-  ])('requires captureId for computer %s before dispatch', async (action, coords) => {
-    seedCapture();
-
-    const result = await computerClick({
-      action,
-      coordinateSpace: 'screenshot',
-      ...coords,
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/captureId|fresh screenshot/i);
     expect(dispatched).toEqual([]);
   });
 
@@ -411,27 +345,6 @@ describe('Screenshot coordinate contract', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/captureId|fresh screenshot/i);
-    expect(dispatched).toEqual([]);
-  });
-
-  it.each([
-    ['left_click', { coordinates: { x: 100, y: 100 } }],
-    ['double_click', { coordinates: { x: 100, y: 100 } }],
-    ['right_click', { coordinates: { x: 100, y: 100 } }],
-    ['hover', { coordinates: { x: 100, y: 100 } }],
-    ['left_click_drag', { startCoordinates: { x: 100, y: 100 }, coordinates: { x: 200, y: 200 } }],
-  ])('fails stale computer %s before any mouse dispatch', async (action, coords) => {
-    const capture = seedCapture();
-    page.scrollY = 99;
-
-    const result = await computerClick({
-      action,
-      captureId: capture.captureId,
-      ...coords,
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/scroll changed/i);
     expect(dispatched).toEqual([]);
   });
 
@@ -481,17 +394,24 @@ describe('Screenshot coordinate contract', () => {
 
   it('does not replay a capture-bound hover through the synthetic DOM fallback', async () => {
     const capture = seedCapture();
-    vi.mocked(cdpSessionManager.sendCommand).mockRejectedValue(
-      new Error('CDP Input.dispatchMouseEvent outcome unknown'),
-    );
-
-    const result = await computerClick({
-      action: 'hover',
-      captureId: capture.captureId,
+    vi.mocked(cdpSessionManager.sendCommand).mockImplementation(async (_id, method, params) => {
+      if (method === 'Input.dispatchMouseEvent') {
+        dispatched.push({ method, params });
+        throw new Error('CDP mouse move failed');
+      }
+      return {};
     });
 
+    const result = await interactClick({ action: 'hover', captureId: capture.captureId });
+
     expect(result.isError).toBe(true);
-    expect(computerTool.safeExecuteScript).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain('capture-bound action was not replayed');
+    expect(mouseEvents('mouseMoved')).toHaveLength(1);
+    expect(inPageEngine.executeInPage).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'inPageInteractIndex',
+      expect.anything(),
+    );
   });
 
   it('does not synthesize a replay for an uncertain capture-bound click', async () => {

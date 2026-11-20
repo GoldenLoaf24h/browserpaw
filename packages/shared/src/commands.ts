@@ -5,6 +5,7 @@ import { pageCommands } from './commands-extra-page';
 export interface CommandSpec {
   usage: string;
   summary: string;
+  keywords?: readonly string[];
 }
 
 export const COMMANDS = {
@@ -29,6 +30,11 @@ export const COMMANDS = {
     usage: 'help [COMMAND|TOPIC]',
     summary: 'Show usage and examples without opening Chrome.',
   },
+  search: {
+    usage: 'search KEYWORD... [--limit N]',
+    summary: 'Find CLI commands offline by name, purpose, option, or English and Chinese keywords.',
+    keywords: ['tool search', 'command discovery', '查找命令', '搜索工具'],
+  },
   open: {
     usage: 'open URL [--foreground]',
     summary: 'Open a new tab. --foreground applies only to non-task opens.',
@@ -39,6 +45,7 @@ export const COMMANDS = {
   observe: {
     usage: 'observe [--scope CSS] [--delta] [--max N]',
     summary: 'Read page structure, frame IDs, and actionable refs.',
+    keywords: ['DOM snapshot', 'inspect elements', '网页结构', '元素定位'],
   },
   find: {
     usage: 'find PATTERN [--regex] [--scroll]',
@@ -47,6 +54,7 @@ export const COMMANDS = {
   screenshot: {
     usage: 'screenshot [TARGET] [--full] [--out FILE]',
     summary: 'Save an image locally and return its capture ID.',
+    keywords: ['screen capture', 'full page screenshot', '截图', '页面截图', '截屏'],
   },
   wait: {
     usage: 'wait [TARGET] [--text TEXT|--url URL] [--gone] [--timeout MS]',
@@ -59,11 +67,13 @@ export const COMMANDS = {
   fill: {
     usage: 'fill TARGET TEXT [--append] [--input FILE|-]',
     summary: 'Replace or append text. Use -- before option-like text.',
+    keywords: ['form input', 'type into a field'],
   },
   hover: { usage: 'hover TARGET [--capture ID]', summary: 'Move the pointer to a target.' },
   press: {
     usage: 'press KEYS [TARGET]',
     summary: 'Send a key sequence, optionally to a strict target.',
+    keywords: ['keyboard shortcut', 'hotkey'],
   },
   drag: {
     usage: 'drag FROM TO [--capture ID]',
@@ -84,6 +94,7 @@ export const COMMANDS = {
   eval: {
     usage: 'eval [CODE] [--file FILE|-] [--timeout MS]',
     summary: 'Evaluate explicit JavaScript in the selected page.',
+    keywords: ['execute JavaScript', 'run page script'],
   },
   fetch: {
     usage: 'fetch URL [--method METHOD] [--header KEY:VALUE]... [--body BODY]',
@@ -92,6 +103,7 @@ export const COMMANDS = {
   cdp: {
     usage: 'cdp METHOD [JSON]',
     summary: 'Call a supported DevTools command in the selected tab.',
+    keywords: ['Chrome DevTools Protocol'],
   },
   'ask-human': {
     usage: 'ask-human MESSAGE [--timeout MS]',
@@ -195,6 +207,8 @@ export function parseCommand(argv: readonly string[]): ParsedCommand {
       ([, key, value]) => [key, Boolean(value)],
     ),
   );
+  if (name === 'tabs') spec.set('windows', false);
+  if (name === 'select') spec.set('list', false);
   const options: CommandOptions = Object.create(null);
   const operands: string[] = [];
   const input = argv.slice(name.split(' ').length);
@@ -224,6 +238,16 @@ export function parseCommand(argv: readonly string[]): ParsedCommand {
       throw new Error(`Missing value for ${token}.`);
     options[key] = repeated.has(key) ? [...((options[key] as string[]) ?? []), value] : value;
   }
+  if (name === 'tabs' && options.windows) {
+    if (operands.length || options.content || options.limit !== undefined)
+      throw new Error('Use window list without a query, --content or --limit.');
+    delete options.windows;
+    return { name: 'window list', operands, options };
+  }
+  if (name === 'select' && options.list) {
+    if (operands.length !== 1) throw new Error('Use select TARGET to list available choices.');
+    delete options.list;
+  }
   return { name, operands, options };
 }
 
@@ -231,6 +255,12 @@ export const TARGET_HELP =
   'Targets: 12 (observed ref), css:SELECTOR, text:TEXT, role:ROLE[:NAME], label:LABEL, or @X,Y --capture ID. Use --frame ID to select a frame. After navigation or a stale ref, observe again.';
 
 const examples: Partial<Record<CommandName, readonly string[]>> = {
+  search: [
+    'search network response body',
+    'search network throttling',
+    'search 导出书签 --limit 3 --json',
+    'search screenshot -- --full',
+  ],
   setup: [
     'setup',
     'setup --skill-scope project',
@@ -328,6 +358,62 @@ const commandTopics: Record<string, string[]> = {
 const exitHelp =
   'Exit codes: 0 success, 1 failure, 2 usage error, 3 disconnected, 4 outcome unknown. Observe before acting again after exit 4.';
 
+function searchWords(text: string): string[] {
+  return (
+    text
+      .normalize('NFKC')
+      .toLowerCase()
+      .match(/[\p{L}\p{N}]+/gu) ?? []
+  );
+}
+
+export function searchCommands(query: string) {
+  const terms = [...new Set(searchWords(query))];
+  if (!terms.length) return [];
+  const phrase = terms.join(' ');
+  return (Object.keys(COMMANDS) as CommandName[])
+    .flatMap((name) => {
+      const spec: CommandSpec = COMMANDS[name];
+      const commandWords = searchWords(name);
+      const topic = Object.entries(commandTopics).find(([, members]) =>
+        members.includes(name.split(' ')[0]),
+      )?.[0];
+      const fields = [
+        { words: commandWords, weight: 10 },
+        { words: searchWords(spec.keywords?.join(' ') ?? ''), weight: 6 },
+        { words: searchWords(spec.summary), weight: 4 },
+        { words: searchWords(spec.usage + ' ' + (topic ?? '')), weight: 2 },
+      ];
+      let score = commandWords.join(' ') === phrase ? 30 : 0;
+      for (const term of terms) {
+        const best = Math.max(
+          ...fields.map(({ words, weight }) =>
+            words.includes(term)
+              ? weight
+              : term.length >= 2 && words.some((word) => word.startsWith(term))
+                ? weight - 1
+                : 0,
+          ),
+        );
+        if (!best) return [];
+        score += best;
+      }
+      return [
+        {
+          score,
+          item: {
+            name,
+            usage: `browserpaw ${spec.usage}`,
+            summary: spec.summary,
+            ...(examples[name]?.[0] ? { example: `browserpaw ${examples[name][0]}` } : {}),
+          },
+        },
+      ];
+    })
+    .sort((a, b) => b.score - a.score)
+    .map(({ item }) => item);
+}
+
 export function commandHelp(topic?: string): string {
   if (topic === 'targets') return TARGET_HELP;
   if (topic === 'recipes')
@@ -337,7 +423,9 @@ export function commandHelp(topic?: string): string {
     return [
       `browserpaw ${spec.usage}`,
       spec.summary,
-      `Common options: ${globalOptions}`,
+      topic === 'search'
+        ? 'Returns 8 matches by default. Use --limit 1–50 to change the count, --json for structured results, and -- before an option used as a keyword.'
+        : `Common options: ${globalOptions}`,
       exitHelp,
       ...(examples[topic] ?? []).map((example) => `Example: browserpaw ${example}`),
     ].join('\n');
@@ -359,6 +447,7 @@ export function commandHelp(topic?: string): string {
     'Workflow: task start → open --task ID → observe --task ID → act → verify → task finish --task ID.',
     'Use --tab ID to select an existing tab, or --task ID for a task page. --json emits a single receipt.',
     exitHelp,
+    'Run browserpaw search KEYWORD to find commands by name, purpose, or option.',
     'Run browserpaw help GROUP for a list, help COMMAND for usage, or help targets for locator syntax.',
     '',
     ...Object.entries(commandTopics).map(

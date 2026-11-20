@@ -1,5 +1,3 @@
-import { resolveToolName } from 'chrome-mcp-shared';
-
 export interface ElementFingerprint {
   tagName: string;
   text?: string;
@@ -455,7 +453,7 @@ export class SnapshotCacheManager {
             totalAdded,
             totalModified,
             totalRemoved,
-            summary: `Delta truncated: showing ${finalAdded.length}/${totalAdded} added, ${finalModified.length}/${totalModified} modified, ${finalRemoved.length}/${totalRemoved} removed. Call ${resolveToolName('read_dom')} for full DOM tree.`,
+            summary: `Delta truncated: showing ${finalAdded.length}/${totalAdded} added, ${finalModified.length}/${totalModified} modified, ${finalRemoved.length}/${totalRemoved} removed. Call browserpaw observe for full DOM tree.`,
           }
         : {}),
     };
@@ -504,7 +502,7 @@ export class SnapshotCacheManager {
   public getInvalidationMessage(tabId: number): string {
     const s = this.cache.get(tabId);
     const reason = s?.invalidationReason ? ` (${s.invalidationReason})` : '';
-    return `Snapshot refs invalidated: DOM or URL changed since last ${resolveToolName('read_dom')}${reason}. ACTION REQUIRED: Please call '${resolveToolName('read_dom')}' to refresh the index tree before re-attempting interaction.`;
+    return `Snapshot refs invalidated: DOM or URL changed since last browserpaw observe${reason}. ACTION REQUIRED: Please call 'browserpaw observe' to refresh the index tree before re-attempting interaction.`;
   }
 
   public clear(tabId?: number): void {

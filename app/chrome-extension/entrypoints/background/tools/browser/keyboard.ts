@@ -2,7 +2,7 @@ import { tabFaviconManager } from './tab-favicon';
 import { createErrorResponse, type ToolCallContext, ToolResult } from '@/common/tool-handler';
 import { throwIfAborted, waitWithAbort } from '@/utils/action-abort';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
+import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { TOOL_MESSAGE_TYPES } from '@/common/message-types';
 import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
 import { executeInPage } from './in-page-engine';
@@ -316,8 +316,7 @@ function cdpKeyDefinition(token: string, modifiers: number): CdpKeyDef | undefin
 
 /**
  * The content-script simulator separates key combinations with ','; accept the
- * space-separated form too so "ArrowDown ArrowDown Enter" works like it does
- * on chrome_computer, and collapse two-word spellings such as "Page Down".
+ * space-separated form too, and collapse two-word spellings such as "Page Down".
  */
 export function normalizeKeySequence(keys: string): string {
   const raw = keys.trim();
@@ -571,12 +570,12 @@ class KeyboardTool extends BaseBrowserToolExecutor {
         if (!focusTarget?.success) {
           return createErrorResponse(
             focusTarget?.error ||
-              `Failed to resolve index [${args.index}] for ${resolveToolName('keyboard')}. Call ${resolveToolName('read_dom')} to refresh the index tree.`,
+              `Failed to resolve index [${args.index}] for browserpaw press. Call browserpaw observe to refresh the index tree.`,
           );
         }
         if (focusTarget.focused === false) {
           return createErrorResponse(
-            `Index [${args.index}] resolved to <${focusTarget.tagName}> but could not take focus; refusing to type into an unknown element. Focus it explicitly (${resolveToolName('interact_index')}) or pass a selector.`,
+            `Index [${args.index}] resolved to <${focusTarget.tagName}> but could not take focus; refusing to type into an unknown element. Focus it explicitly (browserpaw click) or pass a selector.`,
           );
         }
         if (!cursorTarget && focusTarget.tagName) {

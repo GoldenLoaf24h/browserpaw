@@ -1,4 +1,3 @@
-import { resolveToolName } from 'chrome-mcp-shared';
 import { findIndexedElement, interceptingElementAtPoint, describeHitTarget } from '../dom-indexer';
 
 export async function inPageGetAssetImage(assetIndex: number): Promise<{
@@ -18,7 +17,7 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
   if (!entry)
     return {
       success: false,
-      reason: `asset ${assetIndex} not found (run ${resolveToolName('read_dom')} first)`,
+      reason: `asset ${assetIndex} not found (run browserpaw observe first)`,
     };
   const rect = entry.el.getBoundingClientRect().toJSON();
   // rect is relative to this frame's viewport; the background crops the

@@ -3,7 +3,6 @@ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import {
   TOOL_NAMES,
-  resolveToolName,
   formatErrorForAgent,
   type PrunedDOMTreeResult,
   type IndexedElement,
@@ -118,7 +117,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         sessionId: args.sessionId || args.sessionContext,
       });
       if (!tab.id) {
-        return createErrorResponse(`No active tab found for ${resolveToolName('read_dom')}`);
+        return createErrorResponse(`No active tab found for browserpaw observe`);
       }
       tabFaviconManager.markTabActive(tab.id);
 
@@ -194,7 +193,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                   `- **Reason**: ${fastData?.error || 'Frame is showing error page'}`,
                   `- **Status**: Network unreachable, DNS failure, or page crashed.`,
                   ``,
-                  `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`${resolveToolName('navigate')}\`.*`,
+                  `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`browserpaw nav\`.*`,
                 ].join('\n'),
               },
             ],
@@ -640,7 +639,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
                 `- **Reason**: ${errPayload?.error || 'Frame is showing error page'}`,
                 `- **Status**: Network unreachable, DNS failure, or page crashed.`,
                 ``,
-                `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`${resolveToolName('navigate')}\`.*`,
+                `*Tip: Please check the URL, network connection, or try navigating to a valid address using \`browserpaw nav\`.*`,
               ].join('\n'),
             },
           ],
@@ -920,7 +919,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
               `[asset ${a.index}] ${a.kind} ${a.rect.width}x${a.rect.height} @(${a.rect.x},${a.rect.y})${a.src ? ' ' + a.src.slice(0, 120) : ''}${a.alt ? ' alt=' + JSON.stringify(a.alt.slice(0, 60)) : ''}`,
           )
           .join('\n');
-        mergedData.treeString += `\n[Visual Assets: ${mergedData.assets.length} found. Pass assetIndex to ${resolveToolName('screenshot')} to view one.]\n${assetLines}`;
+        mergedData.treeString += `\n[Visual Assets: ${mergedData.assets.length} found. Pass assetIndex to browserpaw screenshot to view one.]\n${assetLines}`;
       }
 
       let deltaRequiresFullBaseline = false;
@@ -1150,7 +1149,7 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
       };
     } catch (error) {
       return createErrorResponse(
-        `Error executing ${resolveToolName('read_dom')}: ${error instanceof Error ? error.message : String(error)}`,
+        `Error executing browserpaw observe: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

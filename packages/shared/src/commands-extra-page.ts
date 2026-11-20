@@ -1,8 +1,9 @@
 export const pageCommands = {
   tabs: {
-    usage: 'tabs [QUERY...] [--windows|--content] [--limit N]',
+    usage: 'tabs [QUERY...] [--content] [--limit N]',
     summary:
       'List windows and tabs or search titles and URLs. --content also searches loaded pages.',
+    keywords: ['open tabs', 'search across tabs'],
   },
   'window list': {
     usage: 'window list',
@@ -49,9 +50,10 @@ export const pageCommands = {
     usage: 'text [TARGET] [--links|--media|--content] [--max-chars N] [--limit N]',
     summary:
       'Read page text, extract the main content, list links, or inspect one image or media element.',
+    keywords: ['page text extraction', 'extract hyperlinks', 'inspect media'],
   },
   select: {
-    usage: 'select TARGET [--list|VALUE...]',
+    usage: 'select TARGET [VALUE...]',
     summary: 'List available choices or select by value.',
   },
   scroll: {

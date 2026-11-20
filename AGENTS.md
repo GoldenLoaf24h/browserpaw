@@ -7,8 +7,8 @@ BrowserPaw connects an Agent Skill and CLI to Chrome over a local Native Messagi
 - Use the shared command registry for command syntax and help. Keep the Native dispatcher and generated command reference in sync.
 - Reuse the existing browser execution path for changes to locators, input, task ownership, and file delivery.
 - Run focused tests while changing code and `pnpm verify` on the final candidate.
-- Use `BROWSERPAW_EXTENSION_SYNC_DIR=""` for a non-deploy build. Native v5 builds use `app/native-server/dist/v5`.
-- Treat extension build and deployment as strictly separate steps: `pnpm verify`, `pnpm build`, and `pnpm build:extension` only write inside `app/chrome-extension/.output/chrome-mv3` (and `scripts/sync-extension-dist.mjs` ignores `browserpaw.local.json`). When deployment is authorized, sync to Chrome's actual unpacked directory with `pnpm build:deploy` and prove parity with `pnpm verify:delivery` — never treat a repo build, partial copy, or programmatic `chrome.runtime.reload()` as proof that Chrome loaded the new code.
+- Native v5 builds use `app/native-server/dist/v5`.
+- Keep builds in the repository. `pnpm verify`, `pnpm build`, and `pnpm build:extension` do not deploy, even when `BROWSERPAW_EXTENSION_SYNC_DIR` is set. When deployment is authorized, sync to Chrome's actual unpacked directory with `pnpm build:deploy` and prove parity with `pnpm verify:delivery`. Verify the loaded build ID after reload.
 - Before claiming an extension or popup change is live in Chrome, verify the extension's loaded folder in `chrome://extensions` and the v5 Native Host registration (`com.browserpaw.nativehost`). Close open popups and DevTools before reload. Compare the live `buildId` from `browserpaw status` or `browserpaw doctor` with `browserpaw-build.json` in that folder.
 - Keep CLI update notices on stderr and deduplicate them per release. Setup updates the managed Native Host and base Skills. Existing Chrome extensions are upgraded manually from the matching release ZIP.
 - Edit the canonical skill and regenerate its mirrors. Do not edit generated build outputs or machine-written evidence.

@@ -1,6 +1,6 @@
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
-import { TOOL_NAMES, resolveToolName } from 'chrome-mcp-shared';
+import { TOOL_NAMES } from 'chrome-mcp-shared';
 import { screenshotTool } from './screenshot';
 
 export interface InspectMediaParams {
@@ -44,7 +44,7 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
 
     if (typeof args.index !== 'number' && (!args.selector || !args.selector.trim())) {
       return createErrorResponse(
-        `Either "index" (1-based from ${resolveToolName('read_dom')}) or "selector" must be provided`,
+        `Either "index" (1-based from browserpaw observe) or "selector" must be provided`,
       );
     }
     if (args.index !== undefined && (!Number.isSafeInteger(args.index) || args.index <= 0)) {
@@ -170,7 +170,7 @@ export class InspectMediaTool extends BaseBrowserToolExecutor {
       inMemOutcome = inMemoryResults?.find((entry) => entry.result?.found)?.result;
       if (args.index !== undefined && !inMemOutcome) {
         return createErrorResponse(
-          `Element [${args.index}] not found. Run ${resolveToolName('read_dom')} to refresh references.`,
+          `Element [${args.index}] not found. Run browserpaw observe to refresh references.`,
         );
       }
       const outcome = inMemOutcome;

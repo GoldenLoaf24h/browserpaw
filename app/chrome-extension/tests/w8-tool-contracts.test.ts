@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { computerTool } from '../entrypoints/background/tools/browser/computer';
 import { scrollUntilFoundTool } from '../entrypoints/background/tools/browser/scroll-until-found';
 import { inPageScrollUntilFound } from '../entrypoints/background/tools/browser/dom-indexer';
 import {
@@ -9,9 +8,8 @@ import {
   MAX_CANVAS_AREA,
 } from '../entrypoints/background/tools/browser/screenshot';
 import { inspectMediaTool } from '../entrypoints/background/tools/browser/inspect-media';
-import { tabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';
 import { screenshotContextManager, scaleCoordinates } from '@/utils/screenshot-context';
-import { RAW_TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
+import { TOOL_SCHEMAS } from '../../../packages/shared/src/tools';
 
 describe('W8 Contract & Screenshot Regression Tests', () => {
   beforeEach(() => {
@@ -23,76 +21,6 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  describe('TOOL-01 (Part 1): chrome_computer groupTitle/groupColor/autoGroup consumption', () => {
-    it('consumes groupTitle and groupColor when passed to computerTool.execute using spyOn', async () => {
-      const ensureSpy = vi.spyOn(tabGroupManager, 'ensureAgentTabGroup').mockResolvedValue(999);
-      vi.spyOn(tabGroupManager, 'isAgentTab').mockReturnValue(false);
-
-      vi.spyOn(computerTool as any, 'resolveAffinityTab').mockResolvedValue({
-        id: 123,
-        windowId: 1,
-      });
-      vi.spyOn(computerTool as any, 'executeAction').mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-      });
-
-      await computerTool.execute({
-        action: 'wait',
-        tabId: 123,
-        groupTitle: 'W8-Custom-Group',
-        groupColor: 'orange',
-        autoGroup: true,
-      });
-
-      expect(ensureSpy).toHaveBeenCalledWith(123, {
-        title: 'W8-Custom-Group',
-        color: 'orange',
-        windowId: 1,
-      });
-    });
-
-    it('does not group tab when autoGroup is false', async () => {
-      const ensureSpy = vi.spyOn(tabGroupManager, 'ensureAgentTabGroup').mockResolvedValue(999);
-
-      vi.spyOn(computerTool as any, 'resolveAffinityTab').mockResolvedValue({
-        id: 123,
-        windowId: 1,
-      });
-      vi.spyOn(computerTool as any, 'executeAction').mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-      });
-
-      await computerTool.execute({
-        action: 'wait',
-        tabId: 123,
-        groupTitle: 'Ignored',
-        autoGroup: false,
-      });
-
-      expect(ensureSpy).not.toHaveBeenCalled();
-    });
-
-    it('does not perform double-group if tab is already an agent tab and no custom title/color is requested', async () => {
-      const ensureSpy = vi.spyOn(tabGroupManager, 'ensureAgentTabGroup').mockResolvedValue(999);
-      vi.spyOn(tabGroupManager, 'isAgentTab').mockReturnValue(true);
-
-      vi.spyOn(computerTool as any, 'resolveAffinityTab').mockResolvedValue({
-        id: 123,
-        windowId: 1,
-      });
-      vi.spyOn(computerTool as any, 'executeAction').mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-      });
-
-      await computerTool.execute({
-        action: 'wait',
-        tabId: 123,
-      });
-
-      expect(ensureSpy).not.toHaveBeenCalled();
-    });
   });
 
   describe('QUAL-05 & TOOL-01 (Part 2): chrome_scroll_until_found maxSteps clamp, role filter, actionOnFound', () => {
@@ -375,7 +303,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
 
   describe('TOOL-02 & QUAL-05: tool annotations and descriptions', () => {
     it('TOOL-02: read_dom annotations reflect default read-only perception (readOnlyHint: true, destructiveHint: false, idempotentHint: true)', () => {
-      const readDomSchema = RAW_TOOL_SCHEMAS.find((s) => s.name === 'chrome_read_dom');
+      const readDomSchema = TOOL_SCHEMAS.find((s) => s.name === 'chrome_read_dom');
       expect(readDomSchema).toBeDefined();
       expect(readDomSchema?.annotations?.readOnlyHint).toBe(true);
       expect(readDomSchema?.annotations?.destructiveHint).toBe(false);
@@ -386,7 +314,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
     });
 
     it('QUAL-05: console tool description accurately describes ~50ms settle instead of ~2s', () => {
-      const consoleSchema = RAW_TOOL_SCHEMAS.find((s) => s.name === 'chrome_console');
+      const consoleSchema = TOOL_SCHEMAS.find((s) => s.name === 'chrome_console');
       expect(consoleSchema).toBeDefined();
       expect(consoleSchema?.description).toContain('~50ms');
       expect(consoleSchema?.description).not.toContain('~2s');

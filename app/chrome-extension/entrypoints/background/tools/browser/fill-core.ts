@@ -1,4 +1,3 @@
-import { actionHistoryManager } from '@/utils/action-history-manager';
 import { executeInPage } from './in-page-engine';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 import {
@@ -18,7 +17,7 @@ import { withActionReceipt, type ActionReceipt } from '@/utils/action-receipt';
 import { computeHumanizedPoints } from '@/utils/mouse-trajectory';
 import { resolveTargetLocation } from './unified-locator';
 import { sessionTabAffinity, type TabHandoverInfo } from '@/utils/session-tab-affinity';
-import { resolveToolName, formatErrorForAgent } from 'chrome-mcp-shared';
+import { formatErrorForAgent } from 'chrome-mcp-shared';
 import { dispatchNativeSelectAll } from './keyboard';
 import { snapshotCacheManager } from '@/utils/snapshot-cache-manager';
 import { throwIfAborted, TaskCancelledError } from '@/utils/action-abort';
@@ -826,7 +825,7 @@ async function runPhysicalFill(
     /(http|#|@|tweet|post|reply|thread)/i.test(textToFill);
 
   if (isSearchTarget && isMultiLineOrPostText) {
-    const searchNotice = `[Input Disambiguation Notice] Targeted element [${target}] appears to be a search input (searchbox), but the filled text looks like a multi-line post or comment. If you intended to post or reply, verify with ${resolveToolName('read_dom')} to target the [composer] element instead.`;
+    const searchNotice = `[Input Disambiguation Notice] Targeted element [${target}] appears to be a search input (searchbox), but the filled text looks like a multi-line post or comment. If you intended to post or reply, verify with browserpaw observe to target the [composer] element instead.`;
     disambiguationWarning = disambiguationWarning
       ? `${disambiguationWarning}; ${searchNotice}`
       : searchNotice;
@@ -1530,18 +1529,6 @@ async function runPhysicalFill(
     disambiguationWarning,
     resolutionPath,
   };
-
-  // Record successful mutating action in history for undo capability
-  if (resObj.success && typeof coords?.value === 'string' && numericIndex !== undefined) {
-    actionHistoryManager.pushAction(tabId, {
-      type: 'fill',
-      frameId: targetFrameId,
-      index: numericIndex,
-      selector: typeof options.target === 'string' && !isNumericIndex ? options.target : undefined,
-      prevValue: coords.value,
-      timestamp: Date.now(),
-    });
-  }
 
   // 6. Handle auto-submit if requested (and not already submitted via pressEnter)
   if (submit && resObj.success && !resObj.submitted) {
