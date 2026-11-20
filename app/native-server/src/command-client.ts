@@ -1,10 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { access, readFile, mkdir, copyFile } from 'node:fs/promises';
+import { access, readFile, copyFile, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   commandHelp,
+  isProfileCommand,
   parseCommand,
   CURRENT_VERSION,
   DEFAULT_SERVER_PORT,
@@ -83,7 +84,7 @@ function receiptDirectory(command: ParsedCommand, requestId: string) {
 
 async function saveOutput(result: BackendResult, command: ParsedCommand, requestId: string) {
   const directory = receiptDirectory(command, requestId);
-  const { ensureDirectory, atomicWrite } = require('./cli-files.cjs');
+  const { ensureDirectory, atomicWrite, assertNoLinks } = require('./cli-files.cjs');
   const rawPath = join(directory, 'result.json');
   const raw = JSON.stringify(result) + '\n';
   const saveRaw = () => {
@@ -132,13 +133,30 @@ async function saveOutput(result: BackendResult, command: ParsedCommand, request
             ? '.jpg'
             : mimeType === 'image/webp'
               ? '.webp'
-              : '.bin';
+              : mimeType?.startsWith('text/')
+                ? '.txt'
+                : '.bin';
       const bytes = Buffer.from(data, 'base64');
       if (bytes.toString('base64') !== data) throw new Error('Invalid media in browser receipt.');
       save({ ...item, mimeType }, bytes, data, extension);
       return;
     }
     Object.values(value).forEach(discover);
+  }
+  if (
+    command.name === 'bookmark export' &&
+    !result.isError &&
+    typeof command.options.out === 'string'
+  ) {
+    const body = result.content?.find((block) => block.type === 'text')?.text;
+    if (!body) throw new Error('Browser did not return a bookmark export.');
+    const target = resolve(command.options.out);
+    ensureDirectory(dirname(target));
+    const temp = join(directory, 'bookmarks');
+    ensureDirectory(directory);
+    atomicWrite(temp, body);
+    await copyFile(temp, target, constants.COPYFILE_EXCL);
+    return { ...resultData(result), outputPath: target, bytes: Buffer.byteLength(body) };
   }
   discover(result);
   function compact(value: unknown): unknown {
@@ -173,12 +191,43 @@ async function saveOutput(result: BackendResult, command: ParsedCommand, request
     }
   });
   const view = compact({ ...data, ...(content?.length ? { content } : {}) }) as Fields;
-  if (command.name === 'screenshot' && typeof command.options.out === 'string' && !result.isError) {
-    const image = [...references.values()].find((item) => item.originalType === 'image');
-    if (!image) throw new Error('Browser did not return an image.');
+  if (
+    ['screenshot', 'network show', 'pdf', 'perf trace'].includes(command.name) &&
+    typeof command.options.out === 'string' &&
+    !result.isError &&
+    data?.success !== false
+  ) {
+    let source: string;
+    if (command.name === 'screenshot' || command.name === 'network show') {
+      const type = command.name === 'screenshot' ? 'image' : 'resource';
+      const file = [...references.values()].find((item) => item.originalType === type);
+      if (!file)
+        throw new Error(
+          `Browser did not return a captured ${type === 'image' ? 'image' : 'response body'}.`,
+        );
+      source = String(file.path);
+    } else {
+      const file = data?.file as Fields | undefined;
+      if (typeof file?.path !== 'string')
+        throw new Error('Browser did not return a trace or PDF file.');
+      source = resolve(file.path);
+      const inside = relative(join(tmpdir(), 'chrome-mcp-uploads'), source);
+      const expected = command.name === 'pdf' ? '.pdf' : '.json';
+      if (
+        !inside ||
+        inside === '..' ||
+        inside.startsWith('..' + sep) ||
+        isAbsolute(inside) ||
+        extname(source) !== expected
+      )
+        throw new Error('Browser output is outside the Native temporary files.');
+      assertNoLinks(source);
+      if (!(await lstat(source)).isFile())
+        throw new Error('Browser output must be a regular file.');
+    }
     const target = resolve(command.options.out);
-    await mkdir(dirname(target), { recursive: true });
-    await copyFile(String(image.path), target, constants.COPYFILE_EXCL);
+    ensureDirectory(dirname(target));
+    await copyFile(source, target, constants.COPYFILE_EXCL);
     view.outputPath = target;
   }
   if (artifactNumber || JSON.stringify(view).length > 30000) {
@@ -248,12 +297,32 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
       .finally(() => controller.abort());
   };
   const failure = (code: number, errorCode: string, message: string, data?: unknown) => {
+    const receipt = knownResult ? resultData(knownResult) : undefined;
+    const status =
+      code === 4
+        ? 'unknown'
+        : receipt?.status === 'blocked' ||
+            ['busy', 'extension_disconnected', 'host_unavailable'].includes(errorCode)
+          ? 'blocked'
+          : receipt?.status === 'cancelled'
+            ? 'cancelled'
+            : 'failed';
+    const requestDispatched =
+      typeof receipt?.requestDispatched === 'boolean'
+        ? receipt.requestDispatched
+        : !accepted || code === 2 || code === 3 || errorCode === 'busy'
+          ? false
+          : knownResult && status !== 'blocked'
+            ? true
+            : null;
     writeReceipt(
       {
         ok: false,
         command: command?.name ?? argv[0],
         requestId,
         outcome: code === 4 ? 'unknown' : 'failed',
+        status,
+        requestDispatched,
         ...(command?.options.task ? { taskId: command.options.task } : {}),
         ...(command?.options.tab ? { tabId: Number(command.options.tab) } : {}),
         ...(data === undefined ? {} : { data }),
@@ -296,6 +365,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     if (
       !command.options.task &&
       process.env.BROWSERPAW_TASK &&
+      !isProfileCommand(command.name) &&
       ![
         'task start',
         'task list',
@@ -469,7 +539,6 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
       throw new Error('Invalid local host receipt.');
     const result = (knownResult = body.result);
     const data = resultData(result);
-    const view = await saveOutput(result, command, requestId);
     const errorText =
       typeof data?.error === 'string'
         ? data.error
@@ -477,6 +546,13 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
             result.content?.find((block) => block.type === 'text')?.text ??
               'Browser operation failed.',
           );
+    let view: Fields;
+    try {
+      view = await saveOutput(result, command, requestId);
+    } catch (error) {
+      if (!(result.isError || data?.ok === false || data?.success === false)) throw error;
+      view = { ...data, outputError: error instanceof Error ? error.message : String(error) };
+    }
     if (
       data?.status === 'unknown' ||
       data?.outcome === 'unknown' ||

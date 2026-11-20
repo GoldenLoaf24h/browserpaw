@@ -1,8 +1,20 @@
 import { mkdir, copyFile, rm } from 'node:fs/promises';
 import { constants, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { parseCommand, type ParsedCommand } from 'chrome-mcp-shared';
+import { isProfileCommand, parseCommand, type ParsedCommand } from 'chrome-mcp-shared';
 import { handleBrowserCall } from './browser-dispatch';
+import {
+  argumentCount,
+  CommandError,
+  integer,
+  parseTarget,
+  type CommandRun,
+} from './command-utils';
+import { dispatchData } from './commands-data';
+import { dispatchDebug } from './commands-debug';
+import { dispatchPage } from './commands-page';
+
+export { CommandError, integer, parseTarget } from './command-utils';
 import { tryParseCallResult } from './browser-tasks';
 import {
   browserPawHome,
@@ -30,22 +42,6 @@ type Fields = Record<string, unknown>;
 type BackendResult = Awaited<ReturnType<typeof handleBrowserCall>>;
 const taskPrefix = 'browserpaw-cli:';
 
-export class CommandError extends Error {
-  constructor(
-    message: string,
-    readonly code = 'invalid_arguments',
-  ) {
-    super(message);
-  }
-}
-
-export function integer(value: unknown, label: string, min = 1, max = Number.MAX_SAFE_INTEGER) {
-  const number = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isSafeInteger(number) || number < min || number > max)
-    throw new CommandError(`${label} must be an integer from ${min} to ${max}.`);
-  return number;
-}
-
 function object(value: string) {
   let parsed: unknown;
   try {
@@ -56,23 +52,6 @@ function object(value: string) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
     throw new CommandError('Expected a JSON object.');
   return parsed as Fields;
-}
-
-export function parseTarget(value: string): Fields {
-  if (/^\d+$/.test(value)) return { index: integer(value, 'Ref') };
-  const coordinate = /^@(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(value);
-  if (coordinate) return { coordinate: { x: Number(coordinate[1]), y: Number(coordinate[2]) } };
-  const locator = /^(css|text|role|label):(.+)$/.exec(value);
-  if (!locator) throw new CommandError('Invalid target. Run browserpaw help targets.');
-  const [, type, name] = locator;
-  if (type === 'css') return { selector: name };
-  if (type === 'role') {
-    const colon = name.indexOf(':');
-    return colon === -1
-      ? { role: name, exact: true }
-      : { role: name.slice(0, colon), targetText: name.slice(colon + 1), exact: true };
-  }
-  return { [type === 'text' ? 'targetText' : 'label']: name, exact: true };
 }
 
 function failed(result: BackendResult) {
@@ -140,11 +119,6 @@ function truncateTextResult(result: BackendResult, maxChars: number): BackendRes
   };
 }
 
-function argumentCount(command: ParsedCommand, minimum: number, maximum = minimum) {
-  if (command.operands.length < minimum || command.operands.length > maximum)
-    throw new CommandError(`Incorrect operands. Run browserpaw help ${command.name}.`);
-}
-
 const withoutPage = new Set([
   'tabs',
   'open',
@@ -181,15 +155,19 @@ export async function dispatchCommand(
     throw new CommandError('Expected a task ID returned by task start.');
   if (taskId && name === 'task status' && first && first !== taskId)
     throw new CommandError('Conflicting task IDs.');
+  if (isProfileCommand(name) && (taskId || options.tab || options.frame))
+    throw new CommandError(
+      'This command uses browser profile IDs. Omit --task, --tab and --frame.',
+    );
   const tabId = options.tab === undefined ? undefined : integer(options.tab, 'Tab ID');
   const frameId = options.frame === undefined ? undefined : integer(options.frame, 'Frame ID', 0);
   const timeoutMs =
     options.timeout === undefined ? undefined : integer(options.timeout, 'Timeout', 1, 300000);
-  if (!withoutPage.has(name) && !taskId && tabId === undefined)
+  if (!withoutPage.has(name) && !isProfileCommand(name) && !taskId && tabId === undefined)
     throw new CommandError('Select a page with --task ID or --tab ID.');
   const owner = taskId ? taskPrefix + taskId : tabId ? 'cli-tab:' + tabId : undefined;
   const context = { ...(taskId ? { taskId } : {}), ...(tabId ? { tabId } : {}) };
-  const run = (backend: string, args: Fields = {}, includeContext = true) =>
+  const run: CommandRun = (backend, args = {}, includeContext = true) =>
     handleBrowserCall(backend, { ...(includeContext ? context : {}), ...args }, owner, signal);
   const task = (action: string, args: Fields = {}) => {
     if (action !== 'start' && action !== 'list' && !taskId)
@@ -239,6 +217,10 @@ export async function dispatchCommand(
     return batchAction({ type: action, ...fields });
   };
 
+  const delegated =
+    dispatchData(command, run) ?? dispatchDebug(command, run) ?? dispatchPage(command, run);
+  if (delegated) return delegated;
+
   switch (name) {
     case 'tabs':
       argumentCount(command, 0);
@@ -257,7 +239,13 @@ export async function dispatchCommand(
             { url: first, newTab: true, background: !options.foreground },
             false,
           ));
-      return attachMatchedRecipes(opened, first);
+      const data = taskId ? tryParseCallResult(opened) : undefined;
+      return attachMatchedRecipes(
+        data?.ok === true && typeof data.tabId === 'number'
+          ? { ...opened, content: [], structuredContent: { ...data, created: true } }
+          : opened,
+        first,
+      );
     }
     case 'nav': {
       argumentCount(command, 1);
@@ -466,24 +454,6 @@ export async function dispatchCommand(
       }
       return result;
     }
-    case 'console':
-      argumentCount(command, 0);
-      if (options.level && options.level !== 'error')
-        throw new CommandError('Supported console level: error. Omit it to include all levels.');
-      return run('chrome_console', {
-        mode: 'buffer',
-        clear: !!options.clear,
-        onlyErrors: options.level === 'error',
-      });
-    case 'network start':
-    case 'network stop':
-    case 'network show':
-      argumentCount(command, 0);
-      return run('chrome_network_capture', {
-        action: name === 'network show' ? 'status' : name.split(' ')[1],
-        needResponseBody: !!options.bodies,
-        requestUrlPattern: options.filter,
-      });
     case 'eval':
       argumentCount(command, options.file ? 0 : 1);
       if (options.file && typeof input !== 'string')
@@ -924,9 +894,11 @@ function batchCommands(input: unknown, options: ParsedCommand['options']) {
     const parsed = parseCommand(args);
     if (
       batchExcluded.has(parsed.name) ||
+      isProfileCommand(parsed.name) ||
       parsed.name.startsWith('recipe ') ||
       parsed.options.file ||
-      parsed.options.input
+      parsed.options.input ||
+      (parsed.name !== 'screenshot' && parsed.name !== 'download' && parsed.options.out)
     )
       throw new CommandError(`Command ${parsed.name} is unavailable inside a batch.`);
     return {

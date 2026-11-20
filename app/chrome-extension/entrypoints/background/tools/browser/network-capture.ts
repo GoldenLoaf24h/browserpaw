@@ -7,7 +7,7 @@ import { networkDebuggerStartTool, networkDebuggerStopTool } from './network-cap
 type NetworkCaptureBackend = 'webRequest' | 'debugger';
 
 interface NetworkCaptureToolParams {
-  action: 'start' | 'stop' | 'status';
+  action: 'start' | 'stop' | 'status' | 'list' | 'show' | 'clear';
   needResponseBody?: boolean;
   url?: string;
   tabId?: number;
@@ -17,6 +17,12 @@ interface NetworkCaptureToolParams {
   inactivityTimeout?: number;
   includeStatic?: boolean;
   requestUrlPattern?: string;
+  method?: string;
+  status?: number;
+  resourceType?: string;
+  limit?: number;
+  requestId?: string;
+  outputPath?: string;
 }
 
 /**
@@ -81,8 +87,10 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
 
   async execute(args: NetworkCaptureToolParams): Promise<ToolResult> {
     const action = args?.action;
-    if (action !== 'start' && action !== 'stop' && action !== 'status') {
-      return createErrorResponse('Parameter [action] must be start, stop, or status');
+    if (!['start', 'stop', 'status', 'list', 'show', 'clear'].includes(action)) {
+      return createErrorResponse(
+        'Parameter [action] must be start, stop, status, list, show, or clear',
+      );
     }
 
     const wantBody = args?.needResponseBody === true;
@@ -91,7 +99,7 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       return this.handleStart(args, wantBody);
     }
 
-    if (action === 'status') {
+    if (action === 'status' || action === 'list' || action === 'show' || action === 'clear') {
       const tab = await this.resolveAffinityTab({ tabId: args.tabId, sessionId: args.sessionId });
       if (!tab.id) return createErrorResponse('No target tab.');
       const owner = tabCaptureSessions.get(tab.id);
@@ -103,10 +111,156 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
         }
       ).captureData.get(tab.id);
       const recording = debug ?? networkCaptureStartTool.captureData.get(tab.id);
+      const retained =
+        (
+          networkDebuggerStartTool as unknown as { terminalResults: Map<number, { result: any }> }
+        ).terminalResults.get(tab.id)?.result ??
+        networkCaptureStartTool.terminalResults.get(tab.id)?.result;
+      if (
+        !recording &&
+        !retained &&
+        (action === 'list' || action === 'show' || action === 'clear')
+      ) {
+        const history = await this.tabHistory(tab.id);
+        if (action === 'clear')
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  tabId: tab.id,
+                  cleared: false,
+                  message: 'No active or retained capture.',
+                }),
+              },
+            ],
+            isError: false,
+          };
+        if (!history.length)
+          return createErrorResponse(
+            `No active, retained, or page-helper network capture found on tab ${tab.id}. Start network start before inspecting traffic.`,
+          );
+        if (action === 'show') {
+          if (!args.requestId)
+            return createErrorResponse('Use network show ID to inspect one captured request.');
+          const item = history.find((entry: any) => String(entry.requestId) === args.requestId);
+          if (!item) return createErrorResponse(`Network request ${args.requestId} was not found.`);
+          return this.showNetworkRequest(tab.id, item, args.outputPath);
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ tabId: tab.id, recording: false, requests: history }),
+            },
+          ],
+          isError: false,
+        };
+      }
+      const requests = recording?.requests ?? retained?.requests ?? {};
+      if (action === 'status') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                tabId: tab.id,
+                recording: Boolean(recording),
+                requestCount: Object.keys(requests).length,
+                requests: Object.values(requests),
+              }),
+            },
+          ],
+          isError: false,
+        };
+      }
+      if (action === 'clear') {
+        if (recording?.requests) recording.requests = {};
+        if (retained?.requests) retained.requests = {};
+        if (debug) {
+          (
+            networkDebuggerStartTool as unknown as { requestCounters: Map<number, number> }
+          ).requestCounters.set(tab.id, 0);
+        } else {
+          (
+            networkCaptureStartTool as unknown as { requestCounters: Map<number, number> }
+          ).requestCounters.set(tab.id, 0);
+        }
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ success: true, tabId: tab.id, cleared: true }) },
+          ],
+          isError: false,
+        };
+      }
+      const method = typeof args.method === 'string' ? args.method.toUpperCase() : undefined;
+      const status = Number(args.status);
+      const type =
+        typeof args.resourceType === 'string' ? args.resourceType.toLowerCase() : undefined;
+      const limit =
+        Number.isSafeInteger(args.limit) && Number(args.limit) > 0
+          ? Math.min(Number(args.limit), 100)
+          : 100;
+      let entries = Object.values(requests) as Array<Record<string, any>>;
+      if (args.requestUrlPattern)
+        entries = entries.filter((entry) => {
+          const pattern = String(args.requestUrlPattern);
+          const regex = /^\/(.+)\/([gimsuy]*)$/.exec(pattern);
+          if (!regex)
+            return String(entry.url || '')
+              .toLowerCase()
+              .includes(pattern.toLowerCase());
+          try {
+            const compiled = new RegExp(regex[1], regex[2]);
+            return compiled.test(String(entry.url || ''));
+          } catch {
+            return false;
+          }
+        });
+      if (method)
+        entries = entries.filter((entry) => String(entry.method || '').toUpperCase() === method);
+      if (Number.isFinite(status))
+        entries = entries.filter(
+          (entry) => Number(entry.statusCode ?? entry.status) === Math.floor(status),
+        );
+      if (type)
+        entries = entries.filter((entry) => String(entry.type || '').toLowerCase() === type);
+      entries.sort((a, b) => Number(a.requestTime || 0) - Number(b.requestTime || 0));
+      if (action === 'show') {
+        const requestId = args.requestId;
+        if (!requestId)
+          return createErrorResponse('Use network show ID to inspect one captured request.');
+        const item = entries.find(
+          (entry, index) =>
+            String(entry.requestId) === requestId || String(index + 1) === requestId,
+        );
+        if (!item) return createErrorResponse(`Network request ${requestId} was not found.`);
+        return this.showNetworkRequest(tab.id, item, args.outputPath);
+      }
+      if (action === 'list')
+        entries = entries.slice(0, limit).map((entry, index) => ({
+          id: entry.requestId,
+          index: index + 1,
+          method: entry.method,
+          url: entry.url,
+          status: entry.statusCode ?? entry.status,
+          type: entry.type,
+          requestTime: entry.requestTime,
+          responseTime: entry.responseTime,
+          mimeType: entry.mimeType,
+          encodedDataLength: entry.encodedDataLength ?? entry.responseSize,
+          responseBody: entry.responseBody
+            ? {
+                chars: entry.responseBody.length,
+                truncated: entry.responseBody.includes('[Response truncated'),
+              }
+            : undefined,
+        }));
       const payload = {
         tabId: tab.id,
         recording: Boolean(recording),
-        requests: Object.values(recording?.requests ?? {}),
+        requests: entries,
       };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false };
     }
@@ -165,6 +319,65 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
     }
 
     return decorateJsonResult(result, { backend, needResponseBody: wantBody, tabId });
+  }
+
+  private async tabHistory(tabId: number) {
+    try {
+      await this.injectContentScript(tabId, ['inject-scripts/network-helper.js']);
+      const response = await this.sendMessageToTab(
+        tabId,
+        { action: 'GET_NETWORK_HISTORY' },
+        undefined,
+        10000,
+      );
+      const entries = Array.isArray(response?.requests) ? response.requests : [];
+      return entries;
+    } catch {
+      return [];
+    }
+  }
+
+  private showNetworkRequest(tabId: number, item: Record<string, any>, outputPath?: string) {
+    const body = typeof item.responseBody === 'string' ? item.responseBody : undefined;
+    if (outputPath && body === undefined)
+      return createErrorResponse(
+        `Network request ${item.requestId} has no textual response body${item.bodyOmitted ? ` (${item.bodyOmitted})` : ''}.`,
+      );
+    const result: ToolResult = {
+      content: [{ type: 'text', text: JSON.stringify({ tabId, request: item }) }],
+      isError: false,
+    };
+    if (body !== undefined && outputPath) {
+      const bytes = new TextEncoder().encode(body);
+      let binary = '';
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      }
+      const mimeType = /json/i.test(String(item.mimeType || ''))
+        ? 'application/json'
+        : 'text/plain';
+      (result.content as any[]).push({
+        type: 'resource',
+        resource: {
+          uri: `browserpaw://network/${encodeURIComponent(String(item.requestId))}/body.txt`,
+          mimeType,
+          blob: btoa(binary),
+        },
+      });
+      result.structuredContent = {
+        tabId,
+        request: item,
+        file: {
+          path: null,
+          name: `${item.requestId}.txt`,
+          mimeType,
+          bytes: bytes.length,
+          outputPath,
+          resourceUri: `browserpaw://network/${encodeURIComponent(String(item.requestId))}/body.txt`,
+        },
+      };
+    }
+    return result;
   }
 
   private async handleStop(args: NetworkCaptureToolParams): Promise<ToolResult> {

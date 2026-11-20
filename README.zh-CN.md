@@ -37,6 +37,8 @@ browserpaw setup
 
 ## 使用
 
+通过 `browserpaw help data` 查看历史、书签、下载记录、存储和 Cookie 命令。通过 `browserpaw help debug` 查看网络抓包、控制台、性能、设备模拟、PDF 和 CDP 命令。
+
 先运行 `browserpaw status` 确认连接，随后运行 `browserpaw help` 查看命令。多步工作用 `task start` 获取任务 ID，并在后续命令传入 `--task ID`。在现有页面工作时可通过 `tabs` 取得标签页 ID，然后传入 `--tab ID`。观察页面后再用 ref 操作，核实业务结果后运行 `task finish`。
 
 自学习的站点技能与保存的 CLI 工作流统一保存在 `~/.browserpaw`（`skills/`、`recipes/` 与 `learned-index.json`）。可通过 `browserpaw recipe find <关键词>` 检索、`browserpaw recipe show ID` 查看参数、`browserpaw recipe validate ID` 校验激活候选技能、`browserpaw recipe run ID key=value` 直接调用，并用 `browserpaw recipe save FILE` 持久化新学到的站点流程。保存、校验或安装技能时会自动刷新已安装 `SKILL.md` 的自动路由表，让 Agent 无需提醒即可直接路由调用。

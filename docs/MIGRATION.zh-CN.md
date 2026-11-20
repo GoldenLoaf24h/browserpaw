@@ -81,6 +81,10 @@ npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup
 
 后续 v5 升级时，用新版 CLI 运行 `browserpaw setup` 同步更新 Native Host 和已登记的基础 Skill。浏览器扩展需从对应的 GitHub Release 下载 ZIP、解压并手动加载。完整流程见 [v5 升级指南](../INSTALL.md#upgrade-an-existing-v5-installation)。
 
+浏览器数据命令会使用扩展的 `history`、`bookmarks` 和 `cookies` 权限。安装或重载时如果 Chrome 提示，请核对这些权限。加载后执行 `browserpaw status --json`，核对返回的 build ID 与已选目录里的 `browserpaw-build.json`。
+
+通过 `browserpaw help data` 查看历史、书签、下载记录、存储和 Cookie 命令。通过 `browserpaw help debug` 查看网络、控制台、性能、模拟、PDF 和 CDP 命令。
+
 ### 第四步：验证连接与自学习工作流路由
 
 执行以下命令确认迁移完成：

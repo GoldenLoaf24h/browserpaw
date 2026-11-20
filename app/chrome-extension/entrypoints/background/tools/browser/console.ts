@@ -22,6 +22,7 @@ interface ConsoleToolParams {
   clear?: boolean; // Clear before reading
   clearAfterRead?: boolean; // Clear after reading (mcp-tools.js style)
   pattern?: string;
+  levels?: string[];
   onlyErrors?: boolean;
   limit?: number;
   waitMs?: number;
@@ -101,16 +102,33 @@ function isErrorLevel(level?: string): boolean {
   return normalized === 'error' || normalized === 'assert';
 }
 
+function isSelectedLevel(level: string | undefined, levels?: string[]): boolean {
+  if (!levels?.length) return true;
+  const normalized = String(level || '').toLowerCase();
+  return levels.some((candidate) =>
+    candidate === 'warn'
+      ? normalized === 'warning' || normalized === 'warn'
+      : candidate === normalized,
+  );
+}
+
 function applyResultFilters(
   result: ConsoleResult,
-  options: { pattern?: RegExp; onlyErrors?: boolean; includeExceptions: boolean },
+  options: {
+    pattern?: RegExp;
+    onlyErrors?: boolean;
+    levels?: string[];
+    includeExceptions: boolean;
+  },
 ): ConsoleResult {
-  const { pattern, onlyErrors = false, includeExceptions } = options;
+  const { pattern, onlyErrors = false, levels, includeExceptions } = options;
 
   let messages = result.messages;
   if (onlyErrors) {
     messages = messages.filter((m) => isErrorLevel(m.level));
   }
+  if (levels?.length)
+    messages = messages.filter((message) => isSelectedLevel(message.level, levels));
   if (pattern) {
     messages = messages.filter((m) => matchesPattern(pattern, m.text || ''));
   }
@@ -162,6 +180,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
       clearAfterRead = false,
       pattern,
       onlyErrors = false,
+      levels,
       limit,
     } = args;
 
@@ -258,6 +277,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
         const read = consoleBuffer.read(targetTabId, {
           pattern: compiledPattern,
           onlyErrors,
+          levels,
           limit: effectiveLimit,
           includeExceptions,
         });
@@ -330,6 +350,7 @@ class ConsoleTool extends BaseBrowserToolExecutor {
       const filtered = applyResultFilters(result, {
         pattern: compiledPattern,
         onlyErrors,
+        levels,
         includeExceptions,
       });
 

@@ -14,6 +14,20 @@ import { getBrowserInstanceId } from '@/utils/browser-identity';
 export { isPopupUrl };
 
 // Default window dimensions
+export function tabReceipt(
+  tab: chrome.tabs.Tab | undefined,
+  created: boolean,
+  details?: { windowId?: number; url?: string },
+) {
+  return {
+    created,
+    tabId: tab?.id,
+    windowId: details?.windowId ?? tab?.windowId,
+    url: details?.url ?? tab?.pendingUrl ?? tab?.url,
+    title: tab?.title,
+  };
+}
+
 const DEFAULT_WINDOW_WIDTH = 1280;
 const DEFAULT_WINDOW_HEIGHT = 720;
 
@@ -200,9 +214,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
               text: JSON.stringify({
                 success: true,
                 message: 'Successfully refreshed current tab',
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: updatedTab.url,
+                ...tabReceipt(updatedTab, false),
               }),
             },
           ],
@@ -284,9 +296,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 success: true,
                 action: url,
                 message: `Successfully navigated ${url} in browser history`,
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: updatedTab.url,
+                ...tabReceipt(updatedTab, false),
               }),
             },
           ],
@@ -527,9 +537,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 message: navigationPending
                   ? 'Navigation started; page still loading'
                   : 'Activated existing tab',
-                tabId: updatedTab.id,
-                windowId: updatedTab.windowId,
-                url: pendingUrl || updatedTab.url || url,
+                ...tabReceipt(updatedTab, false, { url: pendingUrl || updatedTab.url || url }),
                 ...(navigationPending ? { navigationPending: true, status: 'loading' } : {}),
               }),
             },
@@ -621,10 +629,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 text: JSON.stringify({
                   success: true,
                   message: 'Opened URL in new window',
-                  created: true,
-                  ...(firstTab?.id !== undefined ? { tabId: firstTab.id } : {}),
-                  windowId: newWindow.id,
-                  url: finalUrl,
+                  ...tabReceipt(firstTab, true, { windowId: newWindow.id, url: finalUrl }),
                   tabs: newWindow.tabs
                     ? newWindow.tabs.map((tab) => ({
                         tabId: tab.id,
@@ -723,10 +728,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
                 text: JSON.stringify({
                   success: true,
                   message: 'Opened URL in new tab in existing window',
-                  created: true,
-                  tabId: newTab.id,
-                  windowId: targetWindow.id,
-                  url: finalUrl,
+                  ...tabReceipt(newTab, true, { windowId: targetWindow.id, url: finalUrl }),
                 }),
               },
             ],
@@ -760,10 +762,10 @@ class NavigateTool extends BaseBrowserToolExecutor {
                   text: JSON.stringify({
                     success: true,
                     message: 'Opened URL in new window',
-                    created: true,
-                    tabId: fallbackTab?.id,
-                    windowId: fallbackWindow.id,
-                    url: fallbackUrl,
+                    ...tabReceipt(fallbackTab, true, {
+                      windowId: fallbackWindow.id,
+                      url: fallbackUrl,
+                    }),
                     tabs: fallbackWindow.tabs
                       ? fallbackWindow.tabs.map((tab) => ({
                           tabId: tab.id,
@@ -1251,9 +1253,7 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
               message: keepBackground
                 ? `Tab ID ${targetTabId} resolved (background: true, not activated)`
                 : `Activated tab ID: ${targetTabId}`,
-              tabId: updatedTab.id,
-              windowId: updatedTab.windowId,
-              url: updatedTab.url,
+              ...tabReceipt(updatedTab, false),
               activated: !keepBackground,
               active: updatedTab.active ?? false,
             }),

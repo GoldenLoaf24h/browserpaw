@@ -1,5 +1,12 @@
 export { navigateTool, closeTabsTool, switchTabTool } from './common';
 export { windowTool } from './window';
+export {
+  historyTool,
+  bookmarksTool,
+  downloadsTool,
+  cookiesTool,
+  storageTool,
+} from './browser-data';
 export { screenshotTool } from './screenshot';
 export { networkRequestTool } from './network-request';
 export { networkCaptureTool } from './network-capture';
@@ -23,3 +30,15 @@ export { tabFaviconManager } from './tab-favicon';
 export { humanInterventionTool } from './human-intervention';
 export { grepTool } from './grep';
 export { doctorTool } from './doctor';
+
+export { debugTool } from './debug';
+export { pageTool } from './page';
+export {
+  tabGroupCreateTool,
+  tabGroupUpdateTool,
+  tabGroupListTool,
+  tabGroupUngroupTool,
+  tabGroupCloseTool,
+} from './tab-group';
+export { inspectMediaTool } from './inspect-media';
+export { dismissOverlayTool } from './dismiss-overlay';

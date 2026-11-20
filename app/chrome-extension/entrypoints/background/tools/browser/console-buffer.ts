@@ -45,6 +45,7 @@ interface TabConsoleBufferState {
 export interface ConsoleBufferReadOptions {
   pattern?: RegExp;
   onlyErrors?: boolean;
+  levels?: string[];
   limit?: number;
   includeExceptions?: boolean;
 }
@@ -232,7 +233,7 @@ class ConsoleBuffer {
     const state = this.buffers.get(tabId);
     if (!state) return null;
 
-    const { pattern, onlyErrors = false, limit, includeExceptions = true } = options;
+    const { pattern, onlyErrors = false, levels, limit, includeExceptions = true } = options;
 
     const totalBufferedMessages = state.messages.length;
     const totalBufferedExceptions = state.exceptions.length;
@@ -241,6 +242,14 @@ class ConsoleBuffer {
     let messages = state.messages;
     if (onlyErrors) {
       messages = messages.filter((m) => isErrorLevel(m.level));
+    }
+    if (levels?.length) {
+      messages = messages.filter((m) => {
+        const level = (m.level || '').toLowerCase();
+        return levels.some((candidate) =>
+          candidate === 'warn' ? level === 'warning' || level === 'warn' : candidate === level,
+        );
+      });
     }
     if (pattern) {
       messages = messages.filter((m) => matchesPattern(pattern, m.text || ''));

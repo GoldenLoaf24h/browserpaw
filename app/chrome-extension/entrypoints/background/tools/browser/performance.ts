@@ -15,12 +15,46 @@ interface StartTraceParams {
   sessionContext?: string;
 }
 
+interface TraceOutputFile {
+  path: string;
+  name?: string;
+  bytes: number;
+  mimeType: 'application/json';
+  outputPath?: string;
+}
+
+export interface TraceStopReceipt {
+  success: true;
+  message: string;
+  tabId: number;
+  eventCount: number;
+  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  metrics?: Record<string, number>;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  url: string;
+  tracingCompleted: boolean;
+  traceBytes: number;
+  file?: TraceOutputFile;
+}
+
+function textualTrace(trace: { traceEvents?: any[] }): { traceEvents: any[] } {
+  return {
+    traceEvents: (trace.traceEvents || []).filter((event) => {
+      const snapshot = event?.args?.snapshot;
+      return typeof snapshot !== 'string' || !/^[A-Za-z0-9+/]{256,}={0,2}$/.test(snapshot);
+    }),
+  };
+}
+
 interface StopTraceParams {
   saveToDownloads?: boolean; // save trace to Downloads as JSON (default true)
   filenamePrefix?: string; // filename prefix (default 'performance_trace')
   tabId?: number;
   sessionId?: string;
   sessionContext?: string;
+  outputPath?: string;
 }
 
 interface AnalyzeInsightParams {
@@ -392,7 +426,7 @@ async function finalizeTraceSession(
 
     const endedAt = Date.now();
     const trace = { traceEvents: session.events };
-    const json = JSON.stringify(trace);
+    const json = JSON.stringify(textualTrace(trace));
 
     let saved: { downloadId?: number; filename?: string; fullPath?: string } | undefined;
     if (saveToDownloads) {
@@ -591,6 +625,13 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
             }),
           },
         ],
+        structuredContent: {
+          success: true,
+          tabId,
+          recording: true,
+          startedAt: state.startedAt,
+          url: state.pageUrl || '',
+        },
         isError: false,
       };
     } catch (e: any) {
@@ -665,26 +706,40 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
         saveToDownloads,
         filenamePrefix || 'performance_trace',
       );
+      const response: TraceStopReceipt = {
+        success: true,
+        message: 'The performance trace has been stopped.',
+        tabId,
+        eventCount: session.events.length,
+        saved: finalized.saved,
+        metrics: finalized.metrics,
+        startedAt: session.startedAt,
+        endedAt: finalized.endedAt,
+        durationMs: finalized.endedAt - session.startedAt,
+        url: session.pageUrl || '',
+        tracingCompleted: finalized.tracingCompleted,
+        traceBytes: JSON.stringify(textualTrace({ traceEvents: session.events })).length,
+        ...(finalized.saved?.fullPath && args?.outputPath
+          ? {
+              file: {
+                path: finalized.saved.fullPath,
+                name: finalized.saved.filename,
+                bytes: JSON.stringify(textualTrace({ traceEvents: session.events })).length,
+                mimeType: 'application/json',
+                outputPath: args.outputPath,
+              } satisfies TraceOutputFile,
+            }
+          : {}),
+      };
 
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify({
-              success: true,
-              message: 'The performance trace has been stopped.',
-              tabId,
-              eventCount: session.events.length,
-              saved: finalized.saved,
-              metrics: finalized.metrics,
-              startedAt: session.startedAt,
-              endedAt: finalized.endedAt,
-              durationMs: finalized.endedAt - session.startedAt,
-              url: session.pageUrl || '',
-              tracingCompleted: finalized.tracingCompleted,
-            }),
+            text: JSON.stringify(response),
           },
         ],
+        structuredContent: response as unknown as Record<string, unknown>,
         isError: false,
       };
     } catch (e: any) {

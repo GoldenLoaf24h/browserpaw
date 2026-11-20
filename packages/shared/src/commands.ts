@@ -1,3 +1,7 @@
+import { dataCommands } from './commands-extra-data';
+import { debugCommands } from './commands-extra-debug';
+import { pageCommands } from './commands-extra-page';
+
 export interface CommandSpec {
   usage: string;
   summary: string;
@@ -25,7 +29,6 @@ export const COMMANDS = {
     usage: 'help [COMMAND|TOPIC]',
     summary: 'Show usage and examples without opening Chrome.',
   },
-  tabs: { usage: 'tabs', summary: 'List windows and tabs with IDs.' },
   open: {
     usage: 'open URL [--foreground]',
     summary: 'Open a new tab. --foreground applies only to non-task opens.',
@@ -36,10 +39,6 @@ export const COMMANDS = {
   observe: {
     usage: 'observe [--scope CSS] [--delta] [--max N]',
     summary: 'Read page structure, frame IDs, and actionable refs.',
-  },
-  text: {
-    usage: 'text [TARGET] [--max-chars N]',
-    summary: 'Read Markdown or extract text from a single target.',
   },
   find: {
     usage: 'find PATTERN [--regex] [--scroll]',
@@ -53,19 +52,6 @@ export const COMMANDS = {
     usage: 'wait [TARGET] [--text TEXT|--url URL] [--gone] [--timeout MS]',
     summary: 'Wait for a target, page text, or URL condition.',
   },
-  console: {
-    usage: 'console [--level LEVEL] [--clear]',
-    summary: 'Read buffered console output; --level error keeps only errors.',
-  },
-  'network start': {
-    usage: 'network start [--filter PATTERN] [--bodies]',
-    summary: 'Start a scoped network recording; --filter matches captured request URLs.',
-  },
-  'network stop': {
-    usage: 'network stop',
-    summary: 'Stop recording and return the captured events.',
-  },
-  'network show': { usage: 'network show', summary: 'Read currently captured network events.' },
   click: {
     usage: 'click TARGET [--double|--right] [--capture ID]',
     summary: 'Click the target from the current observation or capture.',
@@ -74,18 +60,10 @@ export const COMMANDS = {
     usage: 'fill TARGET TEXT [--append] [--input FILE|-]',
     summary: 'Replace or append text. Use -- before option-like text.',
   },
-  select: {
-    usage: 'select TARGET [VALUE...]',
-    summary: 'Read available choices or select by value.',
-  },
   hover: { usage: 'hover TARGET [--capture ID]', summary: 'Move the pointer to a target.' },
   press: {
     usage: 'press KEYS [TARGET]',
     summary: 'Send a key sequence, optionally to a strict target.',
-  },
-  scroll: {
-    usage: 'scroll [TARGET] [--up|--down|--top|--bottom] [--by PX]',
-    summary: 'Scroll the page or a scroll container.',
   },
   drag: {
     usage: 'drag FROM TO [--capture ID]',
@@ -173,6 +151,9 @@ export const COMMANDS = {
     usage: 'recipe rm ID',
     summary: 'Remove a saved workflow or disable a learned skill.',
   },
+  ...pageCommands,
+  ...dataCommands,
+  ...debugCommands,
 } satisfies Record<string, CommandSpec>;
 
 export type CommandName = keyof typeof COMMANDS;
@@ -183,7 +164,12 @@ export interface ParsedCommand {
   options: CommandOptions;
 }
 
-export function commandLockKey(options: CommandOptions): string | undefined {
+export function isProfileCommand(name: string): boolean {
+  return /^(history|bookmark|downloads|cookies|window|group) /.test(name) || name === 'tab move';
+}
+
+export function commandLockKey(options: CommandOptions, name?: string): string | undefined {
+  if (name && isProfileCommand(name)) return 'profile:' + name.split(' ')[0];
   if (options.task) return `task:${options.task}`;
   const rawTab = options.tab;
   const parsedTab = typeof rawTab === 'string' && /^\d+$/.test(rawTab) ? Number(rawTab) : undefined;
@@ -265,7 +251,82 @@ const examples: Partial<Record<CommandName, readonly string[]>> = {
     'recipe run x-search-thread query=typescript limit=5',
   ],
   'recipe validate': ['recipe validate x-search-thread'],
+  'history search': ['history search example.com --since 7d --limit 20'],
+  'history visits': ['history visits https://example.com/ --since 24h'],
+  'history top': ['history top --since 7d --limit 10'],
+  'history rm': ['history rm https://example.com/'],
+  'bookmark tree': ['bookmark tree --folder 18'],
+  'bookmark search': ['bookmark search Research'],
+  'bookmark add': ['bookmark add https://example.com/ --title Example --folder 18'],
+  'bookmark mkdir': ['bookmark mkdir Research --folder 18'],
+  'bookmark mv': ['bookmark mv 27 --folder 18 --index 0'],
+  'bookmark rename': ['bookmark rename 27 Research'],
+  'bookmark rm': ['bookmark rm 27'],
+  'bookmark dedupe': ['bookmark dedupe --folder 18'],
+  'bookmark export': ['bookmark export --folder 18 --format html --out backup.html'],
+  'downloads list': ['downloads list --state complete --limit 10'],
+  'downloads reveal': ['downloads reveal 9'],
+  'downloads rm': ['downloads rm 9'],
+  'storage get': ['storage get theme --tab 12'],
+  'storage set': ['storage set theme dark --tab 12'],
+  'storage rm': ['storage rm theme --tab 12'],
+  'storage clear': ['storage clear --session --tab 12'],
+  'cookies list': ['cookies list --domain example.com'],
+  'cookies set': ['cookies set https://example.com/ theme dark --secure'],
+  'cookies rm': ['cookies rm https://example.com/ theme'],
+  'network start': ['network start --tab 12 --bodies --filter /api/'],
+  'network list': ['network list --tab 12 --status 200'],
+  'network show': ['network show REQUEST_ID --tab 12'],
+  'network stop': ['network stop --tab 12'],
+  'network clear': ['network clear --tab 12'],
+  console: ['console --tab 12 --level error,warning --grep fixture'],
+  'perf metrics': ['perf metrics --tab 12'],
+  'perf trace': ['perf trace start --tab 12', 'perf trace stop --tab 12'],
+  emulate: ['emulate --viewport 390x844 --mobile --tab 12'],
+  'emulate reset': ['emulate reset --tab 12'],
+  pdf: ['pdf --tab 12 --out page.pdf'],
+  tabs: ['tabs', 'tabs example.com --limit 10'],
+  'tab move': ['tab move 12 0 --window 5'],
+  'window list': ['window list'],
+  'window open': ['window open https://example.com/ --background'],
+  'window focus': ['window focus 5'],
+  'window close': ['window close 5'],
+  'group list': ['group list --window 5'],
+  'group create': ['group create 12 13 --title Research'],
+  'group update': ['group update 8 --color blue'],
+  'group ungroup': ['group ungroup 12 13'],
+  'group close': ['group close 8'],
+  text: ['text --links --tab 12', 'text css:article --tab 12'],
+  scroll: ['scroll --until Results --max 10 --tab 12'],
+  dismiss: ['dismiss --tab 12'],
 };
+
+const commandTopics: Record<string, string[]> = {
+  install: ['setup', 'status', 'doctor', 'uninstall'],
+  page: ['tabs', 'tab', 'window', 'group', 'open', 'nav'],
+  read: ['observe', 'text', 'find', 'screenshot', 'wait'],
+  act: [
+    'click',
+    'fill',
+    'select',
+    'hover',
+    'press',
+    'scroll',
+    'drag',
+    'upload',
+    'dialog',
+    'dismiss',
+    'ask-human',
+    'batch',
+  ],
+  data: ['history', 'bookmark', 'download', 'downloads', 'storage', 'cookies'],
+  debug: ['console', 'network', 'perf', 'emulate', 'pdf', 'eval', 'fetch', 'cdp'],
+  task: ['task'],
+  recipe: ['recipe'],
+};
+
+const exitHelp =
+  'Exit codes: 0 success, 1 failure, 2 usage error, 3 disconnected, 4 outcome unknown. Observe before acting again after exit 4.';
 
 export function commandHelp(topic?: string): string {
   if (topic === 'targets') return TARGET_HELP;
@@ -277,12 +338,17 @@ export function commandHelp(topic?: string): string {
       `browserpaw ${spec.usage}`,
       spec.summary,
       `Common options: ${globalOptions}`,
-      TARGET_HELP,
+      exitHelp,
       ...(examples[topic] ?? []).map((example) => `Example: browserpaw ${example}`),
     ].join('\n');
   }
   if (topic) {
-    const group = Object.entries(COMMANDS).filter(([name]) => name.startsWith(topic + ' '));
+    const members = Object.prototype.hasOwnProperty.call(commandTopics, topic)
+      ? commandTopics[topic]
+      : undefined;
+    const group = Object.entries(COMMANDS).filter(([name]) =>
+      members ? members.includes(name.split(' ')[0]) : name.startsWith(topic + ' '),
+    );
     if (group.length)
       return group.map(([, spec]) => `browserpaw ${spec.usage}\n  ${spec.summary}`).join('\n');
     throw new Error(`Unknown help topic ${topic}.`);
@@ -292,10 +358,11 @@ export function commandHelp(topic?: string): string {
     'Run browserpaw status to verify the connection, or browserpaw setup to install.',
     'Workflow: task start → open --task ID → observe --task ID → act → verify → task finish --task ID.',
     'Use --tab ID to select an existing tab, or --task ID for a task page. --json emits a single receipt.',
-    'Exit codes: 0 success, 1 failure, 2 usage error, 3 disconnected, 4 outcome unknown. Observe before acting again after exit 4.',
-    TARGET_HELP,
-    'Run browserpaw help COMMAND for command-specific usage.',
+    exitHelp,
+    'Run browserpaw help GROUP for a list, help COMMAND for usage, or help targets for locator syntax.',
     '',
-    ...Object.values(COMMANDS).map((spec) => `  ${spec.usage}`),
+    ...Object.entries(commandTopics).map(
+      ([name, members]) => `  ${name.padEnd(9)} ${members.join(', ')}`,
+    ),
   ].join('\n');
 }

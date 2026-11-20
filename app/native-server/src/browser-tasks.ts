@@ -161,6 +161,9 @@ export interface BrowserTaskSummary {
 export interface BrowserTaskResult {
   ok: boolean;
   action: string;
+  tabId?: number;
+  windowId?: number;
+  url?: string;
   message?: string;
   error?: string;
   task?: BrowserTaskInventory;
@@ -217,14 +220,11 @@ const OBSERVATION_TOOL_NAMES = new Set([
   'chrome_get_markdown',
   'chrome_get_web_content',
   'chrome_grep',
-  'chrome_tool_docs',
   'chrome_get_links',
   'chrome_inspect_media',
   'chrome_get_dropdown_options',
   'chrome_console',
   'chrome_network_capture',
-  'chrome_history',
-  'chrome_bookmark_search',
   'chrome_doctor',
 ]);
 
@@ -1660,6 +1660,9 @@ export class BrowserTaskManager {
       return {
         ok: true,
         action: 'open',
+        tabId,
+        windowId,
+        url: committed.page.url,
         message:
           viewport.status === 'native'
             ? `Opened owned page ${tabId} with native viewport ${viewport.width}x${viewport.height}${

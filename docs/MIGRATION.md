@@ -81,6 +81,8 @@ The first `browserpaw setup` prepares the v5 extension at `~/.browserpaw/extensi
 
 For later v5 updates, follow [Upgrade an existing v5 installation](../INSTALL.md#upgrade-an-existing-v5-installation). Setup refreshes the host and managed base Skills. Download, unpack, and load the matching Chrome ZIP manually.
 
+The v5 browser data commands use the extension's `history`, `bookmarks` and `cookies` permissions. Review these permissions when Chrome prompts during the installation or reload. After loading, run `browserpaw status --json` and compare the reported build ID with `browserpaw-build.json` in the selected directory.
+
 ### Step 4: Verify Connection and Learned Workflow Routing
 
 Run the verification commands:
@@ -125,4 +127,4 @@ Use this mapping when updating Agent skills, automation scripts, or manual workf
 | `chrome_skill`                                      | `browserpaw recipe list\|find\|show\|run\|save\|validate\|rm`                          | Stores and routes learned workflows under `~/.browserpaw`                            |
 | `chrome_tool_docs`                                  | `browserpaw help` / `browserpaw help COMMAND`                                          | Offline command discovery built into the installed CLI                               |
 
-See [Commands](COMMANDS.md), the [Agent Skill](../skills/browserpaw/SKILL.md), and [Troubleshooting](TROUBLESHOOTING.md) for full details.
+Run `browserpaw help data` for history, bookmarks, downloads, storage and cookies. Run `browserpaw help debug` for network, console, performance, emulation, PDF and CDP. See [Commands](COMMANDS.md), the [Agent Skill](../skills/browserpaw/SKILL.md), and [Troubleshooting](TROUBLESHOOTING.md) for full details.

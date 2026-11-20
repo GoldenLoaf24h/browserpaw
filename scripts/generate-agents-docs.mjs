@@ -438,7 +438,6 @@ const METADATA = {
       },
       { name: 'in-page-engine.ts', desc: 'Injected script orchestrator' },
       { name: 'index.ts', desc: 'Barrel export for all browser tool modules' },
-      { name: 'insert-media.ts', desc: 'Inserts media or mock streams into web pages' },
       { name: 'inspect-media.ts', desc: 'Inspects media elements (video, audio, canvas) on page' },
       {
         name: 'interact-index.ts',
@@ -877,7 +876,6 @@ const METADATA = {
     instructions: [
       'mcp-server-stdio.ts provides the primary stdio transport used by Claude Code and Cursor.',
       'register-tools.ts maps packages/shared/src/tools.ts schemas to MCP tool handlers.',
-      'Supports dynamic profile layering and runtime tool exposure via chrome_tool_docs.',
     ],
     testing: 'Run jest tests in register-tools.test.ts.',
     patterns: 'MCP Server protocol handlers; session-affinity mapping.',

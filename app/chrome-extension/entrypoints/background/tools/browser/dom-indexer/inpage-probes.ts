@@ -104,13 +104,14 @@ export async function inPageGetAssetImage(assetIndex: number): Promise<{
  * nofollow). Read-only; runs in the page's isolated world.
  */
 export function inPageGetLinks(options?: {
+  index?: number;
   selector?: string;
   sameOriginOnly?: boolean;
   includeEmptyHref?: boolean;
 }): Array<{ url: string; text: string; internal: boolean; nofollow: boolean }> {
-  const root: ParentNode = options?.selector
-    ? (document.querySelector(options.selector) ?? document)
-    : document;
+  const indexed = typeof options?.index === 'number' ? findIndexedElement(options.index) : null;
+  const selected = options?.selector ? document.querySelector(options.selector) : null;
+  const root: ParentNode = indexed ?? selected ?? document;
   const anchors = root.querySelectorAll('a[href]');
   const out: Array<{ url: string; text: string; internal: boolean; nofollow: boolean }> = [];
   const seen = new Set<string>();

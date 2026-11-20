@@ -40,6 +40,7 @@ interface NetworkRequestInfo {
 
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const MAX_RESPONSE_BODY_SIZE_BYTES = 1 * 1024 * 1024; // 1MB
+const MAX_AGGREGATE_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_CAPTURE_TIME_MS = 3 * 60 * 1000; // 3 minutes
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 60 * 1000; // 1 minute
 const TERMINAL_RESULT_TTL_MS = 5 * 60 * 1000;
@@ -75,6 +76,19 @@ function matchesRequestUrlPattern(url: string, pattern?: string): boolean {
   return String(url || '')
     .toLowerCase()
     .includes(trimmed.toLowerCase());
+}
+
+function decodeTextBody(body: string, base64Encoded: boolean): string | undefined {
+  if (!base64Encoded) return body;
+  try {
+    const binary = typeof Buffer !== 'undefined' ? Buffer.from(body, 'base64') : atob(body);
+    const bytes =
+      typeof binary === 'string' ? Uint8Array.from(binary, (c) => c.charCodeAt(0)) : binary;
+    if (bytes.includes(0)) return undefined;
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 interface WebSocketFrameInfo {
@@ -128,6 +142,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   private lastActivityTime: Map<number, number> = new Map(); // tabId -> timestamp of last network activity
   private pendingResponseBodies: Map<string, Promise<any>> = new Map(); // requestId -> promise for getResponseBody
   private requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests (after filtering)
+  private responseBodyBytes: Map<number, number> = new Map();
   private static MAX_REQUESTS_PER_CAPTURE = 100; // Max requests to store to prevent memory issues
   public static instance: NetworkDebuggerStartTool | null = null;
   public static listenersInitialized = false;
@@ -294,6 +309,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
         webSocketFrameCount: 0,
         webSocketFramesTruncated: 0,
         webSocketConnectionsTruncated: 0,
+        responseBodyBytes: 0,
         limitReached: false,
       });
 
@@ -672,17 +688,24 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
         // console.log(`NetworkDebuggerStartTool: Attempting to get response body for ${requestId} (${requestInfo.url})`);
         const responseBodyData = await this.getResponseBody(tabId, requestId);
         if (responseBodyData) {
-          if (
-            responseBodyData.body &&
-            responseBodyData.body.length > MAX_RESPONSE_BODY_SIZE_BYTES
+          const text = decodeTextBody(responseBodyData.body, responseBodyData.base64Encoded);
+          if (text === undefined) {
+            requestInfo.bodyOmitted = 'binary body omitted';
+          } else if (
+            (captureInfo.responseBodyBytes || 0) + text.length >
+            MAX_AGGREGATE_RESPONSE_BODY_BYTES
           ) {
+            requestInfo.bodyOmitted = 'aggregate response body limit reached';
+          } else if (text.length > MAX_RESPONSE_BODY_SIZE_BYTES) {
             requestInfo.responseBody =
-              responseBodyData.body.substring(0, MAX_RESPONSE_BODY_SIZE_BYTES) +
-              `\n\n... [Response truncated, total size: ${responseBodyData.body.length} bytes] ...`;
+              text.substring(0, MAX_RESPONSE_BODY_SIZE_BYTES) +
+              `\n\n... [Response truncated, total size: ${text.length} chars] ...`;
+            captureInfo.responseBodyBytes =
+              (captureInfo.responseBodyBytes || 0) + MAX_RESPONSE_BODY_SIZE_BYTES;
           } else {
-            requestInfo.responseBody = responseBodyData.body;
+            requestInfo.responseBody = text;
+            captureInfo.responseBodyBytes = (captureInfo.responseBodyBytes || 0) + text.length;
           }
-          requestInfo.base64Encoded = responseBodyData.base64Encoded;
           // console.log(`NetworkDebuggerStartTool: Successfully got response body for ${requestId}, size: ${requestInfo.responseBody?.length || 0} bytes`);
         }
       } catch (error) {
@@ -746,7 +769,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     // console.log(`NetworkDebuggerStartTool: Loading failed for ${requestId} on tab ${tabId}: ${errorText}`);
   }
 
-  private async getResponseBody(
+  public async getResponseBody(
     tabId: number,
     requestId: string,
   ): Promise<{ body: string; base64Encoded: boolean } | null> {
@@ -784,6 +807,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
     this.lastActivityTime.delete(tabId);
     this.captureData.delete(tabId);
     this.requestCounters.delete(tabId);
+    this.responseBodyBytes.delete(tabId);
 
     // Abort pending getResponseBody calls for this tab
     // Note: Promises themselves cannot be "aborted" externally in a standard way once created.

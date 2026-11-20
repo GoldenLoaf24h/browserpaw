@@ -11,6 +11,7 @@ import {
 } from '@/utils/race-cdp';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { executeInPage } from './in-page-engine';
+import { scrollUntilFoundTool, type ScrollUntilFoundParams } from './scroll-until-found';
 import type { SmartScrollTargetInfo } from './dom-indexer';
 import { parseUnifiedCoordinate, type PolymorphicCoordinate } from '@/utils/coordinate-parser';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
@@ -22,6 +23,7 @@ import {
 import { TaskCancelledError, throwIfAborted, waitWithAbort } from '@/utils/action-abort';
 
 export interface SmartScrollParams {
+  until?: ScrollUntilFoundParams;
   tabId?: number;
   windowId?: number;
   sessionId?: string;
@@ -68,6 +70,13 @@ export class SmartScrollTool extends BaseBrowserToolExecutor {
     let scrollDispatched = false;
     try {
       throwIfAborted(context?.signal, 'before smart scroll');
+      if (args.until)
+        return await scrollUntilFoundTool.execute({
+          ...args.until,
+          tabId: args.tabId,
+          windowId: args.windowId,
+          sessionId: args.sessionId,
+        });
       const tab = await this.resolveAffinityTab({
         tabId: args.tabId,
         windowId: args.windowId,

@@ -49,7 +49,6 @@ try {
     'LICENSE',
     'dist/v5/cli.cjs',
     'dist/v5/host.cjs',
-    'dist/v5/index.cjs',
     'dist/v5/cli-files.cjs',
     'dist/v5/run_host.sh',
     'dist/v5/run_host.bat',
@@ -105,7 +104,7 @@ try {
   const extension = JSON.parse(readFileSync(join(dist, 'extension', 'manifest.json'), 'utf8'));
   assert.equal(extension.version, manifest.version);
   assert.match(readFileSync(join(dist, 'skill/browserpaw/SKILL.md'), 'utf8'), /browserpaw status/);
-  for (const file of ['host.cjs', 'index.cjs', 'run_host.bat', 'run_host.sh', 'recipes/mdn-search.json'])
+  for (const file of ['host.cjs', 'run_host.bat', 'run_host.sh', 'recipes/mdn-search.json'])
     assert.ok(readFileSync(join(dist, file)).length > 0);
 
   const setup = (...args) =>
@@ -140,16 +139,25 @@ try {
   writeFileSync(extensionFile, 'Manually installed extension');
   const upgrade = setup();
   assert.equal(upgrade.extensionPrepared, false);
-  assert.deepEqual(new Set(upgrade.updatedSkillPaths), new Set([first.skillPath, second.skillPath]));
+  assert.deepEqual(
+    new Set(upgrade.updatedSkillPaths),
+    new Set([first.skillPath, second.skillPath]),
+  );
   assert.equal(readFileSync(extensionFile, 'utf8'), 'Manually installed extension');
   const installation = JSON.parse(readFileSync(join(browserpawHome, 'installation.json'), 'utf8'));
   assert.deepEqual(installation.browsers, ['chromium']);
-  assert.equal(JSON.parse(readFileSync(join(first.skillPath, '.browserpaw-skill.json'), 'utf8')).scope, 'project');
+  assert.equal(
+    JSON.parse(readFileSync(join(first.skillPath, '.browserpaw-skill.json'), 'utf8')).scope,
+    'project',
+  );
   for (const skillPath of upgrade.updatedSkillPaths)
     assert.match(readFileSync(join(skillPath, 'SKILL.md'), 'utf8'), /browserpaw status/);
 
   const latest = '5000.0.1';
-  writeFileSync(join(browserpawHome, 'cli-update.json'), JSON.stringify({ checkedAt: Date.now(), latest }));
+  writeFileSync(
+    join(browserpawHome, 'cli-update.json'),
+    JSON.stringify({ checkedAt: Date.now(), latest }),
+  );
   for (const expected of [true, false]) {
     const notice = spawnSync(process.execPath, [cli, 'recipe', 'list', '--json'], {
       encoding: 'utf8',

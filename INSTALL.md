@@ -83,6 +83,8 @@ On first setup, `browserpaw setup` installs the host outside npm's cache, regist
 3. Click **Load unpacked** and select the `~/.browserpaw/extension` directory printed by `setup`.
 4. Click the BrowserPaw toolbar icon to confirm the popup shows **Connected** and **Agent Control** enabled.
 
+Chrome can prompt for the history, bookmarks, and cookies permissions used by the browser data commands. Review them when loading the unpacked extension.
+
 ### 3. Verify the live bridge
 
 ```sh

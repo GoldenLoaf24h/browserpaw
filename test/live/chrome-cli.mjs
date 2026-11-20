@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdtemp, readFile, writeFile, mkdir, rm, cp } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -11,7 +12,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const chrome = process.env.BROWSERPAW_TEST_CHROME;
 if (!chrome) throw new Error('Point BROWSERPAW_TEST_CHROME at Chrome for Testing.');
-const cli = resolve(process.env.BROWSERPAW_TEST_CLI ?? 'app/native-server/dist/v5/cli.cjs');
+let cli = resolve(process.env.BROWSERPAW_TEST_CLI ?? 'app/native-server/dist/v5/cli.cjs');
 const output = resolve(process.env.BROWSERPAW_TEST_RECEIPTS ?? '.artifacts/cli-live');
 await mkdir(output, { recursive: true });
 const root = await mkdtemp(join(tmpdir(), 'browserpaw-v5-live-'));
@@ -20,11 +21,14 @@ const env = {
   BROWSERPAW_HOME: join(root, 'data'),
   BROWSERPAW_NO_UPDATE_CHECK: '1',
   HOME: root,
+  TMPDIR: root,
+  TEMP: root,
+  TMP: root,
   APPDATA: join(root, 'AppData'),
   ...(process.platform === 'win32' ? { USERPROFILE: root } : {}),
 };
-const registration =
-  'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpaw.nativehost';
+const productionHost = 'com.browserpaw.nativehost';
+const registration = 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\' + productionHost;
 const report = { status: 'failed', checks: [], startedAt: new Date().toISOString() };
 let browser;
 let registered = false;
@@ -52,6 +56,10 @@ const fixture = createServer((request, response) => {
   if (request.url === '/frame') {
     response.setHeader('content-type', 'text/html; charset=utf-8');
     return response.end('<label>Frame input <input id="inner"></label>');
+  }
+  if (request.url === '/debug-json') {
+    response.setHeader('content-type', 'application/json');
+    return response.end(JSON.stringify({ fixture: 'native-response' }));
   }
   response.setHeader('content-type', 'text/html; charset=utf-8');
   response.end(`<!doctype html><meta charset="utf-8"><title>BrowserPaw test</title>
@@ -153,11 +161,34 @@ try {
       ({ stdout }) => /REG_SZ\s+[^\r\n]+\.json\s*$/i.test(stdout.trim()),
       () => false,
     );
-    assert.equal(
-      existing,
-      false,
-      'Run the live fixture on a Windows account without a v5 registration.',
-    );
+    if (existing) {
+      const testHost = 'com.browserpaw.fixture_' + randomUUID().replaceAll('-', '');
+      const portProbe = createServer();
+      portProbe.listen(0, '127.0.0.1');
+      await once(portProbe, 'listening');
+      const testPort = portProbe.address().port;
+      await new Promise((resolve) => portProbe.close(resolve));
+      const isolated = join(root, 'package');
+      await cp(dirname(cli), isolated, { recursive: true });
+      cli = join(isolated, 'cli.cjs');
+      for (const [file, defaultPort] of [
+        [cli, 'DEFAULT_SERVER_PORT = 12307;'],
+        [join(isolated, 'host.cjs'), 'DEFAULT_SERVER_PORT = 12307;'],
+        [join(isolated, 'extension', 'background.js'), 'DEFAULT_PORT: 12307'],
+      ]) {
+        const source = await readFile(file, 'utf8');
+        assert.ok(source.includes(defaultPort), 'Missing default port in test bundle.');
+        await writeFile(
+          file,
+          source
+            .replaceAll(productionHost, testHost)
+            .replace(defaultPort, defaultPort.replace('12307', String(testPort))),
+        );
+      }
+      env.BROWSERPAW_PORT = String(testPort);
+      report.isolatedHostName = testHost;
+      report.isolatedPort = testPort;
+    }
   }
   registered = true;
   const setup = await run('setup', ['setup']);
@@ -210,6 +241,137 @@ try {
   const taskId = start.task.id;
   const task = (label, args, code) => run(label, [...args, '--task', taskId], code);
   const opened = await task('task-open', ['open', url]);
+  const history = await run('history-search', ['history', 'search', url, '--since', '1h']);
+  assert.ok(history.items.some((item) => item.url?.startsWith(url)));
+  const top = await run('history-top', ['history', 'top', '--since', '1h']);
+  assert.ok(top.domains.some((item) => item.domain === '127.0.0.1' && item.visits > 0));
+  const folder = await run('bookmark-mkdir', ['bookmark', 'mkdir', 'BrowserPaw E2E']);
+  const added = await run('bookmark-add', [
+    'bookmark',
+    'add',
+    url,
+    '--title',
+    'BrowserPaw E2E link',
+    '--folder',
+    folder.id,
+  ]);
+  await run('bookmark-add-duplicate', ['bookmark', 'add', url, '--folder', folder.id]);
+  const duplicates = await run('bookmark-dedupe-preview', [
+    'bookmark',
+    'dedupe',
+    '--folder',
+    folder.id,
+  ]);
+  assert.equal(duplicates.groups.length, 1);
+  const deduped = await run('bookmark-dedupe-apply', [
+    'bookmark',
+    'dedupe',
+    '--folder',
+    folder.id,
+    '--apply',
+  ]);
+  assert.equal(deduped.removed.length, 1);
+  assert.equal(duplicates.groups[0].keep, added.bookmark.id);
+  const subfolder = await run('bookmark-subfolder', [
+    'bookmark',
+    'mkdir',
+    'Archive',
+    '--folder',
+    folder.id,
+  ]);
+  await run('bookmark-move', ['bookmark', 'mv', added.bookmark.id, '--folder', subfolder.id]);
+  await run('bookmark-rename', [
+    'bookmark',
+    'rename',
+    added.bookmark.id,
+    'BrowserPaw E2E archived',
+  ]);
+  const found = await run('bookmark-search', ['bookmark', 'search', 'BrowserPaw E2E archived']);
+  assert.equal(found.items[0].parentId, subfolder.id);
+  const exported = await run('bookmark-export', [
+    'bookmark',
+    'export',
+    '--out',
+    join(root, 'bookmarks.html'),
+    '--folder',
+    folder.id,
+    '--format',
+    'html',
+  ]);
+  assert.match(
+    await readFile(exported.outputPath, 'utf8'),
+    /NETSCAPE-Bookmark-file-1[\s\S]*BrowserPaw E2E archived/,
+  );
+  await run('bookmark-cleanup', ['bookmark', 'rm', folder.id, '--recursive']);
+  await task('storage-set', ['storage', 'set', 'browserpaw-fixture', 'ready']);
+  const stored = await task('storage-get', ['storage', 'get', 'browserpaw-fixture']);
+  assert.equal(stored.value, 'ready');
+  await task('storage-rm', ['storage', 'rm', 'browserpaw-fixture']);
+  await run('cookie-set', ['cookies', 'set', url, 'browserpaw_fixture', 'ready']);
+  const cookies = await run('cookies-list', ['cookies', 'list', '--url', url]);
+  const cookie = cookies.items.find((item) => item.name === 'browserpaw_fixture');
+  assert.ok(cookie && !Object.hasOwn(cookie, 'value'));
+  await run('cookie-rm', ['cookies', 'rm', url, 'browserpaw_fixture']);
+  const tabsByTitle = await run('tabs-search', ['tabs', 'BrowserPaw test', '--limit', '10']);
+  assert.ok(tabsByTitle.tabs.some((item) => item.tabId === opened.tabId));
+  const tabsByContent = await run('tabs-content-search', ['tabs', 'Public name', '--content']);
+  assert.ok(tabsByContent.tabs.some((item) => item.tabId === opened.tabId && item.snippet));
+  const separate = await run('window-open', ['window', 'open', url + '/window', '--background']);
+  assert.ok(separate.tabId && separate.windowId && separate.created);
+  const windowList = await run('window-list', ['window', 'list']);
+  assert.ok(windowList.windows.some((item) => item.windowId === separate.windowId));
+  const grouped = await run('group-create', [
+    'group',
+    'create',
+    String(separate.tabId),
+    '--title',
+    'Fixture',
+  ]);
+  await run('group-list', ['group', 'list', '--window', String(separate.windowId)]);
+  await run('group-ungroup', ['group', 'ungroup', String(separate.tabId)]);
+  assert.ok(grouped.group.id);
+  assert.equal(grouped.group.windowId, separate.windowId);
+  await run('window-close', ['window', 'close', String(separate.windowId)]);
+  const links = await task('text-links', ['text', '--links']);
+  assert.ok(links.links.some((link) => link.url === url + '/file'));
+  const scrolled = await task('scroll-until', ['scroll', '--selector', '#reveal', '--max', '2']);
+  assert.equal(scrolled.found, true);
+  const metrics = await task('performance-metrics', ['perf', 'metrics']);
+  assert.ok(metrics.metrics && Object.keys(metrics.metrics).length > 0);
+  await task('perf-trace-start', ['perf', 'trace', 'start']);
+  await task('perf-trace-activity', ['eval', 'document.title']);
+  const trace = await task('perf-trace-stop', [
+    'perf',
+    'trace',
+    'stop',
+    '--out',
+    join(root, 'trace.json'),
+  ]);
+  assert.ok(JSON.parse(await readFile(trace.outputPath, 'utf8')));
+  await task('network-body-start', ['network', 'start', '--bodies', '--filter', '/debug-json']);
+  await task('network-body-request', ['eval', 'fetch("/debug-json").then(r => r.json())']);
+  await delay(400);
+  const captured = await task('network-body-list', ['network', 'list', '--status', '200']);
+  const request = captured.requests.find((entry) => entry.url === url + '/debug-json');
+  assert.ok(request, 'Expected a captured fixture response.');
+  const responseBody = await task('network-body-export', [
+    'network',
+    'show',
+    String(request.id),
+    '--out',
+    join(root, 'response.json'),
+  ]);
+  assert.equal(
+    JSON.parse(await readFile(responseBody.outputPath, 'utf8')).fixture,
+    'native-response',
+  );
+  await task('network-body-stop', ['network', 'stop']);
+  await task('emulate-viewport', ['emulate', '--viewport', '420x700']);
+  const viewport = await task('emulate-read-width', ['eval', 'innerWidth']);
+  assert.equal(Number(viewport.result), 420);
+  await task('emulate-reset', ['emulate', 'reset']);
+  const pdf = await task('print-pdf', ['pdf', '--out', join(root, 'page.pdf')]);
+  assert.equal((await readFile(pdf.outputPath)).subarray(0, 4).toString(), '%PDF');
   const ownedTabId = opened.task.currentTabId;
   let observed = await task('observe', ['observe']);
   const lookup = (label) => {

@@ -4,7 +4,11 @@ Run `pnpm install --frozen-lockfile` and `pnpm verify`. Use `BROWSERPAW_EXTENSIO
 
 The shared command registry drives help and generated Markdown. After editing it, run `pnpm build:shared`, `pnpm docs:commands`, and `node scripts/sync-skills.mjs`. Edit the Skill in the canonical directory.
 
-Run `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` pointing to Chrome for Testing. The fixture uses an isolated Chrome profile, Native state, and fixture pages. On Windows it creates a temporary v5 registration and removes its manifest afterwards. Point `BROWSERPAW_TEST_CLI` at an extracted npm package CLI to verify the packaged runtime. The runtime report records the build ID read from Chrome.
+Run `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` pointing to Chrome for Testing. The fixture uses an isolated Chrome profile, Native state, and fixture pages. On Windows it creates a temporary registration and removes its manifest afterwards. If the production key already exists, the fixture uses a unique host name in its copied CLI and extension and records that substitution. Point `BROWSERPAW_TEST_CLI` at an extracted npm package CLI to verify the packaged runtime. The runtime report records the build ID read from Chrome.
+
+Add commands to the shared registry, route them through the Native dispatcher, and reuse the existing extension executor where it fits. Add an example to offline help and a focused test for the behavior. Regenerate the command reference and skill mirrors with `pnpm docs:commands` and `node scripts/sync-skills.mjs`.
+
+Chrome serializes `scripting.executeScript({ func })` without its surrounding module. Keep inline functions self-contained and check the built extension when changing them. For example, object spread can introduce a build helper that is absent on the page after serialization. Use the existing in-page engine for functions that need imports or shared helpers.
 
 Change shared browser behavior through existing locator, task, or extension executors. Preserve task ownership, document identity, framed Native stdout, and unknown dispatch receipts. Retain source and build evidence until the candidate has been verified.
 

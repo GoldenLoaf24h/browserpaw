@@ -4,7 +4,6 @@ import {
   inPageFillIndex,
   inPageInsertMedia,
 } from '../entrypoints/background/tools/browser/dom-indexer';
-import { InsertMediaTool } from '../entrypoints/background/tools/browser/insert-media';
 
 describe('Production Boost: Priority Scroll, Multiline Newlines, and Media Injection', () => {
   describe('1. Priority Scroll Engine (inPageFindSmartScrollTarget)', () => {
@@ -244,7 +243,7 @@ describe('Production Boost: Priority Scroll, Multiline Newlines, and Media Injec
     });
   });
 
-  describe('3. Native Media Injection (inPageInsertMedia & InsertMediaTool)', () => {
+  describe('3. Native Media Injection (inPageInsertMedia)', () => {
     it('dispatches paste and drop events with real DataTransfer and File objects', () => {
       const composer = document.createElement('div');
       composer.setAttribute('contenteditable', 'true');
@@ -280,42 +279,6 @@ describe('Production Boost: Priority Scroll, Multiline Newlines, and Media Injec
         expect(fileReceived?.type).toBe('image/png');
       } finally {
         composer.remove();
-      }
-    });
-
-    it('InsertMediaTool requires one of filePath, fileUrl, mediaUrl, or base64Data', async () => {
-      const tool = new InsertMediaTool();
-      (tool as any).resolveAffinityTab = vi.fn().mockResolvedValue({ id: 123 });
-
-      const res = await tool.execute({});
-      expect(res.isError).toBe(true);
-      expect((res.content[0] as any).text).toContain(
-        'One of filePath, fileUrl, mediaUrl, or base64Data must be provided',
-      );
-    });
-
-    it('InsertMediaTool downloads and injects streamed media from mediaUrl', async () => {
-      const tool = new InsertMediaTool();
-      (tool as any).resolveAffinityTab = vi.fn().mockResolvedValue({ id: 123 });
-
-      const fakeArrayBuffer = new Uint8Array([105, 109, 97, 103, 101]).buffer;
-      const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        headers: new Headers({ 'content-type': 'image/png' }),
-        arrayBuffer: async () => fakeArrayBuffer,
-      } as any);
-
-      try {
-        // Execute with mediaUrl
-        const res = await tool.execute({
-          mediaUrl: 'http://127.0.0.1:12306/media-asset/fake-id',
-          fileName: 'large-4k-diagram.png',
-        });
-        // In JSDOM without inPage engine, outcome handles error response gracefully
-        expect(global.fetch).toHaveBeenCalledWith('http://127.0.0.1:12306/media-asset/fake-id');
-      } finally {
-        global.fetch = originalFetch;
       }
     });
   });

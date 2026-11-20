@@ -7,6 +7,8 @@ description: Control the user's Chrome or Chromium through the BrowserPaw CLI an
 
 Run `browserpaw status` to confirm the host and extension are connected. Use `browserpaw help` and `browserpaw help COMMAND` to discover syntax at the installed version. If setup is needed, use [troubleshooting](references/TROUBLESHOOTING.md).
 
+For browser history, bookmarks, or site storage, use `browserpaw help data` and [browser data](references/browser-data.md). For network, performance, or CDP work, use `browserpaw help debug` and [debugging](references/debugging.md).
+
 If the CLI reports an update on stderr, tell the user once. Finish the current task before upgrading. Run `browserpaw setup` with the new CLI to refresh the host and its managed base Skills. Ask the user to download, unpack, and load the matching Chrome extension ZIP, then verify with `browserpaw status`. Update plugin-bundled Skills through their Agent's plugin manager.
 
 For an npx-only installation, use `npx --yes browserpaw@5.0.0` in place of `browserpaw` throughout.

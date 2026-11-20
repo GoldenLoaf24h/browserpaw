@@ -193,11 +193,11 @@ export class Server {
     } catch (error) {
       throw new CommandError(error instanceof Error ? error.message : String(error));
     }
-    const key = commandLockKey(command.options);
+    const key = commandLockKey(command.options, command.name);
     if (this.requests.has(requestId) || (key && this.context.has(key)))
       return send(reply, 409, {
         code: 'busy',
-        message: 'A command is already running for this page or task.',
+        message: 'A command is already running for this page, task, or profile command group.',
       });
     const controller = new AbortController();
     const abort = () => controller.abort();

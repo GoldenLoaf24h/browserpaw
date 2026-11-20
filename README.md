@@ -37,6 +37,8 @@ See [Plugin Compatibility & Spec Boundaries](docs/development/PLUGIN_COMPATIBILI
 
 ## Run
 
+Use `browserpaw help data` for history, bookmarks, downloads, storage and cookies. Use `browserpaw help debug` for network capture, console, performance, device emulation, PDF and CDP.
+
 ```text
 browserpaw status
 browserpaw help

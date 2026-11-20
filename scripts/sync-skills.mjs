@@ -122,6 +122,8 @@ function frontmatter(text) {
 function assertCanonical(root) {
   const skillPath = path.join(root, canonicalDir, 'SKILL.md');
   if (!fs.existsSync(skillPath)) throw new Error('Canonical skills/browserpaw/SKILL.md is missing');
+  if (fs.statSync(skillPath).size > 6 * 1024)
+    throw new Error('Keep the base Skill under 6 KiB and move detailed workflows into references.');
   if (!/^name:\s*browserpaw\s*$/m.test(frontmatter(fs.readFileSync(skillPath, 'utf8')))) {
     throw new Error('Canonical SKILL.md frontmatter must declare name: browserpaw');
   }

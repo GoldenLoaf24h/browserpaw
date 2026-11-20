@@ -45,9 +45,9 @@ export class TabGroupCreateTool extends BaseBrowserToolExecutor {
       };
       if (typeof args.groupId === 'number' && args.groupId > 0) {
         groupOptions.groupId = args.groupId;
-      }
-      if (typeof args.windowId === 'number' && args.windowId > 0) {
-        groupOptions.createProperties = { windowId: args.windowId };
+      } else {
+        const windowId = args.windowId ?? (await chrome.tabs.get(args.tabIds[0])).windowId;
+        groupOptions.createProperties = { windowId };
       }
 
       const groupId = await chrome.tabs.group(groupOptions);
@@ -213,9 +213,6 @@ export class TabGroupUngroupTool extends BaseBrowserToolExecutor {
 
     try {
       await chrome.tabs.ungroup(args.tabIds);
-      for (const tabId of args.tabIds) {
-        await tabGroupManager.releaseAgentTab(tabId);
-      }
       await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
       setTimeout(() => {
         tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
@@ -268,13 +265,24 @@ export class TabGroupCloseTool extends BaseBrowserToolExecutor {
         return createErrorResponse(`Tab group with ID ${args.groupId} does not exist`);
       }
 
+      if (!(await tabGroupManager.isManagedGroup(args.groupId)))
+        return createErrorResponse('Only groups managed by BrowserPaw can be closed.');
       const tabs = await chrome.tabs.query({ groupId: args.groupId });
       const tabIds = tabs.map((t) => t.id).filter((id): id is number => typeof id === 'number');
-
-      await tabGroupManager.closeManagedGroup(args.groupId);
-      setTimeout(() => {
-        tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-      }, 150);
+      if (!(await tabGroupManager.closeManagedGroup(args.groupId)))
+        return {
+          content: [],
+          isError: true,
+          structuredContent: {
+            status: 'unknown',
+            success: false,
+            requestDispatched: true,
+            retry: false,
+            error: 'The group close could not be confirmed. Inspect tabs before acting again.',
+          },
+        };
+      const remaining = new Set((await chrome.tabs.query({})).map((tab) => tab.id));
+      const closedTabIds = tabIds.filter((id) => !remaining.has(id));
 
       return {
         content: [
@@ -283,10 +291,11 @@ export class TabGroupCloseTool extends BaseBrowserToolExecutor {
             text: JSON.stringify(
               {
                 success: true,
-                message: `Successfully closed tab group ${args.groupId} (${tabIds.length} tab(s) closed)`,
+                message: `Closed managed tab group ${args.groupId}`,
                 groupId: args.groupId,
-                closedTabCount: tabIds.length,
-                closedTabIds: tabIds,
+                closedTabCount: closedTabIds.length,
+                closedTabIds,
+                preservedTabIds: tabIds.filter((id) => remaining.has(id)),
               },
               null,
               2,

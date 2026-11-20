@@ -182,9 +182,9 @@ export const TOOL_NAMES = {
     NETWORK_REQUEST: 'chrome_network_request',
     KEYBOARD: 'chrome_keyboard',
     HISTORY: 'chrome_history',
-    BOOKMARK_SEARCH: 'chrome_bookmark_search',
-    BOOKMARK_ADD: 'chrome_bookmark_add',
-    BOOKMARK_DELETE: 'chrome_bookmark_delete',
+    BOOKMARKS: 'chrome_bookmarks',
+    DOWNLOADS: 'chrome_downloads',
+    COOKIES: 'chrome_cookies',
     JAVASCRIPT: 'chrome_javascript',
     CONSOLE: 'chrome_console',
     FILE_UPLOAD: 'chrome_upload_file',
@@ -200,19 +200,14 @@ export const TOOL_NAMES = {
     BATCH_ACTIONS: 'chrome_batch_actions',
     GET_MARKDOWN: 'chrome_get_markdown',
     GET_DROPDOWN_OPTIONS: 'chrome_get_dropdown_options',
-    MOVE_TAB: 'chrome_move_tab',
     TAB_GROUP_CREATE: 'chrome_tab_group_create',
     TAB_GROUP_UPDATE: 'chrome_tab_group_update',
     TAB_GROUP_LIST: 'chrome_tab_group_list',
     TAB_GROUP_UNGROUP: 'chrome_tab_group_ungroup',
     TAB_GROUP_CLOSE: 'chrome_tab_group_close',
-    ATTACH_TAB: 'chrome_attach_tab',
-    DETACH_TAB: 'chrome_detach_tab',
-    BURST_INTERACT: 'chrome_burst_interact',
     SMART_SCROLL: 'chrome_smart_scroll',
     STORAGE: 'chrome_storage',
     GET_LINKS: 'chrome_get_links',
-    TOOL_DOCS: 'chrome_tool_docs',
     INSPECT_MEDIA: 'chrome_inspect_media',
     REQUEST_HUMAN_INTERVENTION: 'chrome_request_human_intervention',
     UNDO_LAST_ACTION: 'chrome_undo_last_action',
@@ -221,7 +216,6 @@ export const TOOL_NAMES = {
     CDP_EXECUTE: 'chrome_cdp_execute',
     GREP: 'chrome_grep',
     FORM_PIPELINE: 'chrome_form_pipeline',
-    INSERT_MEDIA: 'chrome_insert_media',
     DISMISS_OVERLAY: 'chrome_dismiss_overlay',
     SCROLL_UNTIL_FOUND: 'chrome_scroll_until_found',
   },
@@ -232,6 +226,30 @@ export const TOOL_NAMES = {
 };
 
 export const RAW_TOOL_SCHEMAS: Tool[] = [
+  ...[
+    [TOOL_NAMES.BROWSER.HISTORY, 'Read or remove visited URLs.'],
+    [TOOL_NAMES.BROWSER.BOOKMARKS, 'Read or organize bookmarks.'],
+    [TOOL_NAMES.BROWSER.DOWNLOADS, 'Read or manage Chrome download entries.'],
+    [TOOL_NAMES.BROWSER.COOKIES, 'Read or edit cookies in the profile.'],
+    [TOOL_NAMES.BROWSER.STORAGE, 'Read or edit the selected document storage.'],
+    ['chrome_debug', 'Run a scoped browser diagnostic.'],
+    ['chrome_page', 'Manage explicitly selected tabs and windows or read page data.'],
+    [TOOL_NAMES.BROWSER.TAB_GROUP_LIST, 'List tab groups.'],
+    [TOOL_NAMES.BROWSER.TAB_GROUP_CREATE, 'Group selected tabs.'],
+    [TOOL_NAMES.BROWSER.TAB_GROUP_UPDATE, 'Update an explicit tab group.'],
+    [TOOL_NAMES.BROWSER.TAB_GROUP_UNGROUP, 'Ungroup selected tabs.'],
+    [TOOL_NAMES.BROWSER.TAB_GROUP_CLOSE, 'Close an eligible explicit tab group.'],
+    [TOOL_NAMES.BROWSER.INSPECT_MEDIA, 'Inspect a page media element.'],
+    [TOOL_NAMES.BROWSER.DISMISS_OVERLAY, 'Dismiss overlays on the selected page.'],
+  ].map(([name, description]) => ({
+    name,
+    description,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { action: { type: 'string' } },
+      required: ['action'],
+    },
+  })),
   {
     name: TOOL_NAMES.NATIVE.TASK,
     annotations: {
@@ -714,7 +732,7 @@ export const RAW_TOOL_SCHEMAS: Tool[] = [
         formData: {
           type: 'object',
           description:
-            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:. Note: filePath and the file: spec are read through the native host, which only accepts files strictly inside its temp directory (<os.tmpdir()>/chrome-mcp-uploads) and at most 700KB (Native Messaging 1MB pipe, base64 inflates binary by 33%). For arbitrary local paths use chrome_upload_file or chrome_insert_media.',
+            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:. Note: filePath and the file: spec are read through the native host, which only accepts files strictly inside its temp directory (<os.tmpdir()>/chrome-mcp-uploads) and at most 700KB (Native Messaging 1MB pipe, base64 inflates binary by 33%). For arbitrary local paths use chrome_upload_file.',
         },
         tabId: {
           type: 'number',
