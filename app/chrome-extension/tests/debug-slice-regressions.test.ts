@@ -311,6 +311,20 @@ describe('debug slice CDP actions', () => {
         'Network.emulateNetworkConditions',
       ]),
     );
+
+    send.mockImplementation(async (_tabId, method) => {
+      if (method === 'Emulation.setTimezoneOverride') {
+        throw new Error(
+          '{"code":-32000,"message":"Timezone override is only available to trusted clients"}',
+        );
+      }
+      return {};
+    });
+    const resetWithRestrictedTimezone = await debugTool.execute({
+      action: 'emulate_reset',
+      tabId: tab.id,
+    });
+    expect(resetWithRestrictedTimezone.isError).toBe(false);
   });
 
   it('prints PDF to a file-shaped result and exposes bytes only through Native output', async () => {

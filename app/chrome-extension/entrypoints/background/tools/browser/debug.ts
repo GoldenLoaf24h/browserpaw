@@ -200,6 +200,18 @@ class DebugTool extends BaseBrowserToolExecutor {
       }
       if (args.action === 'emulate' || args.action === 'emulate_reset') {
         const reset = args.action === 'emulate_reset';
+        const sendEmulationCommand = async (
+          method: string,
+          params?: Record<string, unknown>,
+        ) => {
+          try {
+            await cdpSessionManager.sendCommand(tabId, method, params);
+          } catch (error) {
+            if (!reset || !/only available to trusted clients/i.test(String(error))) {
+              throw error;
+            }
+          }
+        };
         if (
           reset ||
           args.width !== undefined ||
@@ -207,9 +219,9 @@ class DebugTool extends BaseBrowserToolExecutor {
           args.deviceScaleFactor !== undefined
         ) {
           if (reset)
-            await cdpSessionManager.sendCommand(tabId, 'Emulation.clearDeviceMetricsOverride');
+            await sendEmulationCommand('Emulation.clearDeviceMetricsOverride');
           else
-            await cdpSessionManager.sendCommand(tabId, 'Emulation.setDeviceMetricsOverride', {
+            await sendEmulationCommand('Emulation.setDeviceMetricsOverride', {
               width: args.width ?? tab.width ?? 1280,
               height: args.height ?? tab.height ?? 720,
               deviceScaleFactor: args.deviceScaleFactor ?? 1,
@@ -217,23 +229,23 @@ class DebugTool extends BaseBrowserToolExecutor {
             });
         }
         if (reset || args.colorScheme !== undefined)
-          await cdpSessionManager.sendCommand(tabId, 'Emulation.setEmulatedMedia', {
+          await sendEmulationCommand('Emulation.setEmulatedMedia', {
             features: reset ? [] : [{ name: 'prefers-color-scheme', value: args.colorScheme }],
           });
         if (reset || args.timezoneId !== undefined)
-          await cdpSessionManager.sendCommand(tabId, 'Emulation.setTimezoneOverride', {
+          await sendEmulationCommand('Emulation.setTimezoneOverride', {
             timezoneId: reset ? '' : args.timezoneId,
           });
         if (reset || args.locale !== undefined)
-          await cdpSessionManager.sendCommand(tabId, 'Emulation.setLocaleOverride', {
+          await sendEmulationCommand('Emulation.setLocaleOverride', {
             locale: reset ? undefined : args.locale,
           });
         if (reset || args.userAgent !== undefined)
-          await cdpSessionManager.sendCommand(tabId, 'Emulation.setUserAgentOverride', {
+          await sendEmulationCommand('Emulation.setUserAgentOverride', {
             userAgent: reset ? '' : args.userAgent,
           });
         if (reset || args.cpuRate !== undefined)
-          await cdpSessionManager.sendCommand(tabId, 'Emulation.setCPUThrottlingRate', {
+          await sendEmulationCommand('Emulation.setCPUThrottlingRate', {
             rate: reset ? 1 : args.cpuRate,
           });
         if (
@@ -243,7 +255,7 @@ class DebugTool extends BaseBrowserToolExecutor {
           args.downloadThroughput !== undefined ||
           args.uploadThroughput !== undefined
         )
-          await cdpSessionManager.sendCommand(tabId, 'Network.emulateNetworkConditions', {
+          await sendEmulationCommand('Network.emulateNetworkConditions', {
             offline: reset ? false : args.offline === true,
             latency: reset ? 0 : (args.latency ?? 0),
             downloadThroughput: reset ? -1 : (args.downloadThroughput ?? -1),

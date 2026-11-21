@@ -294,6 +294,18 @@ try {
   await mkdir(join(root, 'downloads'));
   if (process.platform === 'win32') {
     await mkdir(join(root, 'LocalAppData'), { recursive: true });
+  } else {
+    const linuxHosts = join(root, '.config', 'google-chrome', 'NativeMessagingHosts');
+    const macHosts = join(
+      root,
+      'Library',
+      'Application Support',
+      'Google',
+      'Chrome',
+      'NativeMessagingHosts',
+    );
+    const sourceHosts = existsSync(linuxHosts) ? linuxHosts : macHosts;
+    await cp(sourceHosts, join(root, 'profile', 'NativeMessagingHosts'), { recursive: true });
   }
   await writeFile(
     join(root, 'profile', 'Default', 'Preferences'),

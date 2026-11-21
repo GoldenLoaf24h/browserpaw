@@ -306,8 +306,10 @@ export function checkBuild(options = {}) {
 export function assertNoSymlink(p) {
   let curr = resolve(p);
   while (true) {
+    const isMacSystemRootLink =
+      process.platform === 'darwin' && (curr === '/var' || curr === '/tmp' || curr === '/etc');
     try {
-      if (lstatSync(curr).isSymbolicLink()) {
+      if (lstatSync(curr).isSymbolicLink() && !isMacSystemRootLink) {
         throw new Error('Security violation: symlink or junction forbidden: ' + curr);
       }
     } catch (e) {

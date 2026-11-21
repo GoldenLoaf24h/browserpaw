@@ -39,8 +39,11 @@ const learnedDescriptionPrefix = ' Learned workflows ready: ';
 function assertNoLinks(target: string): void {
   let current = path.resolve(target);
   while (true) {
+    const isMacSystemRootLink =
+      process.platform === 'darwin' &&
+      (current === '/var' || current === '/tmp' || current === '/etc');
     const stat = fs.lstatSync(current, { throwIfNoEntry: false });
-    if (stat?.isSymbolicLink()) {
+    if (stat?.isSymbolicLink() && !isMacSystemRootLink) {
       throw new Error(`Refusing symlink or junction in target path: ${current}`);
     }
     const parent = path.dirname(current);
