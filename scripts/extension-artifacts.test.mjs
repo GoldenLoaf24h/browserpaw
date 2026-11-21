@@ -21,9 +21,10 @@ import {
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const scriptPath = path.join(repoRoot, 'scripts', 'extension-artifacts.mjs');
+const tempRoot = fs.realpathSync(os.tmpdir());
 
 function createFixtureSandbox() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-artifacts-test-'));
+  const root = fs.mkdtempSync(path.join(tempRoot, 'paw-artifacts-test-'));
   const extSrc = path.join(root, 'app', 'chrome-extension');
   const sharedSrc = path.join(root, 'packages', 'shared', 'src');
   const outDir = path.join(extSrc, '.output', 'chrome-mv3');
@@ -286,7 +287,7 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
 // 5. Deploy & CheckDeployment with verification gate evidence checks and negative counterexamples
 {
   const { root, outDir } = createFixtureSandbox();
-  const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paw-deploy-target-'));
+  const targetDir = fs.mkdtempSync(path.join(tempRoot, 'paw-deploy-target-'));
   try {
     const buildInfo = createBuildInfo({ repoRoot: root });
     writeBuildProvenance(outDir, buildInfo);
