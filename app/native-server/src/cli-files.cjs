@@ -7,10 +7,11 @@ const STALE_LOCK_AGE_MS = 10 * 60 * 1000;
 function assertNoLinks(target) {
   let current = path.resolve(target);
   for (;;) {
-    const isMacSystemRootLink =
-      process.platform === 'darwin' &&
-      (current === '/var' || current === '/tmp' || current === '/etc');
     const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+    const isMacSystemRootLink =
+      stat?.isSymbolicLink() &&
+      (current === '/var' || current === '/tmp' || current === '/etc') &&
+      path.resolve(path.dirname(current), fs.readlinkSync(current)) === `/private${current}`;
     if (stat?.isSymbolicLink() && !isMacSystemRootLink)
       throw new Error(`Symlink or junction forbidden: ${current}`);
     const parent = path.dirname(current);

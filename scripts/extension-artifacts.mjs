@@ -7,6 +7,7 @@ import {
   writeFileSync,
   cpSync,
   lstatSync,
+  readlinkSync,
   realpathSync,
 } from 'node:fs';
 import { resolve, join, relative, dirname, sep, isAbsolute } from 'node:path';
@@ -306,10 +307,13 @@ export function checkBuild(options = {}) {
 export function assertNoSymlink(p) {
   let curr = resolve(p);
   while (true) {
-    const isMacSystemRootLink =
-      process.platform === 'darwin' && (curr === '/var' || curr === '/tmp' || curr === '/etc');
     try {
-      if (lstatSync(curr).isSymbolicLink() && !isMacSystemRootLink) {
+      const stat = lstatSync(curr, { throwIfNoEntry: false });
+      const isMacSystemRootLink =
+        stat?.isSymbolicLink() &&
+        (curr === '/var' || curr === '/tmp' || curr === '/etc') &&
+        resolve(dirname(curr), readlinkSync(curr)) === `/private${curr}`;
+      if (stat?.isSymbolicLink() && !isMacSystemRootLink) {
         throw new Error('Security violation: symlink or junction forbidden: ' + curr);
       }
     } catch (e) {
