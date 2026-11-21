@@ -844,7 +844,11 @@ try {
   const statusAfterSetup = await run('setup-leaves-loaded-extension-running', ['status']);
   assert.equal(statusAfterSetup.pid, restarted.pid);
   assert.equal(statusAfterSetup.extension.buildId, build.buildId);
-  await run('unowned-close', ['tab', 'close', String(external.tabId)]);
+  const unownedCloseTarget = await run('open-unowned-close-target', [
+    'open',
+    url + '/cleanup-target',
+  ]);
+  await run('unowned-close', ['tab', 'close', String(unownedCloseTarget.tabId)]);
   report.status = 'passed';
 } finally {
   fixture.close();
