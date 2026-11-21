@@ -53,7 +53,10 @@ def test_handler_validates_args_and_reports_missing_cli(monkeypatch):
 
 
 def test_handler_invokes_cli_without_shell_and_appends_media(monkeypatch, tmp_path):
-    shot = tmp_path / "capture.png"
+    request_id = "61fd9a5a-9e6b-4643-aaed-41fdc9d99afb"
+    monkeypatch.setenv("BROWSERPAW_HOME", str(tmp_path))
+    shot = tmp_path.resolve() / "out" / "misc" / request_id / "item-1.png"
+    shot.parent.mkdir(parents=True)
     shot.write_bytes(b"\x89PNG\r\n\x1a\n")
 
     captured = {}
@@ -63,7 +66,14 @@ def test_handler_invokes_cli_without_shell_and_appends_media(monkeypatch, tmp_pa
         captured["kwargs"] = kwargs
         return SimpleNamespace(
             returncode=0,
-            stdout=json.dumps({"ok": True, "data": {"path": str(shot)}}),
+            stdout=json.dumps({
+                "ok": True,
+                "command": cmd[cmd.index("--json") + 1] if cmd[1] == "--json" else cmd[1],
+                "requestId": request_id,
+                "data": {"content": [{
+                    "type": "artifact_ref", "originalType": "image", "path": str(shot)
+                }]},
+            }),
             stderr="",
         )
 
@@ -84,3 +94,16 @@ def test_handler_invokes_cli_without_shell_and_appends_media(monkeypatch, tmp_pa
     assert captured["cmd"] == ["/usr/local/bin/browserpaw", "screenshot", "--out", str(shot), "--json"]
     assert captured["kwargs"]["shell"] is False
     assert any(line == f"MEDIA:{shot.resolve()}" for line in lines[1:])
+    assert "MEDIA:" not in handler({"args": ["eval", "fixture", "--json"]})
+    assert "MEDIA:" in handler({"args": ["screenshot"]})
+
+
+def test_ignores_arbitrary_and_outside_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("BROWSERPAW_HOME", str(tmp_path / "managed"))
+    image = tmp_path / "item-1.png"
+    image.write_bytes(b"fixture")
+    assert plugin._extract_media_paths(str(image)) == []
+    assert plugin._extract_media_paths(json.dumps({
+        "ok": True, "command": "screenshot", "requestId": "61fd9a5a-9e6b-4643-aaed-41fdc9d99afb",
+        "data": {"content": [{"type": "artifact_ref", "originalType": "image", "path": str(image)}]},
+    })) == []

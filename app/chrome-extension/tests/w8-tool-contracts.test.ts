@@ -26,6 +26,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
   describe('QUAL-05 & TOOL-01 (Part 2): chrome_scroll_until_found maxSteps clamp, role filter, actionOnFound', () => {
     it('QUAL-05: clamps maxSteps to 30 when user specifies 40 in scrolling container', async () => {
       const container = document.createElement('div');
+      container.id = 'bounded-scroll';
       let curScrollTop = 0;
       Object.defineProperty(container, 'scrollTop', {
         get: () => curScrollTop,
@@ -40,6 +41,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
 
       const res = await inPageScrollUntilFound({
         query: 'never_find_me_token',
+        containerSelector: '#bounded-scroll',
         maxSteps: 40,
         stepPx: 100,
         settleMs: 0,
@@ -47,6 +49,7 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
       });
 
       expect(res.stepsTaken).toBe(30);
+      expect(res.scrolledPx).toBe(3000);
       container.remove();
     });
 
@@ -301,23 +304,21 @@ describe('W8 Contract & Screenshot Regression Tests', () => {
     });
   });
 
-  describe('TOOL-02 & QUAL-05: tool annotations and descriptions', () => {
-    it('TOOL-02: read_dom annotations reflect default read-only perception (readOnlyHint: true, destructiveHint: false, idempotentHint: true)', () => {
+  describe('Execution contracts', () => {
+    it('keeps runtime schema fields without MCP presentation metadata', () => {
       const readDomSchema = TOOL_SCHEMAS.find((s) => s.name === 'chrome_read_dom');
-      expect(readDomSchema).toBeDefined();
-      expect(readDomSchema?.annotations?.readOnlyHint).toBe(true);
-      expect(readDomSchema?.annotations?.destructiveHint).toBe(false);
-      expect(readDomSchema?.annotations?.idempotentHint).toBe(true);
-      expect(readDomSchema?.description).toContain(
-        'Optional dismissOverlays closes modals and removes overlay elements.',
-      );
-    });
-
-    it('QUAL-05: console tool description accurately describes ~50ms settle instead of ~2s', () => {
       const consoleSchema = TOOL_SCHEMAS.find((s) => s.name === 'chrome_console');
-      expect(consoleSchema).toBeDefined();
-      expect(consoleSchema?.description).toContain('~50ms');
-      expect(consoleSchema?.description).not.toContain('~2s');
+      expect(readDomSchema?.inputSchema.properties?.dismissOverlays).toEqual({
+        type: 'boolean',
+      });
+      expect(consoleSchema?.inputSchema.properties?.mode?.enum).toEqual([
+        'snapshot',
+        'buffer',
+        'stop',
+      ]);
+      expect(readDomSchema?.annotations).toBeUndefined();
+      expect(readDomSchema?.description).toBeUndefined();
+      expect(consoleSchema?.description).toBeUndefined();
     });
   });
 });

@@ -3,7 +3,7 @@ import { resolveTargetLocation as baseResolveTargetLocation } from '../utils/uni
 import * as engine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as locator from '../entrypoints/background/tools/browser/unified-locator';
 import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
-import { clickTool, fillTool } from '../entrypoints/background/tools/browser/interaction';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
@@ -390,92 +390,6 @@ describe('explicit frame routing', () => {
         action: 'double_click',
       }),
       undefined,
-    );
-  });
-
-  it('delegates legacy fills to the physical fill core and preserves the resolved frame', async () => {
-    vi.spyOn(fillTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
-    const sendMessage = vi
-      .spyOn(fillTool as any, 'sendMessageToTab')
-      .mockResolvedValue({ success: true, ref: 'ref_1' });
-    vi.spyOn(locator, 'resolveTargetLocation').mockResolvedValue({
-      success: true,
-      x: 30,
-      y: 40,
-      index: 5,
-      frameId: 71,
-      resolutionPath: 'ref',
-      tagName: 'input',
-    } as any);
-    vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _tag, fn) =>
-      fn({} as any),
-    );
-    vi.spyOn(cdpSessionManager, 'sendCommand').mockResolvedValue({});
-    vi.spyOn(agentCursor, 'animateAgentCursor').mockResolvedValue(undefined as any);
-    vi.spyOn(agentCursor, 'animateAgentCursorClick').mockResolvedValue(undefined as any);
-    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'value',
-      isTrusted: true,
-      method: 'cdp_native',
-    });
-
-    const result = await fillTool.execute({
-      tabId: tab.id,
-      frameId: 71,
-      selector: '//input',
-      selectorType: 'xpath',
-      value: 'value',
-    });
-
-    expect(result.isError).toBe(false);
-    expect(sendMessage).toHaveBeenCalledWith(
-      tab.id,
-      expect.objectContaining({ selector: '//input', isXPath: true }),
-      71,
-    );
-    expect(fill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tabId: tab.id,
-        frameId: 71,
-        target: 5,
-        text: 'value',
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps coordinate-only legacy fill on the physical fill executor', async () => {
-    vi.spyOn(fillTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
-    vi.spyOn(locator, 'resolveTargetLocation').mockResolvedValue({
-      success: true,
-      x: 30,
-      y: 40,
-      frameId: 0,
-      resolutionPath: 'coordinate',
-    } as any);
-    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'value',
-      isTrusted: true,
-      method: 'cdp_native',
-    });
-
-    const result = await fillTool.execute({
-      tabId: tab.id,
-      coordinate: { x: 30, y: 40 },
-      value: 'value',
-    });
-
-    expect(result.isError).toBe(false);
-    expect(fill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tabId: tab.id,
-        target: '',
-        coordinate: { x: 30, y: 40 },
-      }),
     );
   });
 

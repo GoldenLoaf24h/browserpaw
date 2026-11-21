@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   deepElementFromPoint,
   interceptingElementAtPoint,
@@ -8,18 +6,7 @@ import {
 } from '../entrypoints/background/tools/browser/dom-indexer';
 
 describe('Shadow Root Visibility & Helper Suite', () => {
-  let messageListeners: Array<(req: any, sender: any, sendResponse: any) => any> = [];
-
   beforeEach(() => {
-    messageListeners = [];
-    (globalThis as any).chrome = {
-      runtime: {
-        onMessage: {
-          addListener: (fn: any) => messageListeners.push(fn),
-        },
-      },
-    };
-    (window as any).__WAIT_HELPER_INITIALIZED__ = false;
     if (!Element.prototype.scrollIntoView) {
       Element.prototype.scrollIntoView = () => {};
     }
@@ -28,44 +15,6 @@ describe('Shadow Root Visibility & Helper Suite', () => {
 
   afterEach(() => {
     document.body.innerHTML = '';
-  });
-
-  function loadHelper(helperFile: string) {
-    const filePath = path.resolve(__dirname, '../inject-scripts', helperFile);
-    const code = fs.readFileSync(filePath, 'utf-8');
-    // Execute helper in current jsdom window context
-    (0, eval)(code);
-  }
-
-  async function sendMessage(action: string, payload: Record<string, any> = {}): Promise<any> {
-    for (const listener of messageListeners) {
-      let result: any = null;
-      let answered = false;
-      const res = listener({ action, ...payload }, {}, (ans: any) => {
-        answered = true;
-        result = ans;
-      });
-      if (res === true || answered) {
-        for (let i = 0; i < 40; i++) {
-          if (answered) return result;
-          await new Promise((r) => setTimeout(r, 10));
-        }
-        return result;
-      }
-    }
-    return null;
-  }
-
-  describe('wait-helper.js message handling', () => {
-    it('answers ping and file-set ping actions', async () => {
-      loadHelper('wait-helper.js');
-
-      const pingRes = await sendMessage('wait_helper_ping');
-      expect(pingRes).toEqual({ status: 'pong' });
-
-      const mcpPingRes = await sendMessage('mcp_ping_test');
-      expect(mcpPingRes).toEqual({ status: 'pong' });
-    });
   });
 
   describe('active shadow DOM piercing and occlusion behavior', () => {

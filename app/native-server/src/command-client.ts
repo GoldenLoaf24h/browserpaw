@@ -15,6 +15,7 @@ import {
 import type { ParsedCommand } from 'chrome-mcp-shared';
 import { checkForCliUpdate } from './cli-update';
 import { readBridgeToken } from './server/token';
+import { pruneOutput } from './output-retention';
 
 type Fields = Record<string, unknown>;
 type Block = { type: string; text?: string; data?: string; mimeType?: string };
@@ -25,7 +26,8 @@ const outputRoot = () =>
 export function resultData(result: BackendResult): Fields | undefined {
   if (result.structuredContent) return result.structuredContent;
   for (const block of result.content ?? []) {
-    if (block.type !== 'text' || !block.text?.startsWith('{')) continue;
+    if (block.type !== 'text' || typeof block.text !== 'string' || !block.text.startsWith('{'))
+      continue;
     try {
       const data: unknown = JSON.parse(block.text);
       if (data && typeof data === 'object' && !Array.isArray(data)) return data as Fields;
@@ -237,6 +239,7 @@ async function saveOutput(result: BackendResult, command: ParsedCommand, request
       return {
         resultPath,
         artifacts: [...references.values()].slice(0, 12),
+        ...(view.outputPath ? { outputPath: view.outputPath } : {}),
         ...(view.captureId ? { captureId: view.captureId } : {}),
         ...(view.task ? { task: view.task } : {}),
       };
@@ -409,11 +412,14 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     if (command.name !== 'setup' && command.name !== 'uninstall') update = checkForCliUpdate();
     if (
       !command.options.task &&
+      !command.options.tab &&
+      !(command.name === 'task status' && command.operands.length) &&
       process.env.BROWSERPAW_TASK &&
       !isProfileCommand(command.name) &&
       ![
         'task start',
         'task list',
+        'tab close',
         'status',
         'doctor',
         'setup',
@@ -421,6 +427,10 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
         'recipe list',
         'recipe find',
         'recipe show',
+        'recipe save',
+        'recipe patch',
+        'recipe validate',
+        'recipe rm',
       ].includes(command.name)
     ) {
       const end = argv.indexOf('--');
@@ -509,10 +519,15 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
       const data = (await response.json()) as Fields;
       if (!data.connected)
         return failure(3, 'extension_disconnected', 'The extension is disconnected.', data);
-      if (
-        data.version !== CURRENT_VERSION ||
-        (data.extension as Fields | undefined)?.manifestVersion !== CURRENT_VERSION
-      ) {
+      const extension = data.extension as Fields | undefined;
+      if (data.version === CURRENT_VERSION && typeof extension?.manifestVersion !== 'string')
+        return failure(
+          3,
+          'extension_status_unavailable',
+          'Could not read extension diagnostics.',
+          data,
+        );
+      if (data.version !== CURRENT_VERSION || extension?.manifestVersion !== CURRENT_VERSION) {
         return failure(
           3,
           'version_mismatch',
@@ -537,10 +552,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
         localManifest?.version === CURRENT_VERSION
           ? await readExtensionJson('browserpaw-build.json')
           : undefined;
-      if (
-        localBuild?.buildId &&
-        localBuild.buildId !== (data.extension as Fields | undefined)?.buildId
-      )
+      if (localBuild?.buildId && localBuild.buildId !== extension?.buildId)
         return failure(
           3,
           'build_mismatch',
@@ -558,7 +570,10 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
       argv.splice(0, argv.length, 'upload', ...global, '--', command.operands[0], ...paths);
     }
     if (command.name === 'download' && typeof command.options.out === 'string') {
-      argv[argv.indexOf('--out') + 1] = resolve(command.options.out);
+      const out = resolve(command.options.out);
+      const index = argv.findIndex((token) => token === '--out' || token.startsWith('--out='));
+      if (argv[index] === '--out') argv[index + 1] = out;
+      else argv[index] = '--out=' + out;
     }
     const input = await inputFor(command);
     process.once('SIGINT', interrupt);
@@ -654,6 +669,16 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     return failure(4, 'outcome_unknown', message);
   } finally {
     process.removeListener('SIGINT', interrupt);
+    if (knownResult && command) {
+      const directory = receiptDirectory(command, requestId);
+      if (
+        await access(directory).then(
+          () => true,
+          () => false,
+        )
+      )
+        await pruneOutput(outputRoot(), directory).catch(() => {});
+    }
     const latest = await update;
     if (latest) {
       console.error(

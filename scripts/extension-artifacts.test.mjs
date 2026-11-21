@@ -85,6 +85,32 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
 
     const info1 = createBuildInfo({ repoRoot: root });
     assert.strictEqual(info1.sourceHash, fp1.sourceHash);
+    assert.notStrictEqual(info1.identityHash, info1.sourceHash);
+    assert.strictEqual(info1.identityHash, createBuildInfo({ repoRoot: root }).identityHash);
+    assert.match(info1.buildId, /^paw-[a-f0-9]{12}$/);
+
+    const sameInputs = createBuildInfo({ repoRoot: root });
+    assert.strictEqual(sameInputs.buildId, info1.buildId);
+    assert.ok(Date.parse(sameInputs.buildTime) >= Date.parse(info1.buildTime));
+
+    const keyed = createBuildInfo({ repoRoot: root, extensionKey: 'key-a' });
+    assert.notStrictEqual(keyed.buildId, info1.buildId);
+    assert.strictEqual(keyed.sourceHash, info1.sourceHash);
+    assert.notStrictEqual(keyed.identityHash, info1.identityHash);
+    const dev = createBuildInfo({
+      repoRoot: root,
+      extensionKey: 'key-a',
+      buildMode: 'development',
+    });
+    assert.notStrictEqual(dev.buildId, keyed.buildId);
+    assert.strictEqual(
+      createBuildInfo({
+        repoRoot: root,
+        extensionKey: 'key-a',
+        buildMode: 'development',
+      }).buildId,
+      dev.buildId,
+    );
 
     const sessionDir = path.join(extSrc, '.omc', 'state');
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -123,6 +149,26 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
 
     const checkRes = checkBuild({ repoRoot: root, outDir });
     assert.strictEqual(checkRes.valid, true);
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(outDir, 'manifest.json'), 'utf8'));
+    const keyedBuildInfo = createBuildInfo({ repoRoot: root, extensionKey: 'fixture-key' });
+    fs.writeFileSync(
+      path.join(outDir, 'manifest.json'),
+      JSON.stringify({ ...manifest, key: 'fixture-key' }),
+    );
+    writeBuildProvenance(outDir, keyedBuildInfo);
+    assert.strictEqual(checkBuild({ repoRoot: root, outDir }).valid, true);
+    fs.writeFileSync(
+      path.join(outDir, 'manifest.json'),
+      JSON.stringify({ ...manifest, key: 'different-key' }),
+    );
+    writeBuildProvenance(outDir, keyedBuildInfo);
+    assert.throws(
+      () => checkBuild({ repoRoot: root, outDir }),
+      /Build identity mismatch: manifest key or build mode changed/,
+    );
+    fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest));
+    writeBuildProvenance(outDir, buildInfo);
 
     fs.writeFileSync(path.join(outDir, 'AGENTS.md'), '# Engineering instructions');
     writeBuildProvenance(outDir, buildInfo);
@@ -190,6 +236,13 @@ function createPassingVerificationReport(root, fingerprint = 'mock-fp') {
       'console.log("drift");',
     );
     assert.throws(() => checkBuild({ repoRoot: root, outDir }), /Source fingerprint mismatch/);
+
+    const keyedInfo = createBuildInfo({ repoRoot: root, extensionKey: 'fixture-key' });
+    const manifestPath = path.join(outDir, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, key: 'fixture-key' }));
+    writeBuildProvenance(outDir, keyedInfo);
+    assert.strictEqual(checkBuild({ repoRoot: root, outDir }).valid, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

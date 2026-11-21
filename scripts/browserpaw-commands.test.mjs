@@ -34,6 +34,19 @@ test('typed commands parse shell arguments and preserve literal text', () => {
   assert.equal(found.options.all, true);
   assert.equal(parseCommand(['recipe', 'show', 'x-search-thread']).name, 'recipe show');
   assert.equal(parseCommand(['recipe', 'validate', 'x-search-thread']).name, 'recipe validate');
+  const patch = parseCommand([
+    'recipe',
+    'patch',
+    'x-search-thread',
+    '--step',
+    '1',
+    '--',
+    'wait',
+    'css:main',
+  ]);
+  assert.equal(patch.name, 'recipe patch');
+  assert.equal(patch.options.step, '1');
+  assert.deepEqual(patch.operands, ['x-search-thread', 'wait', 'css:main']);
 });
 
 test('legacy inventory and select flags resolve to canonical commands without appearing in help', () => {
@@ -55,17 +68,24 @@ test('legacy inventory and select flags resolve to canonical commands without ap
 test('help is available offline and contains supported command topics', () => {
   assert.match(commandHelp(), /task start.*observe/);
   assert.match(commandHelp('task'), /task finish/);
+  assert.match(commandHelp('task resume'), /task resume --task ID \[--adopt\]/);
+  assert.doesNotMatch(commandHelp('task resume'), /--tab|--frame/);
   assert.match(commandHelp('click'), /--capture/);
   assert.match(commandHelp('setup'), /--skill-scope/);
   assert.match(commandHelp('recipe'), /recipe find/);
   assert.match(commandHelp('recipe'), /recipe validate/);
+  assert.match(commandHelp('recipe patch'), /--step INDEX/);
   assert.throws(() => commandHelp('chrome_navigate'), /Unknown help topic/);
-  assert.throws(() => parseCommand(['chrome_navigate', 'https://example.com']), /Unknown command/);
+  for (const command of ['chrome_navigate', 'mcp', 'repl', 'session', 'jev']) {
+    assert.throws(() => parseCommand([command]), /Unknown command/);
+  }
 });
 
 test('command search ranks exact names and finds English and Chinese keywords and options', () => {
   assert.equal(searchCommands('BOOKMARK export')[0].name, 'bookmark export');
   assert.equal(searchCommands('network response body')[0].name, 'network show');
+  assert.equal(searchCommands('pending navigation')[0].name, 'task resume');
+  assert.equal(searchCommands('恢复任务')[0].name, 'task resume');
   for (const [query, name] of [
     ['export bookmarks', 'bookmark export'],
     ['find duplicate bookmarks', 'bookmark dedupe'],

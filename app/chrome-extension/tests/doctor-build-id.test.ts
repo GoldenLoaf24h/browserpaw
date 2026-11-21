@@ -44,4 +44,11 @@ describe('DoctorTool buildId and verbose reporting', () => {
     const payload = JSON.parse(res.content[0].text);
     expect(payload.buildId).toBeUndefined();
   });
+
+  it('reports when the popup pauses Agent Control', async () => {
+    vi.mocked(chrome.storage.session.get).mockResolvedValue({ agentControlEnabled: false });
+    const result = await doctorTool.execute({ verbose: true });
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.content[0].text).agentControlEnabled).toBe(false);
+  });
 });

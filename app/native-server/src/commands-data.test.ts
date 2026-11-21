@@ -44,6 +44,36 @@ test('maps bookmarks, tab storage, and cookie metadata without values', () => {
 test('relative history ranges use a common clock', () => {
   const now = Date.UTC(2026, 10, 20);
   expect(time('1d', now)).toBe(Date.UTC(2026, 10, 19));
+  expect(time('7d', now)).toBe(Date.UTC(2026, 10, 13));
+  expect(time('7d', now, 1)).toBe(Date.UTC(2026, 10, 27));
   expect(time('2026-11-19')).toBe(Date.UTC(2026, 10, 19));
+  expect(time(String(Date.UTC(2026, 10, 25)), now, 1)).toBe(Date.UTC(2026, 10, 25));
   expect(() => time('unbounded', now)).toThrow();
+
+  const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+  try {
+    dispatch('history', 'search', 'example', '--since', '7d');
+    expect(run).toHaveBeenLastCalledWith(
+      'chrome_history',
+      expect.objectContaining({
+        action: 'search',
+        since: Date.UTC(2026, 10, 13),
+      }),
+      false,
+    );
+
+    dispatch('cookies', 'set', 'https://example.com/', 'theme', 'dark', '--expires', '7d');
+    expect(run).toHaveBeenLastCalledWith(
+      'chrome_cookies',
+      expect.objectContaining({
+        action: 'set',
+        name: 'theme',
+        value: 'dark',
+        expirationDate: Date.UTC(2026, 10, 27) / 1000,
+      }),
+      false,
+    );
+  } finally {
+    nowSpy.mockRestore();
+  }
 });

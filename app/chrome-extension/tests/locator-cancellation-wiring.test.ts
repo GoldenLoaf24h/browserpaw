@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clickTool, fillTool } from '../entrypoints/background/tools/browser/interaction';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import { keyboardTool } from '../entrypoints/background/tools/browser/keyboard';
 import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
 import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-actions';
-import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import * as unifiedLocator from '../entrypoints/background/tools/browser/unified-locator';
 import * as fillCoreModule from '../entrypoints/background/tools/browser/fill-core';
@@ -31,10 +30,6 @@ describe('locator cancellation, operation and deadline wiring', () => {
       id: TAB_ID,
       url: TEST_URL,
     });
-    vi.spyOn(fillTool as any, 'resolveAffinityTab').mockResolvedValue({
-      id: TAB_ID,
-      url: TEST_URL,
-    });
     vi.spyOn(keyboardTool as any, 'resolveAffinityTab').mockResolvedValue({
       id: TAB_ID,
       url: TEST_URL,
@@ -47,11 +42,6 @@ describe('locator cancellation, operation and deadline wiring', () => {
       id: TAB_ID,
       url: TEST_URL,
     });
-    vi.spyOn(formPipelineTool as any, 'resolveAffinityTab').mockResolvedValue({
-      id: TAB_ID,
-      url: TEST_URL,
-    });
-
     vi.spyOn(cdpSessionManager, 'withSession').mockImplementation(async (_tabId, _owner, run) =>
       run({} as any),
     );
@@ -168,54 +158,6 @@ describe('locator cancellation, operation and deadline wiring', () => {
     );
     expect(abortedRes.isError).toBe(true);
     expect(interactSpy).not.toHaveBeenCalled();
-  });
-
-  it('wires context.signal, deadlineAt and operation fill into fillTool and performPhysicalFill', async () => {
-    let capturedLocOptions: any = null;
-    vi.spyOn(unifiedLocator, 'resolveTargetLocation').mockImplementation(
-      async (_tabId, options: any) => {
-        capturedLocOptions = options;
-        return { success: true, index: 3, x: 50, y: 50, resolutionPath: 'text' };
-      },
-    );
-
-    let capturedFillOptions: any = null;
-    vi.spyOn(fillCoreModule, 'performPhysicalFill').mockImplementation(async (options: any) => {
-      capturedFillOptions = options;
-      return {
-        success: true,
-        committed: true,
-        filledText: options.text,
-        isTrusted: true,
-        method: 'cdp_native',
-      };
-    });
-
-    const controller = new AbortController();
-    const deadlineAt = Date.now() + 4000;
-
-    const res = await fillTool.execute(
-      { text: 'test value', targetText: 'Username', tabId: TAB_ID, ...({ deadlineAt } as any) },
-      { signal: controller.signal },
-    );
-    expect(res.isError).toBe(false);
-    expect(capturedLocOptions.signal).toBe(controller.signal);
-    expect(capturedLocOptions.deadlineAt).toBe(deadlineAt);
-    expect(capturedLocOptions.operation).toBe('fill');
-    expect(capturedFillOptions.signal).toBe(controller.signal);
-    expect(capturedFillOptions.deadlineAt).toBe(deadlineAt);
-
-    // When signal is aborted, performPhysicalFill is not called
-    controller.abort();
-    const fillSpy = vi.spyOn(fillCoreModule, 'performPhysicalFill');
-    fillSpy.mockClear();
-
-    const abortedRes = await fillTool.execute(
-      { text: 'test value', targetText: 'Username', tabId: TAB_ID },
-      { signal: controller.signal },
-    );
-    expect(abortedRes.isError).toBe(true);
-    expect(fillSpy).not.toHaveBeenCalled();
   });
 
   it('wires context.signal, deadlineAt and operation press into keyboardTool and aborts before key dispatch', async () => {
@@ -343,74 +285,6 @@ describe('locator cancellation, operation and deadline wiring', () => {
     ).rejects.toThrow(/Task cancelled/);
 
     expect(sendCommandSpy).not.toHaveBeenCalled();
-  });
-
-  it('wires context.signal into formPipeline dispatchNativeClick and performPhysicalFill', async () => {
-    let capturedInteractContext: any = null;
-    vi.spyOn(interactIndexTool, 'execute').mockImplementation(async (_args: any, context?: any) => {
-      capturedInteractContext = context;
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-        isError: false,
-      };
-    });
-
-    let capturedFillOptions: any = null;
-    vi.spyOn(fillCoreModule, 'performPhysicalFill').mockImplementation(async (options: any) => {
-      capturedFillOptions = options;
-      return {
-        success: true,
-        committed: true,
-        filledText: options.text,
-        isTrusted: true,
-        method: 'cdp_native',
-      };
-    });
-
-    const controller = new AbortController();
-    vi.spyOn(inPageEngine, 'executeInPage').mockImplementation(async (_target, fnName) => {
-      if (fnName === 'inPageCheckCaptcha') return [{ result: { detected: false } }] as any;
-      if (fnName === 'inPageDetectPerceptiveSignature') {
-        return [
-          {
-            result: {
-              question: 'What is your email address?',
-              activeInputs: [
-                { index: 10, name: 'email', placeholder: 'Email', text: 'Email', type: 'text' },
-              ],
-              alerts: [],
-            },
-          },
-        ] as any;
-      }
-      if (fnName === 'inPageLocateByText') {
-        return [{ result: { success: true, index: 10, tagName: 'input' } }] as any;
-      }
-      return [
-        {
-          result: {
-            success: true,
-            scrollX: 0,
-            scrollY: 0,
-            viewportWidth: 1280,
-            viewportHeight: 800,
-          },
-        },
-      ] as any;
-    });
-
-    const res = await formPipelineTool.execute(
-      {
-        fields: [{ query: 'email', value: 'user@example.com' }],
-        tabId: TAB_ID,
-        autoAdvance: false,
-      },
-      { signal: controller.signal },
-    );
-
-    expect(res.isError).toBe(false);
-    expect(capturedFillOptions).not.toBeNull();
-    expect(capturedFillOptions.signal).toBe(controller.signal);
   });
 
   it.each(['click', 'fill'] as const)(

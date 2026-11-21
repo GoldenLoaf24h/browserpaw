@@ -1,5 +1,5 @@
 import { createErrorResponse, type ToolResult } from '@/common/tool-handler';
-import { BaseBrowserToolExecutor } from '../base-browser';
+import { BaseBrowserToolExecutor, raceInjection } from '../base-browser';
 import { executeInPage } from './in-page-engine';
 import { scrubUrl } from '@/utils/url-sanitizer';
 
@@ -8,11 +8,11 @@ export interface PageToolParams {
   query?: string;
   windowId?: number;
   tabId?: number;
+  frameId?: number;
   index?: number;
   selector?: string;
   limit?: number;
   sameOriginOnly?: boolean;
-  includeEmptyHref?: boolean;
   sessionId?: string;
   sessionContext?: string;
 }
@@ -43,16 +43,19 @@ export class PageTool extends BaseBrowserToolExecutor {
             scanned.slice(i, i + 6).map(async (tab) => {
               if (!tab.id) return;
               try {
-                const [execution] = await chrome.scripting.executeScript({
-                  target: { tabId: tab.id },
-                  func: (needle, url) => {
-                    if (location.href !== url) return null;
-                    const text = (document.body?.innerText ?? '').slice(0, 128000);
-                    const offset = text.toLowerCase().indexOf(needle);
-                    return offset < 0 ? '' : text.slice(Math.max(0, offset - 50), offset + 160);
-                  },
-                  args: [query, tab.url ?? ''],
-                });
+                const [execution] = await raceInjection(
+                  chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    func: (needle, url) => {
+                      if (location.href !== url) return null;
+                      const text = (document.body?.innerText ?? '').slice(0, 128000);
+                      const offset = text.toLowerCase().indexOf(needle);
+                      return offset < 0 ? '' : text.slice(Math.max(0, offset - 50), offset + 160);
+                    },
+                    args: [query, tab.url ?? ''],
+                  }),
+                  2500,
+                );
                 if (execution?.result == null) skipped++;
                 else if (execution.result) snippets.set(tab.id, execution.result);
               } catch {
@@ -138,21 +141,29 @@ export class PageTool extends BaseBrowserToolExecutor {
         if (typeof tab.id !== 'number') return createErrorResponse('No target tab found.');
         const limit = args.limit === undefined ? 100 : positiveInteger(args.limit, 'limit');
         if (limit > 500) throw new Error('limit must not exceed 500');
-        const links =
-          (
-            await executeInPage<
-              Array<{ url: string; text: string; internal: boolean; nofollow: boolean }>
-            >({ tabId: tab.id }, 'inPageGetLinks', [
-              {
-                ...(args.index === undefined
-                  ? {}
-                  : { index: positiveInteger(args.index, 'index') }),
-                ...(args.selector ? { selector: args.selector } : {}),
-                sameOriginOnly: args.sameOriginOnly === true,
-                includeEmptyHref: args.includeEmptyHref === true,
-              },
-            ])
-          )?.[0]?.result ?? [];
+        const frameId =
+          args.frameId === undefined ? undefined : positiveInteger(args.frameId, 'frameId', 0);
+        const [execution] = await executeInPage<Array<{
+          url: string;
+          text: string;
+          internal: boolean;
+          nofollow: boolean;
+        }> | null>(
+          frameId === undefined ? { tabId: tab.id } : { tabId: tab.id, frameIds: [frameId] },
+          'inPageGetLinks',
+          [
+            {
+              ...(args.index === undefined ? {} : { index: positiveInteger(args.index, 'index') }),
+              ...(args.selector === undefined ? {} : { selector: args.selector }),
+              sameOriginOnly: args.sameOriginOnly === true,
+            },
+          ],
+        );
+        if (!execution?.result)
+          return createErrorResponse(
+            'Link target or frame is unavailable. Run browserpaw observe to refresh it.',
+          );
+        const links = execution.result;
         const bounded = links.slice(0, limit);
         const data = {
           success: true,

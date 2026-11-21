@@ -5,6 +5,7 @@ This directory stores historical project records, superseded engineering reviews
 ## Structure
 
 - [**`agents-2026-09/`**](./agents-2026-09/): Archived dispatch logs, briefings, heartbeats, and codebase exploration surveys from the initial subagent team in September 2026.
+- [**`development-retired/`**](./development-retired/): Retired pre-v5 development design notes, blueprints, benchmark suites, and comparison logs (`persistent-repl`, `blueprint-*`, `browserpaw-blueprint-implementation*`, `three-browser-comparison-*`, `browser-task-suite.json`).
 - [**`handoffs/`**](./handoffs/): Historical engineering handoff memos and transition notes across refactoring phases.
 - [**`releases/`**](./releases/): Archived release notes for earlier major and minor versions (e.g., `RELEASE_NOTES_v3.1.0.md`).
 - [**`reviews/`**](./reviews/): Historical architecture reviews, security audits, and boost optimization ledgers.

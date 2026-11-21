@@ -60,7 +60,7 @@ jobs:
         run: pnpm verify
 
       - name: Install Chrome for Testing
-        if: runner.os == 'Linux'
+        if: runner.os != 'macOS'
         id: chrome
         uses: browser-actions/setup-chrome@v2
         with:
@@ -71,6 +71,12 @@ jobs:
         env:
           BROWSERPAW_TEST_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: xvfb-run -a pnpm test:e2e
+
+      - name: Verify CLI on a loaded extension
+        if: runner.os == 'Windows'
+        env:
+          BROWSERPAW_TEST_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: pnpm test:e2e
 
       - name: Upload verification evidence
         if: always()

@@ -17,9 +17,9 @@ For an npx-only installation, use `npx --yes browserpaw@5.0.0` in place of `brow
 
 Before manually browsing a site, check any synced `Learned Workflows` table (at the end of a `browserpaw setup`-managed skill or injected into session context by a host plugin) or run `browserpaw recipe find <query> --url <url>` (works offline against `~/.browserpaw`). When a learned skill or recipe matches the user's request, inspect inputs if needed with `browserpaw recipe show ID` and invoke `browserpaw recipe run ID key=value...` directly without waiting for the user to ask.
 
-If `recipe list --all` shows a bundled or proposed `candidate` skill (for example `x-search-thread`), run `browserpaw recipe validate ID` once while Chrome is connected to verify and activate it.
+If `recipe list --all` shows a bundled or proposed `candidate`, run `browserpaw recipe validate ID` once while Chrome is connected. Automatic activation is limited to verified read-only workflows; a write-capable candidate remains manual and the previous active revision stays in use.
 
-When you solve a repeatable site workflow that has no learned entry yet (such as a site search or structured page reader), save it into `~/.browserpaw` with `browserpaw recipe save FILE` including `id`, `name`, `description`, `domains`, `keywords`, `inputs`, and `steps` (or propose and validate a verified read-only skill). Saving immediately updates `~/.browserpaw/learned-index.json` (discoverable via `browserpaw recipe find`) and refreshes `browserpaw setup`-managed skills; read-only host plugin skills pick up new entries on the next session or profile restart. Never store passwords, cookies, tokens, tab IDs, or observed refs in saved recipes.
+When you solve a repeatable site workflow that has no learned entry yet (such as a site search or structured page reader), save it into `~/.browserpaw` with `browserpaw recipe save FILE` including `id`, `name`, `description`, `domains`, `keywords`, `inputs`, and `steps` (or propose a verified read-only skill). Saving creates a candidate, which remains discoverable through `recipe list --all` but does not enter automatic routing until validation. Repair one failing step with `browserpaw recipe patch ID --step INDEX -- ARGS...`; the candidate revision is written separately, so a failed repair or validation preserves the active workflow. A failed recipe returns `failedStepIndex`, `failedStep`, `completedSteps`, and a bounded page summary when a temporary task remains available. Never store passwords, cookies, tokens, tab IDs, or observed refs in saved recipes.
 
 ## Interactive Browser Tasks
 
@@ -41,6 +41,8 @@ Read screenshots with the local image viewer using the returned file path. For c
 Use `download REF` for a page-triggered download receipt. Use `download --url URL --out DIR` when the file URL is known and a verified local file path is needed.
 
 Check page state before completing the task. Verify the business effect after a write. Use `ask-human` for browser challenges, authentication prompts, or user confirmation. Use `task status` and a fresh observation after exit 4, which indicates an unknown outcome. Cancellation stops later work and keeps effects already dispatched.
+
+If a task records a pending document after navigation, inspect `task status` and `observe --tab ID`. After verifying the page, run `task resume --task TASK_ID --adopt`, then observe again under the task or finish it. Resume does not replay the previous action.
 
 For a one-off deterministic sequence, `batch FILE` accepts JSON arrays of command arguments and stops on the first failure. Use `--json` to read receipts and follow file references for large results.
 See [commands](references/commands.md) and [recipes](references/recipe-contract.md).

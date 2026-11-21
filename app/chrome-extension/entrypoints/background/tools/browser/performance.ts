@@ -15,6 +15,8 @@ interface StartTraceParams {
   sessionContext?: string;
 }
 
+type SavedTrace = { downloadId?: number; filename?: string; fullPath?: string; bytes?: number };
+
 interface TraceOutputFile {
   path: string;
   name?: string;
@@ -28,7 +30,7 @@ export interface TraceStopReceipt {
   message: string;
   tabId: number;
   eventCount: number;
-  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  saved?: SavedTrace;
   metrics?: Record<string, number>;
   startedAt: number;
   endedAt: number;
@@ -79,38 +81,28 @@ interface TraceSessionState {
   stopPromise?: Promise<{ completed: boolean }>;
   autoStopTimer?: any;
   finalizingPromise?: Promise<{
-    saved?: { downloadId?: number; filename?: string; fullPath?: string };
+    saved?: SavedTrace;
     metrics?: Record<string, number>;
     endedAt: number;
     tracingCompleted: boolean;
   }>;
 }
 
+type TraceResult = {
+  tabId: number;
+  sessionId?: string;
+  events: any[];
+  startedAt: number;
+  endedAt: number;
+  tabUrl: string;
+  saved?: SavedTrace;
+  metrics?: Record<string, number>;
+  tracingCompleted?: boolean;
+};
+
 export const sessions = new Map<number, TraceSessionState>();
-export const SESSION_LAST_RESULTS = new Map<
-  string,
-  {
-    tabId: number;
-    events: any[];
-    startedAt: number;
-    endedAt: number;
-    tabUrl: string;
-    saved?: { downloadId?: number; filename?: string; fullPath?: string };
-    metrics?: Record<string, number>;
-  }
->();
-export const LAST_RESULTS = new Map<
-  number,
-  {
-    tabId: number;
-    events: any[];
-    startedAt: number;
-    endedAt: number;
-    tabUrl: string;
-    saved?: { downloadId?: number; filename?: string; fullPath?: string };
-    metrics?: Record<string, number>;
-  }
->();
+export const SESSION_LAST_RESULTS = new Map<string, TraceResult>();
+export const LAST_RESULTS = new Map<number, TraceResult>();
 
 function tracingCategories(): string[] {
   // Keep broadly consistent with other project
@@ -152,7 +144,7 @@ async function enablePerformanceMetrics(tabId: number): Promise<Record<string, n
 async function saveTraceToDownloads(
   json: string,
   filenamePrefix = 'performance_trace',
-): Promise<{ downloadId?: number; filename?: string; fullPath?: string }> {
+): Promise<SavedTrace> {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${filenamePrefix}_${timestamp}.json`;
@@ -296,7 +288,7 @@ export function prepareSafeTraceForNative(events: any[]): string {
 async function saveTraceToNativeTemp(
   events: any[],
   filenamePrefix = 'performance_trace',
-): Promise<{ filename?: string; fullPath?: string } | undefined> {
+): Promise<SavedTrace | undefined> {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${filenamePrefix}_${timestamp}.json`;
@@ -343,48 +335,12 @@ async function saveTraceToNativeTemp(
     });
 
     if (resp && resp.success && resp.filePath) {
-      return { filename, fullPath: resp.filePath };
+      return { filename, fullPath: resp.filePath, bytes: bytes.byteLength };
     }
   } catch {
     // ignore, fallback will apply
   }
   return undefined;
-}
-
-async function cleanupNativeTempFile(filePath: string): Promise<void> {
-  if (!filePath) return;
-  try {
-    const requestId = `trace-clean-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const timeoutMs = 10000;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        cancelFileOperation(requestId);
-        resolve(); // best-effort
-      }, timeoutMs);
-
-      const ok = sendFileOperationToNative(
-        {
-          type: 'file_operation',
-          requestId,
-          payload: {
-            action: 'cleanupFile',
-            filePath,
-          },
-        },
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-      );
-
-      if (!ok) {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-  } catch {
-    // ignore
-  }
 }
 
 function getOrCreateStopPromise(session: TraceSessionState): Promise<{ completed: boolean }> {
@@ -402,7 +358,7 @@ async function finalizeTraceSession(
   saveToDownloads = true,
   filenamePrefix = 'performance_trace',
 ): Promise<{
-  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  saved?: SavedTrace;
   metrics?: Record<string, number>;
   endedAt: number;
   tracingCompleted: boolean;
@@ -425,21 +381,20 @@ async function finalizeTraceSession(
     } catch {}
 
     const endedAt = Date.now();
-    const trace = { traceEvents: session.events };
-    const json = JSON.stringify(textualTrace(trace));
-
-    let saved: { downloadId?: number; filename?: string; fullPath?: string } | undefined;
+    let saved: SavedTrace | undefined;
     if (saveToDownloads) {
-      saved = await saveTraceToDownloads(json, filenamePrefix);
+      saved = await saveTraceToDownloads(
+        JSON.stringify(textualTrace({ traceEvents: session.events })),
+        filenamePrefix,
+      );
     } else {
-      const tempSaved = await saveTraceToNativeTemp(session.events, filenamePrefix);
-      if (tempSaved) {
-        saved = { ...tempSaved } as any;
-      }
+      saved = await saveTraceToNativeTemp(session.events, filenamePrefix);
     }
 
     const resultRecord = {
       tabId,
+      sessionId: session.sessionId,
+      tracingCompleted: completed,
       events: session.events,
       startedAt: session.startedAt,
       endedAt,
@@ -490,7 +445,7 @@ async function stopAndFinalizeTrace(
   saveToDownloads = true,
   filenamePrefix = 'performance_trace',
 ): Promise<{
-  saved?: { downloadId?: number; filename?: string; fullPath?: string };
+  saved?: SavedTrace;
   metrics?: Record<string, number>;
   endedAt: number;
   tracingCompleted: boolean;
@@ -540,10 +495,7 @@ class PerformanceStartTraceTool extends BaseBrowserToolExecutor {
       const tabId = targetTab.id;
       const existed = sessions.get(tabId);
       if (existed?.recording) {
-        return {
-          content: [{ type: 'text', text: 'Error: a performance trace is already running.' }],
-          isError: false,
-        };
+        return createErrorResponse('A performance trace is already running.');
       }
 
       await cdpSessionManager.attach(tabId, 'performance');
@@ -652,14 +604,16 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
     try {
       let targetTabId: number | undefined;
       let session: TraceSessionState | undefined;
+      let retained: TraceResult | undefined;
 
       // Explicit tabId ALWAYS takes precedence: do NOT fallback to other tabs
       if (typeof args?.tabId === 'number') {
+        retained = LAST_RESULTS.get(args.tabId);
         session = sessions.get(args.tabId);
         if (session) {
           targetTabId = args.tabId;
           // Owner Guard: If caller provided a sessionId and this tab belongs to another principal session, reject!
-          if (sessionId && session.sessionId && session.sessionId !== sessionId) {
+          if (session.sessionId !== sessionId) {
             return createErrorResponse(
               'Cannot stop performance trace on tab ' +
                 args.tabId +
@@ -670,6 +624,7 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
           }
         }
       } else if (sessionId) {
+        retained = SESSION_LAST_RESULTS.get(sessionId);
         // Strict session principal: resolve strictly by caller's sessionId across recording sessions.
         // If not found, reject directly without fallback to affinityTab (prevents hijacking other sessions).
         for (const [tId, s] of sessions.entries()) {
@@ -684,47 +639,57 @@ class PerformanceStopTraceTool extends BaseBrowserToolExecutor {
         const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(
           () => null,
         );
-        if (targetTab?.id && sessions.has(targetTab.id)) {
+        if (targetTab?.id) {
           targetTabId = targetTab.id;
           session = sessions.get(targetTab.id);
+          retained = LAST_RESULTS.get(targetTab.id);
+          if (session?.sessionId) return createErrorResponse('Trace belongs to another task.');
         }
       }
 
-      if (!session) {
-        return {
-          content: [
-            { type: 'text', text: 'No performance trace session found for the current tab.' },
-          ],
-          isError: false,
+      let trace: TraceResult;
+      if (session) {
+        const tabId = targetTabId!;
+        const finalized = await stopAndFinalizeTrace(
+          tabId,
+          session,
+          saveToDownloads,
+          filenamePrefix || 'performance_trace',
+        );
+        trace = {
+          ...finalized,
+          tabId,
+          events: session.events,
+          startedAt: session.startedAt,
+          tabUrl: session.pageUrl || '',
         };
+      } else if (retained && retained.sessionId === sessionId) {
+        trace = retained;
+      } else {
+        return createErrorResponse('No performance trace session found for the current tab.');
       }
-
-      const tabId = targetTabId!;
-      const finalized = await stopAndFinalizeTrace(
-        tabId,
-        session,
-        saveToDownloads,
-        filenamePrefix || 'performance_trace',
-      );
+      const traceBytes = new TextEncoder().encode(
+        JSON.stringify(textualTrace({ traceEvents: trace.events })),
+      ).byteLength;
       const response: TraceStopReceipt = {
         success: true,
         message: 'The performance trace has been stopped.',
-        tabId,
-        eventCount: session.events.length,
-        saved: finalized.saved,
-        metrics: finalized.metrics,
-        startedAt: session.startedAt,
-        endedAt: finalized.endedAt,
-        durationMs: finalized.endedAt - session.startedAt,
-        url: session.pageUrl || '',
-        tracingCompleted: finalized.tracingCompleted,
-        traceBytes: JSON.stringify(textualTrace({ traceEvents: session.events })).length,
-        ...(finalized.saved?.fullPath && args?.outputPath
+        tabId: trace.tabId,
+        eventCount: trace.events.length,
+        saved: trace.saved,
+        metrics: trace.metrics,
+        startedAt: trace.startedAt,
+        endedAt: trace.endedAt,
+        durationMs: trace.endedAt - trace.startedAt,
+        url: trace.tabUrl,
+        tracingCompleted: trace.tracingCompleted === true,
+        traceBytes,
+        ...(trace.saved?.fullPath && args?.outputPath
           ? {
               file: {
-                path: finalized.saved.fullPath,
-                name: finalized.saved.filename,
-                bytes: JSON.stringify(textualTrace({ traceEvents: session.events })).length,
+                path: trace.saved.fullPath,
+                name: trace.saved.filename,
+                bytes: trace.saved.bytes ?? traceBytes,
                 mimeType: 'application/json',
                 outputPath: args.outputPath,
               } satisfies TraceOutputFile,
@@ -763,9 +728,8 @@ class PerformanceAnalyzeInsightTool extends BaseBrowserToolExecutor {
       let result: any;
       // Explicit tabId ALWAYS takes precedence
       if (typeof args?.tabId === 'number') {
-        if (LAST_RESULTS.has(args.tabId)) {
-          result = LAST_RESULTS.get(args.tabId);
-        }
+        const retained = LAST_RESULTS.get(args.tabId);
+        if (retained?.sessionId === sessionId) result = retained;
       } else if (sessionId) {
         // Strict session isolation: only return trace recorded for this session, never fallback!
         if (SESSION_LAST_RESULTS.has(sessionId)) {
@@ -775,8 +739,9 @@ class PerformanceAnalyzeInsightTool extends BaseBrowserToolExecutor {
         const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(
           () => null,
         );
-        if (targetTab?.id && LAST_RESULTS.has(targetTab.id)) {
-          result = LAST_RESULTS.get(targetTab.id);
+        if (targetTab?.id) {
+          const retained = LAST_RESULTS.get(targetTab.id);
+          if (!retained?.sessionId) result = retained;
         }
       }
 
@@ -822,8 +787,6 @@ class PerformanceAnalyzeInsightTool extends BaseBrowserToolExecutor {
             }
           });
           if (resp && resp.success) {
-            // Best-effort cleanup for temp files (Downloads paths are ignored by native cleaner)
-            await cleanupNativeTempFile(fullPath);
             return {
               content: [
                 {

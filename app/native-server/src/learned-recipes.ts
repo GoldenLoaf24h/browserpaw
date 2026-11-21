@@ -16,6 +16,7 @@ export interface RecipeInputSpec {
 
 export interface SavedRecipe {
   id: string;
+  status?: 'active' | 'candidate';
   name?: string;
   description?: string;
   domains?: string[];
@@ -109,6 +110,15 @@ export function savedRecipeFilePath(id: unknown, homeDir = browserPawHome()): st
     );
   }
   return path.join(recipesDirectory(homeDir), `${id}.json`);
+}
+
+export function candidateRecipeFilePath(id: unknown, homeDir = browserPawHome()): string {
+  if (typeof id !== 'string' || !RECIPE_ID_PATTERN.test(id)) {
+    throw new Error(
+      'Recipe ID must begin with a lowercase letter and contain only letters, digits, or hyphens.',
+    );
+  }
+  return path.join(recipesDirectory(homeDir), `${id}.candidate.json`);
 }
 
 export function domainMatchesHost(hostname: string, domain: string): boolean {
@@ -244,6 +254,12 @@ export function validateSavedRecipe(input: unknown): SavedRecipe {
   assertNoStoredCredentials(raw);
 
   const recipe: SavedRecipe = { id: raw.id, steps };
+  if (raw.status !== undefined) {
+    if (raw.status !== 'active' && raw.status !== 'candidate') {
+      throw new Error('Recipe status must be active or candidate.');
+    }
+    recipe.status = raw.status;
+  }
   if (raw.name !== undefined) {
     if (typeof raw.name !== 'string' || !raw.name.trim() || raw.name.length > 120) {
       throw new Error('Recipe name must be a non-empty string up to 120 characters.');
@@ -400,19 +416,23 @@ export function loadLearnedWorkflows(
   if (fs.existsSync(recipesDir) && !fs.lstatSync(recipesDir).isSymbolicLink()) {
     for (const file of fs
       .readdirSync(recipesDir)
-      .filter((name) => /^[a-z][a-z0-9-]{0,63}\.json$/.test(name))
+      .filter((name) => /^[a-z][a-z0-9-]{0,63}(?:\.candidate)?\.json$/.test(name))
       .sort()) {
       const fullPath = path.join(recipesDir, file);
       const parsed = readJsonSafe(fullPath, 256 * 1024);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
       const rec = parsed as SavedRecipe;
       if (typeof rec.id !== 'string' || !Array.isArray(rec.steps)) continue;
+      const candidateFile = file.endsWith('.candidate.json');
+      const status = candidateFile || rec.status === 'candidate' ? 'candidate' : 'active';
+      if (status === 'candidate' && !options.includeCandidates) continue;
+      if (byId.has(rec.id)) continue;
       const inputs = savedRecipeInputs(rec);
       const domains = rec.domains?.length ? rec.domains : inferDomainsFromSteps(rec.steps);
       byId.set(rec.id, {
         id: rec.id,
         kind: 'recipe',
-        status: 'active',
+        status,
         name: rec.name || rec.id,
         description:
           rec.description || `Saved BrowserPaw CLI workflow (${rec.steps.length} steps).`,
@@ -726,14 +746,46 @@ export function inspectLearnedWorkflow(
   id: string,
   homeDir = browserPawHome(),
   bundledDir?: string,
+  preferActive = false,
 ): { summary: LearnedWorkflowSummary; definition: unknown } | undefined {
   if (!RECIPE_ID_PATTERN.test(id)) {
     throw new Error(
       'Recipe ID must begin with a lowercase letter and contain only letters, digits, or hyphens.',
     );
   }
-  const all = loadLearnedWorkflows(homeDir, { includeCandidates: true, bundledDir });
-  const summary = all.find((item) => item.id === id);
+  const active = preferActive
+    ? loadLearnedWorkflows(homeDir, { includeCandidates: false, bundledDir }).find(
+        (item) => item.id === id,
+      )
+    : undefined;
+  const candidatePath = candidateRecipeFilePath(id, homeDir);
+  const candidate = active ? undefined : readJsonSafe(candidatePath, 256 * 1024);
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const recipe = validateSavedRecipe(candidate);
+    const inputs = savedRecipeInputs(recipe);
+    return {
+      summary: {
+        id: recipe.id,
+        kind: 'recipe',
+        status: 'candidate',
+        name: recipe.name || recipe.id,
+        description:
+          recipe.description || `Saved BrowserPaw CLI workflow (${recipe.steps.length} steps).`,
+        domains: recipe.domains?.length ? recipe.domains : inferDomainsFromSteps(recipe.steps),
+        keywords: recipe.keywords ?? [],
+        inputs,
+        ...(recipe.notes ? { notes: recipe.notes } : {}),
+        command: formatRunCommand(recipe.id, inputs),
+        sourcePath: candidatePath,
+      },
+      definition: recipe,
+    };
+  }
+  const summary =
+    active ??
+    loadLearnedWorkflows(homeDir, { includeCandidates: true, bundledDir }).find(
+      (item) => item.id === id,
+    );
   if (!summary) return undefined;
   const raw = readJsonSafe(summary.sourcePath);
   if (
@@ -752,6 +804,43 @@ export function inspectLearnedWorkflow(
     return { summary, definition: selected?.definition ?? raw };
   }
   return { summary, definition: raw };
+}
+
+export function patchSavedRecipe(
+  id: string,
+  stepIndex: unknown,
+  args: unknown,
+  homeDir = browserPawHome(),
+): SavedRecipe {
+  const index =
+    typeof stepIndex === 'number'
+      ? stepIndex
+      : typeof stepIndex === 'string' && /^\d+$/.test(stepIndex)
+        ? Number(stepIndex)
+        : NaN;
+  const activePath = savedRecipeFilePath(id, homeDir);
+  const active = readJsonSafe(activePath, 256 * 1024);
+  const candidatePath = candidateRecipeFilePath(id, homeDir);
+  const candidate = readJsonSafe(candidatePath, 256 * 1024);
+  const source = candidate ?? active;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw new Error(`Unknown saved recipe: ${id}.`);
+  }
+  const recipe = validateSavedRecipe(source);
+  if (!Number.isSafeInteger(index) || index < 0 || index >= recipe.steps.length) {
+    throw new Error(`Recipe step index must be from 0 to ${recipe.steps.length - 1}.`);
+  }
+  if (!Array.isArray(args) || !args.length || args.some((part) => typeof part !== 'string')) {
+    throw new Error('Replacement step must be a command argument array.');
+  }
+  const steps = recipe.steps.map((step, current) =>
+    current === index ? [...(args as string[])] : step,
+  );
+  const patched = validateSavedRecipe({ ...recipe, status: 'candidate', steps });
+  const { ensureDirectory, atomicWrite } = require('./cli-files.cjs');
+  ensureDirectory(recipesDirectory(homeDir));
+  atomicWrite(candidatePath, JSON.stringify(patched, null, 2) + '\n');
+  return patched;
 }
 
 export function showLearnedWorkflow(

@@ -1,3 +1,3 @@
 # Install BrowserPaw
 
-See the [BrowserPaw installation guide](../../README.md#install).
+See the [BrowserPaw installation guide](../../INSTALL.md).

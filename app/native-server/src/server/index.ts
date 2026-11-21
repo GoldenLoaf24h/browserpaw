@@ -193,7 +193,8 @@ export class Server {
     } catch (error) {
       throw new CommandError(error instanceof Error ? error.message : String(error));
     }
-    const key = commandLockKey(command.options, command.name);
+    const key =
+      command.name === 'task cancel' ? undefined : commandLockKey(command.options, command.name);
     if (this.requests.has(requestId) || (key && this.context.has(key)))
       return send(reply, 409, {
         code: 'busy',

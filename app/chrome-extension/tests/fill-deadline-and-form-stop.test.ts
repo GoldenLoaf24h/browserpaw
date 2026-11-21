@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';
 import { performPhysicalFill } from '../entrypoints/background/tools/browser/fill-core';
 import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
 import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
@@ -213,95 +212,6 @@ describe('fill-index public outcome contract', () => {
       execution: { status: 'dispatched' },
       verification: { status: 'verified' },
     });
-  });
-});
-
-describe('form-pipeline deadline stop on the real fill chain', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    installChrome();
-    installFastTransport();
-    vi.spyOn(formPipelineTool as any, 'resolveAffinityTab').mockResolvedValue({
-      id: 77,
-      url: 'https://example.com/form',
-    });
-  });
-
-  it('does not submit or move to the next field when a controlled fill finishes after deadline', async () => {
-    let locateCalls = 0;
-    const inPage = vi.spyOn(engine, 'executeInPage').mockImplementation(async (_target, fnName) => {
-      if (fnName === 'inPageCheckCaptcha') {
-        return [{ result: { detected: false } }] as any;
-      }
-      if (fnName === 'inPageDetectPerceptiveSignature') {
-        return [
-          {
-            result: {
-              question: 'slow field question',
-              progress: '1 / 2',
-              activeInputs: [activeInput],
-              alerts: [],
-            },
-          },
-        ] as any;
-      }
-      if (fnName === 'inPageLocateByText') {
-        locateCalls++;
-        return [{ result: { success: true, index: 9, tagName: 'button' } }] as any;
-      }
-      if (fnName === 'inPageGetElementCoordinates') {
-        return [
-          {
-            result: {
-              success: true,
-              x: 10,
-              y: 20,
-              value: '',
-              tagName: 'input',
-              inputType: 'text',
-            },
-          },
-        ] as any;
-      }
-      if (fnName === 'inPageWaitForActionable') {
-        return [{ result: { success: true, x: 10, y: 20 } }] as any;
-      }
-      if (fnName === 'inPageCheckOcclusion') {
-        return [{ result: { success: true, x: 10, y: 20 } }] as any;
-      }
-      if (fnName === 'inPageVerifyActiveElement') {
-        return [{ result: { isFocused: true } }] as any;
-      }
-      if (fnName === 'inPageVerifyInputCommitment') {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        return [{ result: { committed: true } }] as any;
-      }
-      return [{ result: { success: true } }] as any;
-    });
-    const interact = vi.spyOn(interactIndexTool, 'execute').mockResolvedValue({
-      content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
-      isError: false,
-    });
-
-    const result = await formPipelineTool.execute({
-      tabId: 77,
-      timeoutMs: 180,
-      fields: [
-        { query: 'slow field', value: 'first' },
-        { query: 'second field', value: 'second' },
-      ],
-    });
-    const payload = JSON.parse((result.content[0] as any).text);
-
-    expect(result.isError).toBe(true);
-    expect(payload.success).toBe(false);
-    expect(payload.status).toBe('timeout');
-    expect(payload.reason).toBe('deadline_exceeded');
-    expect(interact).not.toHaveBeenCalled();
-    expect(locateCalls).toBe(0);
-    expect(
-      inPage.mock.calls.filter(([, name]) => name === 'inPageVerifyInputCommitment'),
-    ).toHaveLength(1);
   });
 });
 

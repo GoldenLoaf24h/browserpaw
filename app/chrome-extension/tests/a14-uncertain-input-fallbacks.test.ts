@@ -13,7 +13,6 @@ import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-
 import { smartScrollTool } from '../entrypoints/background/tools/browser/smart-scroll';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
 import { clickTool } from '../entrypoints/background/tools/browser/interaction';
-import { fillTool } from '../entrypoints/background/tools/browser/interaction';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as raceCdpModule from '../utils/race-cdp';
 import { CdpDispatchTimeoutError } from '../utils/race-cdp';
@@ -26,21 +25,6 @@ const OUTCOME_UNKNOWN_MESSAGE =
 describe('core interaction tools expose the common not-dispatched contract', () => {
   it('click rejects a missing target before dispatch', async () => {
     const res = await clickTool.execute({});
-    const payload = JSON.parse((res.content[0] as any).text);
-
-    expect(res.isError).toBe(true);
-    expect(payload).toMatchObject({
-      status: 'blocked',
-      requestDispatched: false,
-      interaction: {
-        execution: { status: 'not_dispatched', dispatchedCount: 0 },
-        verification: { status: 'not_requested' },
-      },
-    });
-  });
-
-  it('fill rejects a missing target before dispatch', async () => {
-    const res = await fillTool.execute({ value: 'draft' });
     const payload = JSON.parse((res.content[0] as any).text);
 
     expect(res.isError).toBe(true);

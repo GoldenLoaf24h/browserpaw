@@ -866,7 +866,7 @@ describe('BrowserTaskManager', () => {
         status: 'blocked',
         retry: false,
         dispatched: false,
-        error: expect.stringContaining('resume with adopt: true'),
+        error: expect.stringContaining(`browserpaw task resume --task ${task!.id} --adopt`),
       }),
     );
     expect(call.mock.calls.filter(([name]) => name === 'chrome_interact_index')).toHaveLength(0);
@@ -1901,7 +1901,7 @@ describe('BrowserTaskManager', () => {
     const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
       if (name === 'chrome_navigate') return opened(430, String(args.url));
       if (name === 'get_windows_and_tabs') return live([tab(430, 'https://unknown.example/')]);
-      if (name === 'chrome_form_pipeline') {
+      if (name === 'chrome_batch_actions') {
         markMutationStarted();
         await mutationGate;
         return result(
@@ -1922,7 +1922,9 @@ describe('BrowserTaskManager', () => {
     const { task } = await manager.execute({ action: 'start', name: 'Cancel unknown result' });
     await manager.execute({ action: 'open', taskId: task!.id, url: 'https://unknown.example/' });
 
-    const pending = manager.callTool(task!.id, 'chrome_form_pipeline', { fields: [] });
+    const pending = manager.callTool(task!.id, 'chrome_batch_actions', {
+      actions: [{ type: 'click', selector: '#commit' }],
+    });
     await mutationStarted;
     await manager.execute({ action: 'cancel', taskId: task!.id });
     releaseMutation();
@@ -4457,6 +4459,121 @@ describe('BrowserTaskManager', () => {
     expect(Object.keys(persisted.tasks)).toHaveLength(31);
     expect(persisted.tasks['active-1']).toBeDefined();
     expect(persisted.tasks['done-40']).toBeDefined();
+    expect(persisted.tasks['done-1']).toBeUndefined();
+  });
+
+  it('retains cancelled tasks with owned pages or pending creations across reload pruning', async () => {
+    const storageDir = testDir('prune-cancelled-cleanup');
+    const call = jest.fn<BrowserCall>();
+    const tasks: Record<string, Record<string, unknown>> = {};
+    for (let i = 1; i <= 40; i++) {
+      tasks[`done-${i}`] = {
+        id: `done-${i}`,
+        name: `Done ${i}`,
+        status: 'finished',
+        maxPages: 8,
+        createdAt: i * 10,
+        updatedAt: i * 10,
+        finishedAt: i * 10,
+        pages: [],
+        pendingCreations: [],
+      };
+    }
+    tasks['cancelled-owned'] = {
+      id: 'cancelled-owned',
+      name: 'Cancelled owned cleanup',
+      status: 'cancelled',
+      maxPages: 8,
+      createdAt: 1,
+      updatedAt: 1,
+      cancelledAt: 1,
+      pages: [
+        {
+          tabId: 81,
+          url: 'https://cleanup.example/',
+          documentId: 'doc-81',
+          browserInstanceId: 'browser-1',
+          ownership: 'owned',
+          state: 'active',
+          openedAt: 1,
+          lastVerifiedAt: 1,
+        },
+      ],
+      pendingCreations: [],
+    };
+    tasks['cancelled-recovery'] = {
+      id: 'cancelled-recovery',
+      name: 'Cancelled cleanup recovery',
+      status: 'cancelled',
+      maxPages: 8,
+      createdAt: 3,
+      updatedAt: 3,
+      cancelledAt: 3,
+      pages: [
+        {
+          tabId: 82,
+          url: 'https://recovery.example/',
+          documentId: 'doc-82',
+          browserInstanceId: 'browser-1',
+          ownership: 'owned',
+          state: 'active',
+          recovery: {
+            status: 'cleanupPending',
+            reason: 'close failed',
+            failedAt: 3,
+          },
+          openedAt: 3,
+          lastVerifiedAt: 3,
+        },
+      ],
+      pendingCreations: [],
+    };
+    tasks['cancelled-pending'] = {
+      id: 'cancelled-pending',
+      name: 'Cancelled pending cleanup',
+      status: 'cancelled',
+      maxPages: 8,
+      createdAt: 2,
+      updatedAt: 2,
+      cancelledAt: 2,
+      pages: [],
+      pendingCreations: [
+        {
+          unknownId: 'unknown:cancelled-pending',
+          requestedUrl: 'https://pending.example/',
+          createdAt: 2,
+          reason: 'unknown page creation had no tabId',
+        },
+      ],
+    };
+    fs.writeFileSync(
+      path.join(storageDir, 'tasks.json'),
+      JSON.stringify({ version: 1, tasks }, null, 2),
+    );
+
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const listed = await manager.execute({ action: 'list' });
+    expect(listed.tasks).toHaveLength(33);
+    expect(listed.tasks?.some((item) => item.id === 'cancelled-owned')).toBe(true);
+    expect(listed.tasks?.some((item) => item.id === 'cancelled-pending')).toBe(true);
+    expect(listed.tasks?.some((item) => item.id === 'cancelled-recovery')).toBe(true);
+    expect(listed.tasks?.some((item) => item.id === 'done-1')).toBe(false);
+
+    const reloaded = new BrowserTaskManager({ call, storageDir });
+    const status = await reloaded.execute({ action: 'status', taskId: 'cancelled-owned' });
+    expect(status.ok).toBe(true);
+    expect(status.task?.pages[0]).toMatchObject({ tabId: 81, ownership: 'owned' });
+    const pending = await reloaded.execute({ action: 'status', taskId: 'cancelled-pending' });
+    expect(pending.ok).toBe(true);
+    expect(pending.task?.pendingCreations).toHaveLength(1);
+    const recovery = await reloaded.execute({ action: 'status', taskId: 'cancelled-recovery' });
+    expect(recovery.ok).toBe(true);
+    expect(recovery.task?.pages[0]?.recovery?.status).toBe('cleanupPending');
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(storageDir, 'tasks.json'), 'utf8'));
+    expect(persisted.tasks['cancelled-owned']).toBeDefined();
+    expect(persisted.tasks['cancelled-pending']).toBeDefined();
+    expect(persisted.tasks['cancelled-recovery']).toBeDefined();
     expect(persisted.tasks['done-1']).toBeUndefined();
   });
 

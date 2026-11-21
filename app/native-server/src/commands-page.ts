@@ -12,7 +12,7 @@ type Fields = Record<string, unknown>;
 function dataOf(result: CallToolResult): Fields {
   if (result.structuredContent) return result.structuredContent;
   for (const block of result.content ?? []) {
-    if (block.type !== 'text') continue;
+    if (block.type !== 'text' || typeof block.text !== 'string') continue;
     try {
       const parsed: unknown = JSON.parse(block.text);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Fields;
@@ -93,26 +93,6 @@ function withInventory(
       );
     return transform(windows);
   });
-}
-
-function truncateTextResult(result: CallToolResult, maxChars: number): CallToolResult {
-  const textIndex = result.content.findIndex((block) => block.type === 'text');
-  if (textIndex < 0) return result;
-  const block = result.content[textIndex];
-  if (block.type !== 'text') return result;
-  const text = block.text.slice(0, maxChars);
-  const truncated = text.length !== block.text.length;
-  return {
-    ...result,
-    content: result.content.map((item, index) =>
-      index === textIndex && item.type === 'text' ? { ...item, text } : item,
-    ),
-    structuredContent: {
-      ...(result.structuredContent ?? {}),
-      truncated,
-      originalChars: block.text.length,
-    },
-  };
 }
 
 export function dispatchPage(
@@ -286,21 +266,17 @@ export function dispatchPage(
 
     if (options.content) {
       argumentCount(command, 0);
-      const result = run('chrome_get_markdown', { fit: true });
-      return options['max-chars'] === undefined
-        ? result
-        : result.then((value) =>
-            truncateTextResult(value, integer(options['max-chars'], 'Character limit')),
-          );
+      return;
     }
 
     if (options.links) {
       const target = first ? parseTarget(first) : {};
-      if (target.coordinate)
+      if (first !== undefined && !target.index && !target.selector)
         throw new CommandError('Link extraction requires a ref, css:SELECTOR, or no target.');
       return run('chrome_page', {
         action: 'text_links',
         ...target,
+        ...(options.frame === undefined ? {} : { frameId: integer(options.frame, 'Frame ID', 0) }),
         limit: limitOption(command, 100, 500),
       });
     }

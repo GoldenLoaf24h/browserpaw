@@ -106,12 +106,16 @@ export function inPageGetLinks(options?: {
   index?: number;
   selector?: string;
   sameOriginOnly?: boolean;
-  includeEmptyHref?: boolean;
-}): Array<{ url: string; text: string; internal: boolean; nofollow: boolean }> {
-  const indexed = typeof options?.index === 'number' ? findIndexedElement(options.index) : null;
-  const selected = options?.selector ? document.querySelector(options.selector) : null;
-  const root: ParentNode = indexed ?? selected ?? document;
-  const anchors = root.querySelectorAll('a[href]');
+}): Array<{ url: string; text: string; internal: boolean; nofollow: boolean }> | null {
+  const scoped = options?.index !== undefined || options?.selector !== undefined;
+  const root = scoped
+    ? options?.index !== undefined
+      ? findIndexedElement(options.index)
+      : document.querySelector(options!.selector!)
+    : document;
+  if (!root) return null;
+  const anchors =
+    root instanceof Element && root.matches('a[href]') ? [root] : root.querySelectorAll('a[href]');
   const out: Array<{ url: string; text: string; internal: boolean; nofollow: boolean }> = [];
   const seen = new Set<string>();
   anchors.forEach((a) => {

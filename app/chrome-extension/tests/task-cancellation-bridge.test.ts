@@ -5,7 +5,6 @@ import * as path from 'node:path';
 import type { CallToolResult } from 'chrome-mcp-shared';
 import { BrowserTaskManager, type BrowserCall } from '../../native-server/src/browser-tasks';
 import { batchActionsTool } from '../entrypoints/background/tools/browser/batch-actions';
-import { formPipelineTool } from '../entrypoints/background/tools/browser/form-pipeline';
 import * as agentCursor from '../entrypoints/background/tools/browser/agent-cursor';
 import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
@@ -210,25 +209,6 @@ describe('task cancellation bridge', () => {
     expect((cancelledResult.structuredContent as any).results[0]).toEqual(
       expect.objectContaining({ actionIndex: 0, success: true, status: 'success' }),
     );
-    expect(fillTargets).toEqual([]);
-  });
-
-  it('refuses to start a form mutation when the request was already cancelled', async () => {
-    vi.spyOn(formPipelineTool as any, 'resolveAffinityTab').mockResolvedValue({
-      id: TAB_ID,
-      url: PAGE_URL,
-    });
-    const controller = new AbortController();
-    controller.abort();
-
-    const result = await formPipelineTool.execute(
-      { fields: [{ query: 'Email', value: 'must-not-run' }], tabId: TAB_ID },
-      { signal: controller.signal },
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.type).toBe('text');
-    expect((result.content[0] as { text: string }).text).toContain('Task cancelled');
     expect(fillTargets).toEqual([]);
   });
 });

@@ -1,213 +1,60 @@
 import type { CallToolResult } from 'chrome-mcp-shared';
 import type { DownloadObservation } from 'chrome-mcp-shared';
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { compensateFailedOpenPage } from './browser-task-compensation';
+import {
+  emptyTaskLedger,
+  readTaskLedger,
+  taskLedgerFile,
+  writeTaskLedger,
+} from './browser-task-ledger';
+import {
+  activeOwnedPages,
+  isUnknownPending,
+  knownPendingTabId,
+  lastActiveTabId,
+  pageIdentityVerified,
+  pageInventory,
+  pendingIdentityCanBeAdopted,
+  taskInventory,
+  taskSummary,
+} from './browser-task-ownership';
+import type {
+  BrowserCall,
+  BrowserInventory,
+  BrowserTabSnapshot,
+  BrowserTask,
+  BrowserTaskBudgetDiagnostic,
+  BrowserTaskInventory,
+  BrowserTaskManagerOptions,
+  BrowserTaskPendingCreation,
+  BrowserTaskResult,
+  BrowserTaskViewport,
+  TaskLedger,
+  TaskPage,
+} from './browser-task-types';
 
-export type BrowserCall = (
-  name: string,
-  args: Record<string, unknown>,
-  sessionId?: string,
-  signal?: AbortSignal,
-) => Promise<CallToolResult>;
-
-type TaskStatus = 'active' | 'finished' | 'cancelled';
-type PageOwnership = 'owned' | 'borrowed' | 'user';
-type PageState = 'active' | 'handedOff' | 'closed';
-
-export interface BrowserTaskViewport {
-  status: 'native' | 'limited';
-  width: number;
-  height: number;
-  dpr?: number;
-  reason?: string;
-}
-
-export interface BrowserTaskPageRecovery {
-  status: 'cleanupPending';
-  reason: string;
-  failedAt: number;
-}
-
-export interface BrowserTaskPageCompensation {
-  status: 'closed' | 'retained';
-  tabId: number;
-  documentId: string;
-  browserInstanceId: string;
-  ledgerPersisted: boolean;
-  error?: string;
-}
-
-export interface BrowserTaskPendingCreation {
-  tabId?: number;
-  unknownId?: string;
-  windowId?: number;
-  requestedUrl: string;
-  createdAt: number;
-  reason: string;
-  receipt?: unknown;
-  retained?: boolean;
-}
-
-interface TaskPage {
-  tabId: number;
-  windowId?: number;
-  openerTabId?: number;
-  url: string;
-  documentId: string;
-  browserInstanceId: string;
-  pendingDocumentId?: string;
-  pendingUrl?: string;
-  viewport?: BrowserTaskViewport;
-  recovery?: BrowserTaskPageRecovery;
-  ownership: PageOwnership;
-  state: PageState;
-  openedAt: number;
-  lastVerifiedAt: number;
-}
-
-interface BrowserTask {
-  id: string;
-  ownerSessionId?: string;
-  name: string;
-  goal?: string;
-  browser?: string;
-  browserInstanceId?: string;
-  status: TaskStatus;
-  maxPages: number;
-  currentTabId?: number;
-  createdAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  cancelledAt?: number;
-  pages: TaskPage[];
-  pendingCreations: BrowserTaskPendingCreation[];
-  downloads?: Array<DownloadObservation & { browserInstanceId: string }>;
-}
-
-interface TaskLedger {
-  version: 1;
-  tasks: Record<string, BrowserTask>;
-}
-
-interface BrowserTabSnapshot {
-  tabId: number;
-  windowId?: number;
-  openerTabId?: number;
-  url: string;
-  status?: string;
-  pendingUrl?: string | null;
-  documentId?: string;
-  browserInstanceId: string;
-  isAgentManaged?: boolean;
-  downloads: DownloadObservation[];
-}
-
-interface BrowserInventory {
-  browserInstanceId: string;
-  sourceDownloads: boolean;
-  tabs: BrowserTabSnapshot[];
-}
-
-export interface BrowserTaskPageInventory {
-  tabId: number;
-  openerTabId?: number;
-  ownership: PageOwnership;
-  state: PageState;
-  url: string;
-  documentId: string;
-  browserInstanceId: string;
-  pendingDocumentId?: string;
-  viewport?: BrowserTaskViewport;
-  recovery?: BrowserTaskPageRecovery;
-  exists?: boolean;
-  identityVerified?: boolean;
-}
-
-export interface BrowserTaskInventory {
-  id: string;
-  name: string;
-  goal?: string;
-  browser?: string;
-  browserInstanceId?: string;
-  status: TaskStatus;
-  maxPages: number;
-  currentTabId?: number;
-  createdAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  cancelledAt?: number;
-  pages: BrowserTaskPageInventory[];
-  pendingCreations: BrowserTaskPendingCreation[];
-  downloads: Array<DownloadObservation & { browserInstanceId: string }>;
-}
-
-export interface BrowserTaskSummary {
-  id: string;
-  name: string;
-  goal?: string;
-  status: TaskStatus;
-  currentTabId?: number;
-  createdAt: number;
-  updatedAt: number;
-  finishedAt?: number;
-  cancelledAt?: number;
-  pageCount: number;
-  downloadCount: number;
-  pendingCreationCount?: number;
-}
-
-export interface BrowserTaskResult {
-  ok: boolean;
-  action: string;
-  tabId?: number;
-  windowId?: number;
-  url?: string;
-  message?: string;
-  error?: string;
-  task?: BrowserTaskInventory;
-  tasks?: BrowserTaskSummary[];
-  dispatched?: boolean;
-  completedActions?: number;
-  created?: BrowserTaskPageInventory;
-  compensation?: BrowserTaskPageCompensation;
-  pendingCreation?: BrowserTaskPendingCreation;
-  ledgerPersisted?: boolean;
-  budgetExceeded?: BrowserTaskBudgetDiagnostic;
-  status?: string;
-  outcome?: string;
-  retry?: boolean;
-  receipt?: unknown;
-  content?: CallToolResult['content'];
-  warning?: string;
-  handedOverUnknown?: BrowserTaskPendingCreation[];
-}
-
-export interface BrowserTaskBudgetDiagnostic {
-  exceeded: true;
-  budget: number;
-  pageCount: number;
-  pages: BrowserTaskPageInventory[];
-}
-
-export interface BrowserTaskManagerOptions {
-  call: BrowserCall;
-  storageDir?: string;
-}
+export type {
+  BrowserCall,
+  BrowserTaskBudgetDiagnostic,
+  BrowserTaskInventory,
+  BrowserTaskManagerOptions,
+  BrowserTaskPageCompensation,
+  BrowserTaskPageInventory,
+  BrowserTaskPageRecovery,
+  BrowserTaskResult,
+  BrowserTaskSummary,
+  BrowserTaskViewport,
+} from './browser-task-types';
 
 const DEFAULT_MAX_PAGES = 8;
-const LEDGER_VERSION = 1 as const;
-const OWN_TASK_TOOL_NAMES = new Set(['chrome_task', 'browser_task', 'browserpaw_task']);
+const OWN_TASK_TOOL_NAMES = new Set(['chrome_task']);
 const TASK_FORBIDDEN_TOOLS = new Set([
   'chrome_tab_group_close',
   'chrome_tab_group_create',
   'chrome_tab_group_update',
   'chrome_tab_group_ungroup',
   'chrome_switch_tab',
-  'chrome_move_tab',
-  'chrome_attach_tab',
-  'chrome_detach_tab',
   'chrome_cdp_execute',
 ]);
 const CREATED_TAB_MESSAGE = 'Opened URL in new tab in existing window';
@@ -218,9 +65,7 @@ const OBSERVATION_TOOL_NAMES = new Set([
   'chrome_screenshot',
   'chrome_read_dom',
   'chrome_get_markdown',
-  'chrome_get_web_content',
   'chrome_grep',
-  'chrome_get_links',
   'chrome_inspect_media',
   'chrome_get_dropdown_options',
   'chrome_console',
@@ -615,89 +460,19 @@ function optionalPositiveInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function knownPendingTabId(pending: BrowserTaskPendingCreation): number | undefined {
-  return optionalPositiveInt(pending.tabId);
-}
-
-function isUnknownPending(pending: BrowserTaskPendingCreation): boolean {
-  return (
-    knownPendingTabId(pending) === undefined &&
-    typeof pending.unknownId === 'string' &&
-    pending.unknownId.trim().length > 0
-  );
-}
-
-function homeDir(): string {
-  return process.env.BROWSERPAW_HOME || path.join(os.homedir(), '.browserpaw');
-}
-
-function pageInventory(page: TaskPage): BrowserTaskPageInventory {
-  return {
-    tabId: page.tabId,
-    ...(page.openerTabId !== undefined ? { openerTabId: page.openerTabId } : {}),
-    ownership: page.ownership,
-    state: page.state,
-    url: page.url,
-    documentId: page.documentId,
-    browserInstanceId: page.browserInstanceId,
-    ...(page.pendingDocumentId ? { pendingDocumentId: page.pendingDocumentId } : {}),
-    ...(page.viewport ? { viewport: page.viewport } : {}),
-    ...(page.recovery ? { recovery: page.recovery } : {}),
-  };
-}
-
-function taskInventory(task: BrowserTask): BrowserTaskInventory {
-  return {
-    id: task.id,
-    name: task.name,
-    ...(task.goal ? { goal: task.goal } : {}),
-    ...(task.browser ? { browser: task.browser } : {}),
-    ...(task.browserInstanceId ? { browserInstanceId: task.browserInstanceId } : {}),
-    status: task.status,
-    maxPages: task.maxPages,
-    ...(task.currentTabId !== undefined ? { currentTabId: task.currentTabId } : {}),
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}),
-    ...(task.cancelledAt !== undefined ? { cancelledAt: task.cancelledAt } : {}),
-    pages: task.pages.map(pageInventory),
-    pendingCreations: task.pendingCreations,
-    downloads: task.downloads || [],
-  };
-}
-
-function taskSummary(task: BrowserTask): BrowserTaskSummary {
-  return {
-    id: task.id,
-    name: task.name,
-    ...(task.goal ? { goal: task.goal } : {}),
-    status: task.status,
-    ...(task.currentTabId !== undefined ? { currentTabId: task.currentTabId } : {}),
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    ...(task.finishedAt !== undefined ? { finishedAt: task.finishedAt } : {}),
-    ...(task.cancelledAt !== undefined ? { cancelledAt: task.cancelledAt } : {}),
-    pageCount: task.pages.length,
-    downloadCount: task.downloads?.length ?? 0,
-    ...(task.pendingCreations.length > 0
-      ? { pendingCreationCount: task.pendingCreations.length }
-      : {}),
-  };
-}
-
 export class BrowserTaskManager {
   private readonly call: BrowserCall;
   private readonly ledgerFile: string;
   private loaded = false;
   private loading: Promise<void> | undefined;
-  private ledger: TaskLedger = { version: LEDGER_VERSION, tasks: {} };
+  private ledger: TaskLedger = emptyTaskLedger();
   private ledgerQueue: Promise<unknown> = Promise.resolve();
   private readonly taskQueues = new Map<string, Promise<unknown>>();
   private readonly activeTaskCalls = new Map<string, Set<AbortController>>();
 
   constructor(options: BrowserTaskManagerOptions) {
     this.call = options.call;
-    this.ledgerFile = path.join(options.storageDir || homeDir(), 'tasks.json');
+    this.ledgerFile = taskLedgerFile(options.storageDir);
   }
 
   async execute(
@@ -800,19 +575,12 @@ export class BrowserTaskManager {
       const target = this.resolveTargetPage(task, args);
       const callArgs = { ...args };
       delete callArgs.taskId;
-      if (
-        [
-          'chrome_click_element',
-          'chrome_fill_or_select',
-          'chrome_keyboard',
-          'chrome_batch_actions',
-          'chrome_form_pipeline',
-        ].includes(name)
-      ) {
+      if (name === 'chrome_keyboard' || name === 'chrome_batch_actions') {
         callArgs._taskId = task.id;
       }
       const observationOnly =
         OBSERVATION_TOOL_NAMES.has(name) ||
+        (name === 'chrome_page' && callArgs.action === 'text_links') ||
         (name === 'chrome_handle_download' && typeof callArgs.guid === 'string');
 
       if (callArgs.tabIds !== undefined) {
@@ -1179,7 +947,7 @@ export class BrowserTaskManager {
               page.ownership = 'user';
               page.state = 'handedOff';
               this.markDownloadsHandedOff(task, page.tabId);
-              if (task.currentTabId === page.tabId) task.currentTabId = this.lastActiveTabId(task);
+              if (task.currentTabId === page.tabId) task.currentTabId = lastActiveTabId(task);
             }
           }
           verified.set(page.tabId, { exists, identityVerified });
@@ -1284,7 +1052,7 @@ export class BrowserTaskManager {
                 error: [
                   'One or more task pages no longer exist or failed identity verification; URL alone is never used to adopt a page',
                   unresolvedPendingCreations > 0
-                    ? `${unresolvedPendingCreations} pending page creation(s) still require an explicit resume with adopt: true after their tab and document identity are observable`
+                    ? `${unresolvedPendingCreations} pending page creation(s) remain. After inspecting any recorded tabs, use browserpaw task resume --task ${taskId} --adopt to verify them if possible`
                     : '',
                 ]
                   .filter(Boolean)
@@ -1369,7 +1137,7 @@ export class BrowserTaskManager {
           task: taskInventory(task),
         };
       }
-      if (this.activeOwnedPages(task).length + task.pendingCreations.length >= task.maxPages) {
+      if (activeOwnedPages(task).length + task.pendingCreations.length >= task.maxPages) {
         return {
           ok: false,
           action: 'open',
@@ -1914,7 +1682,7 @@ export class BrowserTaskManager {
         this.markDownloadsHandedOff(current, tabId);
         delete currentPage.recovery;
         if (current.currentTabId === tabId) {
-          current.currentTabId = this.lastActiveTabId(current);
+          current.currentTabId = lastActiveTabId(current);
         }
         current.updatedAt = Date.now();
         await this.persist();
@@ -2087,7 +1855,7 @@ export class BrowserTaskManager {
         new Map<number, number | undefined>(),
       );
       const refreshed = this.requireTask(taskId);
-      const activeOwned = this.activeOwnedPages(refreshed);
+      const activeOwned = activeOwnedPages(refreshed);
       const verifiedOwned = activeOwned.filter((page) => {
         const observed = inventory.tabs.find((candidate) => candidate.tabId === page.tabId);
         return Boolean(
@@ -2103,13 +1871,19 @@ export class BrowserTaskManager {
         return observed !== undefined && observed.isAgentManaged !== false;
       });
       if (unreleased.length > 0) {
+        const recovery =
+          refreshed.status === 'cancelled'
+            ? 'Task is cancelled; preserve these pages for the user and retry finish after they have been explicitly closed.'
+            : unreleased.every((page) => pendingIdentityCanBeAdopted(refreshed, page, inventory))
+              ? `Inspect the current pages, then run browserpaw task resume --task ${taskId} --adopt before finishing.`
+              : 'Inspect task status and the current tabs. One or more pages lack a matching pending document.';
         return {
           ok: false,
           action: 'finish',
           status: 'unverified',
           retry: false,
           dispatched: false,
-          error: `Task finish refused: browser/document identity is unverified for owned tabs ${unreleased.map((page) => page.tabId).join(', ')}. Pages remain owned. ${refreshed.status === 'cancelled' ? 'Task is cancelled; preserve these pages for the user and retry finish after they have been explicitly closed.' : 'Resume to inspect pending navigation before cleanup.'}`,
+          error: `Task finish refused: browser/document identity is unverified for owned tabs ${unreleased.map((page) => page.tabId).join(', ')}. Pages remain owned. ${recovery}`,
           task: taskInventory(refreshed),
         };
       }
@@ -2126,7 +1900,7 @@ export class BrowserTaskManager {
           released.state = 'handedOff';
           this.markDownloadsHandedOff(current, released.tabId);
           delete released.recovery;
-          current.currentTabId = this.lastActiveTabId(current);
+          current.currentTabId = lastActiveTabId(current);
           current.updatedAt = Date.now();
           await this.persist();
         });
@@ -2176,7 +1950,7 @@ export class BrowserTaskManager {
         current.pages = current.pages.filter((page) => !ids.includes(page.tabId));
         current.pages = current.pages.filter((page) => page.state !== 'closed');
         current.pages = current.pages.filter((page) => page.ownership !== 'borrowed');
-        current.currentTabId = this.lastActiveTabId(current);
+        current.currentTabId = lastActiveTabId(current);
         current.updatedAt = Date.now();
         const handedOverUnknown = current.pendingCreations.filter(isUnknownPending);
         if (keepUnknownPages) {
@@ -2584,12 +2358,8 @@ export class BrowserTaskManager {
     return page;
   }
 
-  private activeOwnedPages(task: BrowserTask): TaskPage[] {
-    return task.pages.filter((page) => page.ownership === 'owned' && page.state === 'active');
-  }
-
   private budgetDiagnostic(task: BrowserTask): BrowserTaskBudgetDiagnostic | undefined {
-    const pageCount = this.activeOwnedPages(task).length;
+    const pageCount = activeOwnedPages(task).length;
     if (pageCount <= task.maxPages) return undefined;
     return {
       exceeded: true,
@@ -2690,25 +2460,14 @@ export class BrowserTaskManager {
   }
 
   private assertObservedPage(task: BrowserTask, page: TaskPage, inventory: BrowserInventory): void {
-    const observed = inventory.tabs.find((candidate) => candidate.tabId === page.tabId);
-    const sameBrowser = Boolean(
-      task.browserInstanceId === inventory.browserInstanceId &&
-      page.browserInstanceId === inventory.browserInstanceId &&
-      observed?.browserInstanceId === inventory.browserInstanceId,
-    );
-    const sameDocument = Boolean(observed?.documentId && observed.documentId === page.documentId);
-    if (
-      sameBrowser &&
-      sameDocument &&
-      (page.ownership !== 'owned' || observed?.isAgentManaged === true)
-    )
-      return;
+    if (pageIdentityVerified(task, page, inventory)) return;
 
-    const canAdopt =
-      sameBrowser && observed?.documentId && page.pendingDocumentId === observed.documentId;
+    const canAdopt = pendingIdentityCanBeAdopted(task, page, inventory);
     throw new Error(
       `Tab ${page.tabId} failed browser/document identity verification; refusing to mutate it` +
-        (canAdopt ? '; run resume with adopt: true to confirm the pending document' : ''),
+        (canAdopt
+          ? `. Inspect the current page, then run browserpaw task resume --task ${task.id} --adopt to confirm the pending document.`
+          : ''),
     );
   }
 
@@ -2749,119 +2508,16 @@ export class BrowserTaskManager {
       pageWasPersisted: boolean;
       pendingCreation?: BrowserTaskPendingCreation;
     },
-  ): Promise<{
-    task: BrowserTaskInventory;
-    page: TaskPage;
-    compensation: BrowserTaskPageCompensation;
-    message: string;
-  }> {
-    let cleanupError: string | undefined;
-    try {
-      await this.closeCreatedPage(page, options.sessionId);
-    } catch (error) {
-      cleanupError = errorMessage(error);
-    }
-
-    return this.withLedgerLock(async () => {
-      const current = this.requireTask(taskId);
-      let target = current.pages.find(
-        (candidate) =>
-          candidate.tabId === page.tabId &&
-          candidate.documentId === page.documentId &&
-          candidate.browserInstanceId === page.browserInstanceId &&
-          candidate.ownership === 'owned' &&
-          candidate.state === 'active',
-      );
-
-      if (!cleanupError) {
-        if (target) {
-          current.pages = current.pages.filter((candidate) => candidate !== target);
-          if (current.currentTabId === page.tabId) {
-            current.currentTabId =
-              options.previousCurrentTabId === page.tabId
-                ? this.lastActiveTabId(current)
-                : options.previousCurrentTabId;
-          }
-          if (!options.pageWasPersisted && current.browserInstanceId === page.browserInstanceId) {
-            current.browserInstanceId = options.previousBrowserInstanceId;
-          }
-        }
-        if (options.pendingCreation) {
-          current.pendingCreations = current.pendingCreations.filter(
-            (candidate) => candidate !== options.pendingCreation,
-          );
-        }
-        const compensatedPage = target || page;
-        compensatedPage.state = 'closed';
-        current.updatedAt = Date.now();
-        let ledgerPersisted = true;
-        let ledgerError: string | undefined;
-        try {
-          await this.persist();
-        } catch (error) {
-          ledgerPersisted = false;
-          ledgerError = errorMessage(error);
-        }
-        return {
-          task: taskInventory(current),
-          page: compensatedPage,
-          compensation: {
-            status: 'closed',
-            tabId: page.tabId,
-            documentId: page.documentId,
-            browserInstanceId: page.browserInstanceId,
-            ledgerPersisted,
-            ...(ledgerError ? { error: `Final ledger persistence failed: ${ledgerError}` } : {}),
-          },
-          message: ledgerPersisted
-            ? 'the self-created page was closed after exact identity verification'
-            : `the self-created page was closed after exact identity verification, but the final ledger state could not be persisted: ${ledgerError}`,
-        };
-      }
-
-      if (!target && !options.pageWasPersisted) {
-        current.pages.push(page);
-        current.currentTabId = page.tabId;
-        current.browserInstanceId = page.browserInstanceId;
-        target = page;
-      }
-      if (options.pendingCreation) {
-        current.pendingCreations = current.pendingCreations.filter(
-          (candidate) => candidate !== options.pendingCreation,
-        );
-      }
-      if (target) {
-        target.recovery = {
-          status: 'cleanupPending',
-          reason: cleanupError,
-          failedAt: Date.now(),
-        };
-      }
-      current.updatedAt = Date.now();
-      let ledgerPersisted = true;
-      let ledgerError: string | undefined;
-      try {
-        await this.persist();
-      } catch (error) {
-        ledgerPersisted = false;
-        ledgerError = errorMessage(error);
-      }
-      return {
-        task: taskInventory(current),
-        page: target || page,
-        compensation: {
-          status: 'retained',
-          tabId: page.tabId,
-          documentId: page.documentId,
-          browserInstanceId: page.browserInstanceId,
-          ledgerPersisted,
-          error: cleanupError,
-        },
-        message: ledgerPersisted
-          ? `verified cleanup did not complete (${cleanupError}); the page identity and cleanupPending state were persisted for recovery`
-          : `verified cleanup did not complete (${cleanupError}); the page identity remains in memory, but neither cleanup nor its recovery record could be persisted: ${ledgerError}`,
-      };
-    });
+  ): ReturnType<typeof compensateFailedOpenPage> {
+    return compensateFailedOpenPage(
+      () => this.closeCreatedPage(page, options.sessionId),
+      this.withLedgerLock.bind(this),
+      (taskIdToLoad) => this.requireTask(taskIdToLoad),
+      () => this.persist(),
+      taskId,
+      page,
+      options,
+    );
   }
 
   private async recordPendingCreation(
@@ -2977,16 +2633,7 @@ export class BrowserTaskManager {
 
   private removePage(task: BrowserTask, tabId: number): void {
     task.pages = task.pages.filter((page) => page.tabId !== tabId);
-    if (task.currentTabId === tabId) task.currentTabId = this.lastActiveTabId(task);
-  }
-
-  private lastActiveTabId(task: BrowserTask): number | undefined {
-    return task.pages
-      .filter(
-        (page) =>
-          page.state === 'active' && (page.ownership === 'owned' || page.ownership === 'borrowed'),
-      )
-      .at(-1)?.tabId;
+    if (task.currentTabId === tabId) task.currentTabId = lastActiveTabId(task);
   }
 
   private async ensureLoaded(): Promise<void> {
@@ -3000,72 +2647,14 @@ export class BrowserTaskManager {
   }
 
   private async loadLedger(): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(this.ledgerFile, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      this.ledger = { version: LEDGER_VERSION, tasks: {} };
-      this.loaded = true;
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const timestamp = new Date().toISOString().replace(/\D/g, '');
-      const quarantine = `${this.ledgerFile}.corrupt.${timestamp}`;
-      await fs.promises.rename(this.ledgerFile, quarantine);
-      console.error(
-        `BrowserPaw task ledger was corrupt; quarantined it at ${quarantine} and started with an empty ledger.`,
-      );
-      this.ledger = { version: LEDGER_VERSION, tasks: {} };
-      this.loaded = true;
-      return;
-    }
-
-    if (!isRecord(parsed) || parsed.version !== LEDGER_VERSION || !isRecord(parsed.tasks)) {
-      throw new Error(`Unsupported or corrupt task ledger: ${this.ledgerFile}`);
-    }
-    this.ledger = parsed as unknown as TaskLedger;
-    for (const task of Object.values(this.ledger.tasks)) {
-      if (!Array.isArray(task.pendingCreations)) task.pendingCreations = [];
-    }
-    const pruned = this.pruneTerminalTasks();
-    if (pruned) {
-      await this.persist();
-    }
+    const loaded = await readTaskLedger(this.ledgerFile);
+    this.ledger = loaded.ledger;
+    if (loaded.changed) await writeTaskLedger(this.ledgerFile, this.ledger);
     this.loaded = true;
   }
 
-  private pruneTerminalTasks(maxTerminalTasks = 30): boolean {
-    const terminal = Object.values(this.ledger.tasks)
-      .filter((task) => task.status === 'finished' || task.status === 'cancelled')
-      .sort(
-        (left, right) =>
-          (right.finishedAt ?? right.updatedAt ?? right.createdAt) -
-          (left.finishedAt ?? left.updatedAt ?? left.createdAt),
-      );
-    const stale = terminal.slice(maxTerminalTasks);
-    for (const item of stale) {
-      delete this.ledger.tasks[item.id];
-    }
-    return stale.length > 0;
-  }
-
   private async persist(): Promise<void> {
-    this.pruneTerminalTasks();
-    await fs.promises.mkdir(path.dirname(this.ledgerFile), { recursive: true, mode: 0o700 });
-    const tempFile = `${this.ledgerFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    const body = `${JSON.stringify(this.ledger, null, 2)}\n`;
-    try {
-      await fs.promises.writeFile(tempFile, body, { encoding: 'utf8', mode: 0o600 });
-      await fs.promises.rename(tempFile, this.ledgerFile);
-    } catch (error) {
-      await fs.promises.rm(tempFile, { force: true }).catch(() => {});
-      throw error;
-    }
+    await writeTaskLedger(this.ledgerFile, this.ledger);
   }
 
   private async withLedgerLock<T>(operation: () => Promise<T>): Promise<T> {

@@ -3,10 +3,13 @@ import { argumentCount, CommandError, integer, type CommandRun } from './command
 
 export const profileCommands = new Set(['history', 'bookmark', 'downloads', 'cookies']);
 
-export function time(value: string, now = Date.now()) {
+export function time(value: string, now = Date.now(), direction: 1 | -1 = -1) {
   const relative = /^(\d+)([mhdw])$/.exec(value);
   const result = relative
-    ? now - Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000, w: 604800000 }[relative[2]]!
+    ? now +
+      direction *
+        Number(relative[1]) *
+        { m: 60000, h: 3600000, d: 86400000, w: 604800000 }[relative[2]]!
     : /^\d+$/.test(value)
       ? Number(value)
       : /^\d{4}-\d{2}-\d{2}(?:T.*(?:Z|[+-]\d{2}:\d{2}))?$/.test(value)
@@ -168,7 +171,9 @@ export function dispatchData(command: ParsedCommand, run: CommandRun) {
       httpOnly: !!options['http-only'],
       sameSite: options['same-site'],
       expirationDate:
-        typeof options.expires === 'string' ? time(options.expires) / 1000 : undefined,
+        typeof options.expires === 'string'
+          ? time(options.expires, Date.now(), 1) / 1000
+          : undefined,
     });
   }
   if (group === 'storage') {

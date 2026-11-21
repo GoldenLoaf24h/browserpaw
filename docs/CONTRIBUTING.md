@@ -77,32 +77,27 @@ browserpaw/
 
 ## 🛠️ Development Workflow
 
-### Adding New Tools
+### Adding New CLI Commands and Browser Executors
 
-1. **Define the tool schema in `packages/shared/src/tools.ts`**:
-   Specify parameters, descriptions, and required fields.
+1. **Define the command spec in `packages/shared/src/commands.ts`**:
+   Register command names, options, arguments, examples, and search keywords in `COMMAND_SPECS`.
 
-2. **Register the tool name in `packages/shared/src/tools.ts`** under `TOOL_NAMES.BROWSER`.
+2. **Route the command in `app/native-server/src/command-dispatch.ts`** (and `commands-page.ts` / `commands-debug.ts` when applicable):
+   Map the parsed CLI command to a local handler or internal extension execution request, preserving task ownership and receipt contracts.
 
-3. **Map the tool to a category in `packages/shared/src/tool-profiles.ts`**:
-   Add the tool name to `TOOL_CATEGORIES` under one of the 8 canonical categories:
-   `navigate`, `perceive`, `act`, `observe`, `manage`, `diagnose`, `network`, or `crawl`.
-   If it belongs in the default profiles, include it in `CORE_TOOL_NAMES` or `CRAWL_TOOL_NAMES`.
+3. **Implement or reuse the browser executor in `app/chrome-extension/entrypoints/background/tools/browser/`**:
+   Extend `BaseBrowserToolExecutor`, implement `execute(args)`, and ensure it is registered in `app/chrome-extension/entrypoints/background/tools/index.ts` (and `packages/shared/src/tools.ts` if an internal extension schema is shared).
 
-4. **Implement the tool executor in `app/chrome-extension/entrypoints/background/tools/browser/`**:
-   Extend `BaseBrowserToolExecutor` and implement `execute(args)`.
-
-5. **Register the executor in `app/chrome-extension/entrypoints/background/tools/index.ts`** in `toolsMap`.
-
-6. **Regenerate tool documentation**:
+4. **Regenerate command documentation and sync skill mirrors**:
 
    ```bash
    pnpm --filter chrome-mcp-shared build
-   node scripts/gen-tools-doc.mjs
+   pnpm docs:commands
+   node scripts/sync-skills.mjs
    ```
 
-7. **Add automated tests**:
-   Add a unit test in `app/chrome-extension/tests/` and verify with `pnpm --filter chrome-mcp-server test` and `pnpm test`.
+5. **Add automated tests**:
+   Add focused tests in `app/chrome-extension/tests/`, `app/native-server/src/`, or `scripts/browserpaw-commands.test.mjs`, and verify with `pnpm verify`.
 
 ### Core Architecture & Security Guidelines for Contributors
 
@@ -145,7 +140,7 @@ git checkout -b feature/your-feature-name
    - Verify the CLI, Native loopback protocol and extension integration
    - **Authentic Evidence Integrity**: Never hand-edit or fabricate `sourceFingerprint`, `buildId`, delivery hashes, or test `status` fields.
    - **Documentation Edit Re-verification**: Documentation changes invalidate prior verification fingerprints; rerun the full gate before a release or delivery claim. Focused documentation checks are sufficient during iteration.
-   - **Browser Acceptance vs. Simulated Tests**: Mocked or simulated E2E runs are development checks and do **not** constitute browser acceptance. Real browser verification requires loading into Chrome, performing a manual extension reload in `chrome://extensions`, and confirming matching runtime `buildId` via `chrome_doctor`.
+   - **Browser Acceptance vs. Simulated Tests**: Mocked or simulated E2E runs are development checks and do **not** constitute browser acceptance. Real browser verification requires loading into Chrome, performing a manual extension reload in `chrome://extensions`, and confirming matching runtime `buildId` via `browserpaw doctor` (or `browserpaw status`).
 
 4. **Commit your changes**
 

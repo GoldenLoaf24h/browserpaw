@@ -777,9 +777,16 @@ export class BrowserSkillStore {
         throw new Error('Verification output must contain a concrete assertion');
       }
     }
-    const record: SkillRecord = fs.existsSync(filename)
-      ? this.read(definition.id)
-      : { id: definition.id, versions: [] };
+    const existing = fs.existsSync(filename) ? this.read(definition.id) : undefined;
+    const active = existing?.versions.find(
+      (item) => item.version === existing.activeVersion && item.status === 'active',
+    );
+    const unchanged =
+      active &&
+      active.hash === hash(definition) &&
+      active.definition.startUrl === definition.startUrl;
+    if (unchanged) return this.summary(existing!, active);
+    const record: SkillRecord = existing ?? { id: definition.id, versions: [] };
     if (this.running.has(definition.id)) throw new Error('Skill is being validated or executed');
     const version: SkillVersion = {
       version: Math.max(0, ...record.versions.map((item) => item.version)) + 1,

@@ -1,114 +1,60 @@
 import {
   type IndexedElement,
-  type PageAsset,
   type PrunedDOMTreeResult,
   type ScrollInfo,
   type ScrollUntilFoundOptions,
   type ScrollUntilFoundResult,
 } from 'chrome-mcp-shared';
+import {
+  derefElement,
+  getIsolatedIndexMap,
+  indexElement,
+  pruneDetachedIndices,
+  safeClickPointWeakMap,
+} from './dom-indexer/index-state';
+import { samplePage } from './dom-indexer/page-sampling';
+import {
+  composedChildNodes,
+  composedChildren,
+  composedClosest,
+  composedContainingElement,
+  composedContains,
+  composedParent,
+  extractComposedVisibleText,
+  getShadowRoot,
+  isBlockLikeElement,
+  isCustomElement,
+  isElementHiddenInComposedTree,
+} from './dom-indexer/composed-dom';
+
+export {
+  derefElement,
+  getIsolatedIndexMap,
+  INDEX_NAMESPACE_SIZE,
+  indexElement,
+  inPageSetIndexNamespace,
+  pruneDetachedIndices,
+  safeClickPointWeakMap,
+  wrapElement,
+} from './dom-indexer/index-state';
+export {
+  composedChildNodes,
+  composedChildren,
+  composedClosest,
+  composedContainingElement,
+  composedContains,
+  composedParent,
+  extractComposedVisibleText,
+  getShadowRoot,
+  isBlockLikeElement,
+  isCustomElement,
+  isElementHiddenInComposedTree,
+} from './dom-indexer/composed-dom';
 
 /**
  * Standard structured self-healing guidance when an element is not found or expired
  */
 export const DIAGNOSTIC_REFRESH_GUIDANCE = `ACTION REQUIRED: Please call 'browserpaw observe' to refresh the index tree before re-attempting interaction`;
-
-/**
- * Isolated symbol to store element index map in the extension's execution context.
- * Prevents polluting global window scope and prevents host page hijacking.
- * Stored as WeakRef to prevent Detached DOM Trees in Blink C++ memory.
- */
-const ISOLATED_INDEX_MAP_KEY = Symbol.for('__browser_use_isolated_index_map__');
-
-export function derefElement(entry: any): Element | null {
-  if (!entry) return null;
-  if (typeof entry.deref === 'function') {
-    return entry.deref() ?? null;
-  }
-  return (entry as Element) ?? null;
-}
-
-export function wrapElement(el: Element): any {
-  if (typeof WeakRef !== 'undefined') {
-    return new WeakRef(el);
-  }
-  return el;
-}
-
-export function getIsolatedIndexMap(): Map<number, any> {
-  const g = globalThis as any;
-  if (!g[ISOLATED_INDEX_MAP_KEY]) {
-    g[ISOLATED_INDEX_MAP_KEY] = new Map<number, any>();
-  }
-  return g[ISOLATED_INDEX_MAP_KEY];
-}
-
-export const INDEX_NAMESPACE_SIZE = 2 ** 24;
-const INDEX_IDENTITY_KEY = Symbol.for('__browser_use_index_identity__');
-
-function getIndexState() {
-  const g = globalThis as any;
-  const base = g[Symbol.for('__browser_use_index_namespace__')] ?? 0;
-  if (!g[INDEX_IDENTITY_KEY]) {
-    const ids = new WeakMap<Element, Map<string, number>>();
-    let next = base + 1;
-    const map = getIsolatedIndexMap();
-    for (const [index, entry] of map) {
-      const node = derefElement(entry);
-      if (node) ids.set(node, new Map([['', index]]));
-      next = Math.max(next, index + 1);
-    }
-    g[INDEX_IDENTITY_KEY] = { ids, next, base };
-  }
-  return g[INDEX_IDENTITY_KEY] as {
-    ids: WeakMap<Element, Map<string, number>>;
-    next: number;
-    base: number;
-  };
-}
-
-export function inPageSetIndexNamespace(base: number): boolean {
-  if (
-    !Number.isSafeInteger(base) ||
-    base < INDEX_NAMESPACE_SIZE ||
-    base % INDEX_NAMESPACE_SIZE !== 0 ||
-    base + INDEX_NAMESPACE_SIZE > Number.MAX_SAFE_INTEGER
-  ) {
-    return false;
-  }
-  const g = globalThis as any;
-  const key = Symbol.for('__browser_use_index_namespace__');
-  if (g[key] !== undefined) return true;
-  // Invalidate references from an older engine before installing the document namespace.
-  getIsolatedIndexMap().clear();
-  delete g[INDEX_IDENTITY_KEY];
-  for (const cache of [g.__pawFast, g.__clawFast]) {
-    cache?.actionElements?.clear();
-  }
-  g[key] = base;
-  return true;
-}
-
-export function indexElement(el: Element, key = '', minimum = 1): number {
-  const map = getIsolatedIndexMap();
-  const state = getIndexState();
-  let ids = state.ids.get(el);
-  if (!ids) {
-    ids = new Map();
-    state.ids.set(el, ids);
-  }
-  let index = ids.get(key);
-  if (index === undefined) {
-    state.next = Math.max(state.next, minimum);
-    while (map.has(state.next)) state.next++;
-    if (state.next >= state.base + INDEX_NAMESPACE_SIZE) {
-      throw new Error('DOM index namespace exhausted; refusing to reuse an element index');
-    }
-    index = state.next++;
-    ids.set(key, index);
-  }
-  map.set(index, wrapElement(el));
-  return index;
-}
 
 export interface FormObservationMetadata {
   label?: string;
@@ -133,7 +79,8 @@ export function readFormObservationMetadata(el: Element): FormObservationMetadat
   const editable =
     (el as HTMLElement).isContentEditable ||
     el.getAttribute('contenteditable') === 'true' ||
-    el.getAttribute('contenteditable') === '';
+    el.getAttribute('contenteditable') === '' ||
+    el.getAttribute('contenteditable') === 'plaintext-only';
   const nativeControl = tag === 'input' || tag === 'textarea' || tag === 'select';
   const formRole = ['textbox', 'combobox', 'searchbox', 'spinbutton'].includes(role);
   if (!nativeControl && !editable && !formRole) return null;
@@ -199,80 +146,10 @@ export {
   type TableObservationMetadata,
   type TableObservationCache,
 };
-export function pruneDetachedIndices(): void {
-  for (const [index, entry] of getIsolatedIndexMap()) {
-    const el = derefElement(entry);
-    if (!el?.isConnected || el.ownerDocument !== document) {
-      getIsolatedIndexMap().delete(index);
-    }
-  }
-}
-
-/**
- * Mapping from DOM Element to its verified unoccluded safe click point
- * computed during 9-point grid occlusion sampling.
- *
- * Pinned to globalThis under a registered symbol for the same reason as the
- * isolated index map above: the in-page engine is injected as a file, and a
- * module-scope WeakMap is rebuilt whenever that file re-executes, silently
- * dropping the occlusion-safe click point between chrome_read_dom (writer) and
- * chrome_interact_index (reader) — which degraded clicks back to the geometric
- * centre of partially covered elements.
- */
-const SAFE_CLICK_POINT_KEY = Symbol.for('__browser_use_safe_click_point_map__');
-
-function getSafeClickPointMap(): WeakMap<
-  Element,
-  { x: number; y: number; offsetX: number; offsetY: number }
-> {
-  const g = globalThis as any;
-  if (!g[SAFE_CLICK_POINT_KEY]) {
-    g[SAFE_CLICK_POINT_KEY] = new WeakMap<
-      Element,
-      { x: number; y: number; offsetX: number; offsetY: number }
-    >();
-  }
-  return g[SAFE_CLICK_POINT_KEY];
-}
-
-export const safeClickPointWeakMap = getSafeClickPointMap();
-
 /**
  * Shadow DOM and composed tree traversal helpers.
  * These enable penetrating Shadow DOM boundaries to find the true interactive target.
  */
-export function composedParent(element: Element | null): Element | null {
-  if (!element) return null;
-  if ((element as any).assignedSlot) return (element as any).assignedSlot;
-  if (element.parentElement) return element.parentElement;
-  const root = element.getRootNode ? element.getRootNode() : null;
-  return root && root.nodeType === 11 ? (root as ShadowRoot).host : null;
-}
-
-export function composedChildren(element: Element): Element[] {
-  if (!element) return [];
-  if (element.tagName.toUpperCase() === 'SLOT') {
-    const assigned = (element as HTMLSlotElement).assignedElements?.({ flatten: true }) || [];
-    if (assigned.length > 0) return assigned;
-  }
-  const container = getShadowRoot(element) || element;
-  return Array.from(container.children || []) as Element[];
-}
-
-/**
- * Checks whether an ancestor node contains a descendant across open and composed shadow boundaries.
- */
-export function composedContains(ancestor: Node | null, descendant: Node | null): boolean {
-  if (!ancestor || !descendant) return false;
-  let cur: Element | null =
-    descendant instanceof Element ? descendant : (descendant.parentElement as Element | null);
-  while (cur) {
-    if (cur === ancestor) return true;
-    cur = composedParent(cur);
-  }
-  return false;
-}
-
 export function observationFocusScope(active: Element | null): Element | null {
   const form = (active as HTMLInputElement | null)?.form;
   if (form) return form;
@@ -322,7 +199,7 @@ export function describeHitTarget(element: Element): string {
       const name =
         modal.getAttribute?.('aria-label') ||
         modal.getAttribute?.('aria-labelledby') ||
-        modal.querySelector?.('h1,h2,h3,h4,h5,h6')?.textContent?.trim();
+        extractComposedVisibleText(querySelectorDeep('h1,h2,h3,h4,h5,h6', modal), { maxLen: 80 });
       return name ? `dialog "${name}"` : 'dialog';
     }
     modal = composedParent(modal);
@@ -342,7 +219,11 @@ export function describeHitTarget(element: Element): string {
  * Whitelist check for interactive SVG nodes (e.g. icons, clickable vectors).
  * Prevents non-standard interactive SVG elements from being pruned as decorative.
  */
-export function isInteractiveSvgNode(el: Element, style?: CSSStyleDeclaration): boolean {
+export function isInteractiveSvgNode(
+  el: Element,
+  style?: CSSStyleDeclaration,
+  parentHasPointer = false,
+): boolean {
   if (!el || (typeof Element !== 'undefined' && !(el instanceof Element) && !(el as any).tagName))
     return false;
   const tag = (el.tagName || '').toLowerCase();
@@ -350,7 +231,7 @@ export function isInteractiveSvgNode(el: Element, style?: CSSStyleDeclaration): 
     tag === 'svg' ||
     /^(path|g|rect|circle|line|polygon|polyline|ellipse|text|tspan|use|image)$/i.test(tag) ||
     el.namespaceURI === 'http://www.w3.org/2000/svg' ||
-    (typeof el.closest === 'function' && Boolean(el.closest('svg')));
+    Boolean(composedClosest(el, 'svg'));
   if (!isSvg) return false;
 
   if (
@@ -375,7 +256,10 @@ export function isInteractiveSvgNode(el: Element, style?: CSSStyleDeclaration): 
     (el.hasAttribute?.('tabindex') && !el.getAttribute('tabindex')?.startsWith('-'))
   )
     return true;
-  if (style && (style.cursor === 'pointer' || /grab|grabbing|move/i.test(style.cursor)))
+  if (
+    style &&
+    ((!parentHasPointer && style.cursor === 'pointer') || /grab|grabbing|move/i.test(style.cursor))
+  )
     return true;
   if (typeof el.getAttributeNames === 'function') {
     for (const name of el.getAttributeNames()) {
@@ -401,21 +285,6 @@ export function isInteractiveSvgNode(el: Element, style?: CSSStyleDeclaration): 
   return false;
 }
 
-/**
- * Pierce open or closed ShadowRoot using chrome.dom.openOrClosedShadowRoot when available,
- * falling back to native el.shadowRoot.
- */
-export function getShadowRoot(node: Node | null | undefined): ShadowRoot | null {
-  if (!node || (typeof Element !== 'undefined' && !(node instanceof Element))) return null;
-  try {
-    if (typeof chrome !== 'undefined' && chrome?.dom?.openOrClosedShadowRoot) {
-      const sr = chrome.dom.openOrClosedShadowRoot(node as HTMLElement);
-      if (sr) return sr;
-    }
-  } catch {}
-  return (node as Element).shadowRoot || null;
-}
-
 export function getDeepActiveElement(): Element | null {
   let active = typeof document !== 'undefined' ? document.activeElement : null;
   const seen = new Set<Element>();
@@ -427,15 +296,6 @@ export function getDeepActiveElement(): Element | null {
     active = inner;
   }
   return active;
-}
-
-/**
- * Check if a node is an autonomous or customized Web Component custom element.
- */
-export function isCustomElement(node: Node | null | undefined): boolean {
-  if (!node || (typeof Element !== 'undefined' && !(node instanceof Element))) return false;
-  const tag = ((node as Element).tagName || '').toLowerCase();
-  return tag.includes('-') || Boolean((node as Element).getAttribute?.('is'));
 }
 
 /**
@@ -626,7 +486,7 @@ export async function inPageScrollUntilFound(
   }
 
   // Resolve scroll container
-  let container: HTMLElement | Window = window;
+  let container: HTMLElement | undefined;
   if (options?.containerSelector) {
     const el = querySelectorDeep(options.containerSelector);
     if (el instanceof HTMLElement) {
@@ -634,7 +494,7 @@ export async function inPageScrollUntilFound(
     }
   }
 
-  function probeTarget(): Element | null {
+  function probeTarget(): { element: Element; text: string } | null {
     if (typeof document === 'undefined') return null;
 
     const expectedRole = options?.role?.trim().toLowerCase();
@@ -679,62 +539,41 @@ export async function inPageScrollUntilFound(
       return actualRole === expectedRole;
     }
 
-    if (selector) {
-      const candidates = querySelectorAllDeep(selector, document);
-      for (const el of candidates) {
-        if (!el || !(el instanceof Element)) continue;
-        if (!roleMatches(el)) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          const style = window.getComputedStyle(el);
-          if (style.display !== 'none' && style.visibility !== 'hidden') {
-            if (!query || (targetRegex && targetRegex.test(el.textContent || ''))) {
-              return el;
-            }
-          }
-        }
-      }
+    const candidates = querySelectorAllDeep(
+      selector ||
+        'button, a, input, textarea, select, h1, h2, h3, h4, h5, h6, [role], [data-testid], article, p, span, li, div, section, blockquote, label, td, th, dt, dd, strong, b, i, em, code, pre, figcaption',
+      document,
+    );
+    const matches = new Map<Element, string>();
+    for (const element of candidates) {
+      if (!roleMatches(element) || !isLocatorCandidateVisible(element)) continue;
+      const label = element.getAttribute('aria-label')?.trim() ?? '';
+      const visibleText = extractComposedVisibleText(element, targetRegex ? {} : { maxLen: 100 });
+      const control = element as HTMLInputElement;
+      const value =
+        control.type !== 'password' && typeof control.value === 'string' ? control.value : '';
+      const text = targetRegex
+        ? [visibleText, label, control.placeholder, value].find(
+            (part) => typeof part === 'string' && Boolean(part) && targetRegex.test(part),
+          )
+        : visibleText || label;
+      if (text === undefined) continue;
+      if (selector) return { element, text };
+      matches.set(element, text);
     }
-
-    if (targetRegex) {
-      const candidates = querySelectorAllDeep(
-        'button, a, input, textarea, select, h1, h2, h3, h4, h5, h6, [role="button"], [role="article"], [role="link"], [data-testid], article, p, span, li, div, section, blockquote, label, td, th, dt, dd, strong, b, i, em, code, pre, figcaption',
-        document,
-      );
-      for (const el of candidates) {
-        if (!el || !(el instanceof Element)) continue;
-        const text = (
-          el.textContent ||
-          el.getAttribute('aria-label') ||
-          (el as HTMLInputElement).placeholder ||
-          (el as HTMLInputElement).value ||
-          ''
-        ).trim();
-        if (text && targetRegex.test(text)) {
-          if (!roleMatches(el)) continue;
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            const style = window.getComputedStyle(el);
-            if (style.display !== 'none' && style.visibility !== 'hidden') {
-              return el;
-            }
-          }
-        }
-      }
-    }
-
-    return null;
+    const element = collapseNestedLocatorMatches([...matches.keys()])[0];
+    return element ? { element, text: matches.get(element)! } : null;
   }
 
   function getScrollPos(): number {
-    if (container instanceof Window) {
+    if (!container) {
       return window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0;
     }
     return container.scrollTop;
   }
 
   function doScroll(delta: number): void {
-    if (container instanceof Window) {
+    if (!container) {
       window.scrollBy({ top: delta, left: 0, behavior: 'instant' as any });
     } else {
       container.scrollBy({ top: delta, left: 0, behavior: 'instant' as any });
@@ -753,8 +592,9 @@ export async function inPageScrollUntilFound(
       break;
     }
 
-    const hit = probeTarget();
-    if (hit) {
+    const target = probeTarget();
+    if (target) {
+      const hit = target.element;
       if (options?.actionOnFound === 'none') {
         // actionOnFound none: do not force scrollIntoView
       } else if (options?.actionOnFound === 'focus') {
@@ -763,11 +603,20 @@ export async function inPageScrollUntilFound(
           (hit as HTMLElement).focus?.({ preventScroll: true });
         } catch {}
       } else {
-        // default 'scroll_into_view' or 'click': center in viewport
+        // scrollIntoView can move several nested containers in a single call.
+        const windowTop = window.scrollY;
+        const ancestorTops = new Map<Element, number>();
+        for (let ancestor = composedParent(hit); ancestor; ancestor = composedParent(ancestor)) {
+          if (ancestor !== document.scrollingElement) ancestorTops.set(ancestor, ancestor.scrollTop);
+        }
         try {
           hit.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' as any });
         } catch {}
         await wait(50);
+        totalScrolledPx += Math.abs(window.scrollY - windowTop);
+        for (const [ancestor, top] of ancestorTops) {
+          totalScrolledPx += Math.abs(ancestor.scrollTop - top);
+        }
       }
 
       // Resolve or allocate live 1-based index in isolatedMap
@@ -790,9 +639,7 @@ export async function inPageScrollUntilFound(
         y: Math.round(rect.top + rect.height / 2),
       };
 
-      const matchText = (hit.textContent || hit.getAttribute('aria-label') || '')
-        .trim()
-        .slice(0, 100);
+      const matchText = target.text.slice(0, 100);
 
       return {
         found: true,
@@ -802,7 +649,7 @@ export async function inPageScrollUntilFound(
         stepsTaken,
         scrolledPx: totalScrolledPx,
         coordinates: coords,
-        message: `Found target "${matchText || query || selector}" at index [${targetIndex}] after ${stepsTaken} step(s) (${totalScrolledPx}px). Element centered in viewport.`,
+        message: `Found target "${matchText || query || selector}" at index [${targetIndex}] after ${stepsTaken} search step(s) (${totalScrolledPx}px scrolled).`,
       };
     }
 
@@ -813,15 +660,17 @@ export async function inPageScrollUntilFound(
     const delta = direction === 'up' ? -stepPx : stepPx;
     doScroll(delta);
     stepsTaken++;
-    totalScrolledPx += stepPx;
 
     await wait(settleMs);
 
     const currentPos = getScrollPos();
-    if (Math.abs(currentPos - lastPos) < 2) {
+    const moved = Math.abs(currentPos - lastPos);
+    lastPos = currentPos;
+    totalScrolledPx += moved;
+    if (moved < 2) {
       stallCount++;
       // If initial window scroll did not move, attempt fallback to smart inner container
-      if (stallCount === 1 && container instanceof Window && !options?.containerSelector) {
+      if (stallCount === 1 && !container && !options?.containerSelector) {
         try {
           const smart = inPageFindSmartScrollTarget({ direction });
           if (smart && !smart.isWindow && smart.selector) {
@@ -839,7 +688,6 @@ export async function inPageScrollUntilFound(
     } else {
       stallCount = 0;
     }
-    lastPos = currentPos;
   }
 
   return {
@@ -947,18 +795,35 @@ export function splitSelectorSafely(selector: string, delimiter: string = ' '): 
  */
 function querySelectorAllDeepSingle(selector: string, root: ParentNode): Element[] {
   const results: Element[] = [];
+  const seenResults = new Set<Element>();
   const visitedRoots = new Set<Node>();
+  const isWildcard = selector.trim() === '*';
+
+  const pushResult = (el: Element) => {
+    if (!seenResults.has(el)) {
+      seenResults.add(el);
+      results.push(el);
+    }
+  };
+
+  const inspectSlotted = (el: Element) => {
+    if (isWildcard) {
+      pushResult(el);
+    } else {
+      try {
+        if (typeof el.matches === 'function' && el.matches(selector)) {
+          pushResult(el);
+        }
+      } catch {}
+    }
+    const sr = getShadowRoot(el);
+    if (sr) search(sr);
+    search(el);
+  };
 
   function search(currentRoot: ParentNode) {
     if (!currentRoot || visitedRoots.has(currentRoot)) return;
     visitedRoots.add(currentRoot);
-
-    try {
-      const matches = currentRoot.querySelectorAll(selector);
-      for (let i = 0; i < matches.length; i++) {
-        results.push(matches[i]);
-      }
-    } catch {}
 
     let allEls: NodeListOf<Element>;
     try {
@@ -967,11 +832,34 @@ function querySelectorAllDeepSingle(selector: string, root: ParentNode): Element
       return;
     }
 
+    if (isWildcard) {
+      for (let i = 0; i < allEls.length; i++) {
+        pushResult(allEls[i]);
+      }
+    } else {
+      try {
+        const matches = currentRoot.querySelectorAll(selector);
+        for (let i = 0; i < matches.length; i++) {
+          pushResult(matches[i]);
+        }
+      } catch {}
+    }
+
     for (let i = 0; i < allEls.length; i++) {
       const el = allEls[i];
       const shadow = getShadowRoot(el);
       if (shadow) {
         search(shadow);
+      }
+      if (
+        el.tagName.toUpperCase() === 'SLOT' &&
+        typeof (el as HTMLSlotElement).assignedElements === 'function'
+      ) {
+        try {
+          for (const assigned of (el as HTMLSlotElement).assignedElements({ flatten: true })) {
+            inspectSlotted(assigned);
+          }
+        } catch {}
       }
     }
   }
@@ -1007,10 +895,12 @@ export function querySelectorAllDeep(
     );
     if (hasComplexSegment) {
       const combined: Element[] = [];
+      const seenCombined = new Set<Element>();
       for (const sub of commaSeparators) {
         const subMatches = querySelectorAllDeep(sub, root);
         for (const m of subMatches) {
-          if (!combined.includes(m)) {
+          if (!seenCombined.has(m)) {
+            seenCombined.add(m);
             combined.push(m);
           }
         }
@@ -1042,11 +932,13 @@ export function querySelectorAllDeep(
     const subSelector = segments[i];
     const isLast = i === segments.length - 1;
     const nextMatches: Element[] = [];
+    const seenNext = new Set<Element>();
 
     for (const ctx of currentContexts) {
       const matched = querySelectorAllDeepSingle(subSelector, ctx);
       for (const m of matched) {
-        if (!nextMatches.includes(m)) {
+        if (!seenNext.has(m)) {
+          seenNext.add(m);
           nextMatches.push(m);
         }
       }
@@ -1057,12 +949,15 @@ export function querySelectorAllDeep(
     }
 
     const nextContexts: ParentNode[] = [];
+    const seenContexts = new Set<ParentNode>();
     for (const m of nextMatches) {
-      if (!nextContexts.includes(m)) {
+      if (!seenContexts.has(m)) {
+        seenContexts.add(m);
         nextContexts.push(m);
       }
       const sr = getShadowRoot(m);
-      if (sr && !nextContexts.includes(sr)) {
+      if (sr && !seenContexts.has(sr)) {
+        seenContexts.add(sr);
         nextContexts.push(sr);
       }
     }
@@ -1092,6 +987,18 @@ export function computeScopeHash(text: string): string {
     hash = hash & hash;
   }
   return (hash >>> 0).toString(16);
+}
+
+function computeElementScopeHash(el: Element): string {
+  try {
+    const container =
+      composedClosest(el, 'form,dialog,[role="dialog"],article,li,tr,[role="row"]') ||
+      composedParent(el);
+    const scopeText = container ? extractComposedVisibleText(container, { maxLen: 1000 }) : '';
+    return scopeText ? computeScopeHash(scopeText) : '';
+  } catch {
+    return '';
+  }
 }
 
 export interface ParsedIndex {
@@ -1174,7 +1081,7 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
     const selectEl = el as HTMLSelectElement;
     text = (selectEl.selectedOptions?.[0]?.text || selectEl.value || '').trim();
   } else {
-    text = ((el as HTMLElement).innerText || el.textContent || '').trim();
+    text = extractComposedVisibleText(el, { maxLen });
   }
 
   if (!text) {
@@ -1243,17 +1150,14 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
           } else {
             // 3. Inner accessible children ([role="img"][aria-label], [aria-label], SVG titles)
             try {
-              const innerRoleImg = el
-                .querySelector?.('[role="img"][aria-label]')
+              const innerRoleImg = querySelectorDeep('[role="img"][aria-label]', el)
                 ?.getAttribute('aria-label')
                 ?.trim();
-              const svgAria = el
-                .querySelector?.('svg[aria-label]')
+              const svgAria = querySelectorDeep('svg[aria-label]', el)
                 ?.getAttribute('aria-label')
                 ?.trim();
-              const svgTitle = el.querySelector?.('svg title, svg desc')?.textContent?.trim();
-              const anyInnerAria = el
-                .querySelector?.('[aria-label]')
+              const svgTitle = querySelectorDeep('svg title, svg desc', el)?.textContent?.trim();
+              const anyInnerAria = querySelectorDeep('[aria-label]', el)
                 ?.getAttribute('aria-label')
                 ?.trim();
               if (innerRoleImg) text = innerRoleImg;
@@ -1268,15 +1172,17 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
   }
 
   // 4. Parent custom element wrapper semantics (e.g. Reddit <faceplate-tracker action="reply"> wrapping button)
-  if (!text && el.parentElement && isCustomElement(el.parentElement)) {
-    const parent = el.parentElement;
-    const parentLabel =
-      parent.getAttribute('aria-label') ||
-      parent.getAttribute('action') ||
-      parent.getAttribute('data-action') ||
-      parent.getAttribute('data-testid');
-    if (parentLabel && typeof parentLabel === 'string') {
-      text = parentLabel.replace(/[-_]/g, ' ').trim();
+  if (!text) {
+    const parent = composedParent(el);
+    if (parent && isCustomElement(parent)) {
+      const parentLabel =
+        parent.getAttribute('aria-label') ||
+        parent.getAttribute('action') ||
+        parent.getAttribute('data-action') ||
+        parent.getAttribute('data-testid');
+      if (parentLabel && typeof parentLabel === 'string') {
+        text = parentLabel.replace(/[-_]/g, ' ').trim();
+      }
     }
   }
 
@@ -1290,28 +1196,6 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
     if (actionAttr && typeof actionAttr === 'string') {
       text = actionAttr.replace(/[-_]/g, ' ').trim();
     }
-  }
-
-  // If still empty and element has slotted children (Web Component container), extract slotted text
-  if (!text && typeof el.querySelectorAll === 'function') {
-    try {
-      const slots = el.querySelectorAll('slot');
-      if (slots.length > 0) {
-        const slotTexts: string[] = [];
-        for (let i = 0; i < slots.length; i++) {
-          const slot = slots[i];
-          const assigned =
-            typeof slot.assignedNodes === 'function' ? slot.assignedNodes({ flatten: true }) : [];
-          for (const n of assigned) {
-            const t = n.textContent?.trim();
-            if (t) slotTexts.push(t);
-          }
-        }
-        if (slotTexts.length > 0) {
-          text = slotTexts.join(' ');
-        }
-      }
-    } catch {}
   }
 
   if (tag === 'input') {
@@ -1345,49 +1229,8 @@ export function getSameRootReference(el: Element, id: string): Element | null {
 export function getVisibleReferenceText(ref: Element | null, maxLen: number): string {
   if (!ref || maxLen <= 0) return '';
   const win = ref.ownerDocument?.defaultView;
-  let text = '';
-
-  const isHidden = (el: Element): boolean => {
-    if (
-      el.hasAttribute('hidden') ||
-      el.hasAttribute('inert') ||
-      el.getAttribute('aria-hidden') === 'true'
-    ) {
-      return true;
-    }
-    try {
-      const style = win?.getComputedStyle(el);
-      return (
-        style?.display === 'none' ||
-        style?.visibility === 'hidden' ||
-        style?.visibility === 'collapse' ||
-        parseFloat(style?.opacity || '1') <= 0
-      );
-    } catch {
-      return false;
-    }
-  };
-
-  for (let current: Element | null = ref; current; current = composedParent(current)) {
-    if (isHidden(current)) return '';
-  }
-
-  const walk = (node: Node): void => {
-    if (text.length >= maxLen) return;
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent || '';
-      return;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const current = node as Element;
-    const tag = current.tagName.toLowerCase();
-    if (tag === 'script' || tag === 'style' || tag === 'template') return;
-    if (isHidden(current)) return;
-    for (const child of Array.from(current.childNodes)) walk(child);
-  };
-
-  walk(ref);
-  return text.replace(/\s+/g, ' ').trim().slice(0, maxLen);
+  if (isElementHiddenInComposedTree(ref, win)) return '';
+  return extractComposedVisibleText(ref, { maxLen });
 }
 
 function getAriaReferenceText(el: Element, attribute: string, maxLen = 120): string {
@@ -1649,15 +1492,16 @@ export function detectEditorSemantics(el: Element): {
   const isContentEditable =
     el.getAttribute('contenteditable') === 'true' ||
     el.getAttribute('contenteditable') === '' ||
+    el.getAttribute('contenteditable') === 'plaintext-only' ||
     (typeof (el as HTMLElement).isContentEditable === 'boolean' &&
       (el as HTMLElement).isContentEditable);
 
   // 1. Search Box Detection
   const isSearchType = tag === 'input' && type === 'search';
   const isSearchRole = role === 'searchbox' || role === 'search';
-  const hasSearchAncestor =
-    typeof el.closest === 'function' &&
-    Boolean(el.closest('[role="search"], form[role="search"], .search-box, .search-form'));
+  const hasSearchAncestor = Boolean(
+    composedClosest(el, '[role="search"], form[role="search"], .search-box, .search-form'),
+  );
   const matchesSearchText = /(search|query|find|sousuo|搜索|查找)/i.test(
     `${id} ${name} ${ariaLabel} ${placeholder} ${dataTestId}`,
   );
@@ -1776,6 +1620,76 @@ export interface InteractionScopeInfo {
  * Evaluates Top-Layer, dialog role, aria-modal, z-index, and DOM order so
  * secondary confirmation traps are not obscured by large parent modals.
  */
+const MODAL_SURFACE_CONTROL_SELECTOR =
+  'input, textarea, select, button, a[href], [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [tabindex]:not([tabindex="-1"]), dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
+
+function hasPositionedOverlayAncestor(el: Element, win: Window): boolean {
+  const seen = new Set<Element>();
+  for (let cur = composedParent(el); cur && !seen.has(cur); cur = composedParent(cur)) {
+    seen.add(cur);
+    if (cur === win.document.body || cur === win.document.documentElement) break;
+    try {
+      const pos = win.getComputedStyle(cur).position;
+      if (pos === 'fixed' || pos === 'absolute' || pos === 'sticky') {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+function isElementVisibleInViewport(
+  el: Element,
+  win: Window,
+  vpWidth: number,
+  vpHeight: number,
+): boolean {
+  if (!elementIsVisibleForScope(el, win)) return false;
+  try {
+    const rect = el.getBoundingClientRect();
+    return rect.right > 0 && rect.left < vpWidth && rect.bottom > 0 && rect.top < vpHeight;
+  } catch {
+    return false;
+  }
+}
+
+function maskHasVisibleModalSurface(
+  maskEl: HTMLElement,
+  win: Window,
+  vpWidth: number,
+  vpHeight: number,
+): boolean {
+  const active = getDeepActiveElement();
+  if (active && active !== maskEl && composedContains(maskEl, active)) {
+    return true;
+  }
+  const surfaceRoot = modalSurfaceRoot(maskEl, win);
+  const candidateRoots = outerMostRoots(
+    [
+      surfaceRoot,
+      ...modalPortalRoots(maskEl, win, surfaceRoot),
+      ...referencedModalRoots(surfaceRoot, win),
+      focusedOverlayRoot(maskEl, win),
+    ],
+    win,
+  );
+  for (const root of candidateRoots) {
+    if (
+      root !== maskEl &&
+      isTopLayerSurface(root) &&
+      isElementVisibleInViewport(root, win, vpWidth, vpHeight)
+    ) {
+      return true;
+    }
+    const descendants = querySelectorAllDeep(MODAL_SURFACE_CONTROL_SELECTOR, root);
+    for (const el of descendants) {
+      if (el === maskEl) continue;
+      if (isElementVisibleInViewport(el, win, vpWidth, vpHeight)) return true;
+    }
+  }
+  return false;
+}
+
 export function detectActiveModalBlocker(win: Window = window): ActiveModalBlockerInfo | null {
   try {
     const doc = win.document;
@@ -1789,6 +1703,7 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover], [class*="modal"], [class*="dialog"], [class*="backdrop"], [class*="overlay"], [class*="mask"], [id*="modal"], [id*="dialog"], [id*="overlay"], [style*="fixed"], [style*="absolute"], body > div, body > section, body > aside',
       ),
     ) as HTMLElement[];
+    const seenPositionedCandidates = new Set<HTMLElement>(positionedCandidates);
 
     try {
       const shadowCandidates = querySelectorAllDeep(
@@ -1796,7 +1711,8 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         doc,
       );
       for (const sc of shadowCandidates) {
-        if (sc instanceof HTMLElement && !positionedCandidates.includes(sc)) {
+        if (isHTMLElementInWindow(sc, win) && !seenPositionedCandidates.has(sc)) {
+          seenPositionedCandidates.add(sc);
           positionedCandidates.push(sc);
         }
       }
@@ -1806,7 +1722,7 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
 
     for (let i = 0; i < positionedCandidates.length; i++) {
       const d = positionedCandidates[i];
-      if (!d || d.getAttribute('aria-hidden') === 'true') continue;
+      if (!d || isElementHiddenInComposedTree(d, win)) continue;
       let style: CSSStyleDeclaration;
       try {
         style = win.getComputedStyle(d);
@@ -1816,11 +1732,17 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
       if (
         style.display === 'none' ||
         style.visibility === 'hidden' ||
-        style.pointerEvents === 'none'
+        style.visibility === 'collapse' ||
+        style.pointerEvents === 'none' ||
+        (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0)
       )
         continue;
       const pos = style.position;
-      const isPositioned = pos === 'fixed' || pos === 'absolute' || pos === 'sticky';
+      const isPositioned =
+        pos === 'fixed' ||
+        pos === 'absolute' ||
+        pos === 'sticky' ||
+        hasPositionedOverlayAncestor(d, win);
       const tag = d.tagName.toLowerCase();
       const role = (d.getAttribute('role') || '').toLowerCase();
       const ariaModal = (d.getAttribute('aria-modal') || '').toLowerCase();
@@ -1868,19 +1790,29 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         (hasModalIdentity && hasBox && composedContains(d, getDeepActiveElement()));
       if (!qualifies) continue;
 
-      const hasInputs = !!d.querySelector('input, textarea, select, button, a');
+      const hasInputs = querySelectorAllDeep(
+        'input, textarea, select, button, a[href], [role="button"], [role="menuitem"], [role="option"]',
+        d,
+      ).some((el) => el !== d && el.getAttribute('aria-hidden') !== 'true');
       const kind: 'modal' | 'mask' =
-        isExplicitModal || hasInputs ? 'modal' : cov >= 0.85 ? 'mask' : 'modal';
+        isExplicitModal || role === 'dialog' || hasInputs ? 'modal' : 'mask';
+      // A mask/backdrop without a visible modal surface or controls must not isolate the page.
+      if (kind === 'mask' && !maskHasVisibleModalSurface(d, win, vpWidth, vpHeight)) {
+        continue;
+      }
 
       const id = d.id ? `#${d.id}` : '';
       const name =
         d.getAttribute('aria-label') ||
-        d.querySelector('h1, h2, h3, [role="heading"]')?.textContent?.trim()?.slice(0, 40);
+        extractComposedVisibleText(querySelectorDeep('h1, h2, h3, [role="heading"]', d), {
+          maxLen: 40,
+        }) ||
+        undefined;
       const desc = name
         ? `${tag}${id} "${name}"`
         : `${tag}${id || (kind === 'mask' ? '.mask' : '.modal')}`;
 
-      const textSnippet = `${desc} ${name || ''} ${d.textContent?.slice(0, 300) || ''}`;
+      const textSnippet = `${desc} ${name || ''} ${extractComposedVisibleText(d, { maxLen: 300 })}`;
       const isDiscardOrConfirm =
         /(discard|abandon|unsaved|confirm|放弃|取消|未保存|确认放弃|是否放弃|离开)/i.test(
           textSnippet,
@@ -1900,6 +1832,8 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
         score += 200_000;
       } else if (d.getAttribute('aria-modal') === 'true') {
         score += 100_000;
+      } else if (kind === 'modal') {
+        score += 50_000;
       }
 
       let z = 0;
@@ -1930,15 +1864,9 @@ export function detectActiveModalBlocker(win: Window = window): ActiveModalBlock
 
 function elementIsVisibleForScope(el: Element, win: Window): boolean {
   try {
-    if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert')) return false;
-    const style = win.getComputedStyle(el);
-    return (
-      style.display !== 'none' &&
-      style.visibility !== 'hidden' &&
-      (style.opacity === '' || parseFloat(style.opacity) > 0) &&
-      el.getBoundingClientRect().width > 0 &&
-      el.getBoundingClientRect().height > 0
-    );
+    if (isElementHiddenInComposedTree(el, win)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
   } catch {
     return false;
   }
@@ -2174,15 +2102,80 @@ function selectorForScopeElement(el: Element): string | undefined {
   return undefined;
 }
 
+const NON_SCROLL_CONTAINER_TAGS = new Set([
+  'textarea',
+  'input',
+  'select',
+  'option',
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'svg',
+  'path',
+  'img',
+  'br',
+  'hr',
+  'canvas',
+  'video',
+  'audio',
+]);
+
+function isSecondaryScrollChrome(el: HTMLElement, win: Window): boolean {
+  const tag = (el.tagName || '').toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  if (tag === 'main' || tag === 'article' || role === 'main') return false;
+  if (
+    tag === 'nav' ||
+    tag === 'aside' ||
+    tag === 'header' ||
+    tag === 'footer' ||
+    role === 'navigation' ||
+    role === 'complementary' ||
+    role === 'banner' ||
+    role === 'contentinfo' ||
+    role === 'menu' ||
+    role === 'menubar' ||
+    role === 'tablist'
+  ) {
+    return true;
+  }
+  const identity = [
+    el.id,
+    typeof el.className === 'string' ? el.className : el.getAttribute('class') || '',
+    el.getAttribute('data-testid'),
+    el.getAttribute('aria-label'),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (/(sidebar|side-nav|sidenav|navigation|navbar|rail|drawer|menu-list|toc|left-rail|right-rail)/i.test(identity)) {
+    return true;
+  }
+  try {
+    const rect = el.getBoundingClientRect();
+    const vw = win.innerWidth || win.document.documentElement?.clientWidth || 1280;
+    if (rect.width > 0 && rect.width < Math.min(320, vw * 0.3)) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function scrollContainersInRoots(roots: Element[], win: Window): HTMLElement[] {
   const found: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
   for (const root of roots) {
     const all = [
       ...(isHTMLElementInWindow(root, win) ? [root] : []),
       ...querySelectorAllDeep('*', root),
     ];
     for (const el of all) {
-      if (!isHTMLElementInWindow(el, win) || found.includes(el)) continue;
+      if (!isHTMLElementInWindow(el, win) || seen.has(el)) continue;
+      if (el === win.document.body || el === win.document.documentElement) continue;
+      const tag = (el.tagName || '').toLowerCase();
+      if (NON_SCROLL_CONTAINER_TAGS.has(tag)) continue;
+      if (!(el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2)) continue;
       let style: CSSStyleDeclaration;
       try {
         style = win.getComputedStyle(el);
@@ -2190,18 +2183,10 @@ function scrollContainersInRoots(roots: Element[], win: Window): HTMLElement[] {
         // Inaccessible stylesheets must not make observation fail open.
         continue;
       }
-      if (
-        style.display === 'none' ||
-        style.visibility === 'hidden' ||
-        (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0)
-      ) {
-        continue;
-      }
-      const scrolls =
-        el.scrollHeight > el.clientHeight + 2 &&
-        /(auto|scroll|overlay)/.test(style.overflowY) &&
-        el.clientHeight > 0;
-      if (scrolls) found.push(el);
+      if (!/(auto|scroll|overlay)/.test(style.overflowY)) continue;
+      if (isElementHiddenInComposedTree(el, win)) continue;
+      seen.add(el);
+      found.push(el);
     }
   }
   return found;
@@ -2213,7 +2198,25 @@ export function buildScopedScrollInfo(
   options?: { modalActive?: boolean; containers?: HTMLElement[] },
 ): ScrollInfo {
   const containers = options?.containers ?? scrollContainersInRoots(roots, win);
-  if (containers.length === 1) {
+  const doc = win.document;
+  const docViewportHeight = win.innerHeight || doc.documentElement?.clientHeight || 1;
+  const docScrollY = Math.max(
+    0,
+    win.scrollY || win.pageYOffset || doc.documentElement?.scrollTop || doc.body?.scrollTop || 0,
+  );
+  const docTotalHeight = Math.max(
+    doc.body?.scrollHeight || 0,
+    doc.documentElement?.scrollHeight || 0,
+    doc.body?.offsetHeight || 0,
+    doc.documentElement?.offsetHeight || 0,
+    docViewportHeight,
+  );
+  const docScrolls = docTotalHeight > docViewportHeight + 2;
+
+  if (
+    containers.length === 1 &&
+    (options?.modalActive || !docScrolls || !isSecondaryScrollChrome(containers[0], win))
+  ) {
     const container = containers[0];
     const viewportHeight = Math.max(1, container.clientHeight || 1);
     const totalHeight = Math.max(container.scrollHeight, viewportHeight);
@@ -2236,7 +2239,7 @@ export function buildScopedScrollInfo(
     };
   }
 
-  if (containers.length > 1) {
+  if (containers.length > 1 && (options?.modalActive || !docScrolls)) {
     return {
       pages_up: 0,
       pages_down: 0,
@@ -2265,27 +2268,14 @@ export function buildScopedScrollInfo(
     };
   }
 
-  const doc = win.document;
-  const viewportHeight = win.innerHeight || doc.documentElement?.clientHeight || 1;
-  const scrollY = Math.max(
-    0,
-    win.scrollY || win.pageYOffset || doc.documentElement?.scrollTop || doc.body?.scrollTop || 0,
-  );
-  const totalHeight = Math.max(
-    doc.body?.scrollHeight || 0,
-    doc.documentElement?.scrollHeight || 0,
-    doc.body?.offsetHeight || 0,
-    doc.documentElement?.offsetHeight || 0,
-    viewportHeight,
-  );
   return {
-    pages_up: Number((scrollY / viewportHeight).toFixed(1)),
+    pages_up: Number((docScrollY / docViewportHeight).toFixed(1)),
     pages_down: Number(
-      (Math.max(0, totalHeight - (scrollY + viewportHeight)) / viewportHeight).toFixed(1),
+      (Math.max(0, docTotalHeight - (docScrollY + docViewportHeight)) / docViewportHeight).toFixed(1),
     ),
-    scroll_y: Math.round(scrollY),
-    total_height: Math.round(totalHeight),
-    viewport_height: Math.round(viewportHeight),
+    scroll_y: Math.round(docScrollY),
+    total_height: Math.round(docTotalHeight),
+    viewport_height: Math.round(docViewportHeight),
     ambiguous: false,
     scope: 'page',
   };
@@ -2293,7 +2283,7 @@ export function buildScopedScrollInfo(
 
 export function computeInteractionScope(
   win: Window = window,
-  options?: { explicitScope?: boolean },
+  options?: { explicitScope?: boolean; includeScrollContainers?: boolean },
 ): InteractionScopeInfo {
   const blocker = detectActiveModalBlocker(win);
   const focusTrapped = Boolean(blocker);
@@ -2326,7 +2316,8 @@ export function computeInteractionScope(
     blockingLayerKind: blocker?.kind,
     modalElement,
     roots,
-    scrollContainers: scrollContainersInRoots(roots, win),
+    scrollContainers:
+      options?.includeScrollContainers === false ? [] : scrollContainersInRoots(roots, win),
   };
 }
 
@@ -2421,7 +2412,8 @@ export function flattenCompositeCards(
     }
     if ((cand as any).isTableStructure) continue;
 
-    const card = cand.node.closest?.(
+    const card = composedClosest(
+      cand.node,
       'article, [role="article"], [role="listitem"], li, [aria-roledescription="card"], [aria-roledescription="item"]',
     );
     if (!card || card.tagName.toLowerCase() === 'body') continue;
@@ -2440,8 +2432,9 @@ export function flattenCompositeCards(
     if (items.length < 3) continue;
 
     // Safety Guard 1: Never collapse forms or containers with interactive editable inputs
-    const hasFormInputs = card.querySelector?.(
-      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"], [role="textbox"], [role="combobox"], [role="searchbox"]',
+    const hasFormInputs = querySelectorDeep(
+      'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [role="textbox"], [role="combobox"], [role="searchbox"]',
+      card,
     );
     if (hasFormInputs) continue;
 
@@ -2483,9 +2476,7 @@ export function flattenCompositeCards(
 
     // Find the primary interactive element (e.g. product title link or main card link)
     let primaryCandidate = items.find(
-      (it) =>
-        it.tag === 'a' &&
-        Boolean(((it.node as HTMLElement).innerText || it.node.textContent || '').trim()),
+      (it) => it.tag === 'a' && extractComposedVisibleText(it.node, { maxLen: 40 }).length > 0,
     );
     if (!primaryCandidate) {
       primaryCandidate = items.find((it) => it.isInteractive);
@@ -2843,7 +2834,7 @@ export function inPageDOMPruner(options?: {
         if (textExcludedSet.has(el)) return true;
         if (isRoot) {
           for (const textEl of textExcludedSet) {
-            if (textEl.contains(el)) return true;
+            if (composedContains(textEl, el)) return true;
           }
         }
       }
@@ -2851,7 +2842,7 @@ export function inPageDOMPruner(options?: {
       for (const sel of standardSelectors) {
         try {
           if (isRoot) {
-            if (typeof el.closest === 'function' && el.closest(sel)) return true;
+            if (composedClosest(el, sel)) return true;
           }
           if (typeof el.matches === 'function' && el.matches(sel)) return true;
         } catch {
@@ -2873,35 +2864,6 @@ export function inPageDOMPruner(options?: {
   const winHeight = window.innerHeight;
   const winWidth = window.innerWidth;
 
-  const droppedTags = new Set([
-    'script',
-    'style',
-    'head',
-    'meta',
-    'link',
-    'title',
-    'noscript',
-    'template',
-  ]);
-
-  const svgInternalTags = new Set([
-    'path',
-    'rect',
-    'circle',
-    'ellipse',
-    'line',
-    'polyline',
-    'polygon',
-    'use',
-    'defs',
-    'clippath',
-    'mask',
-    'pattern',
-    'text',
-    'tspan',
-    'g',
-  ]);
-
   const interactiveRoles = new Set([
     'button',
     'link',
@@ -2909,6 +2871,9 @@ export function inPageDOMPruner(options?: {
     'radio',
     'tab',
     'menuitem',
+    'menuitemcheckbox',
+    'menuitemradio',
+    'treeitem',
     'option',
     'textbox',
     'combobox',
@@ -2918,7 +2883,6 @@ export function inPageDOMPruner(options?: {
     'spinbutton',
   ]);
 
-  let totalOriginalNodes = 0;
   // Number of nodes retained in the pruned tree (interactive + informational + files).
   // Previously this counter was never incremented, so elementCount was always 0 and
   // compressionRatio was always 1 — both self-contradictory next to interactiveCount.
@@ -2996,7 +2960,8 @@ export function inPageDOMPruner(options?: {
     if (
       (el as HTMLElement).isContentEditable ||
       el.getAttribute('contenteditable') === 'true' ||
-      el.getAttribute('contenteditable') === ''
+      el.getAttribute('contenteditable') === '' ||
+      el.getAttribute('contenteditable') === 'plaintext-only'
     ) {
       return true;
     }
@@ -3031,23 +2996,20 @@ export function inPageDOMPruner(options?: {
     const cls =
       typeof (el as HTMLElement).className === 'string' ? (el as HTMLElement).className : '';
     if (
-      cls.includes('group/') ||
-      cls.includes('hover') ||
-      cls.includes('dropdown') ||
-      cls.includes('menu-item') ||
       el.hasAttribute('aria-haspopup') ||
-      el.hasAttribute('aria-expanded')
+      el.hasAttribute('aria-expanded') ||
+      el.hasAttribute('aria-pressed')
     ) {
       return true;
     }
-    if (isInteractiveSvgNode(el, style)) {
+    if (isInteractiveSvgNode(el, style, parentHasPointer)) {
       return true;
     }
     // Web Component icon buttons and action triggers (e.g. Reddit faceplate-tracker, faceplate-button, shreddit action rows)
     if (
       (el.hasAttribute('aria-label') || el.hasAttribute('title')) &&
       (isCustomElement(el) ||
-        style.cursor === 'pointer' ||
+        (!parentHasPointer && style.cursor === 'pointer') ||
         tag.includes('button') ||
         tag.includes('item') ||
         tag.includes('action') ||
@@ -3096,6 +3058,13 @@ export function inPageDOMPruner(options?: {
    * and calculates the optimal unoccluded safe click point.
    */
   function checkOcclusionGrid(el: Element, rect: DOMRect): OcclusionResult {
+    const visibleLeft = Math.max(0, rect.left);
+    const visibleTop = Math.max(0, rect.top);
+    const visibleRight = Math.min(winWidth, rect.right);
+    const visibleBottom = Math.min(winHeight, rect.bottom);
+    const visibleWidth = visibleRight - visibleLeft;
+    const visibleHeight = visibleBottom - visibleTop;
+
     const defaultCenter = {
       x: Math.round(rect.left + rect.width / 2),
       y: Math.round(rect.top + rect.height / 2),
@@ -3107,16 +3076,16 @@ export function inPageDOMPruner(options?: {
       return { isFullyOccluded: false, isOccluded: false, safeClickPoint: defaultCenter };
     }
 
-    const visibleLeft = Math.max(0, rect.left);
-    const visibleTop = Math.max(0, rect.top);
-    const visibleRight = Math.min(winWidth, rect.right);
-    const visibleBottom = Math.min(winHeight, rect.bottom);
-    const visibleWidth = visibleRight - visibleLeft;
-    const visibleHeight = visibleBottom - visibleTop;
-
     if (visibleWidth <= 0 || visibleHeight <= 0) {
       return { isFullyOccluded: false, isOccluded: false, safeClickPoint: defaultCenter };
     }
+
+    const makeSamplePoint = (px: number, py: number) => ({
+      x: Math.round(px),
+      y: Math.round(py),
+      offsetX: px - rect.left,
+      offsetY: py - rect.top,
+    });
 
     const ratios = [0.15, 0.5, 0.85];
     let totalSampled = 0;
@@ -3137,53 +3106,19 @@ export function inPageDOMPruner(options?: {
 
         let topEl: Element | null = null;
         try {
-          if (typeof document.elementFromPoint === 'function') {
+          topEl = deepElementFromPoint(px, py);
+          if (!topEl && typeof document.elementFromPoint === 'function') {
             topEl = document.elementFromPoint(px, py);
           }
         } catch {}
 
-        // Composed / Shadow-aware deep hit check
-        let deepHit: Element | null = null;
-        if (el.getRootNode && el.getRootNode() !== document) {
-          try {
-            deepHit = hitElementAtPoint(el, px, py);
-          } catch {}
-        }
-
         if (
-          deepHit &&
-          (deepHit === el || composedContains(el, deepHit) || composedContains(deepHit, el))
+          !topEl ||
+          topEl === el ||
+          composedContains(el, topEl) ||
+          composedContains(topEl, el)
         ) {
-          const pt = {
-            x: Math.round(px),
-            y: Math.round(py),
-            offsetX: rect.width * rx,
-            offsetY: rect.height * ry,
-          };
-          clearPoints.push(pt);
-          if (rx === 0.5 && ry === 0.5) centerClearPoint = pt;
-          continue;
-        }
-
-        if (!topEl) {
-          const pt = {
-            x: Math.round(px),
-            y: Math.round(py),
-            offsetX: rect.width * rx,
-            offsetY: rect.height * ry,
-          };
-          clearPoints.push(pt);
-          if (rx === 0.5 && ry === 0.5) centerClearPoint = pt;
-          continue;
-        }
-
-        if (topEl === el || composedContains(el, topEl) || composedContains(topEl, el)) {
-          const pt = {
-            x: Math.round(px),
-            y: Math.round(py),
-            offsetX: rect.width * rx,
-            offsetY: rect.height * ry,
-          };
+          const pt = makeSamplePoint(px, py);
           clearPoints.push(pt);
           if (rx === 0.5 && ry === 0.5) centerClearPoint = pt;
           continue;
@@ -3197,7 +3132,8 @@ export function inPageDOMPruner(options?: {
             topEl.matches?.(
               'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .modal-backdrop, [class*="backdrop"], [class*="mask"], [class*="overlay"]',
             ) ||
-            topEl.closest?.(
+            composedClosest(
+              topEl,
               'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], .modal, .modal-backdrop, [class*="backdrop"], [class*="mask"], [class*="overlay"]',
             );
           const hasSignificantOpacity = parseFloat(topStyle.opacity || '1') >= 0.35;
@@ -3213,12 +3149,7 @@ export function inPageDOMPruner(options?: {
           }
         } catch {}
 
-        const pt = {
-          x: Math.round(px),
-          y: Math.round(py),
-          offsetX: rect.width * rx,
-          offsetY: rect.height * ry,
-        };
+        const pt = makeSamplePoint(px, py);
         clearPoints.push(pt);
         if (rx === 0.5 && ry === 0.5) centerClearPoint = pt;
       }
@@ -3243,7 +3174,7 @@ export function inPageDOMPruner(options?: {
       // On a ~40px control that is a +8..+18px drift off center — enough to land
       // on a neighbouring element. Centre-first removes that bias.
       if (centerClearPoint) {
-        safePoint = defaultCenter;
+        safePoint = centerClearPoint;
       } else {
         const avgOffsetX = clearPoints.reduce((sum, p) => sum + p.offsetX, 0) / clearPoints.length;
         const avgOffsetY = clearPoints.reduce((sum, p) => sum + p.offsetY, 0) / clearPoints.length;
@@ -3252,16 +3183,18 @@ export function inPageDOMPruner(options?: {
 
         let centroidClear = false;
         try {
-          if (typeof document.elementFromPoint === 'function') {
-            const topAtAvg = document.elementFromPoint(avgX, avgY);
-            if (
-              !topAtAvg ||
-              topAtAvg === el ||
-              composedContains(el, topAtAvg) ||
-              composedContains(topAtAvg, el)
-            ) {
-              centroidClear = true;
-            }
+          const topAtAvg =
+            deepElementFromPoint(avgX, avgY) ||
+            (typeof document.elementFromPoint === 'function'
+              ? document.elementFromPoint(avgX, avgY)
+              : null);
+          if (
+            !topAtAvg ||
+            topAtAvg === el ||
+            composedContains(el, topAtAvg) ||
+            composedContains(topAtAvg, el)
+          ) {
+            centroidClear = true;
           }
         } catch {}
 
@@ -3316,505 +3249,19 @@ export function inPageDOMPruner(options?: {
     if (el.hasAttribute('aria-live')) return true;
     // Text budgets truncate long leaves during serialization instead of hiding their content.
     if (
-      el.children.length === 0 &&
-      el.textContent &&
-      el.textContent.trim().length > 0 &&
-      !['script', 'style', 'noscript', 'meta', 'link'].includes(tag)
+      composedChildren(el).length === 0 &&
+      !['script', 'style', 'noscript', 'meta', 'link', 'template'].includes(tag) &&
+      extractComposedVisibleText(el, { maxLen: 16 }).length > 0
     ) {
       return true;
     }
     return false;
   }
-
-  // Visual assets (img/canvas/video/CSS background images) with viewport
-  // geometry, so the agent can request an individual asset by index.
-  const assets: PageAsset[] = [];
-  const assetRegistry: Array<{ kind: string; el: Element; src?: string }> = [];
-  let assetSeq = 0;
-  const pushAsset = (
-    kind: PageAsset['kind'],
-    el: Element,
-    rect: DOMRect,
-    src?: string,
-    alt?: string,
-  ) => {
-    if (rect.width < 8 || rect.height < 8) return;
-    if (rect.bottom < 0 || rect.right < 0 || rect.top > winHeight || rect.left > winWidth) return;
-    assetSeq += 1;
-    assetRegistry.push({ kind, el, src });
-    assets.push({
-      index: assetSeq,
-      kind,
-      rect: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-      },
-      ...(src ? { src } : {}),
-      ...(alt ? { alt } : {}),
-    });
-  };
-
-  let virtualizedCount = 0;
-  const virtualizedSummary: Array<{ selector: string; count: number }> = [];
 
   const shouldVirtualize =
     options?.virtualizeViewport === true ||
     (options?.virtualizeViewport !== false && !options?.selector && !options?.scope);
   const focusForVirtualization = getDeepActiveElement();
-
-  function isProtectedFromVirtualization(el: Element): boolean {
-    if (composedContains(el, focusForVirtualization)) return true;
-    const tag = (el.tagName || '').toLowerCase();
-    if (
-      tag === 'header' ||
-      tag === 'nav' ||
-      tag === 'footer' ||
-      tag === 'dialog' ||
-      tag === 'form' ||
-      tag === 'main'
-    ) {
-      return true;
-    }
-    const role = (el.getAttribute('role') || '').toLowerCase();
-    if (
-      role === 'navigation' ||
-      role === 'banner' ||
-      role === 'contentinfo' ||
-      role === 'search' ||
-      role === 'dialog' ||
-      role === 'alertdialog' ||
-      role === 'menu' ||
-      role === 'menubar' ||
-      role === 'tablist'
-    ) {
-      return true;
-    }
-    if (
-      typeof el.closest === 'function' &&
-      el.closest(
-        'header, nav, footer, [role="navigation"], [role="banner"], [role="contentinfo"], [role="search"], dialog',
-      )
-    ) {
-      return true;
-    }
-    try {
-      const s = window.getComputedStyle(el);
-      if (s.position === 'fixed' || s.position === 'sticky') return true;
-    } catch {}
-    return false;
-  }
-
-  function getChildSignature(el: Element): string {
-    const tag = (el.tagName || '').toLowerCase();
-    let classSig = '';
-    const rawClass =
-      typeof el.className === 'string' ? el.className : el.getAttribute('class') || '';
-    if (rawClass.trim()) {
-      const parts = rawClass
-        .trim()
-        .split(/\s+/)
-        .filter(
-          (c) =>
-            !/^(active|selected|hover|focus|current|first|last|odd|even|visible|show|open|hide)$/i.test(
-              c,
-            ),
-        )
-        .slice(0, 2)
-        .sort()
-        .join('.');
-      if (parts) classSig = '.' + parts;
-    }
-    const role = el.getAttribute('role');
-    const rawTestId = el.getAttribute('data-testid');
-    const normalizedTestId = rawTestId ? rawTestId.replace(/[-_]\d+$/, '') : null;
-    const testIdPart = normalizedTestId ? `[data-testid*="${normalizedTestId}"]` : '';
-    return role
-      ? `${tag}${classSig}${testIdPart}[role="${role}"]`
-      : `${tag}${classSig}${testIdPart}`;
-  }
-
-  const selectOptionOmissions = new Map<HTMLSelectElement, { total: number; shown: number }>();
-
-  function traverse(
-    node: Element,
-    propagatingParentRect?: DOMRect | null,
-    parentHasPointer = false,
-    insideShadow = false,
-  ) {
-    if (isExcluded(node, false)) return;
-
-    totalOriginalNodes++;
-
-    const tag = (node.tagName || '').toLowerCase();
-    if (tag === 'body' || tag === 'html') {
-      let style: CSSStyleDeclaration | null = null;
-      try {
-        style = window.getComputedStyle(node);
-      } catch {}
-      const currentHasPointer = style?.cursor === 'pointer';
-      const nextPointer = currentHasPointer || parentHasPointer;
-      const children = node.children ? Array.from(node.children) : [];
-      for (const child of children) {
-        traverse(child, propagatingParentRect, nextPointer, insideShadow);
-      }
-      return;
-    }
-
-    // Native options are indexed through the budgeted select pass below.
-    if (tag === 'option') return;
-
-    if (droppedTags.has(tag)) return;
-    if (svgInternalTags.has(tag)) {
-      const insideSvg = typeof node.closest === 'function' ? Boolean(node.closest('svg')) : true;
-      if (insideSvg) {
-        let nodeStyle: CSSStyleDeclaration | undefined;
-        try {
-          nodeStyle = window.getComputedStyle(node);
-        } catch {}
-        if (!isInteractiveSvgNode(node, nodeStyle)) {
-          return;
-        }
-      }
-    }
-    if (typeof Element !== 'undefined' && !(node instanceof Element)) return;
-    if (isAdOrTrackingElement(node)) return;
-
-    if (
-      node.hasAttribute('inert') ||
-      (node as any).inert === true ||
-      node.getAttribute('aria-hidden') === 'true'
-    ) {
-      return;
-    }
-
-    let style: CSSStyleDeclaration | null = null;
-    try {
-      style = window.getComputedStyle(node);
-    } catch {}
-    if (!style) {
-      return;
-    }
-
-    const isFile = tag === 'input' && (node as HTMLInputElement).type === 'file';
-    const isContents = style.display === 'contents';
-
-    if (!isFile) {
-      if (style.display === 'none' || style.visibility === 'hidden') return;
-      if (parseFloat(style.opacity || '1') <= 0) return;
-      if (!isContents && typeof (node as any).checkVisibility === 'function') {
-        if (!(node as any).checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
-          return;
-        }
-      }
-    }
-
-    const rect = node.getBoundingClientRect();
-    const isZeroSize = isContents || rect.width <= 0 || rect.height <= 0;
-
-    if (!isFile) {
-      if (isZeroSize) {
-        if (node.children.length === 0 && !getShadowRoot(node)) return;
-      } else {
-        if (
-          rect.top > winHeight + threshold ||
-          rect.bottom < -threshold ||
-          rect.left > winWidth + threshold ||
-          rect.right < -threshold
-        ) {
-          return;
-        }
-      }
-    }
-
-    // Inline visual asset detection during the single traverse pass (eliminates secondary querySelectorAll thrashing)
-    if (!isZeroSize) {
-      if (tag === 'img') {
-        const img = node as HTMLImageElement;
-        pushAsset('img', img, rect, img.currentSrc || img.src || undefined, img.alt || undefined);
-      } else if (tag === 'canvas' || tag === 'video') {
-        pushAsset(tag as 'canvas' | 'video', node, rect);
-      } else if (assets.length < 40) {
-        const bg = style.backgroundImage;
-        if (bg && bg !== 'none') {
-          const m = /url\(["']?([^"')]+)["']?\)/.exec(bg);
-          if (m) pushAsset('bg-image', node, rect, m[1]);
-        }
-      }
-    }
-
-    const currentHasPointer = style.cursor === 'pointer';
-    const interactive = isInteractive(node, style, parentHasPointer);
-    const informational = !interactive && isInformationalNode(node);
-    const tableRole = getTableObservationRole(node);
-
-    if (propagatingParentRect && !interactive && !isFile && !informational) {
-      const xOverlap = Math.max(
-        0,
-        Math.min(rect.right, propagatingParentRect.right) -
-          Math.max(rect.left, propagatingParentRect.left),
-      );
-      const yOverlap = Math.max(
-        0,
-        Math.min(rect.bottom, propagatingParentRect.bottom) -
-          Math.max(rect.top, propagatingParentRect.top),
-      );
-      const overlapArea = xOverlap * yOverlap;
-      const childArea = rect.width * rect.height;
-      if (childArea > 0 && overlapArea / childArea >= 0.99) {
-        const nextPointer = currentHasPointer || parentHasPointer;
-        for (const child of Array.from(node.children)) {
-          traverse(child, propagatingParentRect, nextPointer, insideShadow);
-        }
-        const shadow = getShadowRoot(node);
-        if (shadow) {
-          for (const shadowChild of Array.from(shadow.children)) {
-            traverse(shadowChild, propagatingParentRect, nextPointer, true);
-          }
-        }
-        return;
-      }
-    }
-
-    const hasInfoText =
-      informational && Boolean(((node as HTMLElement).innerText || node.textContent || '').trim());
-    const isClosedHost =
-      isCustomElement(node) &&
-      getShadowRoot(node) === null &&
-      (interactive ||
-        style.cursor === 'pointer' ||
-        node.hasAttribute('aria-label') ||
-        node.hasAttribute('role') ||
-        (node as HTMLElement).tabIndex >= 0);
-
-    // Task B7: 2-level form control descendant penetration
-    const hasFormControlDescendant = (element: Element, maxDepth = 2): boolean => {
-      if (maxDepth <= 0 || !element || !element.children) return false;
-      for (const child of Array.from(element.children)) {
-        const childTag = (child.tagName || '').toLowerCase();
-        if (
-          childTag === 'input' ||
-          childTag === 'select' ||
-          childTag === 'textarea' ||
-          childTag === 'button'
-        ) {
-          return true;
-        }
-        if (hasFormControlDescendant(child, maxDepth - 1)) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-    const isWrapperOverFormControl =
-      (tag === 'label' || tag === 'span' || tag === 'div') && hasFormControlDescendant(node, 2);
-
-    if (
-      !isZeroSize &&
-      !isWrapperOverFormControl &&
-      (interactive ||
-        isFile ||
-        (informational && hasInfoText) ||
-        isClosedHost ||
-        tableRole !== null)
-    ) {
-      candidates.push({
-        node,
-        tag,
-        rect,
-        isFile,
-        isInteractive: interactive || isFile || isClosedHost,
-        inShadowDom: insideShadow || (isClosedHost ? true : undefined),
-        isClosedShadowHost: isClosedHost ? true : undefined,
-        isTableStructure: tableRole !== null,
-      });
-    }
-
-    // Task B4: Native <select> options static flattening into virtual entries
-    if (tag === 'select' && (node as HTMLSelectElement).options) {
-      const selectEl = node as HTMLSelectElement;
-      const enabledOptions = Array.from(selectEl.options).filter(
-        (opt) => !opt.disabled && !(opt.closest && opt.closest('optgroup[disabled]')),
-      );
-      const shownOptions = enabledOptions.slice(0, 50);
-      for (const opt of shownOptions) {
-        candidates.push({
-          node: opt,
-          tag: 'option',
-          rect,
-          isFile: false,
-          isInteractive: true,
-          inShadowDom: insideShadow,
-          isSelectOption: true,
-          parentSelect: selectEl,
-          optionValue: opt.value,
-          optionLabel: opt.label || opt.text || opt.value,
-        });
-      }
-      if (enabledOptions.length > shownOptions.length) {
-        selectOptionOmissions.set(selectEl, {
-          total: enabledOptions.length,
-          shown: shownOptions.length,
-        });
-      }
-    }
-
-    const nextPropagatingRect =
-      !isZeroSize && interactive && (tag === 'button' || tag === 'a')
-        ? rect
-        : propagatingParentRect;
-    const nextPointer = currentHasPointer || parentHasPointer;
-
-    // Traverse standard children with Viewport Virtualization Pruning
-    const rawChildren = Array.from(node.children);
-    let childrenToTraverse = rawChildren;
-
-    if (shouldVirtualize && rawChildren.length >= 4) {
-      // Check if current node acts as a scroll container clipping its children
-      let containerRect: DOMRect | null = null;
-      try {
-        const pStyle = window.getComputedStyle(node);
-        const inlineStyle = (node as HTMLElement).style;
-        const overflow =
-          (pStyle?.overflowY || inlineStyle?.overflowY || '') +
-          ' ' +
-          (pStyle?.overflow || inlineStyle?.overflow || '');
-        if (/(auto|scroll|hidden|clip)/i.test(overflow)) {
-          containerRect = node.getBoundingClientRect();
-        }
-      } catch {}
-
-      const groups = new Map<string, Element[]>();
-      for (const child of rawChildren) {
-        const sig = getChildSignature(child);
-        let arr = groups.get(sig);
-        if (!arr) {
-          arr = [];
-          groups.set(sig, arr);
-        }
-        arr.push(child);
-      }
-
-      const foldedSet = new Set<Element>();
-      for (const [sig, items] of groups.entries()) {
-        if (items.length >= 4) {
-          const inViewportOrProtected: Element[] = [];
-          const offscreenItems: Element[] = [];
-
-          for (const item of items) {
-            if (isProtectedFromVirtualization(item)) {
-              inViewportOrProtected.push(item);
-              continue;
-            }
-            const r = item.getBoundingClientRect();
-            let inContainer = true;
-            if (containerRect && containerRect.height > 0) {
-              inContainer =
-                r.bottom >= containerRect.top - 60 &&
-                r.top <= containerRect.bottom + 60 &&
-                r.right >= containerRect.left &&
-                r.left <= containerRect.right;
-            }
-            const inViewport =
-              inContainer &&
-              r.bottom >= -60 &&
-              r.top <= winHeight + 100 &&
-              r.right >= 0 &&
-              r.left <= winWidth;
-            if (inViewport) {
-              inViewportOrProtected.push(item);
-            } else {
-              offscreenItems.push(item);
-            }
-          }
-
-          if (offscreenItems.length >= 3) {
-            // Keep the first offscreen item as sample representation
-            const sampleCount = Math.min(1, offscreenItems.length);
-            const folded = offscreenItems.slice(sampleCount);
-
-            for (const f of folded) {
-              foldedSet.add(f);
-            }
-
-            virtualizedCount += folded.length;
-            const parentTag = (node.tagName || '').toLowerCase();
-            const parentId = node.id ? `#${node.id}` : '';
-            const parentCls =
-              typeof node.className === 'string' && node.className.trim()
-                ? '.' + node.className.trim().split(/\s+/)[0]
-                : '';
-            const clusterSelector = `${parentTag}${parentId || parentCls} > ${sig}`;
-            virtualizedSummary.push({ selector: clusterSelector, count: folded.length });
-
-            const markerRect = offscreenItems[0].getBoundingClientRect();
-            candidates.push({
-              node: items[0],
-              tag: 'virtual_marker',
-              rect: {
-                x: markerRect.x ?? markerRect.left ?? 0,
-                y: markerRect.y ?? markerRect.top ?? 0,
-                top: markerRect.top ?? 0,
-                bottom: markerRect.bottom ?? 0,
-                left: markerRect.left ?? 0,
-                right: markerRect.right ?? 0,
-                width: markerRect.width ?? 0,
-                height: markerRect.height ?? 0,
-              } as DOMRect,
-              isFile: false,
-              isInteractive: false,
-              isVirtualMarker: true,
-              virtualCount: folded.length,
-              virtualSig: sig,
-            } as any);
-          }
-        }
-      }
-
-      // Preserve strict DOM child ordering while omitting folded elements
-      childrenToTraverse = rawChildren.filter((c) => !foldedSet.has(c));
-    }
-
-    for (const child of childrenToTraverse) {
-      traverse(child, nextPropagatingRect, nextPointer, insideShadow);
-    }
-
-    // Traverse slotted elements if node is a slot
-    if (tag === 'slot' && typeof (node as HTMLSlotElement).assignedElements === 'function') {
-      try {
-        const assigned = (node as HTMLSlotElement).assignedElements({ flatten: true });
-        for (const assignedEl of assigned) {
-          traverse(assignedEl, nextPropagatingRect, nextPointer, insideShadow);
-        }
-      } catch {}
-    }
-
-    // Traverse Shadow DOM children (penetration for open and closed shadow roots)
-    const shadow = getShadowRoot(node);
-    if (shadow) {
-      for (const shadowChild of Array.from(shadow.children)) {
-        traverse(shadowChild, nextPropagatingRect, nextPointer, true);
-      }
-    }
-  }
-
-  const candidates: Array<{
-    node: Element;
-    tag: string;
-    rect: DOMRect;
-    isFile: boolean;
-    isInteractive: boolean;
-    inShadowDom?: boolean;
-    isClosedShadowHost?: boolean;
-    isSelectOption?: boolean;
-    parentSelect?: HTMLSelectElement;
-    optionValue?: string;
-    optionLabel?: string;
-    text?: string;
-    isTableStructure?: boolean;
-  }> = [];
 
   let roots: Element[] = [];
   let selectorMatched = false;
@@ -3830,7 +3277,9 @@ export function inPageDOMPruner(options?: {
         : querySelectorAllDeep(targetSelector, document);
       selectorMatched = allRoots.length > 0;
       // Filter out nested roots so child elements are not traversed or indexed twice
-      roots = allRoots.filter((r) => !allRoots.some((other) => other !== r && other.contains(r)));
+      roots = allRoots.filter(
+        (r) => !allRoots.some((other) => other !== r && composedContains(other, r)),
+      );
     } catch {
       roots = [];
       selectorMatched = false;
@@ -3849,22 +3298,30 @@ export function inPageDOMPruner(options?: {
     selectorMatched = true;
   }
 
-  for (const root of roots) {
-    if (isExcluded(root, true)) continue;
-    traverse(root, null, false, false);
-  }
-
-  // Phase 2: Deterministic visual reading-order sort (top-to-bottom, left-to-right)
-  candidates.sort((a, b) => {
-    const ay = a.rect?.y ?? a.rect?.top ?? 0;
-    const by = b.rect?.y ?? b.rect?.top ?? 0;
-    const ax = a.rect?.x ?? a.rect?.left ?? 0;
-    const bx = b.rect?.x ?? b.rect?.left ?? 0;
-    const dy = Math.round(ay) - Math.round(by);
-    if (Math.abs(dy) > 4) {
-      return dy;
-    }
-    return Math.round(ax) - Math.round(bx);
+  const {
+    candidates,
+    assets,
+    assetRegistry,
+    totalOriginalNodes,
+    selectOptionOmissions,
+    virtualizedCount,
+    virtualizedSummary,
+  } = samplePage({
+    roots,
+    winWidth,
+    winHeight,
+    threshold,
+    shouldVirtualize,
+    focusForVirtualization,
+    isExcluded,
+    isInteractive,
+    isAdOrTrackingElement,
+    isInformationalNode,
+    getShadowRoot,
+    isInteractiveSvgNode,
+    isCustomElement,
+    getTableObservationRole,
+    composedContains,
   });
 
   type TreeOutputItem = { type: 'element'; el: IndexedElement } | { type: 'marker'; line: string };
@@ -3902,17 +3359,19 @@ export function inPageDOMPruner(options?: {
   };
 
   // First shape among the descendants the original selector matched, in document order.
-  const descendantShape = (root: Element): string | null => {
+  const descendantShape = (root: Element, seen = new Set<Element>()): string | null => {
     const cached = descendantShapeCache.get(root);
     if (cached !== undefined) return cached;
+    if (seen.has(root)) return null;
+    seen.add(root);
 
     let shape: string | null = null;
-    for (const child of Array.from(root.children)) {
+    for (const child of composedChildren(root)) {
       if (SHAPE_DESCENDANT_TAGS.has(child.tagName.toLowerCase())) {
         shape = ownVisualShape(child);
         if (shape !== null) break;
       }
-      shape = descendantShape(child);
+      shape = descendantShape(child, seen);
       if (shape !== null) break;
     }
 
@@ -3968,11 +3427,16 @@ export function inPageDOMPruner(options?: {
       'title',
       'disabled',
       'aria-disabled',
+      'readonly',
+      'aria-readonly',
       'contenteditable',
       'aria-checked',
       'aria-selected',
       'aria-expanded',
       'aria-pressed',
+      'aria-haspopup',
+      'aria-current',
+      'aria-valuenow',
       'aria-invalid',
       'aria-required',
       'aria-describedby',
@@ -3998,18 +3462,10 @@ export function inPageDOMPruner(options?: {
     }
 
     // Task B1: Compute scopeHash for Local Scope Guard
-    let scopeHash = '';
-    try {
-      const container =
-        (cand.node as Element).closest?.(
-          'form,dialog,[role="dialog"],article,li,tr,[role="row"]',
-        ) || cand.node.parentElement;
-      const scopeText = container ? (container.textContent || '').trim().slice(0, 1000) : '';
-      if (scopeText) {
-        scopeHash = computeScopeHash(scopeText);
-        attributes['data-scope-hash'] = scopeHash;
-      }
-    } catch {}
+    const scopeHash = computeElementScopeHash(cand.node);
+    if (scopeHash) {
+      attributes['data-scope-hash'] = scopeHash;
+    }
 
     // Task B4: Select option attributes
     if (cand.isSelectOption) {
@@ -4022,7 +3478,8 @@ export function inPageDOMPruner(options?: {
     if (
       (cand.node as HTMLElement).isContentEditable ||
       cand.node.getAttribute('contenteditable') === 'true' ||
-      cand.node.getAttribute('contenteditable') === ''
+      cand.node.getAttribute('contenteditable') === '' ||
+      cand.node.getAttribute('contenteditable') === 'plaintext-only'
     ) {
       attributes['contenteditable'] = 'true';
     }
@@ -4032,6 +3489,13 @@ export function inPageDOMPruner(options?: {
       cand.node.getAttribute('aria-disabled') === 'true'
     ) {
       attributes['disabled'] = 'true';
+    }
+    if (
+      (cand.node as any).readOnly === true ||
+      cand.node.hasAttribute('readonly') ||
+      cand.node.getAttribute('aria-readonly') === 'true'
+    ) {
+      attributes['readonly'] = 'true';
     }
 
     // Expose live toggle state. React controlled inputs update the IDL property
@@ -4116,7 +3580,7 @@ export function inPageDOMPruner(options?: {
 
     // Dialog / modal status (P1-7)
     try {
-      if (cand.node.closest('dialog, [role="dialog"], [role="alertdialog"], .modal')) {
+      if (composedClosest(cand.node, 'dialog, [role="dialog"], [role="alertdialog"], .modal')) {
         attributes['dialog'] = 'true';
       }
     } catch {}
@@ -4537,7 +4001,10 @@ export function extractElementLocationDetails(
     initialRect.width > 0 &&
     initialRect.height > 0;
 
-  if (!inViewport && allowScroll) {
+  const clippedOut =
+    initialRect.width > 0 && initialRect.height > 0 && isClippedOutOfView(el, initialRect, win);
+
+  if ((!inViewport || clippedOut) && allowScroll) {
     // Try local scroll first
     const point = actionPointForElement(el, win);
     if (point) {
@@ -4554,7 +4021,10 @@ export function extractElementLocationDetails(
             const canScrollY =
               /^(auto|scroll|overlay)$/.test(style.overflowY) &&
               ancestor.scrollHeight > ancestor.clientHeight + 1;
-            if (canScrollX || canScrollY) {
+            if (
+              ((scrollReq.deltaX !== 0 && canScrollX) || (scrollReq.deltaY !== 0 && canScrollY)) &&
+              typeof ancestor.scrollBy === 'function'
+            ) {
               ancestor.scrollBy({
                 left: scrollReq.deltaX,
                 top: scrollReq.deltaY,
@@ -4572,14 +4042,14 @@ export function extractElementLocationDetails(
             }
           } catch {}
         }
-      } else {
+      } else if (!inViewport) {
         try {
           if (typeof (el as any).scrollIntoView === 'function') {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
           }
         } catch {}
       }
-    } else {
+    } else if (!inViewport) {
       try {
         if (typeof (el as any).scrollIntoView === 'function') {
           el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
@@ -4648,9 +4118,21 @@ export function extractElementLocationDetails(
 
   const safePoint = safeClickPointWeakMap.get(el);
   let clickX, clickY;
-  if (safePoint) {
-    clickX = rect.left + safePoint.offsetX;
-    clickY = rect.top + safePoint.offsetY;
+  const candidateSafeX = safePoint ? rect.left + safePoint.offsetX : NaN;
+  const candidateSafeY = safePoint ? rect.top + safePoint.offsetY : NaN;
+  const safePointValid =
+    Boolean(safePoint) &&
+    Number.isFinite(candidateSafeX) &&
+    Number.isFinite(candidateSafeY) &&
+    safePoint!.offsetX >= 0 &&
+    safePoint!.offsetX <= Math.max(rect.width, 1) &&
+    safePoint!.offsetY >= 0 &&
+    safePoint!.offsetY <= Math.max(rect.height, 1) &&
+    (vw <= 0 || (candidateSafeX >= 0 && candidateSafeX <= vw)) &&
+    (vh <= 0 || (candidateSafeY >= 0 && candidateSafeY <= vh));
+  if (safePointValid) {
+    clickX = candidateSafeX;
+    clickY = candidateSafeY;
   } else {
     const bestPoint = actionPointForElement(el, win);
     if (bestPoint) {
@@ -4720,10 +4202,10 @@ export function extractElementLocationDetails(
     }
     // Pass 2: interactive wrapper match (e.g. inner icon/span of button/link)
     if (matchedIndex === undefined) {
-      const interactiveEl =
-        typeof el.closest === 'function'
-          ? el.closest('button, a, input, select, textarea, [role="button"]')
-          : null;
+      const interactiveEl = composedClosest(
+        el,
+        'button, a, input, select, textarea, [role="button"]',
+      );
       if (interactiveEl && interactiveEl !== el) {
         for (const [idx, entry] of isolatedMap.entries()) {
           const target = derefElement(entry);
@@ -4796,17 +4278,7 @@ export function extractElementLocationDetails(
     invalidReason,
     checked,
     selected,
-    scopeHash: (() => {
-      try {
-        const container =
-          el.closest?.('form,dialog,[role="dialog"],article,li,tr,[role="row"]') ||
-          el.parentElement;
-        const scopeText = container ? (container.textContent || '').trim().slice(0, 1000) : '';
-        return scopeText ? computeScopeHash(scopeText) : undefined;
-      } catch {
-        return undefined;
-      }
-    })(),
+    scopeHash: computeElementScopeHash(el) || undefined,
   };
 }
 
@@ -4876,8 +4348,93 @@ export type ActionableResult = ReturnType<typeof inPageGetElementCoordinates> & 
   method?: 'raf' | 'timer';
 };
 
-function getActionableBlockReason(el: Element, action: string): string | null {
+function isClippedOutOfView(el: Element, rect: DOMRect, win: Window): boolean {
+  const visible = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+  let positionMode: 'normal' | 'absolute' | 'fixed' = 'normal';
+  if (typeof win.getComputedStyle === 'function') {
+    try {
+      const ownPos = win.getComputedStyle(el).position;
+      if (ownPos === 'fixed') positionMode = 'fixed';
+      else if (ownPos === 'absolute') positionMode = 'absolute';
+    } catch {}
+  }
+  const createsFixedBlock = (style: CSSStyleDeclaration): boolean =>
+    (Boolean(style.transform) && style.transform !== 'none') ||
+    (Boolean(style.perspective) && style.perspective !== 'none') ||
+    (Boolean(style.filter) && style.filter !== 'none') ||
+    (Boolean((style as any).backdropFilter) && (style as any).backdropFilter !== 'none') ||
+    /\b(paint|layout|strict|content)\b/.test((style as any).contain || '');
+
+  let ancestor = composedParent(el);
+  const seenAnc = new Set<Element>();
+  while (
+    ancestor &&
+    !seenAnc.has(ancestor) &&
+    ancestor !== el.ownerDocument.body &&
+    ancestor !== el.ownerDocument.documentElement
+  ) {
+    seenAnc.add(ancestor);
+    if (typeof win.getComputedStyle === 'function') {
+      const style = win.getComputedStyle(ancestor);
+      const ancPos = style.position || 'static';
+      const isFixedContainer = createsFixedBlock(style);
+      let ancestorClips = true;
+      if (positionMode === 'fixed') {
+        if (!isFixedContainer) {
+          ancestorClips = false;
+        } else {
+          positionMode =
+            ancPos === 'fixed' ? 'fixed' : ancPos === 'absolute' ? 'absolute' : 'normal';
+        }
+      } else if (positionMode === 'absolute') {
+        if (ancPos === 'static' && !isFixedContainer) {
+          ancestorClips = false;
+        } else {
+          positionMode =
+            ancPos === 'fixed' ? 'fixed' : ancPos === 'absolute' ? 'absolute' : 'normal';
+        }
+      } else {
+        if (ancPos === 'fixed') positionMode = 'fixed';
+        else if (ancPos === 'absolute') positionMode = 'absolute';
+      }
+
+      if (ancestorClips) {
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const clipsX = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowX);
+        const clipsY = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowY);
+        if (clipsX || clipsY) {
+          const area = ancestor.getBoundingClientRect();
+          const left = area.left + (ancestor.clientLeft || 0);
+          const top = area.top + (ancestor.clientTop || 0);
+          const right = left + (ancestor.clientWidth || area.width);
+          const bottom = top + (ancestor.clientHeight || area.height);
+          if (clipsX) {
+            visible.left = Math.max(visible.left, left);
+            visible.right = Math.min(visible.right, right);
+          }
+          if (clipsY) {
+            visible.top = Math.max(visible.top, top);
+            visible.bottom = Math.min(visible.bottom, bottom);
+          }
+          if (visible.right <= visible.left || visible.bottom <= visible.top) {
+            return true;
+          }
+        }
+      }
+    }
+    ancestor = composedParent(ancestor);
+  }
+  return false;
+}
+
+function getActionableBlockReason(
+  el: Element,
+  action: string,
+  options?: { checkClipping?: boolean },
+): string | null {
   if (!el.isConnected || el.ownerDocument !== document) return 'disconnected';
+  const checkClipping = options?.checkClipping !== false;
 
   const isOption = el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option';
   const isHover = action === 'hover' || action === 'mouse_move';
@@ -4922,40 +4479,7 @@ function getActionableBlockReason(el: Element, action: string): string | null {
   if (!isOption) {
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return 'hidden';
-    const visible = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
-    let ancestor = composedParent(el);
-    while (
-      ancestor &&
-      ancestor !== el.ownerDocument.body &&
-      ancestor !== el.ownerDocument.documentElement
-    ) {
-      if (typeof win.getComputedStyle === 'function') {
-        const style = win.getComputedStyle(ancestor);
-        const overflowX = style.overflowX || style.overflow;
-        const overflowY = style.overflowY || style.overflow;
-        const clipsX = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowX);
-        const clipsY = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowY);
-        if (clipsX || clipsY) {
-          const area = ancestor.getBoundingClientRect();
-          const left = area.left + (ancestor.clientLeft || 0);
-          const top = area.top + (ancestor.clientTop || 0);
-          const right = left + (ancestor.clientWidth || area.width);
-          const bottom = top + (ancestor.clientHeight || area.height);
-          if (clipsX) {
-            visible.left = Math.max(visible.left, left);
-            visible.right = Math.min(visible.right, right);
-          }
-          if (clipsY) {
-            visible.top = Math.max(visible.top, top);
-            visible.bottom = Math.min(visible.bottom, bottom);
-          }
-          if (visible.right <= visible.left || visible.bottom <= visible.top) {
-            return 'out_of_view';
-          }
-        }
-      }
-      ancestor = composedParent(ancestor);
-    }
+    if (checkClipping && isClippedOutOfView(el, rect, win)) return 'out_of_view';
   }
 
   return null;
@@ -5022,7 +4546,7 @@ export async function inPageWaitForActionable(
     };
   }
 
-  let blockReason = getActionableBlockReason(el, action);
+  let blockReason = getActionableBlockReason(el, action, { checkClipping: false });
   if (blockReason) {
     return {
       success: false,
@@ -5058,6 +4582,19 @@ export async function inPageWaitForActionable(
   const STABILITY_THRESHOLD = 0.25;
   const startTime = performance.now();
   let prevRect = el.getBoundingClientRect();
+  // Verify clipping after scrolling the target into view so scrollable offscreen controls
+  // succeed while permanently clipped elements still report out_of_view.
+  const win = el.ownerDocument?.defaultView || window;
+  if (isClippedOutOfView(el, prevRect, win)) {
+    return {
+      ...initialCoords,
+      success: false,
+      actionable: false,
+      notFound: false,
+      reason: 'out_of_view',
+      error: `Element [${index}] is not actionable (out_of_view)`,
+    };
+  }
   let stableFrames = 0;
   let everUsedTimer = false;
 
@@ -5291,11 +4828,7 @@ export function inPageSnapCoordinate(
       if (svgRoot && (svgRoot.hasAttribute('onclick') || svgRoot.getAttribute('role') === 'button'))
         return true;
     }
-    if (typeof (el as any).closest === 'function') {
-      try {
-        if ((el as any).closest('button, a, [role="button"], [onclick]')) return true;
-      } catch {}
-    }
+    if (composedClosest(el, 'button, a, [role="button"], [onclick]')) return true;
     try {
       const style = window.getComputedStyle(el);
       if (style.cursor === 'pointer' || /grab|grabbing/i.test(style.cursor)) return true;
@@ -5534,6 +5067,8 @@ export function inPageReadDeliveryProbe(disarm?: boolean): {
 }
 
 import {
+  collapseNestedLocatorMatches,
+  isLocatorCandidateVisible,
   inPageLocateBySelector,
   getLocatorAccessibleName,
   inPageLocateByLabel,

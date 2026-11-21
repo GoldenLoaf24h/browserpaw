@@ -61,6 +61,39 @@ describe('BrowserPaw Backlog Defects & Universal Architectural Fixes', () => {
       expect(scrollIntoViewSpy).toHaveBeenCalled();
     });
 
+    it('scrolls to the specific control inside a shadow scroll container', async () => {
+      const host = document.createElement('feed-list');
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.innerHTML = `
+        <div id="feed" style="overflow: auto">
+          <p>Current results</p>
+          <button id="next"><span>Next result</span></button>
+        </div>
+      `;
+      document.body.appendChild(host);
+
+      const elements = Array.from(shadow.querySelectorAll('#feed, #next, #next span'));
+      const scrolls = elements.map((element) => {
+        element.getBoundingClientRect = () => new DOMRect(20, 30, 90, 40);
+        return (element.scrollIntoView = vi.fn());
+      });
+      scrolls[1].mockImplementation(() => {
+        elements[0].scrollTop = 225;
+      });
+
+      const result = await inPageScrollUntilFound({ query: 'Next result' });
+      expect(result).toMatchObject({
+        found: true,
+        tagName: 'button',
+        text: 'Next result',
+        stepsTaken: 0,
+        scrolledPx: 225,
+      });
+      expect(scrolls[0]).not.toHaveBeenCalled();
+      expect(scrolls[1]).toHaveBeenCalledOnce();
+      expect(scrolls[2]).not.toHaveBeenCalled();
+    });
+
     it('scrolls step-by-step and finds element that appears during scroll', async () => {
       let currentScrollY = 0;
       window.scrollY = 0;

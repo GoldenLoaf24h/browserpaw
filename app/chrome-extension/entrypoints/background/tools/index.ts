@@ -1,6 +1,6 @@
 import { createErrorResponse, type ToolCallContext } from '@/common/tool-handler';
 import { ERROR_MESSAGES } from '@/common/constants';
-import { formatErrorForAgent, TOOL_SCHEMAS } from 'chrome-mcp-shared';
+import { formatErrorForAgent, TOOL_NAMES, TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import * as browserTools from './browser';
 import { tabFaviconManager } from './browser/tab-favicon';
 import { logUnexpectedToolError } from '@/utils/restricted-url';
@@ -63,17 +63,19 @@ function coerceArgsWithSchema(argsObj: Record<string, any>, properties: Record<s
 }
 
 export const handleCallTool = async (param: ToolCallParam, context?: ToolCallContext) => {
-  try {
-    const session = await chrome.storage.session.get('agentControlEnabled');
-    if (session?.agentControlEnabled === false) {
+  if (param.name !== TOOL_NAMES.BROWSER.DOCTOR) {
+    try {
+      const session = await chrome.storage.session.get('agentControlEnabled');
+      if (session?.agentControlEnabled === false) {
+        return createErrorResponse(
+          'Agent control is currently paused by the user via the extension popup switch. Please enable the switch in the extension popup to resume browser automation.',
+        );
+      }
+    } catch {
       return createErrorResponse(
-        'Agent control is currently paused by the user via the extension popup switch. Please enable the switch in the extension popup to resume browser automation.',
+        'Agent control state could not be verified due to storage failure. Actions are blocked to prevent unauthorized automation.',
       );
     }
-  } catch {
-    return createErrorResponse(
-      'Agent control state could not be verified due to storage failure. Actions are blocked to prevent unauthorized automation.',
-    );
   }
 
   const tool = toolsMap.get(param.name);

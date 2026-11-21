@@ -3,6 +3,7 @@ import { closeTabsTool } from '../entrypoints/background/tools/browser/common';
 import { sessionTabAffinity } from '../utils/session-tab-affinity';
 import { tabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';
 import * as browserIdentity from '../utils/browser-identity';
+import { cdpSessionManager } from '../utils/cdp-session-manager';
 
 describe('CloseTabsTool (chrome_close_tabs)', () => {
   beforeEach(() => {
@@ -136,5 +137,57 @@ describe('CloseTabsTool (chrome_close_tabs)', () => {
     // Should ONLY close 401, NOT 402 which merely has it in query string
     expect(parsed.closedTabIds).toEqual([401]);
     expect(mockTabsRemove).toHaveBeenCalledWith([401]);
+  });
+
+  it('auto-accepts beforeunload dialogs triggered during tab removal', async () => {
+    let resolveRemove!: () => void;
+    const mockTabsRemove = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRemove = resolve;
+        }),
+    );
+    (chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 501, url: 'https://reddit.com/submit' });
+    (chrome.tabs as any).remove = mockTabsRemove;
+    vi.spyOn(cdpSessionManager, 'sendFrameCommand').mockImplementation(
+      async (_tabId, _sessionId, method, params: any) => {
+        if (method === 'Page.handleJavaScriptDialog' && params?.accept === true) {
+          resolveRemove();
+        }
+        return {};
+      },
+    );
+
+    const pending = closeTabsTool.execute({ tabIds: [501] });
+    for (let i = 0; i < 10 && !resolveRemove; i++) {
+      await Promise.resolve();
+    }
+    expect(resolveRemove).toBeDefined();
+    cdpSessionManager.handleCdpEvent({ tabId: 501 }, 'Page.javascriptDialogOpening', {
+      type: 'beforeunload',
+      message: 'Leave site?',
+    });
+
+    const res = await pending;
+    expect(res.isError).toBe(false);
+    expect(JSON.parse(res.content[0].text).closedTabIds).toEqual([501]);
+  });
+
+  it('times out cleanly instead of hanging forever when tab removal stays blocked', async () => {
+    vi.useFakeTimers();
+    try {
+      (chrome.tabs as any).get = vi.fn().mockResolvedValue({ id: 502, url: 'https://reddit.com/submit' });
+      (chrome.tabs as any).remove = vi.fn().mockImplementation(() => new Promise(() => {}));
+      vi.spyOn(cdpSessionManager, 'isAttached').mockReturnValue(true);
+      vi.spyOn(cdpSessionManager, 'sendFrameCommand').mockResolvedValue({});
+
+      const pending = closeTabsTool.execute({ tabIds: [502] });
+      await vi.advanceTimersByTimeAsync(5100);
+      const res = await pending;
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('Timed out closing tab(s) 502');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BaseBrowserToolExecutor } from '../entrypoints/background/tools/base-browser';
-import { fillTool } from '../entrypoints/background/tools/browser/interaction';
 import { sessionTabAffinity, startHandoverTracking } from '../utils/session-tab-affinity';
 import { handleCallTool } from '../entrypoints/background/tools/index';
 import { TabGroupManager } from '../entrypoints/background/tools/browser/tab-group-manager';

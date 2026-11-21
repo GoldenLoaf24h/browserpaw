@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { interactIndexTool } from '../entrypoints/background/tools/browser/interact-index';
-import { clickTool, fillTool } from '../entrypoints/background/tools/browser/interaction';
-import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
+import { clickTool } from '../entrypoints/background/tools/browser/interaction';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
 import * as agentCursor from '../entrypoints/background/tools/browser/agent-cursor';
 import { cdpSessionManager } from '../utils/cdp-session-manager';
@@ -207,7 +206,6 @@ beforeEach(() => {
   vi.spyOn(agentCursor, 'animateAgentCursorClick').mockResolvedValue(undefined);
   vi.spyOn(interactIndexTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
   vi.spyOn(clickTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
-  vi.spyOn(fillTool as any, 'resolveAffinityTab').mockResolvedValue(tab);
 });
 
 afterEach(() => {
@@ -238,9 +236,10 @@ describe('Screenshot coordinate contract', () => {
       expect(tool!.inputSchema.properties?.captureId, name).toMatchObject({
         type: 'string',
       });
-      expect(tool!.inputSchema.properties?.coordinateSpace?.description, name).toMatch(
-        /captureId/i,
-      );
+      expect(tool!.inputSchema.properties?.coordinateSpace?.enum, name).toEqual([
+        'viewport',
+        'screenshot',
+      ]);
     }
     expect(TOOL_SCHEMAS.some((tool) => tool.name === 'chrome_burst_interact')).toBe(false);
   });
@@ -373,22 +372,6 @@ describe('Screenshot coordinate contract', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/scroll changed/i);
-    expect(dispatched).toEqual([]);
-  });
-
-  it('rejects combining ordinary captureId with Jev expectedScreenshotId', async () => {
-    const capture = seedCapture();
-
-    const result = await interactClick({
-      captureId: capture.captureId,
-      expectedScreenshotId: 'vf-existing',
-      expectedDeadlineAt: Date.now() + 10_000,
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(
-      /captureId.*expectedScreenshotId|expectedScreenshotId.*captureId/i,
-    );
     expect(dispatched).toEqual([]);
   });
 
@@ -556,100 +539,6 @@ describe('Screenshot coordinate contract', () => {
       undefined,
     );
     expect(interact).toHaveBeenCalledWith(expect.objectContaining({ index: 5 }), undefined);
-  });
-
-  it('rejects a stale legacy fill captureId before physical fill', async () => {
-    const capture = seedCapture({ screenshotWidth: page.width / 2 });
-    page.scrollY = 99;
-    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'value',
-      isTrusted: true,
-      method: 'cdp_native',
-    });
-
-    const result = await fillTool.execute({
-      tabId,
-      coordinate: { x: 100, y: 100 },
-      coordinateSpace: 'screenshot',
-      captureId: capture.captureId,
-      value: 'value',
-    } as any);
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/scroll changed/i);
-    expect(fill).not.toHaveBeenCalled();
-  });
-
-  it('passes legacy fill screenshot coordinates to the physical fill in viewport space', async () => {
-    const capture = seedCapture({
-      screenshotWidth: page.width / 2,
-      screenshotHeight: page.height / 2,
-    });
-    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'value',
-      isTrusted: true,
-      method: 'cdp_native',
-    });
-
-    const result = await fillTool.execute({
-      tabId,
-      coordinate: { x: 100, y: 100 },
-      coordinateSpace: 'screenshot',
-      captureId: capture.captureId,
-      value: 'value',
-    } as any);
-
-    expect(result.isError).toBe(false);
-    expect(fill).toHaveBeenCalledWith(expect.objectContaining({ coordinate: { x: 200, y: 200 } }));
-  });
-
-  it('does not let an unused stale captureId break a semantic legacy fill', async () => {
-    const capture = seedCapture({ screenshotWidth: page.width / 2 });
-    page.scrollY = 99;
-    vi.mocked(inPageEngine.executeInPage).mockImplementation(
-      async (_target: any, method: string) => {
-        if (method === 'inPageLocateBySelector') {
-          return [
-            {
-              frameId: 0,
-              result: {
-                success: true,
-                x: 10,
-                y: 20,
-                width: 30,
-                height: 20,
-                index: 5,
-                tagName: 'INPUT',
-              },
-            },
-          ] as any;
-        }
-        return [{ result: true }] as any;
-      },
-    );
-    const fill = vi.spyOn(fillCore, 'performPhysicalFill').mockResolvedValue({
-      success: true,
-      committed: true,
-      filledText: 'value',
-      isTrusted: true,
-      method: 'cdp_native',
-    });
-
-    const result = await fillTool.execute({
-      tabId,
-      selector: '#name',
-      coordinate: { x: 100, y: 100 },
-      coordinateSpace: 'screenshot',
-      captureId: capture.captureId,
-      value: 'value',
-    } as any);
-
-    expect(result.isError).toBe(false);
-    expect(fill).toHaveBeenCalledTimes(1);
   });
 
   it('revalidates a capture-bound point sequence between every click', async () => {

@@ -136,7 +136,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
   private captureTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> max capture timer
   private inactivityTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> inactivity timer
   private lastActivityTime: Map<number, number> = new Map(); // tabId -> timestamp of last activity
-  private requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests
+  public requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests
   public static MAX_REQUESTS_PER_CAPTURE = LIMITS.MAX_NETWORK_REQUESTS; // Maximum capture request count
   private listeners: Map<number, TabRequestListeners> = new Map(); // tabId -> request listeners
 
@@ -767,9 +767,7 @@ class NetworkCaptureStartTool extends BaseBrowserToolExecutor {
         ...(autoStopReason ? { autoStopped: true, stoppedReason: autoStopReason } : {}),
       };
 
-      if (autoStopReason) {
-        this.retainTerminalResult(tabId, resultData);
-      }
+      this.retainTerminalResult(tabId, resultData);
 
       // Clean up resources
       this.cleanupCapture(tabId);
@@ -967,7 +965,7 @@ class NetworkCaptureStopTool extends BaseBrowserToolExecutor {
     NetworkCaptureStopTool.instance = this;
   }
 
-  async execute(args?: { tabId?: number }): Promise<ToolResult> {
+  async execute(args?: { tabId?: number; keepResult?: boolean }): Promise<ToolResult> {
     console.log(`NetworkCaptureStopTool: Executing`);
 
     try {
@@ -987,7 +985,10 @@ class NetworkCaptureStopTool extends BaseBrowserToolExecutor {
 
       if (typeof args?.tabId === 'number') {
         if (!startTool.captureData.has(args.tabId)) {
-          const retained = startTool.takeTerminalResult(args.tabId);
+          const retained = args.keepResult
+            ? startTool.hasTerminalResult(args.tabId) &&
+              startTool.terminalResults.get(args.tabId)?.result
+            : startTool.takeTerminalResult(args.tabId);
           if (retained) return this.makeStopResponse(startTool, args.tabId, retained);
           return createErrorResponse(`No active network captures found on tab ${args.tabId}.`);
         }

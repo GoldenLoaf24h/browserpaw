@@ -55,7 +55,9 @@ describe('injectContentScript ping handling', () => {
       new Error('Cannot access contents of the page'),
     );
 
-    await expect(executor.inject(102, ['inject-scripts/wait-helper.js'])).resolves.toBeUndefined();
+    await expect(
+      executor.inject(102, ['inject-scripts/keyboard-helper.js']),
+    ).resolves.toBeUndefined();
 
     expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
     expect(consoleError).toHaveBeenCalledWith(

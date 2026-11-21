@@ -54,25 +54,22 @@ function decorateJsonResult(result: ToolResult, extra: Record<string, unknown>):
   return result;
 }
 
-function isDebuggerCaptureActiveOnTab(tabId: number): boolean {
-  const captureData = (
-    networkDebuggerStartTool as unknown as { captureData?: Map<number, unknown> }
-  ).captureData;
-  return captureData instanceof Map && captureData.has(tabId);
-}
+const backends = {
+  debugger: { start: networkDebuggerStartTool, stop: networkDebuggerStopTool },
+  webRequest: { start: networkCaptureStartTool, stop: networkCaptureStopTool },
+};
+const tabCaptureSessions = new Map<
+  number,
+  { backend: NetworkCaptureBackend; sessionId?: string; busy: boolean }
+>();
 
-function isWebRequestCaptureActiveOnTab(tabId: number): boolean {
-  return networkCaptureStartTool.captureData.has(tabId);
-}
-
-function hasRetainedResultOnTab(tabId: number): boolean {
-  return (
-    networkDebuggerStartTool.hasTerminalResult(tabId) ||
-    networkCaptureStartTool.hasTerminalResult(tabId)
+function captureBackend(tabId: number): NetworkCaptureBackend | undefined {
+  const selected = tabCaptureSessions.get(tabId)?.backend;
+  if (selected) return selected;
+  return (['debugger', 'webRequest'] as const).find((backend) =>
+    backends[backend].start.captureData.has(tabId),
   );
 }
-
-const tabCaptureSessions = new Map<number, string>();
 
 /**
  * Unified Network Capture Tool
@@ -99,36 +96,44 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       return this.handleStart(args, wantBody);
     }
 
-    if (action === 'status' || action === 'list' || action === 'show' || action === 'clear') {
-      const tab = await this.resolveAffinityTab({ tabId: args.tabId, sessionId: args.sessionId });
-      if (!tab.id) return createErrorResponse('No target tab.');
-      const owner = tabCaptureSessions.get(tab.id);
-      if (owner && owner !== args.sessionId)
-        return createErrorResponse('Capture belongs to another task.');
-      const debug = (
-        networkDebuggerStartTool as unknown as {
-          captureData: Map<number, { requests: Record<string, unknown> }>;
-        }
-      ).captureData.get(tab.id);
-      const recording = debug ?? networkCaptureStartTool.captureData.get(tab.id);
-      const retained =
-        (
-          networkDebuggerStartTool as unknown as { terminalResults: Map<number, { result: any }> }
-        ).terminalResults.get(tab.id)?.result ??
-        networkCaptureStartTool.terminalResults.get(tab.id)?.result;
+    const sessionId = args.sessionId || args.sessionContext;
+    const tab = await this.resolveAffinityTab({ tabId: args.tabId, sessionId });
+    if (typeof tab.id !== 'number') return createErrorResponse('No target tab.');
+    const capture = tabCaptureSessions.get(tab.id);
+    if (capture && capture.sessionId !== sessionId)
+      return createErrorResponse('Capture belongs to another task.');
+    if (capture?.busy) return createErrorResponse('Network capture is changing state.');
+    const backend = captureBackend(tab.id);
+    const tools = backend ? backends[backend] : undefined;
+    if (action === 'stop') {
+      if (!tools || (wantBody && backend !== 'debugger'))
+        return createErrorResponse('No matching network capture on this tab.');
+      if (capture) capture.busy = true;
+      try {
+        const result = await tools.stop.execute({ tabId: tab.id, keepResult: true });
+        return decorateJsonResult(result, {
+          backend,
+          needResponseBody: backend === 'debugger',
+          tabId: tab.id,
+        });
+      } finally {
+        if (capture) capture.busy = false;
+      }
+    }
+
+    {
+      const recording = tools?.start.captureData.get(tab.id);
+      const retained = tools?.start.hasTerminalResult(tab.id)
+        ? tools.start.terminalResults.get(tab.id)?.result
+        : undefined;
       const requests = recording?.requests ?? retained?.requests ?? {};
       if (action === 'clear') {
-        if (recording?.requests) recording.requests = {};
-        if (retained?.requests) retained.requests = {};
-        if (debug) {
-          (
-            networkDebuggerStartTool as unknown as { requestCounters: Map<number, number> }
-          ).requestCounters.set(tab.id, 0);
-        } else {
-          (
-            networkCaptureStartTool as unknown as { requestCounters: Map<number, number> }
-          ).requestCounters.set(tab.id, 0);
+        if (recording) {
+          recording.requests = {};
+          tools?.start.requestCounters.set(tab.id, 0);
         }
+        tools?.start.terminalResults.delete(tab.id);
+        if (!recording) tabCaptureSessions.delete(tab.id);
         return {
           content: [
             {
@@ -208,8 +213,6 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false };
     }
-
-    return this.handleStop(args);
   }
 
   private async handleStart(
@@ -235,34 +238,46 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       return createErrorResponse('Invalid target tab ID');
     }
 
-    const debuggerOnTab = isDebuggerCaptureActiveOnTab(tabId);
-    const webOnTab = isWebRequestCaptureActiveOnTab(tabId);
-
-    if (debuggerOnTab || webOnTab) {
-      const activeMode = debuggerOnTab ? 'debugger' : 'webRequest';
+    if (
+      tabCaptureSessions.get(tabId)?.busy ||
+      Object.values(backends).some(({ start }) => start.captureData.has(tabId))
+    ) {
       return createErrorResponse(
-        `Network capture is already active on tab ${tabId} in ${activeMode} mode. Stop it before starting a new capture.`,
+        `Network capture is already active on tab ${tabId}. Stop it before starting a new capture.`,
       );
     }
 
-    const delegate = wantBody ? networkDebuggerStartTool : networkCaptureStartTool;
-    const backend: NetworkCaptureBackend = wantBody ? 'debugger' : 'webRequest';
-
-    const result = await delegate.execute({
-      url: args.url,
-      tabId,
-      maxCaptureTime: args.maxCaptureTime,
-      inactivityTimeout: args.inactivityTimeout,
-      includeStatic: args.includeStatic,
-      requestUrlPattern: args.requestUrlPattern,
-    } as any);
-
-    // Only register session ownership if start actually succeeded
-    if (sessionId && !result.isError) {
-      tabCaptureSessions.set(tabId, sessionId);
+    for (const [previousTab, previous] of tabCaptureSessions) {
+      const { start } = backends[previous.backend];
+      if (
+        !previous.busy &&
+        !start.captureData.has(previousTab) &&
+        !start.hasTerminalResult(previousTab)
+      )
+        tabCaptureSessions.delete(previousTab);
     }
-
-    return decorateJsonResult(result, { backend, needResponseBody: wantBody, tabId });
+    for (const { start } of Object.values(backends)) start.terminalResults.delete(tabId);
+    const backend = wantBody ? 'debugger' : 'webRequest';
+    const state: { backend: NetworkCaptureBackend; sessionId?: string; busy: boolean } = {
+      backend,
+      sessionId,
+      busy: true,
+    };
+    tabCaptureSessions.set(tabId, state);
+    try {
+      const result = await backends[backend].start.execute({
+        url: args.url,
+        tabId,
+        maxCaptureTime: args.maxCaptureTime,
+        inactivityTimeout: args.inactivityTimeout,
+        includeStatic: args.includeStatic,
+        requestUrlPattern: args.requestUrlPattern,
+      });
+      if (result.isError) tabCaptureSessions.delete(tabId);
+      return decorateJsonResult(result, { backend, needResponseBody: wantBody, tabId });
+    } finally {
+      state.busy = false;
+    }
   }
 
   private showNetworkRequest(tabId: number, item: Record<string, any>, outputPath?: string) {
@@ -306,117 +321,6 @@ class NetworkCaptureTool extends BaseBrowserToolExecutor {
       };
     }
     return result;
-  }
-
-  private async handleStop(args: NetworkCaptureToolParams): Promise<ToolResult> {
-    const sessionId = args?.sessionId || args?.sessionContext;
-    let targetTabId: number | undefined;
-
-    // Explicit tabId provided
-    if (typeof args?.tabId === 'number') {
-      targetTabId = args.tabId;
-      // ARCH-06 / Ownership: If this tab is captured by a different session, reject unauthorized stop!
-      const ownerSession = tabCaptureSessions.get(targetTabId);
-      if (ownerSession && sessionId && ownerSession !== sessionId) {
-        return createErrorResponse(
-          `Cannot stop network capture on tab ${targetTabId}: it is owned by another session (${ownerSession}).`,
-        );
-      }
-    } else if (sessionId) {
-      // Find tab captured specifically by this session
-      for (const [tId, sId] of tabCaptureSessions.entries()) {
-        if (sId === sessionId) {
-          targetTabId = tId;
-          break;
-        }
-      }
-    }
-
-    if (targetTabId === undefined && !sessionId) {
-      const targetTab = await this.resolveAffinityTab({ tabId: args?.tabId, sessionId }).catch(
-        () => null,
-      );
-      if (
-        targetTab?.id &&
-        (isDebuggerCaptureActiveOnTab(targetTab.id) ||
-          isWebRequestCaptureActiveOnTab(targetTab.id) ||
-          hasRetainedResultOnTab(targetTab.id))
-      ) {
-        targetTabId = targetTab.id;
-      }
-    }
-
-    if (targetTabId === undefined) {
-      return createErrorResponse(
-        'No active network captures found for the specified tab or session.',
-      );
-    }
-
-    const debuggerActive = isDebuggerCaptureActiveOnTab(targetTabId);
-    const webActive = isWebRequestCaptureActiveOnTab(targetTabId);
-
-    if (!debuggerActive && !webActive) {
-      let retainedBackend: NetworkCaptureBackend | null = null;
-      if (args?.needResponseBody === true) {
-        retainedBackend = networkDebuggerStartTool.hasTerminalResult(targetTabId)
-          ? 'debugger'
-          : null;
-      } else if (args?.needResponseBody === false) {
-        retainedBackend = networkCaptureStartTool.hasTerminalResult(targetTabId)
-          ? 'webRequest'
-          : null;
-      } else if (networkDebuggerStartTool.hasTerminalResult(targetTabId)) {
-        retainedBackend = 'debugger';
-      } else if (networkCaptureStartTool.hasTerminalResult(targetTabId)) {
-        retainedBackend = 'webRequest';
-      }
-
-      if (retainedBackend) {
-        const delegateStop =
-          retainedBackend === 'debugger' ? networkDebuggerStopTool : networkCaptureStopTool;
-        const result = await delegateStop.execute({ tabId: targetTabId } as any);
-        tabCaptureSessions.delete(targetTabId);
-        return decorateJsonResult(result, {
-          backend: retainedBackend,
-          needResponseBody: retainedBackend === 'debugger',
-          tabId: targetTabId,
-        });
-      }
-      return createErrorResponse(`No active network captures found on tab ${targetTabId}.`);
-    }
-
-    // Determine which backend to stop
-    let backendToStop: NetworkCaptureBackend | null = null;
-
-    if (args?.needResponseBody === true) {
-      backendToStop = debuggerActive ? 'debugger' : null;
-    } else if (args?.needResponseBody === false) {
-      backendToStop = webActive ? 'webRequest' : null;
-    }
-
-    if (!backendToStop) {
-      if (debuggerActive) {
-        backendToStop = 'debugger';
-      } else if (webActive) {
-        backendToStop = 'webRequest';
-      }
-    }
-
-    if (!backendToStop) {
-      return createErrorResponse(`No matching network capture found on tab ${targetTabId}.`);
-    }
-
-    const delegateStop =
-      backendToStop === 'debugger' ? networkDebuggerStopTool : networkCaptureStopTool;
-    const result = await delegateStop.execute({ tabId: targetTabId } as any);
-
-    tabCaptureSessions.delete(targetTabId);
-
-    return decorateJsonResult(result, {
-      backend: backendToStop,
-      needResponseBody: backendToStop === 'debugger',
-      tabId: targetTabId,
-    });
   }
 }
 

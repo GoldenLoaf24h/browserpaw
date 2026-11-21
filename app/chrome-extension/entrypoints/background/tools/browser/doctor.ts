@@ -99,6 +99,7 @@ class DoctorTool extends BaseBrowserToolExecutor {
             text: JSON.stringify(
               {
                 success: true,
+                agentControlEnabled: controlEnabled,
                 healthy: allPassed,
                 summary: allPassed
                   ? 'All BrowserPaw core components healthy'

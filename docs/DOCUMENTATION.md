@@ -25,7 +25,7 @@ Task instructions take precedence over repository guidance. Deeper AGENTS files 
 | `app/native-server/`                  | v5 CLI, Native loopback host and Native Messaging bridge; MCP is retired                         |
 | `packages/shared/`                    | CLI command registry, browser schemas, shared types and protocol helpers                         |
 | `test/`                               | Cross-package integration and simulated E2E; package unit tests stay in their packages           |
-| `scripts/` and `bin/`                 | Repository automation and executable entry points; keep callers intact when moving files         |
+| `scripts/`                            | Repository automation scripts; keep callers intact when moving files                             |
 | `skills/browserpaw/`                  | Canonical client-neutral skill                                                                   |
 | `plugins/`                            | Client adapters and generated skill distributions                                                |
 | `.agents/plugins/`, `.claude-plugin/` | Marketplace discovery metadata, not disposable agent logs                                        |
@@ -43,7 +43,7 @@ Do not move working source packages merely to make the tree look cleaner. A move
 ## Active, generated and archived documents
 
 - Active documentation describes current behavior and supported commands. Link new documents from the relevant hub; keep local links valid and exclude links to ephemeral `.artifacts/` paths.
-- `docs/COMMANDS.md` comes from `node scripts/gen-tools-doc.mjs`. Static skill mirrors come from `node scripts/sync-skills.mjs`; edit their canonical sources.
+- `docs/COMMANDS.md` comes from `node scripts/gen-commands-doc.mjs` (`pnpm docs:commands`). Static skill mirrors come from `node scripts/sync-skills.mjs`; edit their canonical sources.
 - Generated AGENTS files are directory navigation plus package guidance. Put maintained local rules under the exact `## Manual Notes` heading so regeneration preserves them. Use targeted regeneration, such as `node scripts/generate-agents-docs.mjs docs`; a new folder does not need another AGENTS file unless its rules differ.
 - Archive completed records with their context and date under the [archive index](./archive/README.md). Preserve content; update active inbound links or leave a deliberate pointer. Historical paths inside frozen records are not current navigation.
 - Keep archive index links valid. Do not rewrite old release claims to match today's implementation. The version ledger distinguishes published tags from local drafts.

@@ -28,6 +28,8 @@ describe('BrowserPaw CLI dispatch regressions', () => {
   it.each([
     { step: ['history', 'search', 'example.com'], name: 'history search' },
     { step: ['pdf', '--out', 'page.pdf'], name: 'pdf' },
+    { step: ['screenshot', '--out=page.png'], name: 'screenshot' },
+    { step: ['task', 'resume', '--adopt'], name: 'task resume' },
   ])('rejects $name at recipe save and batch dispatch', async ({ step, name }) => {
     const error = `Command ${name} is unavailable inside a batch.`;
     expect(() => validateSavedRecipe({ id: 'audit-recipe', steps: [step] })).toThrow(error);
@@ -48,6 +50,20 @@ describe('BrowserPaw CLI dispatch regressions', () => {
     if (previousHome === undefined) delete process.env.BROWSERPAW_HOME;
     else process.env.BROWSERPAW_HOME = previousHome;
     rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it('requires task context and rejects a narrower tab or frame for task resume', async () => {
+    const id = '01234567-89ab-4cde-8f01-23456789abcd';
+    const resume = (...args: string[]) =>
+      dispatchCommand(parseCommand(['task', 'resume', ...args]), new AbortController().signal);
+
+    await expect(resume('--adopt')).rejects.toThrow('Select a task with --task ID.');
+    for (const [option, value] of [['--tab', '12'], ['--frame', '0']]) {
+      await expect(resume('--task', id, option, value, '--adopt')).rejects.toThrow(
+        'Task resume applies to the whole task.',
+      );
+    }
+    expect(mockedBrowserCall).not.toHaveBeenCalled();
   });
 
   it('passes network filters as requestUrlPattern without replacing the page URL', async () => {
@@ -112,6 +128,26 @@ describe('BrowserPaw CLI dispatch regressions', () => {
     });
   });
 
+  it.each([{ options: [] }, { options: ['--content'] }])(
+    'treats a JSON document as text $options',
+    async ({ options }) => {
+      const text = '{"fixture":"long text"}';
+      mockedBrowserCall.mockResolvedValueOnce({ content: [{ type: 'text', text }] });
+      const response = await dispatchCommand(
+        parseCommand(['text', ...options, '--max-chars', '4', '--tab', '12']),
+        new AbortController().signal,
+      );
+      expect(mockedBrowserCall.mock.lastCall?.[1]).toEqual({
+        tabId: 12,
+        ...(options.length ? { fit: true } : {}),
+      });
+      expect(response).toMatchObject({
+        content: [{ type: 'text', text: text.slice(0, 4) }],
+        structuredContent: { truncated: true, originalChars: text.length },
+      });
+    },
+  );
+
   it('keeps caller tab context authoritative over legacy batch step options', async () => {
     mockedBrowserCall.mockResolvedValueOnce(result({ success: true }));
 
@@ -130,5 +166,33 @@ describe('BrowserPaw CLI dispatch regressions', () => {
       'cli-tab:7',
       expect.any(AbortSignal),
     );
+  });
+
+  it('preserves actual receipts from completed steps when a direct batch fails', async () => {
+    mockedBrowserCall
+      .mockResolvedValueOnce(result({ success: true, text: 'first receipt' }))
+      .mockResolvedValueOnce(result({ success: false, error: 'second failed' }, true));
+
+    const response = await dispatchCommand(
+      parseCommand(['batch', 'placeholder.json', '--tab', '7']),
+      new AbortController().signal,
+      [
+        ['text', 'css:h1'],
+        ['click', 'css:#missing'],
+      ],
+    );
+
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent?.failedStepIndex).toBeUndefined();
+    expect(response.structuredContent?.steps).toEqual([
+      expect.objectContaining({
+        command: 'text',
+        result: expect.objectContaining({ content: expect.any(Array) }),
+      }),
+      expect.objectContaining({
+        command: 'click',
+        result: expect.objectContaining({ isError: true }),
+      }),
+    ]);
   });
 });

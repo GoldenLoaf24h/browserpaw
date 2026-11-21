@@ -5,6 +5,7 @@ import {
   computeInteractionScope,
   getStickyOcclusionMargins,
   inPageDOMPruner,
+  querySelectorAllDeep,
 } from '../dom-indexer';
 
 export interface SmartScrollTargetInfo {
@@ -92,7 +93,10 @@ export function inPageFindSmartScrollTarget(options?: {
       targetEl = findIndexedElement(options.ref);
     } else if (options?.selector) {
       try {
-        targetEl = document.querySelector(options.selector);
+        targetEl =
+          document.querySelector(options.selector) ||
+          querySelectorAllDeep(options.selector, document)[0] ||
+          null;
       } catch {}
     } else if (options?.coordinate) {
       try {
@@ -389,6 +393,14 @@ export function inPageFindSmartScrollTarget(options?: {
         selector = `#${safeId}`;
       } else {
         try {
+          for (const stale of querySelectorAllDeep(
+            '[data-browserpaw-scroll-target="true"]',
+            document,
+          )) {
+            if (stale !== targetEl) {
+              stale.removeAttribute('data-browserpaw-scroll-target');
+            }
+          }
           targetEl.setAttribute('data-browserpaw-scroll-target', 'true');
           selector = `${targetEl.tagName.toLowerCase()}[data-browserpaw-scroll-target="true"]`;
         } catch {
@@ -527,7 +539,7 @@ export function inPagePerformSmartScroll(
   let el: Element | null = null;
   if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
     try {
-      el = document.querySelector(selector);
+      el = document.querySelector(selector) || querySelectorAllDeep(selector, document)[0] || null;
     } catch {}
   }
   if (!el) {

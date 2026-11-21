@@ -53,16 +53,31 @@ describe('PageTool', () => {
       },
     ] as any);
 
-    const response = await tool.execute({ action: 'text_links', tabId: 12, index: 9, limit: 1 });
+    const response = await tool.execute({
+      action: 'text_links',
+      tabId: 12,
+      frameId: 5,
+      index: 9,
+      limit: 1,
+    });
 
-    expect(inPageEngine.executeInPage).toHaveBeenCalledWith({ tabId: 12 }, 'inPageGetLinks', [
-      { index: 9, sameOriginOnly: false, includeEmptyHref: false },
-    ]);
+    expect(inPageEngine.executeInPage).toHaveBeenCalledWith(
+      { tabId: 12, frameIds: [5] },
+      'inPageGetLinks',
+      [{ index: 9, sameOriginOnly: false }],
+    );
     expect(response.structuredContent).toMatchObject({
       count: 1,
       totalCount: 2,
       truncated: true,
       links: [{ text: 'One' }],
     });
+  });
+
+  it('reports a missing explicitly scoped target', async () => {
+    vi.spyOn(inPageEngine, 'executeInPage').mockResolvedValueOnce([{ result: null, frameId: 0 }]);
+    expect(
+      (await tool.execute({ action: 'text_links', tabId: 12, selector: '#missing' })).isError,
+    ).toBe(true);
   });
 });

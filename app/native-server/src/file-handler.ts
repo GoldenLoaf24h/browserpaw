@@ -226,10 +226,6 @@ export function isSensitivePath(candidatePath: string): boolean {
   if (SENSITIVE_PATH_PATTERN.test(normalized)) {
     return true;
   }
-  const base = path.basename(normalized).toLowerCase();
-  if (base === 'bridge-token' || base === 'jev-remote.json') {
-    return true;
-  }
   return false;
 }
 
@@ -677,6 +673,12 @@ export class FileHandler {
       controller.abort();
       response?.body?.destroy?.();
       fileStream?.destroy();
+      if (fileStream) {
+        await new Promise<void>((resolve) => {
+          if (fileStream!.closed) return resolve();
+          fileStream!.once('close', () => resolve());
+        });
+      }
       if (filePath) {
         try {
           if (fs.existsSync(filePath)) await fs.promises.unlink(filePath);

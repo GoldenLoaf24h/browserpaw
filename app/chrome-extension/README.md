@@ -1,6 +1,6 @@
 # BrowserPaw Chrome Extension (MV3) 🧩
 
-This package contains the Google Chrome Manifest V3 extension for **BrowserPaw** (`chrome-mcp-server`), built with [WXT](https://wxt.dev/) and Vue 3. It runs directly inside the user's everyday Chrome browser, executing automation commands via the Chrome DevTools Protocol (CDP) and isolated-world content scripts.
+This package contains the Google Chrome Manifest V3 extension connector for **BrowserPaw** (workspace package `chrome-mcp-server`), built with [WXT](https://wxt.dev/) and Vue 3. It connects the user's desktop Chrome/Chromium profile to the local `com.browserpaw.nativehost` Native Messaging host and executes browser actions via the Chrome DevTools Protocol (CDP) and isolated-world content scripts.
 
 ---
 
@@ -9,13 +9,13 @@ This package contains the Google Chrome Manifest V3 extension for **BrowserPaw**
 ```
 app/chrome-extension/
 ├── entrypoints/
-│   ├── background/             # MV3 Service Worker & 49 Tool Executors
+│   ├── background/             # MV3 Service Worker & Browser Tool Executors
 │   │   ├── native-host.ts      # Native Messaging pipe listener & sender authentication guard
 │   │   ├── index.ts            # Extension initialization, keepalive, and error reporting
-│   │   └── tools/browser/      # Executors for all 49 BrowserPaw extension tools (52 total with 3 Native tools: chrome_task, chrome_skill, chrome_act_toward_goal)
+│   │   └── tools/browser/      # Internal browser executors dispatched by the v5 Native host
 │   ├── agent-cursor.content.ts # Closed Shadow DOM virtual mouse overlay with spring physics
 │   ├── inpage-engine.ts        # Isolated-world DOM indexing, 1-based indexing, WeakRef mapping
-│   └── popup/                  # Extension popup UI (agent toggle and connection monitor)
+│   └── popup/                  # Extension popup UI (bridge status, Agent Control, cursor & window mode, update badge)
 ├── utils/
 │   ├── cdp-session-manager.ts  # CDP session pooling, domain ref-counting & anti-hang detachment
 │   ├── session-tab-affinity.ts # Multi-turn tab binding backed by chrome.storage.session
@@ -80,9 +80,10 @@ app/chrome-extension/.output/chrome-mv3
 
 ### Loading in Chrome
 
-1. Open Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** in the top right corner.
-3. Click **Load unpacked** and select the `app/chrome-extension/.output/chrome-mv3` folder.
+1. Register the v5 Native Messaging host first (`browserpaw setup`) or deploy via `pnpm build:deploy`.
+2. Open Chrome and navigate to `chrome://extensions/` (or `chromium://extensions/`).
+3. Enable **Developer mode** in the top right corner.
+4. Click **Load unpacked** and select the unpacked extension directory (e.g. `~/.browserpaw/extension` or your configured local sync directory).
 
 ---
 
@@ -94,5 +95,4 @@ The extension test suite runs via Vitest with mocked Chrome MV3 and CDP environm
 pnpm --filter chrome-mcp-server test
 ```
 
-- **Test Files**: 150 passed (100%)
-- **Test Count**: 1,789 passed (100%)
+Run `pnpm verify` at the repository root to record complete Vitest, Jest, script, and documentation gate counts.

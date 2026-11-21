@@ -744,6 +744,9 @@ export class TabGroupManager {
               for (const tid of residueIds) {
                 this.agentTabIds.delete(tid);
               }
+              if (chrome.tabs.ungroup && residueIds.length > 0) {
+                await chrome.tabs.ungroup(residueIds).catch(() => {});
+              }
               try {
                 await chrome.tabs.remove(residueIds);
               } catch {}
@@ -772,6 +775,34 @@ export class TabGroupManager {
     }
 
     return removedCount;
+  }
+
+  /**
+   * Ungroups closing agent-managed tabs before chrome.tabs.remove so Chrome
+   * dissolves the group instead of saving it as a closed Saved Tab Group.
+   */
+  public async detachManagedTabsBeforeClose(tabIds: number[]): Promise<void> {
+    if (typeof chrome === 'undefined' || !chrome.tabs?.ungroup || tabIds.length === 0) return;
+    await this.ensureStorageLoaded();
+    const toUngroup: number[] = [];
+    for (const tid of tabIds) {
+      try {
+        const tab = await chrome.tabs.get(tid);
+        const gid = (tab as { groupId?: number })?.groupId;
+        if (
+          typeof gid === 'number' &&
+          gid > 0 &&
+          (this.agentTabIds.has(tid) || (await this.isAgentGroup(gid)))
+        ) {
+          toUngroup.push(tid);
+        }
+      } catch {
+        // Tab may already be closing.
+      }
+    }
+    if (toUngroup.length > 0) {
+      await chrome.tabs.ungroup(toUngroup).catch(() => {});
+    }
   }
 
   /**
@@ -806,6 +837,10 @@ export class TabGroupManager {
       if (tabsToClose.length > 0) {
         for (const tid of tabsToClose) {
           this.agentTabIds.delete(tid);
+        }
+        // Ungroup before closing so Chrome does not archive ephemeral agent groups into Saved Tab Groups.
+        if (chrome.tabs.ungroup) {
+          await chrome.tabs.ungroup(tabsToClose).catch(() => {});
         }
         await chrome.tabs.remove(tabsToClose);
       }

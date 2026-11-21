@@ -24,13 +24,8 @@ import {
   inPageReadDeliveryProbe,
   computePerceptiveDelta,
 } from './dom-indexer';
-import {
-  screenshotContextManager,
-  scaleCoordinates,
-  scaleVisionFrameCoordinates,
-  type VisionFrameContext,
-} from '../../../../utils/screenshot-context';
-import { screenshotOriginViolation, validateVisionFrame } from '../../../../utils/screenshot-guard';
+import { screenshotContextManager, scaleCoordinates } from '../../../../utils/screenshot-context';
+import { screenshotOriginViolation } from '../../../../utils/screenshot-guard';
 import {
   SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
   validateScreenshotCoordinateBinding,
@@ -70,9 +65,6 @@ export interface InteractIndexParams {
   coordinateSpace?: 'viewport' | 'screenshot';
   /** Ordinary screenshot identity from chrome_screenshot. Screenshot-space coordinates must name it. */
   captureId?: string;
-  /** Internal: Bind action execution to a specific immutable TypeSafe vision frame.
-   * If the page or frame has drifted or been superseded, execution fails closed before dispatch. */
-  expectedScreenshotId?: string;
   /** Internal: Epoch ms deadline before which the physical click press must be dispatched.
    * If Date.now() >= expectedDeadlineAt at entry or right before mousePressed, execution fails closed. */
   expectedDeadlineAt?: number;
@@ -387,12 +379,6 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
       };
     };
 
-    if (args.captureId && args.expectedScreenshotId) {
-      return blockedError(
-        'captureId and expectedScreenshotId are distinct screenshot identities and cannot be combined. Use captureId for ordinary screenshot coordinates or expectedScreenshotId for a Jev vision-frame click.',
-        'conflicting_capture_identity',
-      );
-    }
     if (args.captureId && !hasCoord && !hasPoints && !hasPath) {
       return blockedError(
         'captureId only supports screenshot coordinate actions (coordinate, points, or drag path); index/selector-only actions do not use screenshot coordinates.',
@@ -419,48 +405,6 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         `Unsupported action "${action}". Allowed actions: ${validActions.join(', ')}`,
         'unsupported_action',
       );
-    }
-
-    if (args.expectedScreenshotId) {
-      if (action !== 'click') {
-        return blockedError(
-          `expectedScreenshotId only supports action="click", received "${action}"`,
-          'invalid_screenshot_action',
-        );
-      }
-      if (
-        args.index !== undefined ||
-        (args as any).selector !== undefined ||
-        (args as any).ref !== undefined ||
-        args.path !== undefined ||
-        args.points !== undefined
-      ) {
-        return blockedError(
-          'expectedScreenshotId only supports direct coordinate click (index/selector/ref/path/points are rejected)',
-          'invalid_screenshot_target',
-        );
-      }
-      if (!args.coordinate) {
-        return blockedError(
-          'expectedScreenshotId requires coordinate',
-          'missing_screenshot_coordinate',
-        );
-      }
-      if (
-        typeof args.expectedDeadlineAt !== 'number' ||
-        !Number.isFinite(args.expectedDeadlineAt)
-      ) {
-        return blockedError(
-          'expectedDeadlineAt must be a finite number when expectedScreenshotId is provided',
-          'invalid_screenshot_deadline',
-        );
-      }
-      if (Date.now() >= args.expectedDeadlineAt) {
-        return blockedError(
-          `Interaction deadline expired before execution (now=${Date.now()}, deadline=${args.expectedDeadlineAt})`,
-          'deadline_expired',
-        );
-      }
     }
 
     try {
@@ -497,17 +441,13 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
         const previousUrl = tab.url || '';
         tabFaviconManager.markTabActive(tabId);
 
-        const isScreenshotSpace =
-          args.coordinateSpace === 'screenshot' ||
-          Boolean(args.captureId) ||
-          Boolean(args.expectedScreenshotId);
+        const isScreenshotSpace = args.coordinateSpace === 'screenshot' || Boolean(args.captureId);
         let captureBindingValidated = false;
         const validateCaptureBinding = async (): Promise<string | undefined> => {
           const binding = await validateScreenshotCoordinateBinding({
             tabId,
             captureId: args.captureId,
             coordinateSpace: args.coordinateSpace,
-            visionFrameId: args.expectedScreenshotId,
           });
           if (binding.error) return binding.error;
           captureBindingValidated = Boolean(binding.captureId);
@@ -537,50 +477,8 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           ? undefined
           : `input routed to active tab (tabId=${tabId}); pass explicit tabId to target another tab`;
 
-        let visionFrame: VisionFrameContext | undefined;
-        if (args.expectedScreenshotId) {
-          const scrollRes = await executeInPage({ tabId }, 'inPageGetScrollState', []).catch(
-            () => null,
-          );
-          const scrollState = scrollRes?.[0]?.result;
-          const currentDocId = scrollRes?.[0]?.documentId || scrollState?.documentId;
-          const currentUrl = scrollState?.documentURL || tab.url || '';
-
-          const currentPerceptiveSignature = await executeInPage(
-            { tabId },
-            'inPageDetectPerceptiveSignature',
-            [],
-          )
-            .then((r) => r?.[0]?.result)
-            .catch(() => null);
-
-          const validation = validateVisionFrame({
-            expectedScreenshotId: args.expectedScreenshotId,
-            currentTabId: tabId,
-            currentUrl,
-            currentDocumentId: currentDocId,
-            currentScroll: scrollState
-              ? { scrollX: scrollState.scrollX, scrollY: scrollState.scrollY }
-              : undefined,
-            currentViewport: scrollState
-              ? {
-                  viewportWidth: scrollState.viewportWidth,
-                  viewportHeight: scrollState.viewportHeight,
-                }
-              : undefined,
-            currentPerceptiveSignature,
-          });
-
-          if (!validation.valid || !validation.frame) {
-            return createErrorResponse(
-              validation.error || 'Vision frame validation failed: frame is stale or invalid',
-            );
-          }
-          visionFrame = validation.frame;
-        }
-
         let screenshotCtx: any;
-        if (isScreenshotSpace && !visionFrame) {
+        if (isScreenshotSpace) {
           screenshotCtx = screenshotContextManager.getContext(tabId);
           if (!screenshotCtx) {
             return createErrorResponse(
@@ -600,21 +498,6 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           c: any,
         ): { x: number; y: number; isDocumentSpace?: boolean } | null => {
           if (!c) return null;
-          if (visionFrame) {
-            const rawParsed = parseUnifiedCoordinate(c, {
-              viewportWidth: visionFrame.width,
-              viewportHeight: visionFrame.height,
-              originX: 0,
-              originY: 0,
-            });
-            if (!rawParsed) return null;
-            const scaled = scaleVisionFrameCoordinates(rawParsed.x, rawParsed.y, visionFrame);
-            if ('error' in scaled) {
-              lastCoordinateError = scaled.error;
-              return null;
-            }
-            return { x: scaled.x, y: scaled.y };
-          }
           if (isScreenshotSpace && screenshotCtx) {
             const rawParsed = parseUnifiedCoordinate(c, {
               viewportWidth: screenshotCtx.screenshotWidth,
@@ -655,9 +538,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
             viewportHeight: 800,
           };
 
-          const ctx = isScreenshotSpace
-            ? (visionFrame ?? screenshotContextManager.getContext(tabId))
-            : undefined;
+          const ctx = isScreenshotSpace ? screenshotContextManager.getContext(tabId) : undefined;
           const isDoc = Boolean(coord.isDocumentSpace || ctx?.captureMode === 'fullpage');
 
           const baseScrollX = ctx?.scrollX ?? scrollState.scrollX;
@@ -1519,79 +1400,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                           args.expectedGuard,
                         );
                         throwIfAborted(signal, 'after observed target validation');
-                        if (visionFrame) {
-                          // Check deadline immediately before press
-                          if (
-                            typeof args.expectedDeadlineAt === 'number' &&
-                            Date.now() >= args.expectedDeadlineAt
-                          ) {
-                            throw new Error(
-                              `Interaction deadline expired before physical press (now=${Date.now()}, deadline=${args.expectedDeadlineAt})`,
-                            );
-                          }
-
-                          // Re-probe fresh page state after movement/prepress
-                          const freshScrollRes = await executeInPage(
-                            { tabId },
-                            'inPageGetScrollState',
-                            [],
-                          ).catch(() => null);
-                          const freshScroll = freshScrollRes?.[0]?.result;
-                          const freshDocId =
-                            freshScrollRes?.[0]?.documentId || freshScroll?.documentId;
-                          const freshUrl = freshScroll?.documentURL || tab.url || '';
-
-                          const freshSigRes = await executeInPage(
-                            { tabId },
-                            'inPageDetectPerceptiveSignature',
-                            [],
-                          ).catch(() => null);
-                          const freshSig = freshSigRes?.[0]?.result;
-
-                          const validation = validateVisionFrame({
-                            expectedScreenshotId: visionFrame.id,
-                            currentTabId: tabId,
-                            currentUrl: freshUrl,
-                            currentDocumentId: freshDocId,
-                            currentScroll: freshScroll
-                              ? { scrollX: freshScroll.scrollX, scrollY: freshScroll.scrollY }
-                              : undefined,
-                            currentViewport: freshScroll
-                              ? {
-                                  viewportWidth: freshScroll.viewportWidth,
-                                  viewportHeight: freshScroll.viewportHeight,
-                                }
-                              : undefined,
-                            currentPerceptiveSignature: freshSig,
-                          });
-
-                          if (!validation.valid) {
-                            throw new Error(
-                              validation.error ||
-                                'Vision frame validation failed right before mouse press',
-                            );
-                          }
-
-                          // Re-check deadline after probe
-                          if (
-                            typeof args.expectedDeadlineAt === 'number' &&
-                            Date.now() >= args.expectedDeadlineAt
-                          ) {
-                            throw new Error(
-                              `Interaction deadline expired after validation probe (now=${Date.now()}, deadline=${args.expectedDeadlineAt})`,
-                            );
-                          }
-
-                          // Atomic consume before dispatch
-                          const consumed = screenshotContextManager.consumeVisionFrame(
-                            visionFrame.id,
-                          );
-                          if (!consumed) {
-                            throw new Error(
-                              `Vision frame "${visionFrame.id}" could not be consumed (already consumed, superseded, or expired)`,
-                            );
-                          }
-                        } else if (args.captureId) {
+                        if (args.captureId) {
                           await assertCaptureBinding();
                         }
 
@@ -1603,7 +1412,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
                       if (params.type === 'mouseReleased') {
                         // Suppress compensating mouseReleased if mousePressed was never dispatched
                         if (
-                          (visionFrame || args.captureId || args.expectedGuard !== undefined) &&
+                          (args.captureId || args.expectedGuard !== undefined) &&
                           !physicalPressDispatched
                         ) {
                           return;
@@ -1821,10 +1630,6 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
               netCapture.dispose();
               throw cdpErr;
             }
-            if (visionFrame) {
-              netCapture.dispose();
-              return createErrorResponse(cdpErr instanceof Error ? cdpErr.message : String(cdpErr));
-            }
             if (args.captureId) {
               netCapture.dispose();
               return createErrorResponse(
@@ -1902,17 +1707,9 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
           }
         }
 
-        if (visionFrame && deliveryVerified === false) {
-          return createErrorResponse(
-            'Visual click delivery is unverified; inspect page state before any further action.',
-          );
-        }
-
         // Visibility: screenshot-context TTL silently expires after 5 minutes;
         // surface the remaining budget so stale coordinate projection is detected
-        const ctxTtlMs = visionFrame
-          ? screenshotContextManager.getVisionFrameTtlRemaining(visionFrame.id)
-          : screenshotContextManager.getTtlRemaining(tabId);
+        const ctxTtlMs = screenshotContextManager.getTtlRemaining(tabId);
         const screenshotCtxWarning =
           ctxTtlMs >= 0 && ctxTtlMs < 30_000
             ? `screenshot coordinate context expires in ${Math.round(ctxTtlMs / 1000)}s; re-capture to refresh`

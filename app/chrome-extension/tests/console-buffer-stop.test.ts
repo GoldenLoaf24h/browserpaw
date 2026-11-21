@@ -125,6 +125,6 @@ describe('P2-1: console buffer stop entry point', () => {
     expect(schema).toBeDefined();
     const modeSchema = (schema as any).inputSchema.properties.mode;
     expect(modeSchema.enum).toContain('stop');
-    expect(modeSchema.description).toContain('stop');
+    expect(modeSchema.description).toBeUndefined();
   });
 });

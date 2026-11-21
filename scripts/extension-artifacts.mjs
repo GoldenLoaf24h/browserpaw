@@ -82,7 +82,7 @@ export function calculateExtensionSourceFingerprint(root = repoRoot) {
 
   for (const file of files) {
     if (/\.md$/i.test(file.relPath)) continue;
-    const hash = sha256File(file.fullPath);
+    const hash = file.hash || sha256File(file.fullPath);
     sourceInputs[file.relPath] = hash;
     hashLines.push(`${file.relPath}:${hash}`);
   }
@@ -93,13 +93,26 @@ export function calculateExtensionSourceFingerprint(root = repoRoot) {
 
 export function createBuildInfo(options = {}) {
   const root = options.repoRoot || repoRoot;
+  const buildMode = options.buildMode || 'production';
   const { sourceHash, sourceInputs } = calculateExtensionSourceFingerprint(root);
-  const buildId = `paw-${Date.now().toString(36)}-${sourceHash.slice(0, 8)}`;
+  const identityHash = sha256Buffer(
+    Buffer.from(
+      JSON.stringify({
+        sourceHash,
+        extensionKey: options.extensionKey || '',
+        buildMode,
+      }),
+      'utf-8',
+    ),
+  );
+  const buildId = `paw-${identityHash.slice(0, 12)}`;
 
   return {
     buildId,
     buildTime: new Date().toISOString(),
+    buildMode,
     sourceHash,
+    identityHash,
     sourceInputs,
   };
 }
@@ -120,7 +133,9 @@ export function writeBuildProvenance(outDir = defaultOutDir, buildInfo) {
   const provenance = {
     buildId: buildInfo.buildId,
     buildTime: buildInfo.buildTime || new Date().toISOString(),
+    buildMode: buildInfo.buildMode || 'production',
     sourceHash: buildInfo.sourceHash,
+    identityHash: buildInfo.identityHash,
     sourceInputs: buildInfo.sourceInputs,
     artifacts,
   };
@@ -221,6 +236,9 @@ export function checkBuild(options = {}) {
       'browserpaw-build.json is missing required fields (buildId, sourceHash, artifacts)',
     );
   }
+  if (!provenance.identityHash) {
+    throw new Error('browserpaw-build.json is missing required field identityHash');
+  }
 
   const artifactKeys = Object.keys(provenance.artifacts);
   if (artifactKeys.length === 0) {
@@ -268,6 +286,17 @@ export function checkBuild(options = {}) {
   if (sourceHash !== provenance.sourceHash) {
     throw new Error(
       `Source fingerprint mismatch: extension build inputs have changed since build (${sourceHash} !== ${provenance.sourceHash})`,
+    );
+  }
+
+  const expectedIdentityHash = createBuildInfo({
+    repoRoot: root,
+    extensionKey: manifest.key,
+    buildMode: provenance.buildMode || 'production',
+  }).identityHash;
+  if (provenance.identityHash !== expectedIdentityHash) {
+    throw new Error(
+      `Build identity mismatch: manifest key or build mode changed since build (${expectedIdentityHash} !== ${provenance.identityHash})`,
     );
   }
 

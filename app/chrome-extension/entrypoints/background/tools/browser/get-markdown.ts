@@ -27,13 +27,28 @@ export class GetMarkdownTool extends BaseBrowserToolExecutor {
         return createErrorResponse('No active tab found for chrome_get_markdown');
       }
 
-      const results = await executeInPage<string>(
-        { tabId: tab.id },
-        'inPageExtractMarkdown',
-        [args.includeLinks ?? true, args.fit ?? false],
-      );
+      const results = await executeInPage<string>({ tabId: tab.id }, 'inPageExtractMarkdown', [
+        args.includeLinks ?? true,
+        args.fit ?? false,
+      ]);
 
-      const markdown = results?.[0]?.result ?? '';
+      const rawResult = results?.[0]?.result as unknown;
+      if (
+        rawResult &&
+        typeof rawResult === 'object' &&
+        (rawResult as { isErrorPage?: boolean }).isErrorPage
+      ) {
+        const errMessage =
+          (rawResult as { error?: string }).error || 'Frame is showing Chrome error page';
+        return createErrorResponse(`Cannot extract markdown from error page: ${errMessage}`);
+      }
+
+      const markdown =
+        typeof rawResult === 'string'
+          ? rawResult
+          : rawResult == null
+            ? ''
+            : JSON.stringify(rawResult);
 
       return {
         content: [

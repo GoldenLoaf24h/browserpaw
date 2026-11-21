@@ -348,16 +348,6 @@ describe('Agent Cursor (Virtual Mouse) Tests', () => {
     expect(batchSrc).toContain(
       'await animateAgentCursorClick(tabId, targetX, targetY, batchActNote);',
     );
-
-    // 4. form-pipeline.ts
-    const formPath = path.resolve(
-      __dirname,
-      '../entrypoints/background/tools/browser/form-pipeline.ts',
-    );
-    const formSrc = fs.readFileSync(formPath, 'utf-8');
-    expect(formSrc).not.toMatch(/void animateAgentCursorClick\(/);
-    expect(formSrc).toMatch(/await interactIndexTool\.execute\(\s*\{/);
-    expect(formSrc).not.toContain('Input.dispatchMouseEvent');
   });
 
   it('verifies background agent-cursor lifecycle cleanup on tab removal and reload', async () => {

@@ -4,7 +4,13 @@ Run `pnpm install --frozen-lockfile` and `pnpm verify`. Builds stay in the repos
 
 The shared command registry drives help and generated Markdown. After editing it, run `pnpm build:shared`, `pnpm docs:commands`, and `node scripts/sync-skills.mjs`. Edit the Skill in the canonical directory.
 
-Run `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` pointing to Chrome for Testing. The fixture uses an isolated Chrome profile, Native state, and fixture pages. On Windows it creates a temporary registration and removes its manifest afterwards. If the production key already exists, the fixture uses a unique host name in its copied CLI and extension and records that substitution. Point `BROWSERPAW_TEST_CLI` at an extracted npm package CLI to verify the packaged runtime. The runtime report records the build ID read from Chrome.
+Run `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` pointing to Chrome for Testing. The fixture uses an isolated Chrome profile, Native state, and fixture pages. On Windows it uses a unique host name and port in its browser and CLI test copies, then removes its manifest and registration key. Point `BROWSERPAW_TEST_CLI` at an extracted npm package CLI to verify the packaged runtime. The runtime report records the build ID read from Chrome.
+
+The fixture checks tab and dedicated-window creation and cleanup. Retain its report and receipts under `.artifacts/`. Tests that create a temporary browser profile, task ledger or package installation own its teardown.
+
+The extension build ID is derived from extension and shared build inputs, the manifest key and build mode. A Markdown edit can change the full verification fingerprint while the loaded extension build ID stays the same. When checking a ZIP, use the artifact hashes in `browserpaw-build.json` as well as the build ID. Build timestamps can differ between runs.
+
+The CLI prunes managed receipts in `~/.browserpaw/out` after artifact delivery. It removes eligible receipts older than seven days and keeps up to 200 eligible recent receipts, with a ten-minute grace period for concurrent output. The current command, active or paused tasks, and directories containing unrecognized entries are excluded. Explicit `--out` files belong to the caller.
 
 Add commands to the shared registry, route them through the Native dispatcher, and reuse the existing extension executor where it fits. Add an example to offline help and a focused test for the behavior. Regenerate the command reference and skill mirrors with `pnpm docs:commands` and `node scripts/sync-skills.mjs`.
 

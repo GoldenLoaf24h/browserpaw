@@ -1,23 +1,18 @@
 import type { Tool } from './operation-types';
 
+const TASK_ID = { type: 'string' } as const;
+
 const EXPLICIT_TARGET_SCHEMA = {
   type: 'object',
   properties: {
-    index: { type: 'number', description: 'Element index from the current observation' },
-    frameId: {
-      type: 'integer',
-      minimum: 0,
-      description: 'Resolve only in this frame; never fall back to another frame.',
-    },
-    ref: {
-      type: ['string', 'number'],
-      description: 'Element ref or numeric index from the current observation',
-    },
-    selector: { type: 'string', description: 'CSS selector or XPath for the target' },
-    text: { type: 'string', description: 'Visible text target' },
-    role: { type: 'string', description: 'ARIA role target' },
-    label: { type: 'string', description: 'Associated native or ARIA label target' },
-    exact: { type: 'boolean', description: 'Require an exact text or label match' },
+    index: { type: 'number' },
+    frameId: { type: 'integer', minimum: 0 },
+    ref: { type: ['string', 'number'] },
+    selector: { type: 'string' },
+    text: { type: 'string' },
+    role: { type: 'string' },
+    label: { type: 'string' },
+    exact: { type: 'boolean' },
   },
   additionalProperties: false,
   anyOf: [
@@ -30,6 +25,23 @@ const EXPLICIT_TARGET_SCHEMA = {
   ],
 } as const;
 
+const CAPTURE_NETWORK_SCHEMA = {
+  type: 'object',
+  properties: {
+    urlPattern: { type: 'string' },
+    method: { type: 'string' },
+    timeoutMs: { type: 'number' },
+    statusCodes: { type: 'array', items: { type: 'number' } },
+  },
+  required: ['urlPattern'],
+} as const;
+
+const BROWSER_DATA_SCHEMA = {
+  type: 'object' as const,
+  properties: { action: { type: 'string' } },
+  required: ['action'],
+};
+
 export const TOOL_NAMES = {
   BROWSER: {
     GET_WINDOWS_AND_TABS: 'get_windows_and_tabs',
@@ -37,9 +49,7 @@ export const TOOL_NAMES = {
     SCREENSHOT: 'chrome_screenshot',
     CLOSE_TABS: 'chrome_close_tabs',
     SWITCH_TAB: 'chrome_switch_tab',
-    WEB_FETCHER: 'chrome_get_web_content',
     CLICK: 'chrome_click_element',
-    FILL: 'chrome_fill_or_select',
     NETWORK_CAPTURE: 'chrome_network_capture',
     NETWORK_REQUEST: 'chrome_network_request',
     KEYBOARD: 'chrome_keyboard',
@@ -68,13 +78,11 @@ export const TOOL_NAMES = {
     TAB_GROUP_CLOSE: 'chrome_tab_group_close',
     SMART_SCROLL: 'chrome_smart_scroll',
     STORAGE: 'chrome_storage',
-    GET_LINKS: 'chrome_get_links',
     INSPECT_MEDIA: 'chrome_inspect_media',
     REQUEST_HUMAN_INTERVENTION: 'chrome_request_human_intervention',
     DOCTOR: 'chrome_doctor',
     CDP_EXECUTE: 'chrome_cdp_execute',
     GREP: 'chrome_grep',
-    FORM_PIPELINE: 'chrome_form_pipeline',
     DISMISS_OVERLAY: 'chrome_dismiss_overlay',
     SCROLL_UNTIL_FOUND: 'chrome_scroll_until_found',
   },
@@ -86,40 +94,23 @@ export const TOOL_NAMES = {
 
 const schemas: Tool[] = [
   ...[
-    [TOOL_NAMES.BROWSER.HISTORY, 'Read or remove visited URLs.'],
-    [TOOL_NAMES.BROWSER.BOOKMARKS, 'Read or organize bookmarks.'],
-    [TOOL_NAMES.BROWSER.DOWNLOADS, 'Read or manage Chrome download entries.'],
-    [TOOL_NAMES.BROWSER.COOKIES, 'Read or edit cookies in the profile.'],
-    [TOOL_NAMES.BROWSER.STORAGE, 'Read or edit the selected document storage.'],
-    ['chrome_debug', 'Run a scoped browser diagnostic.'],
-    ['chrome_page', 'Manage explicitly selected tabs and windows or read page data.'],
-    [TOOL_NAMES.BROWSER.TAB_GROUP_LIST, 'List tab groups.'],
-    [TOOL_NAMES.BROWSER.TAB_GROUP_CREATE, 'Group selected tabs.'],
-    [TOOL_NAMES.BROWSER.TAB_GROUP_UPDATE, 'Update an explicit tab group.'],
-    [TOOL_NAMES.BROWSER.TAB_GROUP_UNGROUP, 'Ungroup selected tabs.'],
-    [TOOL_NAMES.BROWSER.TAB_GROUP_CLOSE, 'Close an eligible explicit tab group.'],
-    [TOOL_NAMES.BROWSER.INSPECT_MEDIA, 'Inspect a page media element.'],
-    [TOOL_NAMES.BROWSER.DISMISS_OVERLAY, 'Dismiss overlays on the selected page.'],
-  ].map(([name, description]) => ({
-    name,
-    description,
-    inputSchema: {
-      type: 'object' as const,
-      properties: { action: { type: 'string' } },
-      required: ['action'],
-    },
-  })),
+    TOOL_NAMES.BROWSER.HISTORY,
+    TOOL_NAMES.BROWSER.BOOKMARKS,
+    TOOL_NAMES.BROWSER.DOWNLOADS,
+    TOOL_NAMES.BROWSER.COOKIES,
+    TOOL_NAMES.BROWSER.STORAGE,
+    'chrome_debug',
+    'chrome_page',
+    TOOL_NAMES.BROWSER.TAB_GROUP_LIST,
+    TOOL_NAMES.BROWSER.TAB_GROUP_CREATE,
+    TOOL_NAMES.BROWSER.TAB_GROUP_UPDATE,
+    TOOL_NAMES.BROWSER.TAB_GROUP_UNGROUP,
+    TOOL_NAMES.BROWSER.TAB_GROUP_CLOSE,
+    TOOL_NAMES.BROWSER.INSPECT_MEDIA,
+    TOOL_NAMES.BROWSER.DISMISS_OVERLAY,
+  ].map((name) => ({ name, inputSchema: BROWSER_DATA_SCHEMA })),
   {
     name: TOOL_NAMES.NATIVE.TASK,
-    annotations: {
-      title: 'Manage Browser Task',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    description:
-      'Manage durable browser tasks and owned pages. Connections do not own tasks. Default budget: eight created pages; borrowed pages are never cleaned up. Cancellation stops later actions without rolling back dispatched work. finish keepUnknownPages:true requires confirm:true and retains unresolved page-creation receipts, including known tabs and receipts without a tabId, without closing them or claiming cleanup. Default finish stays unverified while those receipts still resolve to pages.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,26 +134,10 @@ const schemas: Tool[] = [
         goal: { type: 'string' },
         url: { type: 'string' },
         tabId: { type: 'integer', minimum: 1 },
-        keep: {
-          type: 'array',
-          items: { type: 'integer', minimum: 1 },
-          description: 'Owned tab IDs to hand back to the user when finishing.',
-        },
-        keepUnknownPages: {
-          type: 'boolean',
-          description:
-            'Finish while retaining every unresolved page-creation receipt, including known tabs and receipts without a tabId. Requires confirm: true. Does not close those pages or claim they were cleaned up. Omitted or false leaves finish unverified while such receipts still resolve to pages.',
-        },
-        adopt: {
-          type: 'boolean',
-          description:
-            "On resume, explicitly accept only the new document identity observed after this task's own navigation-producing action.",
-        },
-        confirm: {
-          type: 'boolean',
-          description:
-            'Required by takeOver to transfer a durable task from a disconnected or different MCP session. Also required with keepUnknownPages: true on finish.',
-        },
+        keep: { type: 'array', items: { type: 'integer', minimum: 1 } },
+        keepUnknownPages: { type: 'boolean' },
+        adopt: { type: 'boolean' },
+        confirm: { type: 'boolean' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -170,15 +145,6 @@ const schemas: Tool[] = [
   },
   {
     name: TOOL_NAMES.NATIVE.SKILL,
-    annotations: {
-      title: 'Manage Browser Skills',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Find and execute independently verified read-only site skills. Proposals remain candidates until at least two fresh-task tests with different inputs and output assertions pass. Automatic JavaScript steps require a locally reviewed program; new DOM extraction uses args.program="dom-extract" with data-only config. Arbitrary JavaScript and write-capable options are unsupported. Never replay unknown outcomes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -190,20 +156,10 @@ const schemas: Tool[] = [
         url: { type: 'string' },
         intent: { type: 'string' },
         version: { type: 'integer', minimum: 1 },
-        definitionHash: {
-          type: 'string',
-          pattern: '^[a-f0-9]{64}$',
-          description:
-            'Expected active skill definition hash; execution stops if it changed after discovery.',
-        },
+        definitionHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
         taskId: { type: 'string' },
         inputs: { type: 'object', additionalProperties: true },
-        definition: {
-          type: 'object',
-          additionalProperties: true,
-          description:
-            'Executable recipe: id/name/description/domains/keywords/startUrl/inputSchema/outputSchema/steps[{tool,args,resultPath?}]/verification{tool,args,resultPath?}/tests[{inputs,expect,observe}]. Tool identifiers inside recipes always use the chrome_ backend prefix, regardless of displayed MCP tool names. DOM extraction uses the javascript backend with args={program:"dom-extract",config:{fields:[{name,selector,value:"text"|"attribute",attribute?,multiple?}]}}, resultPath="/result". It returns success, fields and sources.page. For multiple sources, verification and observe are matching arrays of 1–8 checks; every independent DOM/GET assertion must pass. URL parameters use {{key}}. Do not persist credentials, tab identities or refs.',
-        },
+        definition: { type: 'object', additionalProperties: true },
       },
       required: ['action'],
       additionalProperties: false,
@@ -211,216 +167,62 @@ const schemas: Tool[] = [
   },
   {
     name: TOOL_NAMES.BROWSER.GET_WINDOWS_AND_TABS,
-    annotations: {
-      title: 'Get Windows and Tabs',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description: 'Get all currently open browser windows and tabs',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: TOOL_NAMES.BROWSER.NAVIGATE,
-    annotations: {
-      title: 'Navigate Tab',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    description:
-      'Navigate to a URL, refresh the current tab, or navigate browser history (back/forward)',
     inputSchema: {
       type: 'object',
       properties: {
-        url: {
-          type: 'string',
-          description:
-            'URL to navigate to. Special values: "back" or "forward" to navigate browser history in the target tab.',
-        },
-        action: {
-          type: 'string',
-          enum: ['back', 'forward'],
-          description:
-            'Alternative to url="back"|"forward": navigate browser history backward or forward.',
-        },
-        newWindow: {
-          type: 'boolean',
-          description: 'Create a new window to navigate to the URL or not. Defaults to false',
-        },
-        newTab: {
-          type: 'boolean',
-          description:
-            'Create a new tab even when a matching page is already open. Defaults to false',
-        },
-        tabId: {
-          type: 'number',
-          description:
-            'Target an existing tab by ID (if provided, navigate/refresh/back/forward that tab instead of the active tab).',
-        },
-        windowId: {
-          type: 'number',
-          description:
-            'Target an existing window by ID (when creating a new tab in existing window, or picking active tab if tabId is not provided).',
-        },
-        background: {
-          type: 'boolean',
-          description:
-            'Perform the operation without stealing focus (do not activate the tab or focus the window). Default: true (set false only if user explicitly asks to bring tab to foreground)',
-        },
-        width: {
-          type: 'number',
-          description:
-            'Window width in pixels (default: 1280). When width or height is provided, a new window will be created.',
-        },
-        height: {
-          type: 'number',
-          description:
-            'Window height in pixels (default: 720). When width or height is provided, a new window will be created.',
-        },
-        refresh: {
-          type: 'boolean',
-          description:
-            'Refresh the current active tab instead of navigating to a URL. When true, the url parameter is ignored. Defaults to false',
-        },
-        groupTitle: {
-          type: 'string',
-          description:
-            'Concise, task-aligned title for the Chrome tab group reflecting user intent in user language (e.g. "Best 4K Monitors on Amazon", "GitHub PR Review"). If omitted, the extension derives a smart title dynamically from the destination domain and page title instead of generic fallback.',
-        },
+        url: { type: 'string' },
+        action: { type: 'string', enum: ['back', 'forward'] },
+        newWindow: { type: 'boolean' },
+        newTab: { type: 'boolean' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        background: { type: 'boolean' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        refresh: { type: 'boolean' },
+        groupTitle: { type: 'string' },
         groupColor: {
           type: 'string',
           enum: ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'],
-          description: 'Color for the Chrome tab group. Fallback: "blue"',
         },
-        autoGroup: {
-          type: 'boolean',
-          description:
-            'Automatically place newly opened tab into an Agent-managed tab group with dedicated title and color. Default: true',
-        },
-        dismissOverlays: {
-          type: 'boolean',
-          description:
-            'Automatically detect and dismiss visible marketing popups, coupon modals, and promotional overlays after navigation completes (default: false)',
-        },
+        autoGroup: { type: 'boolean' },
+        dismissOverlays: { type: 'boolean' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.SCREENSHOT,
-    annotations: {
-      title: 'Capture Screenshot',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description:
-      '[Prefer chrome_read_dom over taking a screenshot] Capture the page, a region, or an element as PNG/JPEG. The default inline JPEG is fitted to a 1568px long edge and 1.15MP for a practical OCR/token balance. Tune sharpness with maxWidth, maxDimension, maxPixels, highClarity, or region. savePng writes the full-resolution physical-pixel PNG for user-facing delivery.',
     inputSchema: {
       type: 'object',
       properties: {
-        name: {
-          type: 'string',
-          description:
-            'Name or label for the screenshot. Purely in-memory by default; only written to disk if savePng/saveToDisk is explicitly set to true.',
-        },
-        selector: { type: 'string', description: 'CSS selector for element to screenshot' },
-        assetIndex: {
-          type: 'number',
-          description:
-            'View one visual asset listed by chrome_read_dom ([asset N] lines): returns the real image resource; falls back to a viewport crop when bytes are unavailable',
-        },
-        tabId: {
-          type: 'number',
-          description: 'Target tab ID to capture from (default: active tab).',
-        },
-        windowId: {
-          type: 'number',
-          description: 'Target window ID to pick active tab from when tabId is not provided.',
-        },
-        background: {
-          type: 'boolean',
-          description:
-            'Attempt capture without bringing tab/window to foreground. CDP-based capture is used for viewport captures. Default: true',
-        },
-        width: { type: 'number', description: 'Width in pixels (default: 800)' },
-        height: { type: 'number', description: 'Height in pixels (default: 600)' },
-        maxWidth: {
-          type: 'number',
-          description:
-            'Optional hard cap on image width in pixels, applied together with the vision budget.',
-        },
-        maxDimension: {
-          type: 'number',
-          description:
-            'Maximum long edge in pixels for the model-facing image (default: 1568). Lower it to reduce tokens; raise it for fine text.',
-        },
-        maxPixels: {
-          type: 'number',
-          description:
-            'Maximum total pixels for the model-facing image (default: 1,150,000). Lower it to reduce tokens; raise it for dense pages.',
-        },
-        storeBase64: {
-          type: 'boolean',
-          description:
-            'Return screenshot in base64 format in text content (image content is always returned directly)',
-        },
-        fullPage: {
-          type: 'boolean',
-          description:
-            'Capture a full-page scroll screenshot with GoFullPage-grade industrial stitching: automatic StyleStack fixed/sticky header de-duplication, page warmup for lazy-loading/skeletons, dynamic height change recovery, and captureVisibleTab quota backoff retry (default: false).',
-        },
-        maxHeight: {
-          type: 'number',
-          description:
-            'Maximum height in pixels to capture for full-page screenshots (default: 50000, protects against infinite scroll runaway).',
-        },
-        savePng: {
-          type: 'boolean',
-          description:
-            'Save a full-resolution, lossless PNG at the capture physical-pixel size to the system temporary directory. Use this for screenshots the user asked to view or keep.',
-        },
-        saveToDisk: {
-          type: 'boolean',
-          description:
-            'Deprecated alias for savePng (default: false, zero disk write by default; saves to system temp, not Downloads). Prefer savePng.',
-        },
-        som: {
-          type: 'boolean',
-          description:
-            'Overlay Set-of-Mark numbered badges on interactive elements before capturing the screenshot',
-        },
-        highlight: {
-          type: 'boolean',
-          description:
-            'Deprecated alias for som; still accepted but hidden from the schema to keep it small. Prefer som.',
-        },
-        targetIndex: {
-          type: 'number',
-          description:
-            'Compact 1-based numeric index of target element from chrome_read_dom to crop and capture only this specific region of interest',
-        },
-        index: {
-          type: 'number',
-          description:
-            'Alias for targetIndex: compact 1-based numeric index of target element from chrome_read_dom to crop and capture',
-        },
-        padding: {
-          type: 'number',
-          description: 'Padding in pixels to expand around targetIndex crop area (default: 0)',
-        },
+        name: { type: 'string' },
+        selector: { type: 'string' },
+        assetIndex: { type: 'number' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        background: { type: 'boolean' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        maxWidth: { type: 'number' },
+        maxDimension: { type: 'number' },
+        maxPixels: { type: 'number' },
+        storeBase64: { type: 'boolean' },
+        fullPage: { type: 'boolean' },
+        maxHeight: { type: 'number' },
+        savePng: { type: 'boolean' },
+        saveToDisk: { type: 'boolean' },
+        som: { type: 'boolean' },
+        highlight: { type: 'boolean' },
+        targetIndex: { type: 'number' },
+        index: { type: 'number' },
+        padding: { type: 'number' },
         region: {
           type: 'object',
-          description:
-            'High-density ROI crop: capture only a specific sub-region { x0, y0, x1, y1 } in CSS pixels or polymorphic [ymin, xmin, ymax, xmax]. Use it to inspect fine text without paying for the full page.',
           properties: {
             x0: { type: 'number' },
             y0: { type: 'number' },
@@ -428,75 +230,27 @@ const schemas: Tool[] = [
             y1: { type: 'number' },
           },
         },
-        crop: {
-          type: 'object',
-          description: 'Alias for region: { x, y, width, height } or { x0, y0, x1, y1 }.',
-        },
-        grid: {
-          type: 'boolean',
-          description:
-            'Overlay semi-transparent coordinate reference grid with perimeter tape measure rulers (20/50/100px ticks) and interior reticle crosshairs (+) to eliminate visual estimation hallucination (default: false)',
-        },
-        enableGrid: {
-          type: 'boolean',
-          description:
-            'Alias for grid: overlay semi-transparent coordinate reference grid with perimeter tape measure rulers and crosshairs',
-        },
-        expandSearchArea: {
-          type: 'boolean',
-          description:
-            'For small elements (< 100x100), adaptively expand the crop bounding box to preserve surrounding headers and text context (default: true)',
-        },
-        format: {
-          type: 'string',
-          enum: ['png', 'jpeg'],
-          description:
-            'Output format: jpeg (default, compact for model inspection) or png (lossless). Saved screenshots are always PNG.',
-        },
-        quality: {
-          type: 'number',
-          description: 'JPEG compression quality from 0 to 100 (default: 85)',
-        },
-        highClarity: {
-          type: 'boolean',
-          description:
-            'Disable the default vision budget and keep the native CSS-pixel image, unless maxDimension/maxPixels/maxWidth is explicitly set.',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        crop: { type: 'object' },
+        grid: { type: 'boolean' },
+        enableGrid: { type: 'boolean' },
+        expandSearchArea: { type: 'boolean' },
+        format: { type: 'string', enum: ['png', 'jpeg'] },
+        quality: { type: 'number' },
+        highClarity: { type: 'boolean' },
+        sessionId: { type: 'string' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.CLOSE_TABS,
-    annotations: {
-      title: 'Close Tabs',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description: 'Close one or more browser tabs',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: {
-          type: 'number',
-          description: 'Single tab ID to close (convenience alternative to tabIds array).',
-        },
-        tabIds: {
-          type: 'array',
-          items: { type: 'number' },
-          description:
-            'Array of tab IDs to close. If not provided, will close the active tab (requires confirm: true or session affinity).',
-        },
+        tabId: { type: 'number' },
+        tabIds: { type: 'array', items: { type: 'number' } },
         expectedTabs: {
           type: 'array',
-          description:
-            'Fail-closed tab identities for task-owned cleanup. All tab IDs must match the current document and browser before any tab is closed.',
           items: {
             type: 'object',
             properties: {
@@ -507,223 +261,79 @@ const schemas: Tool[] = [
             required: ['tabId', 'documentId', 'browserInstanceId'],
           },
         },
-        url: {
-          type: 'string',
-          description: 'Close tabs matching this URL. Can be used instead of tabIds.',
-        },
-        confirm: {
-          type: 'boolean',
-          description:
-            'Explicit confirmation required to close the active tab when tabIds or url are not specified.',
-        },
-        allManagedGroups: {
-          type: 'boolean',
-          description:
-            'Close all Agent-managed tab groups and their tabs created during automation sessions. Default: false',
-        },
+        url: { type: 'string' },
+        confirm: { type: 'boolean' },
+        allManagedGroups: { type: 'boolean' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.SWITCH_TAB,
-    annotations: {
-      title: 'Switch Active Tab',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description: 'Switch to a specific browser tab',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: {
-          type: 'number',
-          description: 'The ID of the tab to switch to.',
-        },
-        windowId: {
-          type: 'number',
-          description: 'The ID of the window where the tab is located.',
-        },
-        background: {
-          type: 'boolean',
-          description:
-            'If true, binds session affinity only without activating the tab in the Chrome UI or stealing user focus. Default: false',
-        },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        background: { type: 'boolean' },
       },
       required: ['tabId'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.NETWORK_REQUEST,
-    annotations: {
-      title: 'Send Network Request',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description: 'Send a network request from the browser with cookies and other browser context',
     inputSchema: {
       type: 'object',
       properties: {
-        url: {
-          type: 'string',
-          description: 'URL to send the request to',
-        },
-        method: {
-          type: 'string',
-          description: 'HTTP method to use (default: GET)',
-        },
-        headers: {
-          type: 'object',
-          description: 'Headers to include in the request',
-        },
-        body: {
-          type: 'string',
-          description: 'Body of the request (for POST, PUT, etc.)',
-        },
-        timeout: {
-          type: 'number',
-          description: 'Timeout in milliseconds (default: 30000)',
-        },
-        formData: {
-          type: 'object',
-          description:
-            'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:. Note: filePath and the file: spec are read through the native host, which only accepts files strictly inside its temp directory (<os.tmpdir()>/chrome-mcp-uploads) and at most 700KB (Native Messaging 1MB pipe, base64 inflates binary by 33%). For arbitrary local paths use chrome_upload_file.',
-        },
-        tabId: {
-          type: 'number',
-          description:
-            'Optional ID of the tab to execute the request within (defaults to active tab)',
-        },
-        tabUrl: {
-          type: 'string',
-          description: 'Optional URL of the tab to execute the request within',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
-        sessionContext: {
-          type: 'string',
-          description: 'Optional alias for sessionId',
-        },
+        url: { type: 'string' },
+        method: { type: 'string' },
+        headers: { type: 'object' },
+        body: { type: 'string' },
+        timeout: { type: 'number' },
+        formData: { type: 'object' },
+        tabId: { type: 'number' },
+        tabUrl: { type: 'string' },
+        sessionId: { type: 'string' },
+        sessionContext: { type: 'string' },
       },
       required: ['url'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.NETWORK_CAPTURE,
-    annotations: {
-      title: 'Capture Network Traffic',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description:
-      'Unified network capture tool. Use action="start" to begin capturing, action="stop" to end and retrieve results. Set needResponseBody=true to capture response bodies (uses Debugger API, may conflict with DevTools). Default mode uses webRequest API (lightweight, no debugger conflict, but no response body).',
     inputSchema: {
       type: 'object',
       properties: {
-        action: {
-          type: 'string',
-          enum: ['start', 'stop', 'list', 'show', 'clear', 'status'],
-          description: 'Start or stop capture, list requests, show one request, or clear results.',
-        },
-        requestId: { type: 'string', description: 'Captured request ID for show.' },
-        outputPath: { type: 'string', description: 'Output path for show response body.' },
-        method: { type: 'string', description: 'HTTP method filter for list.' },
-        status: { type: 'integer', description: 'HTTP status filter for list.' },
-        resourceType: { type: 'string', description: 'Resource type filter for list.' },
-        limit: { type: 'integer', description: 'Maximum requests included in list (up to 100).' },
-        needResponseBody: {
-          type: 'boolean',
-          description:
-            'When true, captures response body using Debugger API (default: false). Only use when you need to inspect response content.',
-        },
-        url: {
-          type: 'string',
-          description:
-            'URL to capture network requests from. For action="start". If not provided, uses the current active tab.',
-        },
-        requestUrlPattern: {
-          type: 'string',
-          description: 'Optional URL pattern used to filter captured request URLs.',
-        },
-        maxCaptureTime: {
-          type: 'number',
-          description: 'Maximum capture time in milliseconds (default: 180000)',
-        },
-        inactivityTimeout: {
-          type: 'number',
-          description: 'Stop after inactivity in milliseconds (default: 60000). Set 0 to disable.',
-        },
-        includeStatic: {
-          type: 'boolean',
-          description: 'Include static resources like images/scripts/styles (default: false)',
-        },
+        action: { type: 'string', enum: ['start', 'stop', 'list', 'show', 'clear', 'status'] },
+        requestId: { type: 'string' },
+        outputPath: { type: 'string' },
+        method: { type: 'string' },
+        status: { type: 'integer' },
+        resourceType: { type: 'string' },
+        limit: { type: 'integer' },
+        needResponseBody: { type: 'boolean' },
+        url: { type: 'string' },
+        requestUrlPattern: { type: 'string' },
+        maxCaptureTime: { type: 'number' },
+        inactivityTimeout: { type: 'number' },
+        includeStatic: { type: 'boolean' },
       },
       required: ['action'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.HANDLE_DOWNLOAD,
-    annotations: {
-      title: 'Handle Download',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    description:
-      'Wait for a download. With tabId/taskId, use an observed guid or clickTargetIndex to watch that page before clicking; source identity never falls back to browser-wide filename matching. CDP suggestedFilename is not a verified disk path. Without a page scope, the legacy filename filter observes browser-wide downloads.',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: {
-          type: 'integer',
-          minimum: 1,
-          description: 'Source page; taskId can supply its verified page.',
-        },
-        guid: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 128,
-          description:
-            'Observed download GUID from a receipt or task status; never repeats the initiating action.',
-        },
-        clickTargetIndex: {
-          type: 'integer',
-          minimum: 1,
-          description:
-            'Observed element ref to click once after source tracking is ready. Mutually exclusive with guid.',
-        },
-        index: {
-          type: 'number',
-          description:
-            '1-based element index from chrome_read_dom to click to trigger the download (alias for clickTargetIndex)',
-        },
-        frameId: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'Chrome numeric frame for clickTargetIndex; returned download.frameId is a CDP token and cannot be passed here.',
-        },
-        filenameContains: {
-          type: 'string',
-          description:
-            'Filter within this page by suggested filename or sanitized URL; query values are redacted. Without a page scope, matches browser-wide filename/URL.',
-        },
-        timeoutMs: {
-          type: 'integer',
-          minimum: 50,
-          maximum: 300000,
-          description: 'Timeout in ms (default 60000, max 300000)',
-        },
-        waitForComplete: { type: 'boolean', description: 'Wait until completed (default true)' },
+        tabId: { type: 'integer', minimum: 1 },
+        guid: { type: 'string', minLength: 1, maxLength: 128 },
+        clickTargetIndex: { type: 'integer', minimum: 1 },
+        index: { type: 'number' },
+        frameId: { type: 'integer', minimum: 0 },
+        filenameContains: { type: 'string' },
+        timeoutMs: { type: 'integer', minimum: 50, maximum: 300000 },
+        waitForComplete: { type: 'boolean' },
       },
       required: [],
       oneOf: [
@@ -739,9 +349,13 @@ const schemas: Tool[] = [
         },
         {
           not: {
-            anyOf: ['tabId', 'taskId', 'guid', 'clickTargetIndex', 'frameId'].map((field) => ({
-              required: [field],
-            })),
+            anyOf: [
+              { required: ['tabId'] },
+              { required: ['taskId'] },
+              { required: ['guid'] },
+              { required: ['clickTargetIndex'] },
+              { required: ['frameId'] },
+            ],
           },
         },
       ],
@@ -749,704 +363,230 @@ const schemas: Tool[] = [
   },
   {
     name: TOOL_NAMES.BROWSER.JAVASCRIPT,
-    annotations: {
-      title: 'Execute JavaScript',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Execute JavaScript code in a browser tab and return the result. Built-in "mcp" helper supports end-to-end in-page agent workflows: mcp.run(async () => ...), mcp.waitFor, mcp.click, mcp.fill, mcp.check, mcp.sleep, mcp.queryAll, and :has-text("...") pseudo-selector support, eliminating multi-turn LLM ping-pong latency. Uses CDP Runtime.evaluate with awaitPromise and returnByValue; automatically falls back to chrome.scripting.executeScript if the debugger is busy. Set frameId to execute only in that frame. Output is sanitized (sensitive data redacted) and truncated by default.',
     inputSchema: {
       type: 'object',
       properties: {
-        code: {
-          type: 'string',
-          description:
-            'JavaScript code to execute. Runs inside an async function body, so top-level await and "return ..." are supported.',
-        },
-        frameId: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'Target frame ID from observation (0 = main frame; default). Executes only in this frame.',
-        },
-        tabId: {
-          type: 'number',
-          description: 'Target tab ID. If omitted, uses the current active tab.',
-        },
-        timeoutMs: {
-          type: 'number',
-          description: 'Execution timeout in milliseconds (default: 15000).',
-        },
-        maxOutputBytes: {
-          type: 'number',
-          description:
-            'Maximum output size in bytes after sanitization (default: 51200). Output exceeding this limit will be truncated.',
-        },
+        code: { type: 'string' },
+        frameId: { type: 'integer', minimum: 0 },
+        tabId: { type: 'number' },
+        timeoutMs: { type: 'number' },
+        maxOutputBytes: { type: 'number' },
       },
       required: ['code'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.KEYBOARD,
-    annotations: {
-      title: 'Send Key Combination',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    description:
-      'Simulate keyboard input on a web page. Supports single keys (Enter, Tab, Escape), key combinations (Ctrl+C, Ctrl+V), and text input. Can target a specific element or send to the focused element.',
     inputSchema: {
       type: 'object',
       properties: {
-        keys: {
-          type: 'string',
-          description:
-            'Keys or key combinations to simulate. Examples: "Enter", "Tab", "Ctrl+C", "Shift+Tab", "Hello World".',
-        },
-        index: {
-          type: 'integer',
-          description:
-            'Target element index (1-based integer from chrome_read_dom) to focus before sending keyboard events.',
-        },
-        selector: {
-          type: 'string',
-          description: 'CSS selector or XPath for target element to receive keyboard events.',
-        },
-        text: {
-          type: 'string',
-          description: 'Target element by visible text or accessible name.',
-        },
-        role: {
-          type: 'string',
-          description: 'Target element by a supported implicit or explicit ARIA role.',
-        },
-        label: {
-          type: 'string',
-          description: 'Target element by associated native or ARIA label.',
-        },
-        exact: {
-          type: 'boolean',
-          description: 'Require an exact text, accessible name, or label match.',
-        },
-        selectorType: {
-          type: 'string',
-          enum: ['css', 'xpath'],
-          description: 'Type of selector (default: "css").',
-        },
-        delay: {
-          type: 'number',
-          description: 'Delay between keystrokes in milliseconds (default: 50).',
-        },
-        tabId: {
-          type: 'number',
-          description: 'Target tab ID. If omitted, uses the current active tab.',
-        },
-        windowId: {
-          type: 'number',
-          description: 'Window ID to select active tab from (when tabId is omitted).',
-        },
-        frameId: {
-          type: 'number',
-          description: 'Target frame ID for iframe support.',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        keys: { type: 'string' },
+        index: { type: 'integer' },
+        selector: { type: 'string' },
+        text: { type: 'string' },
+        role: { type: 'string' },
+        label: { type: 'string' },
+        exact: { type: 'boolean' },
+        selectorType: { type: 'string', enum: ['css', 'xpath'] },
+        delay: { type: 'number' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        frameId: { type: 'number' },
+        sessionId: { type: 'string' },
       },
       required: ['keys'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.CONSOLE,
-    annotations: {
-      title: 'Read Console Logs',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description:
-      'Capture console output from a browser tab. Supports snapshot mode (default; one-time capture with ~50ms settle wait), buffer mode (persistent per-tab buffer you can read/clear instantly without waiting), and stop mode (release the persistent buffer for a tab).',
     inputSchema: {
       type: 'object',
       properties: {
-        url: {
-          type: 'string',
-          description:
-            'URL to navigate to and capture console from. If not provided, uses the current active tab',
-        },
-        tabId: {
-          type: 'number',
-          description: 'Target an existing tab by ID (default: active tab).',
-        },
-        windowId: {
-          type: 'number',
-          description: 'Target window ID to pick active tab when tabId is omitted.',
-        },
-        background: {
-          type: 'boolean',
-          description: 'Do not activate tab/focus window when capturing via CDP. Default: true',
-        },
-        includeExceptions: {
-          type: 'boolean',
-          description: 'Include uncaught exceptions in the output (default: true)',
-        },
-        maxMessages: {
-          type: 'number',
-          description:
-            'Maximum number of console messages to capture in snapshot mode (default: 100). If limit is provided, it takes precedence.',
-        },
-        mode: {
-          type: 'string',
-          enum: ['snapshot', 'buffer', 'stop'],
-          description:
-            'Console capture mode: snapshot (default; one-time capture with a ~50ms settle wait), buffer (persistent per-tab buffer; reads from memory instantly), or stop (stop the persistent buffer for this tab and release its resources; idempotent).',
-        },
-        buffer: {
-          type: 'boolean',
-          description: 'Deprecated alias for mode="buffer". Prefer mode.',
-        },
-        clear: {
-          type: 'boolean',
-          description:
-            'Buffer mode only: clear the buffered logs for this tab before reading (default: false). Use clearAfterRead instead to clear after reading (mcp-tools.js style). Ignored by stop mode, which discards the buffer entirely.',
-        },
-        clearAfterRead: {
-          type: 'boolean',
-          description:
-            'Buffer mode only: clear the buffered logs for this tab AFTER reading, to avoid duplicate messages on subsequent calls (default: false). This matches mcp-tools.js behavior.',
-        },
-        pattern: {
-          type: 'string',
-          description:
-            'Optional regex filter applied to message/exception text. Supports /pattern/flags syntax.',
-        },
-        onlyErrors: {
-          type: 'boolean',
-          description:
-            'Only return error-level console messages (and exceptions when includeExceptions=true). Default: false.',
-        },
-        limit: {
-          type: 'number',
-          description: 'Deprecated alias for maxMessages. Prefer maxMessages.',
-        },
+        url: { type: 'string' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        background: { type: 'boolean' },
+        includeExceptions: { type: 'boolean' },
+        maxMessages: { type: 'number' },
+        mode: { type: 'string', enum: ['snapshot', 'buffer', 'stop'] },
+        buffer: { type: 'boolean' },
+        clear: { type: 'boolean' },
+        clearAfterRead: { type: 'boolean' },
+        pattern: { type: 'string' },
+        onlyErrors: { type: 'boolean' },
+        limit: { type: 'number' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.FILE_UPLOAD,
-    annotations: {
-      title: 'Upload File',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    description:
-      'Upload files to web forms with file input elements using Chrome DevTools Protocol',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: { type: 'number', description: 'Target tab ID (default: active tab)' },
-        frameId: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'Explicit frame containing the target; selectors never fall back to another frame.',
-        },
-        windowId: {
-          type: 'number',
-          description: 'Target window ID to pick active tab when tabId is omitted',
-        },
-        selector: {
-          type: 'string',
-          description: 'CSS selector for the file input element (optional if index is provided)',
-        },
-        index: {
-          type: 'number',
-          description:
-            'Compact 1-based numeric index of the file input element from chrome_read_dom',
-        },
-        clickTargetIndex: {
-          type: 'number',
-          description:
-            'Compact 1-based numeric index of a button/element from chrome_read_dom to click that triggers a dynamic file chooser dialog (e.g. Ant Design, Element Plus upload buttons) intercepted via CDP Page.setInterceptFileChooserDialog',
-        },
-        filePath: {
-          type: 'string',
-          description: 'Local file path to upload',
-        },
-        fileUrl: {
-          type: 'string',
-          description: 'URL to download file from before uploading',
-        },
-        base64Data: {
-          type: 'string',
-          description: 'Base64 encoded file data to upload',
-        },
-        fileName: {
-          type: 'string',
-          description: 'Optional filename when using base64 or URL (default: "uploaded-file")',
-        },
-        multiple: {
-          type: 'boolean',
-          description: 'Whether the input accepts multiple files (default: false)',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        tabId: { type: 'number' },
+        frameId: { type: 'integer', minimum: 0 },
+        windowId: { type: 'number' },
+        selector: { type: 'string' },
+        index: { type: 'number' },
+        clickTargetIndex: { type: 'number' },
+        filePath: { type: 'string' },
+        fileUrl: { type: 'string' },
+        base64Data: { type: 'string' },
+        fileName: { type: 'string' },
+        multiple: { type: 'boolean' },
+        sessionId: { type: 'string' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.HANDLE_DIALOG,
-    annotations: {
-      title: 'Handle Dialog',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    description: 'Handle JavaScript dialogs (alert/confirm/prompt) via CDP',
     inputSchema: {
       type: 'object',
       properties: {
-        dialogId: {
-          type: 'string',
-          description:
-            'Required when multiple source sessions have pending dialogs. Read IDs from action receipts.',
-        },
-        action: {
-          type: 'string',
-          enum: ['accept', 'dismiss'],
-          description: 'accept: click OK and submit promptText if provided. dismiss: click Cancel.',
-        },
-        promptText: {
-          type: 'string',
-          description: 'Optional prompt text when accepting a prompt',
-        },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        dialogId: { type: 'string' },
+        action: { type: 'string', enum: ['accept', 'dismiss'] },
+        promptText: { type: 'string' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        sessionId: { type: 'string' },
       },
       required: ['action'],
     },
   },
-
   {
     name: TOOL_NAMES.BROWSER.READ_DOM,
-    annotations: {
-      title: 'Read DOM',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    description:
-      'Extract and prune interactive DOM tree with compact 1-based index assignment, viewport boundary filtering, and occlusion pruning. Supports scoped container targeting (selector) and noise exclusion (exclude) to eliminate full DOM dump overhead. Optional dismissOverlays closes modals and removes overlay elements.',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: {
-          type: 'string',
-          description:
-            'CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.',
-        },
-        scope: {
-          type: 'string',
-          description:
-            'Alias for selector. CSS selector to scope parsing to a specific container/element (e.g. "#main-cart", ".dialog-box"). Only descendants and self within matching containers are indexed.',
-        },
-        isolateModal: {
-          type: 'boolean',
-          description:
-            'When true and an active modal dialog is detected, restricts indexing to the active interaction surface. Standalone modal/portal roots are included through standard dialog/top-layer/popover semantics and explicit ARIA ownership relationships, not a fixed framework class list. Set false to observe background content while still reporting the active modal.',
-        },
+        selector: { type: 'string' },
+        scope: { type: 'string' },
+        isolateModal: { type: 'boolean' },
         exclude: {
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-          description:
-            'CSS selector(s) to exclude from parsing (e.g. "#footer, #recommendations, .ad-banner"). Matching elements and their entire subtrees are pruned.',
         },
-        viewportThreshold: {
-          type: 'number',
-          description: 'Vertical threshold in pixels for viewport boundary checking (default 1000)',
-        },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        highlight: {
-          type: 'boolean',
-          description: 'Whether to visually highlight indexed elements',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
-        cursor: {
-          type: 'number',
-          description:
-            'Pagination cursor offset for traversing very large DOM pages incrementally (default: 0)',
-        },
-        limit: {
-          type: 'number',
-          description:
-            'Maximum number of indexed elements to return for current page cursor slice (default: unlimited)',
-        },
-        maxTextLength: {
-          type: 'number',
-          description:
-            'Maximum text length before truncation for element text content (default: 120)',
-        },
-        includeDetails: {
-          type: 'boolean',
-          description:
-            'Also return detailed element geometry and flags, or structured actions and validation metadata in fast mode. Off by default; the tree already carries actionable refs, labels, and values.',
-        },
-        viewportOnly: {
-          type: 'boolean',
-          description:
-            'When true, only index elements inside or immediately near the visible viewport (default: false)',
-        },
-        activeViewportOnly: {
-          type: 'boolean',
-          description:
-            'When true, strictly constrains indexing to elements currently visible within the active viewport (threshold = 0) with horizontal/vertical frustum clipping, eliminating ghost elements from SPA wizards, carousels, and multi-step forms.',
-        },
-        format: {
-          type: 'string',
-          enum: ['compact', 'html', 'fast'],
-          description:
-            'Output format for treeString. "compact" (default) uses a concise accessibility-inspired tree without closing tags. "html" returns pseudo-HTML tags. "fast" returns a budgeted snapshot; latency and total bytes depend on the page and frames.',
-        },
-        fast: {
-          type: 'boolean',
-          description:
-            'When true, uses the fast snapshot engine with stable document refs, native visibility checks, and a shared limit of 250 actions and 6000 body characters across reported frames. Truncation and unverified frame coverage are explicit. flattenCards and virtualizeViewport are rejected before observation because fast does not implement them; isolateModal true/false is supported.',
-        },
-        legacyVisibility: {
-          type: 'boolean',
-          description:
-            'When true, uses legacy visibility fallback (computedStyle display/visibility/opacity) instead of element.checkVisibility.',
-        },
-        deltaOnly: {
-          type: 'boolean',
-          description:
-            'When true, returns changes compared to the previous compatible snapshot. A missing or incompatible baseline returns a full snapshot; fast mode uses the standard representation for delta requests.',
-        },
-        dismissOverlays: {
-          type: 'boolean',
-          description:
-            'When true, automatically detects and dismisses visible marketing popups, coupon modals, and promotional overlays before indexing DOM nodes, preventing modal overlays from polluting the DOM tree (default: false)',
-        },
-        virtualizeViewport: {
-          type: 'boolean',
-          description:
-            'When true (enabled by default on infinite scroll, long feeds, and waterfall pages when selector/scope is omitted), intelligently virtualizes and folds repetitive offscreen subtrees into compact summaries, drastically slashing token usage while strictly preserving visible viewport elements and key navigation.',
-        },
-        flattenCards: {
-          type: 'boolean',
-          description:
-            'When true (default: true), identifies composite card containers (article, [role="article"], [role="listitem"], li) and aggregates fragmented leaf nodes into structured card summaries while preserving actionable link/click indices.',
-        },
+        viewportThreshold: { type: 'number' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        highlight: { type: 'boolean' },
+        sessionId: { type: 'string' },
+        cursor: { type: 'number' },
+        limit: { type: 'number' },
+        maxTextLength: { type: 'number' },
+        includeDetails: { type: 'boolean' },
+        viewportOnly: { type: 'boolean' },
+        activeViewportOnly: { type: 'boolean' },
+        format: { type: 'string', enum: ['compact', 'html', 'fast'] },
+        fast: { type: 'boolean' },
+        legacyVisibility: { type: 'boolean' },
+        deltaOnly: { type: 'boolean' },
+        dismissOverlays: { type: 'boolean' },
+        virtualizeViewport: { type: 'boolean' },
+        flattenCards: { type: 'boolean' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.INTERACT_INDEX,
-    annotations: {
-      title: 'Interact Index',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Click, hover, or interact with an element using its compact 1-based numeric index from chrome_read_dom. When performing predictable multi-step actions (e.g. form submission or chain navigation), prefer chrome_batch_actions to finish in a single round-trip.',
     inputSchema: {
       type: 'object',
       properties: {
-        index: {
-          type: 'number',
-          description: 'Compact 1-based numeric index of the target element',
-        },
-        frameId: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'Resolve only in this frame, including explicit main frame 0; never cross-frame fallback.',
-        },
+        index: { type: 'number' },
+        frameId: { type: 'integer', minimum: 0 },
         coordinate: {
           oneOf: [
             {
               type: 'object',
-              properties: {
-                x: { type: 'number', description: 'X coordinate in viewport/CSS pixels' },
-                y: { type: 'number', description: 'Y coordinate in viewport/CSS pixels' },
-              },
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
               required: ['x', 'y'],
-              description: '{ x, y } coordinate object',
             },
-            {
-              type: 'array',
-              items: { type: 'number' },
-              description: 'Point [x, y] or bounding box [ymin, xmin, ymax, xmax]',
-            },
+            { type: 'array', items: { type: 'number' } },
           ],
-          description:
-            'Visual fallback coordinates in viewport/CSS pixels: { x, y } object, [x, y] point, or [ymin, xmin, ymax, xmax] bounding box (supports 0~1.0 normalized, 0~1000 per-mille, or absolute viewport pixels across modern vision agents).',
         },
-        coordinateSpace: {
-          type: 'string',
-          enum: ['viewport', 'screenshot'],
-          description:
-            'Coordinate reference space. "viewport" (default) assumes standard CSS viewport pixels. "screenshot" scales coordinates through the capture named by captureId and requires that identity.',
-        },
-        captureId: {
-          type: 'string',
-          description:
-            'Screenshot identity returned by chrome_screenshot. Required when coordinateSpace is "screenshot"; dispatch fails if the document, DOM revision, viewport, DPR, scroll position, or capture identity is stale or superseded.',
-        },
-        autoSnap: {
-          type: 'boolean',
-          description:
-            'When clicking via coordinates or visual fallback, magnetically snap to the closest interactive element if clicked within 24px of whitespace. Default: true.',
-        },
+        coordinateSpace: { type: 'string', enum: ['viewport', 'screenshot'] },
+        captureId: { type: 'string' },
+        autoSnap: { type: 'boolean' },
         points: {
           type: 'array',
           items: {
             type: 'object',
-            properties: {
-              x: { type: 'number', description: 'X coordinate in viewport/CSS pixels' },
-              y: { type: 'number', description: 'Y coordinate in viewport/CSS pixels' },
-            },
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
             required: ['x', 'y'],
           },
-          description:
-            'Click sequence: dispatch a full CDP click at each point with intervalMs pacing. When captureId is provided, the capture is revalidated before every point; the sequence stops after the first DOM/geometry drift instead of replaying.',
         },
-        intervalMs: {
-          type: 'number',
-          description: 'Delay between points in the click sequence, 5-500ms (default 35)',
-        },
+        intervalMs: { type: 'number' },
         action: {
           type: 'string',
           enum: ['click', 'hover', 'double_click', 'right_click', 'drag'],
-          description:
-            'Interaction action to perform (default: click). "drag" requires `end` and moves from the indexed element to that target.',
         },
         path: {
           type: 'array',
           items: {
             type: 'object',
-            properties: {
-              x: { type: 'number', description: 'X coordinate in viewport/CSS pixels' },
-              y: { type: 'number', description: 'Y coordinate in viewport/CSS pixels' },
-            },
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
             required: ['x', 'y'],
           },
-          description:
-            'Continuous drag path: an ordered array of { x, y } coordinates to smoothly drag the mouse through while pressed. Ideal for circular gestures, sliders, and drawing on canvas.',
         },
         end: {
           type: 'object',
           properties: {
-            index: {
-              type: 'number',
-              description: '1-based index (from chrome_read_dom) of the drag destination element',
-            },
+            index: { type: 'number' },
             coordinate: {
               type: 'object',
-              properties: {
-                x: { type: 'number', description: 'X coordinate in viewport/CSS pixels' },
-                y: { type: 'number', description: 'Y coordinate in viewport/CSS pixels' },
-              },
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
               required: ['x', 'y'],
-              description: 'Drag destination as viewport coordinates when no index is available',
             },
           },
-          description:
-            'Drag destination: { index } for an indexed element, or { coordinate: { x, y } } for a raw point. Required when action is "drag".',
         },
-        steps: {
-          type: 'number',
-          description:
-            'Number of intermediate mouse-move steps for drag (default 48; lower is faster, higher is smoother)',
-        },
-        holdMs: {
-          type: 'number',
-          description:
-            'How long to hold the mouse button before dragging, in ms (default 80, range 0-3000)',
-        },
-        dnd: {
-          type: 'boolean',
-          description:
-            'Use HTML5 drag-and-drop events (dragstart/dragover/drop) instead of raw mouse moves. Needed for React/HTML5 DnD lists.',
-        },
+        steps: { type: 'number' },
+        holdMs: { type: 'number' },
+        dnd: { type: 'boolean' },
         modifiers: {
           type: 'array',
           items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] },
-          description: 'Keyboard modifiers to hold during interaction',
         },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        waitForSettle: {
-          type: 'boolean',
-          description:
-            'Wait for DOM mutations to settle (quiet for 150ms or timeout) after interaction before returning (default: false)',
-        },
-        settleTimeoutMs: {
-          type: 'number',
-          description: 'Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)',
-        },
-        humanize: {
-          type: 'boolean',
-          description:
-            'Simulate realistic human-like cursor trajectory with micro-jitter before clicking (default: false)',
-        },
-        includeDelta: {
-          type: 'boolean',
-          description:
-            'Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
-        pierceOverlay: {
-          type: 'boolean',
-          description:
-            'Automatically pierce non-opaque or transient backdrop masks/loading stubs when intercepted (default: true)',
-        },
-        waitForNetworkQuiescence: {
-          type: 'boolean',
-          description:
-            'Wait for in-flight network requests to settle after this interaction before returning (default: false)',
-        },
-        quiescenceTimeoutMs: {
-          type: 'number',
-          description: 'Network quiescence timeout in ms (default: 2000)',
-        },
-        captureNetwork: {
-          type: 'object',
-          properties: {
-            urlPattern: {
-              type: 'string',
-              description: 'URL pattern or substring to match (e.g. "*/api/order*", "/checkout")',
-            },
-            method: {
-              type: 'string',
-              description: 'Optional HTTP method to filter by (GET, POST, PUT, DELETE, etc.)',
-            },
-            timeoutMs: {
-              type: 'number',
-              description:
-                'Maximum time in milliseconds to wait for the matching network response (default: 5000ms)',
-            },
-            statusCodes: {
-              type: 'array',
-              items: { type: 'number' },
-              description: 'Optional HTTP status codes to accept (e.g. [200, 201])',
-            },
-          },
-          required: ['urlPattern'],
-          description:
-            'Inline capture of network response triggered by this interaction in a single round-trip',
-        },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        waitForSettle: { type: 'boolean' },
+        settleTimeoutMs: { type: 'number' },
+        humanize: { type: 'boolean' },
+        includeDelta: { type: 'boolean' },
+        sessionId: { type: 'string' },
+        pierceOverlay: { type: 'boolean' },
+        waitForNetworkQuiescence: { type: 'boolean' },
+        quiescenceTimeoutMs: { type: 'number' },
+        captureNetwork: CAPTURE_NETWORK_SCHEMA,
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.FILL_INDEX,
-    annotations: {
-      title: 'Fill Index',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Fill text into an input, textarea, or editable element using its index or a strict locator. Filling verifies the field value only. A caller-requested Enter is an explicit separate action; `submit: true` requires `submitTarget` and uses the normal trusted click path.',
     inputSchema: {
       type: 'object',
       properties: {
-        index: {
-          type: 'number',
-          description: 'Compact 1-based numeric index of the target element',
-        },
-        frameId: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'Resolve only in this frame, including explicit main frame 0; never cross-frame fallback.',
-        },
-        text: { type: 'string', description: 'Text content to fill into the element' },
-        value: { type: 'string', description: 'Alias for text parameter' },
-        clear: {
-          type: 'boolean',
-          description: 'Whether to clear existing field content before typing (default: true)',
-        },
-        pressEnter: {
-          type: 'boolean',
-          description:
-            'Dispatch one explicit Enter after the field value is verified (default: false). This is a key action, not proof that a form or external write succeeded. Do not combine with submit:true.',
-        },
-        submit: {
-          type: 'boolean',
-          description:
-            'Click the caller-specified submitTarget after filling. Requires submitTarget; missing or ambiguous targets reject the request before dispatch. Do not combine with pressEnter:true.',
-        },
+        index: { type: 'number' },
+        frameId: { type: 'integer', minimum: 0 },
+        text: { type: 'string' },
+        value: { type: 'string' },
+        clear: { type: 'boolean' },
+        pressEnter: { type: 'boolean' },
+        submit: { type: 'boolean' },
         submitTarget: EXPLICIT_TARGET_SCHEMA,
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        waitForSettle: {
-          type: 'boolean',
-          description:
-            'Wait for DOM mutations to settle after filling text before returning (default: false)',
-        },
-        settleTimeoutMs: {
-          type: 'number',
-          description: 'Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)',
-        },
-        includeDelta: {
-          type: 'boolean',
-          description:
-            'Automatically capture and return lightweight chained snapshot (activeElement, modal status, key DOM changes) in chainedSnapshot (default: true; set false to disable)',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        waitForSettle: { type: 'boolean' },
+        settleTimeoutMs: { type: 'number' },
+        includeDelta: { type: 'boolean' },
+        sessionId: { type: 'string' },
       },
       required: ['index'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.BATCH_ACTIONS,
-    annotations: {
-      title: 'Batch Actions',
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Execute a sequential multi-step pipeline of browser actions in a single round-trip without waiting for intermediate model turns.\n' +
-      '* List each mutation explicitly. A fill step does not implicitly advance or submit a form; list the click or press_key step when the task authorizes it.\n' +
-      '* Supported action types: click, double_click, right_click, fill, hover, scroll, press_key, wait, fill_form, assert, extract.\n' +
-      '* Set includeDelta: true to automatically inspect DOM changes after the pipeline completes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1471,162 +611,61 @@ const schemas: Tool[] = [
                   'assert',
                   'extract',
                 ],
-                description: 'Action type to perform',
               },
-              index: { type: 'number', description: 'Element index (for click, fill, hover)' },
-              frameId: {
-                type: 'integer',
-                minimum: 0,
-                description: 'Resolve only in this frame; never fall back to a different frame.',
-              },
-              ref: {
-                type: ['string', 'number'],
-                description: 'Target element numeric index or ref from chrome_read_dom',
-              },
-              selector: {
-                type: 'string',
-                description: 'CSS selector or XPath for target element',
-              },
-              targetText: {
-                type: 'string',
-                description: 'Target element by visible text when text is a fill value.',
-              },
-              role: {
-                type: 'string',
-                description: 'Strict target by supported implicit or explicit ARIA role.',
-              },
-              label: {
-                type: 'string',
-                description: 'Strict target by associated native or ARIA label.',
-              },
-              exact: {
-                type: 'boolean',
-                description: 'Require an exact text, accessible name, or label match.',
-              },
-              clear: {
-                type: 'boolean',
-                description: 'Clear field before typing (default: true)',
-              },
-              pressEnter: {
-                type: 'boolean',
-                description:
-                  'Whether to dispatch an Enter key event immediately after filling the text (for type: fill)',
-              },
-              submit: {
-                type: 'boolean',
-                description:
-                  'Click the explicit submitTarget after filling (for type: fill). Requires submitTarget and cannot be combined with pressEnter.',
-              },
+              index: { type: 'number' },
+              frameId: { type: 'integer', minimum: 0 },
+              ref: { type: ['string', 'number'] },
+              selector: { type: 'string' },
+              targetText: { type: 'string' },
+              role: { type: 'string' },
+              label: { type: 'string' },
+              exact: { type: 'boolean' },
+              clear: { type: 'boolean' },
+              pressEnter: { type: 'boolean' },
+              submit: { type: 'boolean' },
               submitTarget: EXPLICIT_TARGET_SCHEMA,
               fields: {
                 type: 'array',
                 items: {
                   type: 'object',
                   properties: {
-                    ref: {
-                      type: ['string', 'number'],
-                      description: 'Target element numeric index or ref from chrome_read_dom',
-                    },
-                    index: {
-                      type: 'number',
-                      description: 'Alias for ref',
-                    },
-                    selector: {
-                      type: 'string',
-                      description: 'CSS selector or XPath for target field',
-                    },
-                    value: {
-                      type: ['string', 'number', 'boolean'],
-                      description: 'Value to fill or select',
-                    },
-                    text: {
-                      type: 'string',
-                      description: 'Alias for value',
-                    },
-                    clear: {
-                      type: 'boolean',
-                      description: 'Clear field before typing (default: true)',
-                    },
+                    ref: { type: ['string', 'number'] },
+                    index: { type: 'number' },
+                    selector: { type: 'string' },
+                    value: { type: ['string', 'number', 'boolean'] },
+                    text: { type: 'string' },
+                    clear: { type: 'boolean' },
                   },
                   required: [],
                 },
-                description: 'Array of field descriptors to fill sequentially (for fill_form)',
               },
-              text: { type: 'string', description: 'Text to type/fill' },
-              value: { type: 'string', description: 'Alias for text' },
-              key: { type: 'string', description: 'Key name (for press_key)' },
+              text: { type: 'string' },
+              value: { type: 'string' },
+              key: { type: 'string' },
               coordinate: {
                 oneOf: [
                   {
                     type: 'object',
-                    properties: {
-                      x: { type: 'number', description: 'X coordinate in viewport/CSS pixels' },
-                      y: { type: 'number', description: 'Y coordinate in viewport/CSS pixels' },
-                    },
+                    properties: { x: { type: 'number' }, y: { type: 'number' } },
                     required: ['x', 'y'],
-                    description: '{ x, y } coordinate object',
                   },
-                  {
-                    type: 'array',
-                    items: { type: 'number' },
-                    description: 'Point [x, y] or bounding box [ymin, xmin, ymax, xmax]',
-                  },
+                  { type: 'array', items: { type: 'number' } },
                 ],
-                description: 'Unified coordinate object or array for click or scroll',
               },
-              x: { type: 'number', description: 'Coordinate X (for scroll/click, alias)' },
-              y: { type: 'number', description: 'Coordinate Y (for scroll/click, alias)' },
-              at: {
-                type: 'number',
-                description:
-                  'Absolute epoch-ms deadline: sleep until this instant before executing this action (extension-side timer, no extra round-trip)',
-              },
-              direction: {
-                type: 'string',
-                enum: ['up', 'down', 'left', 'right'],
-                description: 'Scroll direction (left/right dispatch horizontal wheel deltas)',
-              },
-              amount: { type: 'number', description: 'Scroll pixel amount' },
-              note: {
-                type: 'string',
-                description:
-                  'Optional intent note displayed on virtual agent cursor during execution',
-              },
-              durationMs: { type: 'number', description: 'Wait duration in ms' },
-              waitForSettle: {
-                type: 'boolean',
-                description:
-                  'Wait for DOM mutations to settle after this specific action (default: false)',
-              },
-              settleTimeoutMs: {
-                type: 'number',
-                description:
-                  'Maximum settle timeout in milliseconds for this action (default: 1500)',
-              },
-              waitForNetworkQuiescence: {
-                type: 'boolean',
-                description:
-                  'Wait for in-flight network requests to settle before proceeding to next action (default: false)',
-              },
-              quiescenceTimeoutMs: {
-                type: 'number',
-                description: 'Network quiescence timeout in ms (default: 2000)',
-              },
-              pierceOverlay: {
-                type: 'boolean',
-                description:
-                  'Automatically pierce non-opaque or transient backdrop masks for click actions (default: true)',
-              },
-              preferComposer: {
-                type: 'boolean',
-                description:
-                  'Prioritize rich composer/editor elements over generic search inputs when resolving textbox (default: false)',
-              },
-              // For type: 'assert'
-              expectedText: {
-                type: 'string',
-                description: 'Expected text substring or exact match',
-              },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              at: { type: 'number' },
+              direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+              amount: { type: 'number' },
+              note: { type: 'string' },
+              durationMs: { type: 'number' },
+              waitForSettle: { type: 'boolean' },
+              settleTimeoutMs: { type: 'number' },
+              waitForNetworkQuiescence: { type: 'boolean' },
+              quiescenceTimeoutMs: { type: 'number' },
+              pierceOverlay: { type: 'boolean' },
+              preferComposer: { type: 'boolean' },
+              expectedText: { type: 'string' },
               condition: {
                 type: 'string',
                 enum: [
@@ -1643,391 +682,136 @@ const schemas: Tool[] = [
                   'checked',
                   'unchecked',
                 ],
-                description:
-                  'Assertion condition: contains, not_contains, equals, matches (regex), visible, not_visible, enabled, disabled, valid, invalid, checked, unchecked (default: "contains")',
               },
-              timeoutMs: {
-                type: 'number',
-                description:
-                  'Async polling timeout in milliseconds for assertion settling (default: 300ms)',
-              },
-              abortOnFailure: {
-                type: 'boolean',
-                description: 'Abort batch if assertion fails (default: true)',
-              },
-              // For type: 'extract'
-              property: {
-                type: 'string',
-                enum: ['text', 'value', 'attribute'],
-                description: 'Property to extract (default: "text")',
-              },
-              attributeName: {
-                type: 'string',
-                description: 'Attribute name when property is "attribute"',
-              },
-              variableName: {
-                type: 'string',
-                description: 'Key name under extractedData to store the result',
-              },
-              captureNetwork: {
-                type: 'object',
-                properties: {
-                  urlPattern: {
-                    type: 'string',
-                    description: 'URL pattern or substring to match (e.g. "*/api/order*")',
-                  },
-                  method: {
-                    type: 'string',
-                    description: 'Optional HTTP method to filter by (GET, POST, etc.)',
-                  },
-                  timeoutMs: {
-                    type: 'number',
-                    description:
-                      'Maximum time in milliseconds to wait for the network response (default: 5000ms)',
-                  },
-                  statusCodes: {
-                    type: 'array',
-                    items: { type: 'number' },
-                    description: 'Optional HTTP status codes to accept',
-                  },
-                },
-                required: ['urlPattern'],
-                description: 'Inline capture of network response triggered by this action',
-              },
+              timeoutMs: { type: 'number' },
+              abortOnFailure: { type: 'boolean' },
+              property: { type: 'string', enum: ['text', 'value', 'attribute'] },
+              attributeName: { type: 'string' },
+              variableName: { type: 'string' },
+              captureNetwork: CAPTURE_NETWORK_SCHEMA,
             },
             required: ['type'],
           },
-          description: 'List of actions to execute sequentially',
         },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        waitForSettle: {
-          type: 'boolean',
-          description:
-            'Wait for DOM mutations to settle after all actions before returning (default: false)',
-        },
-        settleTimeoutMs: {
-          type: 'number',
-          description: 'Maximum settle timeout in milliseconds (default: 1500, range: 200-10000)',
-        },
-        waitForNetworkQuiescence: {
-          type: 'boolean',
-          description:
-            'Wait for in-flight network requests to settle after all actions before returning (default: false)',
-        },
-        quiescenceTimeoutMs: {
-          type: 'number',
-          description: 'Network quiescence timeout in ms (default: 2000)',
-        },
-        includeDelta: {
-          type: 'boolean',
-          description:
-            'Automatically capture and return DOM changes caused by the batch in the delta field (default: false)',
-        },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
-        captureNetwork: {
-          type: 'object',
-          properties: {
-            urlPattern: {
-              type: 'string',
-              description: 'URL pattern or substring to match (e.g. "*/api/order*", "/checkout")',
-            },
-            method: {
-              type: 'string',
-              description: 'Optional HTTP method to filter by (GET, POST, PUT, DELETE, etc.)',
-            },
-            timeoutMs: {
-              type: 'number',
-              description:
-                'Maximum time in milliseconds to wait for the matching network response (default: 5000ms)',
-            },
-            statusCodes: {
-              type: 'array',
-              items: { type: 'number' },
-              description: 'Optional HTTP status codes to accept (e.g. [200, 201])',
-            },
-          },
-          required: ['urlPattern'],
-          description:
-            'Inline capture of network response triggered during batch execution in a single round-trip',
-        },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        waitForSettle: { type: 'boolean' },
+        settleTimeoutMs: { type: 'number' },
+        waitForNetworkQuiescence: { type: 'boolean' },
+        quiescenceTimeoutMs: { type: 'number' },
+        includeDelta: { type: 'boolean' },
+        sessionId: { type: 'string' },
+        captureNetwork: CAPTURE_NETWORK_SCHEMA,
       },
       required: ['actions'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.GET_MARKDOWN,
-    annotations: {
-      title: 'Get Markdown',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    description:
-      'Extract clean, structured hierarchical markdown from the active tab DOM stripped of SPA state blobs, hidden text, and scripts.',
     inputSchema: {
       type: 'object',
       properties: {
-        includeLinks: {
-          type: 'boolean',
-          description: 'Whether to preserve hyperlinks in markdown (default: true)',
-        },
-        fit: {
-          type: 'boolean',
-          description:
-            'Content-only extraction: restrict to the main content region and strip nav/header/footer/aside/form noise before conversion (default: false)',
-        },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        includeLinks: { type: 'boolean' },
+        fit: { type: 'boolean' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        sessionId: { type: 'string' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.GET_DROPDOWN_OPTIONS,
-    annotations: {
-      title: 'Get Dropdown Options',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    description:
-      'Get all options from a native `<select>` dropdown, ARIA combobox, or custom menu list.',
     inputSchema: {
       type: 'object',
       properties: {
-        index: { type: 'number', description: 'Element numeric index from chrome_read_dom' },
-        selector: { type: 'string', description: 'CSS selector of the dropdown or combobox' },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        windowId: { type: 'number', description: 'Target window ID (optional)' },
-        sessionId: {
-          type: 'string',
-          description: 'Optional session identifier to bind affinity to a specific tab context',
-        },
+        index: { type: 'number' },
+        selector: { type: 'string' },
+        tabId: { type: 'number' },
+        windowId: { type: 'number' },
+        sessionId: { type: 'string' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.SMART_SCROLL,
-    annotations: {
-      title: 'Smart Scroll',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Intelligently detects and scrolls the most prominent scrollable container on the page, or targets a specific container by selector, ref, or coordinate with automatic progress calculation.',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        sessionId: { type: 'string', description: 'Session ID for tab affinity (optional)' },
-        direction: {
-          type: 'string',
-          enum: ['down', 'up', 'left', 'right'],
-          description: 'Scroll direction (default: "down")',
-        },
-        amount: {
-          type: 'string',
-          description:
-            'Scroll amount: number in pixels, "page" (viewport height), or "half_page" (default: "page")',
-        },
-        selector: {
-          type: 'string',
-          description: 'Optional CSS selector of the scroll container to target',
-        },
-        ref: {
-          type: 'number',
-          description: 'Optional 1-based numeric index of the scroll container to target',
-        },
-        index: {
-          type: 'number',
-          description: 'Alias for ref: 1-based numeric index of the scroll container to target',
-        },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+        direction: { type: 'string', enum: ['down', 'up', 'left', 'right'] },
+        amount: { type: 'string' },
+        selector: { type: 'string' },
+        ref: { type: 'number' },
+        index: { type: 'number' },
         coordinate: {
           oneOf: [
             {
               type: 'object',
-              properties: {
-                x: { type: 'number', description: 'X coordinate' },
-                y: { type: 'number', description: 'Y coordinate' },
-              },
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
               required: ['x', 'y'],
-              description: '{ x, y } coordinate object',
             },
-            {
-              type: 'array',
-              items: { type: 'number' },
-              description: 'Point [x, y] or bounding box [ymin, xmin, ymax, xmax]',
-            },
+            { type: 'array', items: { type: 'number' } },
           ],
-          description:
-            'Optional coordinate to locate the scrollable container under pointer: { x, y } object, [x, y] point, or [ymin, xmin, ymax, xmax] bounding box',
         },
-        smooth: {
-          type: 'boolean',
-          description: 'Whether to use smooth scrolling behavior (default: true)',
-        },
-        waitForSettle: {
-          type: 'boolean',
-          description:
-            'Wait for DOM and network activity to settle after scroll completes (default: true)',
-        },
-        settleTimeoutMs: {
-          type: 'number',
-          description: 'Maximum settle wait timeout in ms (default: 1500)',
-        },
-        note: {
-          type: 'string',
-          description:
-            'Optional intent note displayed on virtual agent cursor during scrolling (e.g. "Scrolling down timeline")',
-        },
+        smooth: { type: 'boolean' },
+        waitForSettle: { type: 'boolean' },
+        settleTimeoutMs: { type: 'number' },
+        note: { type: 'string' },
       },
       required: [],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.CDP_EXECUTE,
-    annotations: {
-      title: 'Execute Raw CDP Command',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Execute raw Chrome DevTools Protocol (CDP) commands directly on a target tab. Gives advanced reasoning agents full, unconstrained, low-level browser automation capabilities (e.g. Page, DOM, Input, Runtime, Network, Emulation domains). Requires debugger permission.',
     inputSchema: {
       type: 'object',
       properties: {
-        tabId: {
-          type: 'number',
-          description:
-            'Target tab ID to attach and execute CDP on. Defaults to current active/affinity tab.',
-        },
-        method: {
-          type: 'string',
-          description:
-            'CDP method name (e.g. "Page.navigate", "Runtime.evaluate", "Input.dispatchMouseEvent", "DOMSnapshot.captureSnapshot").',
-        },
-        params: {
-          type: 'object',
-          description: 'Parameters object passed to the CDP method.',
-        },
-        timeoutMs: {
-          type: 'number',
-          description: 'Timeout in milliseconds for this CDP command. Default: 10000.',
-        },
+        tabId: { type: 'number' },
+        method: { type: 'string' },
+        params: { type: 'object' },
+        timeoutMs: { type: 'number' },
       },
       required: ['method'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.REQUEST_HUMAN_INTERVENTION,
-    annotations: {
-      title: 'Request Human Intervention',
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    description:
-      'Request user assistance for high-friction barriers (SMS 2FA, puzzle captcha, payment confirmation). Renders an in-page glassmorphism overlay bar with explanation, moves agent cursor to standby, and resumes cleanly when human finishes or clicks continue.',
     inputSchema: {
       type: 'object',
       properties: {
-        reason: {
-          type: 'string',
-          description: 'Clear instruction explaining what the human user needs to do',
-        },
-        timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default: 60000)' },
-        tabId: { type: 'number', description: 'Target tab ID' },
+        reason: { type: 'string' },
+        timeoutMs: { type: 'number' },
+        tabId: { type: 'number' },
       },
       required: ['reason'],
     },
   },
   {
     name: TOOL_NAMES.BROWSER.DOCTOR,
-    annotations: {
-      title: 'Environment Doctor',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description:
-      'Diagnose BrowserPaw environment, Native Host connectivity, Chrome silent-debugger flags, port availability, and token security.',
     inputSchema: {
       type: 'object',
-      properties: {
-        verbose: {
-          type: 'boolean',
-          description: 'Return full path and configuration details (default: false)',
-        },
-      },
+      properties: { verbose: { type: 'boolean' } },
       required: [],
       additionalProperties: false,
     },
   },
   {
     name: TOOL_NAMES.BROWSER.GREP,
-    annotations: {
-      title: 'Search Page (Grep)',
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    description:
-      'Search the page without dumping full DOM tree. Supports searching interactive elements (returning indices for chrome_interact_index), all DOM nodes, or raw visible text lines.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search term or regex pattern' },
-        isRegex: {
-          type: 'boolean',
-          description: 'Whether to evaluate query as a regular expression (default: false)',
-        },
-        searchType: {
-          type: 'string',
-          enum: ['interactive_only', 'all_dom', 'page_text'],
-          description:
-            'Search target: "interactive_only" (default, matches clickable/fillable elements and returns indices), "all_dom" (matches all elements), "page_text" (scans visible text lines).',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum matching results to return (default: 20, max: 50)',
-        },
-        autoScroll: {
-          type: 'boolean',
-          description:
-            'When true, automatically executes client-side RAF auto-scrolling to probe and detect off-screen virtualized elements (virtual list / infinite scroll streams like X/Twitter). Default: false',
-        },
-        maxSteps: {
-          type: 'number',
-          description:
-            'Maximum scroll iterations to attempt when autoScroll is enabled (default: 10)',
-        },
-        stepPx: {
-          type: 'number',
-          description: 'Pixel distance to scroll on each probing step (default: 800)',
-        },
-        tabId: { type: 'number', description: 'Target tab ID (optional)' },
-        sessionId: {
-          type: 'string',
-          description: 'Session identifier for tab affinity (optional)',
-        },
+        query: { type: 'string' },
+        isRegex: { type: 'boolean' },
+        searchType: { type: 'string', enum: ['interactive_only', 'all_dom', 'page_text'] },
+        limit: { type: 'number' },
+        autoScroll: { type: 'boolean' },
+        maxSteps: { type: 'number' },
+        stepPx: { type: 'number' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
       },
       required: ['query'],
     },
@@ -2038,9 +822,6 @@ export const TOOL_SCHEMAS: Tool[] = schemas.map((tool) => ({
   ...tool,
   inputSchema: {
     ...tool.inputSchema,
-    properties: {
-      ...tool.inputSchema.properties,
-      taskId: { type: 'string', description: 'Durable task identity for verified pages.' },
-    },
+    properties: { ...tool.inputSchema.properties, taskId: TASK_ID },
   },
 }));

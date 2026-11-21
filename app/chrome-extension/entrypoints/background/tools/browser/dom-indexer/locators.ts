@@ -6,7 +6,7 @@ import {
   extractElementLocationDetails,
 } from '../dom-indexer';
 
-function isLocatorCandidateVisible(el: Element): boolean {
+export function isLocatorCandidateVisible(el: Element): boolean {
   const view = el.ownerDocument?.defaultView || window;
   const visibility = view.getComputedStyle(el).visibility;
   if (visibility === 'hidden' || visibility === 'collapse') return false;
@@ -346,13 +346,13 @@ function locatorIsInteractive(el: Element): boolean {
   );
 }
 
-function collapseNestedLocatorMatches(elements: Element[]): Element[] {
+export function collapseNestedLocatorMatches(elements: Element[]): Element[] {
   if (elements.length <= 1) return elements;
   const interactive = new Map(elements.map((el) => [el, locatorIsInteractive(el)]));
   const dominated = new Set<Element>();
   for (const el of elements) {
     const elInteractive = interactive.get(el)!;
-    for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    for (let ancestor = composedParent(el); ancestor; ancestor = composedParent(ancestor)) {
       const ancestorInteractive = interactive.get(ancestor);
       if (ancestorInteractive === undefined) continue;
       if (!ancestorInteractive || elInteractive) dominated.add(ancestor);

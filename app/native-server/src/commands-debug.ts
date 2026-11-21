@@ -159,12 +159,10 @@ export function dispatchDebug(
         limit: optionalInteger(options.limit, 'Network limit', 1, 100),
       });
     case 'network show':
-      argumentCount(command, 0, 1);
-      if (options.out && !first)
-        throw new CommandError('network show --out requires a captured request ID.');
+      argumentCount(command, 1);
       return run('chrome_network_capture', {
-        action: first ? 'show' : 'list',
-        ...(first ? { requestId: first } : {}),
+        action: 'show',
+        requestId: first,
         ...(options.out ? { outputPath: options.out } : {}),
       }).then((result) => filterNetworkShow(command, result));
     case 'network clear':

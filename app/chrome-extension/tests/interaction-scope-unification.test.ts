@@ -3,9 +3,11 @@ import {
   inPageDOMPruner,
   inPageGetActiveElementSummary,
   inPageFindSmartScrollTarget,
+  inPagePerformSmartScroll,
   detectActiveModalBlocker,
   computeInteractionScope,
   indexElement,
+  buildScopedScrollInfo,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import {
   fastSnapshot,
@@ -639,5 +641,115 @@ describe('Interaction Scope Unification (Modal, Fast Snapshot, Scroll)', () => {
     const snapshot = fastSnapshot();
     expect(snapshot?.actions.some((action) => action.label.includes('Page Action'))).toBe(true);
     expect(snapshot?.actions.some((action) => action.label.includes('Dialog Action'))).toBe(true);
+  });
+
+  it('15. ignores a full-viewport mask with no visible dialog and preserves default scroll', () => {
+    document.body.innerHTML = `
+      <div id="gcp-mask" class="mask" style="position: fixed; inset: 0; width: 1200px; height: 800px; z-index: 900;"></div>
+      <div id="gcp-fading-mask" class="mask" style="position: fixed; inset: 0; width: 1200px; height: 800px; opacity: 0; z-index: 901;"></div>
+      <main>
+        <button id="gcp-nav-btn">Navigation menu</button>
+        <div id="gcp-viewport" role="presentation" style="overflow-y: auto; height: 400px;">
+          <p>Cloud console content</p>
+        </div>
+      </main>
+    `;
+    for (const id of ['gcp-mask', 'gcp-fading-mask']) {
+      const mask = document.getElementById(id)!;
+      mask.getBoundingClientRect = () =>
+        ({
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 1200,
+          bottom: 800,
+          width: 1200,
+          height: 800,
+        }) as DOMRect;
+    }
+    sizeElement('gcp-nav-btn');
+    const viewport = document.getElementById('gcp-viewport') as HTMLElement;
+    sizeElement('gcp-viewport', 900, 400);
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 1600 });
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 0, writable: true });
+
+    expect(detectActiveModalBlocker()).toBeNull();
+    const pruner = inPageDOMPruner({ highlight: false });
+    expect(pruner.modalIsolated).not.toBe(true);
+    expect(pruner.focusTrapped).not.toBe(true);
+    expect(pruner.treeString).toContain('Navigation menu');
+
+    const target = inPageFindSmartScrollTarget({ direction: 'down' });
+    expect(target.found).toBe(true);
+    expect(target.isWindow).toBe(false);
+    expect(target.selector).toBe('#gcp-viewport');
+  });
+
+  it('16. resolves and scrolls an unambiguous shadow DOM scroll container without an id', () => {
+    document.body.innerHTML = '<x-console-shell id="shell"></x-console-shell>';
+    const shell = document.getElementById('shell')!;
+    const shadow = shell.attachShadow({ mode: 'open' });
+    shadow.innerHTML =
+      '<div role="presentation" style="overflow-y: auto; height: 400px;"><div style="height: 1600px;">Items</div></div>';
+    const scroller = shadow.querySelector('div[role="presentation"]') as HTMLElement;
+    scroller.getBoundingClientRect = () =>
+      ({
+        x: 20,
+        y: 80,
+        left: 20,
+        top: 80,
+        right: 920,
+        bottom: 480,
+        width: 900,
+        height: 400,
+      }) as DOMRect;
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1600 });
+    let scrollTop = 0;
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    scroller.scrollBy = ({ top }: ScrollToOptions) => {
+      scrollTop += Number(top || 0);
+    };
+
+    const target = inPageFindSmartScrollTarget({ direction: 'down' });
+    expect(target.found).toBe(true);
+    expect(target.isWindow).toBe(false);
+    expect(target.selector).toBe('div[data-browserpaw-scroll-target="true"]');
+
+    const scrolled = inPagePerformSmartScroll(false, target.selector, 0, 320, false);
+    expect(scrolled.success).toBe(true);
+    expect(scrolled.newScrollTop).toBe(320);
+  });
+
+  it('17. buildScopedScrollInfo reports page scroll rather than ambiguous when non-modal page itself scrolls', () => {
+    document.body.innerHTML = `
+      <aside id="left-rail" style="overflow-y: auto; height: 240px;"></aside>
+      <aside id="right-rail" style="overflow-y: auto; height: 240px;"></aside>
+      <main style="height: 2400px;">Feed</main>
+    `;
+    for (const id of ['left-rail', 'right-rail']) {
+      const rail = document.getElementById(id) as HTMLElement;
+      Object.defineProperty(rail, 'clientHeight', { configurable: true, value: 240 });
+      Object.defineProperty(rail, 'scrollHeight', { configurable: true, value: 900 });
+    }
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      value: 2400,
+    });
+
+    const info = buildScopedScrollInfo([document.body], window, { modalActive: false });
+    expect(info.ambiguous).toBe(false);
+    expect(info.scope).toBe('page');
+    expect(info.total_height).toBe(2400);
+    expect(info.pages_down).toBe(3);
   });
 });

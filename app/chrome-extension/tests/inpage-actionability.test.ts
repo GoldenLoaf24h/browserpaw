@@ -586,5 +586,70 @@ describe('inPageWaitForActionable pre-flight & stability watchdog', () => {
       expect(result.notFound).toBe(false);
       expect(result.reason).toBe('out_of_view');
     });
+
+    it('scrolls a container-clipped element into view even when within window bounds', async () => {
+      const pane = document.createElement('div');
+      pane.style.overflowY = 'auto';
+      Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 100 });
+      Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 500 });
+      let scrollTop = 0;
+      Object.defineProperty(pane, 'scrollTop', {
+        configurable: true,
+        get: () => scrollTop,
+        set: (v: number) => {
+          scrollTop = v;
+        },
+      });
+      attachBox(pane, 300, 100, 50, 100);
+
+      const button = document.createElement('button');
+      button.textContent = 'Scrollable action';
+      let buttonTop = 300;
+      button.getBoundingClientRect = () =>
+        ({
+          x: 100,
+          y: buttonTop,
+          left: 100,
+          top: buttonTop,
+          right: 200,
+          bottom: buttonTop + 40,
+          width: 100,
+          height: 40,
+          toJSON: () => {},
+        }) as DOMRect;
+      pane.scrollBy = ({ top }: ScrollToOptions) => {
+        const delta = Number(top || 0);
+        scrollTop += delta;
+        buttonTop -= delta;
+      };
+      pane.append(button);
+      document.body.append(pane);
+
+      const idx = indexElement(button);
+      const result = await inPageWaitForActionable(idx, 'click', 300);
+
+      expect(result.success).toBe(true);
+      expect(result.actionable).toBe(true);
+      expect(scrollTop).toBeGreaterThan(0);
+    });
+
+    it('does not treat a position:fixed control as clipped by a non-containing overflow:hidden ancestor', async () => {
+      const wrapper = document.createElement('div');
+      wrapper.style.overflow = 'hidden';
+      attachBox(wrapper, 100, 40, 0, 0);
+
+      const button = document.createElement('button');
+      button.style.position = 'fixed';
+      button.textContent = 'Floating CTA';
+      attachBox(button, 120, 40, 300, 300);
+      wrapper.append(button);
+      document.body.append(wrapper);
+
+      const idx = indexElement(button);
+      const result = await inPageWaitForActionable(idx, 'click', 300);
+
+      expect(result.success).toBe(true);
+      expect(result.actionable).toBe(true);
+    });
   });
 });

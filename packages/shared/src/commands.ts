@@ -118,6 +118,11 @@ export const COMMANDS = {
     usage: 'task status [ID]',
     summary: 'Inspect task pages and known and uncertain outcomes.',
   },
+  'task resume': {
+    usage: 'task resume --task ID [--adopt]',
+    summary: 'Revalidate task pages. After inspecting the page, use --adopt to accept a recorded pending document.',
+    keywords: ['recover task', 'pending navigation', 'document identity', '恢复任务', '文档身份'],
+  },
   'task finish': {
     usage: 'task finish [--keep ID]... [--keep-unknown]',
     summary: 'Close verified owned pages and preserve borrowed pages.',
@@ -153,11 +158,15 @@ export const COMMANDS = {
   },
   'recipe save': {
     usage: 'recipe save FILE|-',
-    summary: 'Save a learned workflow or propose a verified skill in ~/.browserpaw.',
+    summary: 'Save a candidate learned workflow or propose a verified skill.',
+  },
+  'recipe patch': {
+    usage: 'recipe patch ID --step INDEX -- ARGS...',
+    summary: 'Replace one candidate recipe step after static validation.',
   },
   'recipe validate': {
-    usage: 'recipe validate ID',
-    summary: 'Verify and activate a candidate skill in ~/.browserpaw.',
+    usage: 'recipe validate ID [KEY=VALUE...]',
+    summary: 'Validate a candidate and activate only a verified read-only workflow.',
   },
   'recipe rm': {
     usage: 'recipe rm ID',
@@ -273,14 +282,16 @@ const examples: Partial<Record<CommandName, readonly string[]>> = {
   select: ['select 19 --tab 12', 'select 19 blue red --tab 12'],
   screenshot: ['screenshot --task TASK_ID --out page.png', 'screenshot --tab 12 --full'],
   batch: ['batch steps.json --task TASK_ID', 'batch - --tab 12'],
+  'task resume': ['task resume --task TASK_ID --adopt'],
   'task finish': ['task finish --task TASK_ID', 'task finish --task TASK_ID --keep 12'],
   'recipe find': ['recipe find twitter search', 'recipe find --url https://x.com/search?q=ai'],
   'recipe show': ['recipe show x-search-thread'],
+  'recipe patch': ['recipe patch x-search-thread --step 1 -- wait css:main'],
   'recipe run': [
     'recipe run read-title selector=h1 --tab 12',
     'recipe run x-search-thread query=typescript limit=5',
   ],
-  'recipe validate': ['recipe validate x-search-thread'],
+  'recipe validate': ['recipe validate x-search-thread', 'recipe validate x-hot query=ai'],
   'history search': ['history search example.com --since 7d --limit 20'],
   'history visits': ['history visits https://example.com/ --since 24h'],
   'history top': ['history top --since 7d --limit 10'],
@@ -417,7 +428,7 @@ export function searchCommands(query: string) {
 export function commandHelp(topic?: string): string {
   if (topic === 'targets') return TARGET_HELP;
   if (topic === 'recipes')
-    return 'Learned skills and recipes live under ~/.browserpaw. Use recipe find to match by intent or URL, recipe show ID for inputs, recipe run ID key=value to execute, recipe save FILE to save a workflow or propose a verified skill, and recipe validate ID to activate candidates.';
+    return 'Learned skills and recipes live under ~/.browserpaw. Use recipe find to match by intent or URL, recipe show ID for inputs, recipe patch ID --step INDEX -- ARGS... to create a candidate revision, recipe run ID key=value to execute, recipe save FILE to save a candidate or propose a verified skill, and recipe validate ID key=value to activate only a verified read-only candidate.';
   if (topic && isCommand(topic)) {
     const spec = COMMANDS[topic];
     return [
@@ -425,7 +436,7 @@ export function commandHelp(topic?: string): string {
       spec.summary,
       topic === 'search'
         ? 'Returns 8 matches by default. Use --limit 1–50 to change the count, --json for structured results, and -- before an option used as a keyword.'
-        : `Common options: ${globalOptions}`,
+        : `Common options: ${topic === 'task resume' ? '--json' : globalOptions}`,
       exitHelp,
       ...(examples[topic] ?? []).map((example) => `Example: browserpaw ${example}`),
     ].join('\n');

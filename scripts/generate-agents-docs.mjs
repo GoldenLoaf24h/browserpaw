@@ -19,7 +19,7 @@ const METADATA = {
   '.': {
     title: 'browserpaw',
     purpose:
-      'Root of BrowserPaw, a Chrome browser automation MCP server and Agent Skill monorepo. It connects agents to an existing Chrome session through an extension and local Native bridge. See PROJECT.md for responsibilities and docs/development/DEVELOPMENT.md for current work and limitations.',
+      'Root of BrowserPaw, a v5 Chrome browser automation CLI, Native Messaging host, MV3 extension, and Agent Skill monorepo. It connects agents to an existing Chrome session over an authenticated local loopback bridge (`127.0.0.1`). See [PROJECT.md](PROJECT.md), [SECURITY.md](SECURITY.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/QUALITY.md](docs/QUALITY.md), and [docs/development/DEVELOPMENT.md](docs/development/DEVELOPMENT.md).',
     keyFiles: [
       {
         name: 'package.json',
@@ -43,20 +43,16 @@ const METADATA = {
         desc: 'Simplified Chinese translation of the engineering project specification',
       },
       {
-        name: 'TEST_INFRA.md',
-        desc: 'Comprehensive E2E test infrastructure specification and test matrix',
-      },
-      {
-        name: 'AGENT_CONFIG_GUIDE.md',
-        desc: 'Client configuration instructions for Claude, Cursor, and Windsurf',
-      },
-      {
-        name: 'AGENT_CONFIG_GUIDE.zh-CN.md',
-        desc: 'Simplified Chinese translation of the AI agent client configuration guide',
+        name: 'CONTRIBUTING.md',
+        desc: 'Entry pointer to docs/CONTRIBUTING.md, quality gates, and release workflow',
       },
       {
         name: 'INSTALL.md',
-        desc: 'Installation instructions for the native messaging host and extension',
+        desc: 'Installation and upgrade instructions for the CLI, Native host, extension, and plugins',
+      },
+      {
+        name: 'SECURITY.md',
+        desc: 'Security policy, trust model, enforced invariants, and vulnerability reporting',
       },
       {
         name: 'PRIVACY.md',
@@ -67,12 +63,12 @@ const METADATA = {
         desc: 'Concise pointer to the centralized release archive in docs/releases/',
       },
       {
-        name: 'docs/QUALITY.md',
-        desc: 'Engineering quality contract: pnpm verify, build:deploy, and verify:delivery gates',
+        name: 'LICENSE',
+        desc: 'GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)',
       },
       {
-        name: 'docs/DOCUMENTATION.md',
-        desc: 'Documentation governance: active vs archived, ownership, translations, and release templates',
+        name: 'NOTICE',
+        desc: 'Legal notices and third-party software attributions',
       },
       {
         name: 'commitlint.config.cjs',
@@ -82,26 +78,19 @@ const METADATA = {
         name: 'eslint.config.js',
         desc: 'Global ESLint 9 flat configuration across TypeScript and Vue files',
       },
-      {
-        name: '.agents/plugins/marketplace.json',
-        desc: 'Portable Agent Plugins marketplace entry for ChatGPT and Codex',
-      },
-      {
-        name: '.claude-plugin/marketplace.json',
-        desc: 'Claude Code marketplace entry for the BrowserPaw plugin',
-      },
       { name: 'pnpm-lock.yaml', desc: 'Pinned dependency tree lockfile' },
     ],
     instructions: [
-      'This is a pnpm monorepo. Run commands using pnpm (e.g., pnpm build, pnpm test, pnpm typecheck).',
-      'The canonical tool definitions and schemas live in packages/shared/src/tools.ts — keep them synchronized with any extension tool changes.',
-      'Always follow conventional commits format enforced by commitlint.',
-      'Do not modify generated files in dist/ or .output/ directly.',
+      'This is a pnpm monorepo (Node >=22.6, pnpm pinned in package.json). Run workspace tasks with pnpm.',
+      'Use packages/shared/src/commands.ts as the single source of truth for CLI syntax and help; keep Native dispatchers and generated docs/COMMANDS.md (`pnpm docs:commands`) in sync.',
+      'Keep packages/shared/src/tools.ts synchronized with extension tool executors, and edit the canonical skill in skills/browserpaw/ before running `node scripts/sync-skills.mjs`.',
+      'Native v5 builds output to app/native-server/dist/v5. Do not edit generated outputs in dist/, .output/, .wxt/, or machine-written verification reports.',
+      'Follow Conventional Commits enforced by commitlint.',
     ],
     testing:
-      'Official verification gate is `pnpm verify` (static checks, lint, typecheck, tests, build, and doc validation). For deployment, run `pnpm build:deploy` and assert hash parity with `pnpm verify:delivery`. Note: Staged disk files or hot reloads are never valid runtime evidence; manual extension reload in chrome://extensions followed by doctor runtime buildId verification is required.',
+      'Run focused tests while iterating, and `pnpm verify` + `pnpm release:check` on the final candidate. For live browser E2E, run `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` pointing to Chrome for Testing. `pnpm verify`, `pnpm build`, and `pnpm build:extension` never deploy outside the repository; authorized local Chrome deployment uses `pnpm build:deploy`, `pnpm verify:delivery`, manual extension reload in `chrome://extensions`, and live `buildId` verification via `browserpaw status` or `browserpaw doctor`.',
     patterns:
-      'Monorepo workspace coordination; SSOT schema synchronization; layered profile filtering.',
+      'Shared CLI command and tool registry; authenticated loopback Native Messaging host (`com.browserpaw.nativehost`); MV3 extension executors; canonical skill mirror synchronization.',
     internalDeps: ['packages/shared'],
     externalDeps: ['pnpm', 'typescript', 'eslint', 'prettier', 'husky'],
   },
@@ -109,23 +98,23 @@ const METADATA = {
   app: {
     title: 'app',
     purpose:
-      'Container directory hosting the two primary executable applications: the Chrome MV3 extension and the Native Messaging Fastify bridge server.',
+      'Container directory hosting the two primary executable applications: the Chrome MV3 extension connector and the Native Messaging CLI/host bridge.',
     keyFiles: [],
     instructions: [
       'Coordinate IPC protocol changes between chrome-extension and native-server simultaneously.',
       'Respect the 1MB Native Messaging ceiling across all IPC boundaries: Chrome caps Host-to-Extension messages at 1MB, and the native host defensively mirrors that same 1MB limit on stdin/stdout.',
     ],
     testing:
-      'Test both packages: `pnpm --filter chrome-mcp-server test` and `pnpm --filter mcp-chrome-bridge test`.',
+      'Test both packages: `pnpm --filter chrome-mcp-server test` and `pnpm --filter browserpaw test`.',
     patterns: 'Native Messaging StdIO framing (4-byte length header + JSON payload).',
     internalDeps: ['packages/shared'],
-    externalDeps: ['Node.js >= 18'],
+    externalDeps: ['Node.js >= 22.6'],
   },
 
   'app/chrome-extension': {
     title: 'chrome-extension',
     purpose:
-      'Chrome MV3 Extension frontend and background service worker built with WXT framework, Vue 3, and TailwindCSS. Executes in-page DOM indexing, virtual cursor rendering, and 49 extension tool executors.',
+      'Chrome MV3 Extension frontend and background service worker built with WXT framework, Vue 3, and TailwindCSS. Executes in-page DOM indexing, virtual cursor rendering, and browser tool executors.',
     keyFiles: [
       {
         name: 'package.json',
@@ -150,7 +139,7 @@ const METADATA = {
       'Never perform direct DOM manipulation in background service worker — use inpage-engine.ts or inject-scripts.',
       'Enforce sender permission isolation: verify _sender.id === chrome.runtime.id.',
     ],
-    testing: 'Run `pnpm --filter chrome-mcp-server test` (Vitest suite with 49+ test files).',
+    testing: 'Run `pnpm --filter chrome-mcp-server test` (Vitest suite).',
     patterns:
       'WXT entrypoints; closed Shadow DOM overlays for cursor and intervention; isolated-world DOM perception.',
     internalDeps: ['packages/shared', 'app/chrome-extension/common', 'app/chrome-extension/utils'],
@@ -335,7 +324,7 @@ const METADATA = {
     ],
     instructions: [
       'Keepalive-manager prevents premature MV3 worker termination during long-running tasks.',
-      'Native-host manages Stdio IPC connection to the local Node.js bridge.',
+      'Native-host manages Chrome Native Messaging IPC connection to the local Node.js host.',
     ],
     testing: 'Run Vitest tests in tests/ covering native host and lifecycle.',
     patterns: 'MV3 Service Worker lifecycle management and event-driven tool routing.',
@@ -414,7 +403,6 @@ const METADATA = {
         name: 'fill-index.ts',
         desc: 'Fills inputs identified by numeric index with clear and enter options',
       },
-      { name: 'form-pipeline.ts', desc: 'Multi-field automated form filling pipeline' },
       {
         name: 'get-dropdown-options.ts',
         desc: 'Extracts options from HTML select or custom dropdowns',
@@ -584,10 +572,6 @@ const METADATA = {
       { name: 'keyboard-helper.js', desc: 'Simulates keydown, keypress, and keyup event streams' },
       { name: 'network-helper.js', desc: 'In-page XHR and fetch hook helper' },
       { name: 'screenshot-helper.js', desc: 'Calculates element bounds for targeted clipping' },
-      {
-        name: 'wait-helper.js',
-        desc: 'Waits for DOM elements, network idle, or custom selector conditions',
-      },
     ],
     instructions: [
       'These scripts run in the page context. They must remain zero-dependency vanilla JS.',
@@ -684,11 +668,6 @@ const METADATA = {
       },
       { name: 'coordinate-parser.ts', desc: 'Parses polymorphic coordinates ([x, y] or {x, y})' },
       { name: 'delta-helper.ts', desc: 'Computes DOM mutation diffs between snapshots' },
-      {
-        name: 'form-semantic-matcher.ts',
-        desc: 'Matches semantic form labels and autocomplete cues to inputs',
-      },
-      { name: 'i18n.ts', desc: 'Extension internationalization helper' },
       { name: 'image-utils.ts', desc: 'Image resizing, compression, and base64 format helpers' },
       {
         name: 'mouse-trajectory.ts',
@@ -749,56 +728,74 @@ const METADATA = {
   'app/native-server': {
     title: 'native-server',
     purpose:
-      'Fastify-based Native Messaging bridge and Model Context Protocol (MCP) server connecting AI agents to Chrome via HTTP/SSE or Stdio IPC.',
+      'BrowserPaw CLI (`browserpaw`), Native Messaging host (`com.browserpaw.nativehost`), and authenticated loopback HTTP command bridge.',
     keyFiles: [
-      { name: 'package.json', desc: 'Bridge package dependencies, build scripts, and bin links' },
-      { name: 'tsconfig.json', desc: 'TypeScript compiler configuration for native server' },
+      {
+        name: 'package.json',
+        desc: 'BrowserPaw npm package metadata, build scripts, and CLI bin entry',
+      },
+      { name: 'tsconfig.json', desc: 'TypeScript compiler configuration for native-server' },
       { name: 'jest.config.js', desc: 'Jest test runner configuration' },
-      { name: 'README.md', desc: 'Server architecture and startup documentation' },
-      { name: 'install.md', desc: 'Detailed host registration instructions' },
-      { name: 'debug.sh', desc: 'Debug shell script for starting the host with inspector' },
+      { name: 'README.md', desc: 'BrowserPaw npm package overview and CLI usage' },
+      { name: 'install.md', desc: 'Pointer to the BrowserPaw installation guide' },
     ],
     instructions: [
-      'Hosts the Chrome Native Messaging host binary and Fastify server (127.0.0.1:12306).',
-      'Provides Stdio MCP transport for Claude Code / Cursor / Windsurf and SSE transport for remote clients.',
-      'Enforces token authentication and connection watchdogs to prevent orphaned Node processes.',
+      'Hosts the Chrome Native Messaging host (`dist/v5/host.cjs`) and loopback command server (`127.0.0.1:12307`).',
+      'Provides the `browserpaw` CLI (`dist/v5/cli.cjs`) with setup, task management, batching, and learned recipes.',
+      'Enforces bearer token authentication and process watchdogs to prevent orphaned Node processes.',
     ],
-    testing: 'Run `pnpm --filter mcp-chrome-bridge test` (Jest suite).',
-    patterns: 'Fastify HTTP/SSE; Native Messaging StdIO framing; MCP SDK integration.',
+    testing: 'Run `pnpm --filter browserpaw test` (Jest suite).',
+    patterns:
+      'Native Messaging StdIO framing; Node HTTP loopback server; file-backed task and recipe state.',
     internalDeps: ['packages/shared'],
-    externalDeps: ['fastify', '@modelcontextprotocol/sdk', 'jest', 'commander'],
+    externalDeps: ['ajv', 'node-fetch', 'tsup', 'jest'],
   },
 
   'app/native-server/src': {
     title: 'src',
     purpose:
-      'Core source code for Native Messaging host, CLI commands, file handling, and trace analysis.',
+      'Core source code for the `browserpaw` CLI, command dispatch, task ownership/ledger, learned recipes, Native Messaging host, and file handling.',
     keyFiles: [
-      { name: 'cli.ts', desc: 'CLI router parsing commands (start, register, doctor)' },
-      { name: 'file-handler.ts', desc: 'Manages local file uploads and temporary downloads' },
-      { name: 'index.ts', desc: 'Primary server bootstrap entry point' },
       {
-        name: 'media-asset-store.ts',
-        desc: 'Stores screenshots and video frames on disk or memory',
+        name: 'cli.ts',
+        desc: 'CLI entrypoint parsing BrowserPaw commands, flags, and offline help/search',
       },
+      {
+        name: 'cli-setup.ts',
+        desc: 'Host registration, extension extraction, and Skill installation/sync',
+      },
+      {
+        name: 'command-dispatch.ts',
+        desc: 'Routes parsed CLI commands to browser and local handlers',
+      },
+      {
+        name: 'browser-tasks.ts',
+        desc: 'Task lifecycle manager coordinating ledger, ownership, and compensation',
+      },
+      {
+        name: 'learned-recipes.ts',
+        desc: 'Learned workflow indexing, intent/URL matching, validation, and execution',
+      },
+      { name: 'file-handler.ts', desc: 'Manages local file uploads and temporary downloads' },
+      { name: 'index.ts', desc: 'Primary Native Messaging host bootstrap entry point' },
       {
         name: 'native-messaging-host.ts',
         desc: 'StdIO Native Messaging host with 1MB chunk guard',
       },
-      { name: 'trace-analyzer.ts', desc: 'Analyzes execution performance and bottlenecks' },
-      {
-        name: 'native-messaging-chunking.test.ts',
-        desc: 'Tests for Native Messaging 1MB buffer chunking',
-      },
     ],
     instructions: [
       'native-messaging-host.ts implements standard Chrome Native Messaging IPC with 1MB chunking guards.',
-      'cli.ts parses command-line arguments for server, register, and doctor operations.',
+      'cli.ts parses command-line arguments using shared definitions from packages/shared/src/commands.ts.',
     ],
     testing: 'Unit tests in jest.',
-    patterns: 'StdIO buffer streaming with length-prefix decoding.',
-    internalDeps: ['packages/shared', 'app/native-server/src/jev', 'app/native-server/src/mcp'],
-    externalDeps: ['fastify', '@modelcontextprotocol/sdk'],
+    patterns:
+      'StdIO length-prefix IPC; file-locked atomic state writes; single-source command registry.',
+    internalDeps: [
+      'packages/shared',
+      'app/native-server/src/server',
+      'app/native-server/src/constant',
+    ],
+    externalDeps: ['ajv', 'node-fetch'],
   },
 
   'app/native-server/src/constant': {
@@ -808,100 +805,41 @@ const METADATA = {
     keyFiles: [
       {
         name: 'index.ts',
-        desc: 'Default server port (12306), token path, and configuration constants',
+        desc: 'Default server port resolution (`DEFAULT_SERVER_PORT`, 12307) and request timeouts',
       },
     ],
-    instructions: ['Maintain default ports (12306) and token file paths.'],
+    instructions: [
+      'Maintain default port (`DEFAULT_SERVER_PORT`, 12307) and BROWSERPAW_PORT validation.',
+    ],
     testing: 'Verified via server startup tests.',
     patterns: 'Configuration constant exports.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  'app/native-server/src/jev': {
-    title: 'jev',
-    purpose:
-      'Bounded semantic micro-loop, Jev evaluator, and heuristic fallback powering chrome_act_toward_goal.',
-    keyFiles: [
-      { name: 'index.ts', desc: 'Module export for Jev decision engines' },
-      {
-        name: 'fast-decision-engine.ts',
-        desc: 'Bounded in-process rule engine for supported micro-steps',
-      },
-      { name: 'fast-decision-engine.test.ts', desc: 'Unit tests for fast decision engine' },
-      { name: 'heuristic-engine.ts', desc: 'Heuristic candidate scorer for DOM elements' },
-      { name: 'heuristic-engine.test.ts', desc: 'Unit tests for heuristic scoring' },
-      { name: 'jev-client.ts', desc: 'Client connector for external JEV evaluation service' },
-      { name: 'jev-client.test.ts', desc: 'Unit tests for Jev client' },
-      { name: 'types.ts', desc: 'Type definitions for Jev state, goals, and actions' },
-    ],
-    instructions: [
-      'fast-decision-engine.ts executes bounded in-process heuristics for supported interactive steps without an additional planner turn.',
-      'jev-client.ts connects to external JEV evaluators when configured.',
-    ],
-    testing: 'Run jest tests: `pnpm test fast-decision-engine`.',
-    patterns: 'Heuristic evaluation and decision graph traversal.',
     internalDeps: ['packages/shared'],
     externalDeps: [],
-  },
-
-  'app/native-server/src/mcp': {
-    title: 'mcp',
-    purpose:
-      'MCP server implementations supporting Stdio and SSE transports, tool registration, and session management.',
-    keyFiles: [
-      {
-        name: 'mcp-server-stdio.ts',
-        desc: 'Stdio MCP transport server used by Claude Code and Cursor',
-      },
-      { name: 'mcp-server.ts', desc: 'SSE MCP transport server for remote network clients' },
-      {
-        name: 'register-tools.ts',
-        desc: 'Registers tool schemas and implements dynamic tool activation',
-      },
-      { name: 'register-tools.test.ts', desc: 'Tests for tool registration and schema validation' },
-      { name: 'session-manager.ts', desc: 'Tracks active MCP client sessions and tab affinity' },
-      { name: 'stdio-config.json', desc: 'Template MCP configuration for client tools' },
-    ],
-    instructions: [
-      'mcp-server-stdio.ts provides the primary stdio transport used by Claude Code and Cursor.',
-      'register-tools.ts maps packages/shared/src/tools.ts schemas to MCP tool handlers.',
-    ],
-    testing: 'Run jest tests in register-tools.test.ts.',
-    patterns: 'MCP Server protocol handlers; session-affinity mapping.',
-    internalDeps: ['packages/shared', 'app/native-server/src/server'],
-    externalDeps: ['@modelcontextprotocol/sdk'],
   },
 
   'app/native-server/src/scripts': {
     title: 'scripts',
     purpose:
-      'Host registration, manifest installation, and diagnostic doctor scripts for Chrome, Edge, and Brave across Windows, macOS, and Linux.',
+      'Cross-platform Chrome/Chromium Native Messaging host config paths, tsup v5 build pipeline, and host wrapper scripts.',
     keyFiles: [
       {
         name: 'browser-config.ts',
         desc: 'OS-specific manifest file paths and registry key definitions',
       },
-      { name: 'build.ts', desc: 'Build automation script bundling native-server' },
-      { name: 'constant.ts', desc: 'Constants for registration scripts' },
       {
-        name: 'doctor.ts',
-        desc: 'Diagnostic health check tool verifying manifests, ports, and registry',
+        name: 'build.ts',
+        desc: 'Bundles v5 CLI, host, assets, extension, recipes, and skill into dist/v5',
       },
-      { name: 'postinstall-guard.js', desc: 'Safety guard preventing postinstall hangs' },
-      { name: 'postinstall.ts', desc: 'Npm postinstall hook registering host automatically' },
-      { name: 'register-dev.ts', desc: 'Registers development build manifest' },
-      { name: 'register.ts', desc: 'Registers production build manifest in browser registry' },
-      { name: 'report.ts', desc: 'Generates markdown diagnostic report' },
+      { name: 'build.test.ts', desc: 'Tests verifying dist/v5 build layout and bundled assets' },
+      { name: 'constant.ts', desc: 'Constants for host registration' },
       { name: 'run_host.bat', desc: 'Windows batch file executing Node host' },
       { name: 'run_host.sh', desc: 'POSIX shell script executing Node host' },
-      { name: 'utils.ts', desc: 'Helper functions for registry and file operations' },
     ],
     instructions: [
-      'register.ts registers the native messaging host manifest in OS-specific registry/paths.',
-      'doctor.ts diagnoses host installation, registry keys, extension IDs, and port availability.',
+      'build.ts bundles cli.cjs and host.cjs into dist/v5 and copies extension, recipes, and skill payloads.',
+      'browser-config.ts defines Native Messaging manifest locations for Chrome and Chromium across OSes.',
     ],
-    testing: 'Test via `node dist/scripts/doctor.js`.',
+    testing: 'Run `pnpm --filter browserpaw test -- src/scripts/build.test.ts`.',
     patterns:
       'Cross-platform manifest registration (Windows Registry, macOS Application Support, Linux ~/.config).',
     internalDeps: ['packages/shared'],
@@ -911,63 +849,30 @@ const METADATA = {
   'app/native-server/src/server': {
     title: 'server',
     purpose:
-      'Fastify HTTP server providing REST endpoints, SSE streams, health checks, and token-based authentication.',
+      'Authenticated loopback HTTP command server (`node:http`) handling `/v1/status`, `/v1/run`, `/v1/cancel`, and `/v1/restart`.',
     keyFiles: [
-      { name: 'index.ts', desc: 'Fastify server initialization, routes, and SSE endpoints' },
-      { name: 'server.test.ts', desc: 'Integration tests for HTTP routes and auth' },
+      {
+        name: 'index.ts',
+        desc: 'Loopback HTTP server initialization, Host/Origin guards, and `/v1/*` routes',
+      },
+      {
+        name: 'command-server.test.ts',
+        desc: 'Integration tests for HTTP routes, auth, and cancellation',
+      },
+      {
+        name: 'token.test.ts',
+        desc: 'Unit tests for exclusive token initialization and timing-safe checks',
+      },
       { name: 'token.ts', desc: 'Token generator, file persister, and authentication validator' },
     ],
     instructions: [
-      'Enforces token authentication via Authorization: Bearer <token>.',
-      'Includes unreferenced hard exit watchdog to prevent zombie Node processes on Windows.',
+      'Enforces bearer token authentication (`$BROWSERPAW_HOME/token`), loopback Host checks, and rejects browser Origin headers.',
+      'Writes discovery metadata (`host.json`) atomically and enforces an 8 MiB request body cap.',
     ],
-    testing: 'Run jest tests in server.test.ts.',
-    patterns: 'Fastify routes, SSE streaming, authentication hooks.',
-    internalDeps: ['app/native-server/src/constant'],
-    externalDeps: ['fastify'],
-  },
-
-  'app/native-server/src/shims': {
-    title: 'shims',
-    purpose: 'Type shims for Chrome DevTools Protocol domains and frontend structures.',
-    keyFiles: [{ name: 'devtools.d.ts', desc: 'CDP protocol domain type shims' }],
-    instructions: ['TypeScript type definitions for CDP domains.'],
-    testing: 'Verified during typecheck.',
-    patterns: 'Ambient TypeScript declarations.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  'app/native-server/src/types': {
-    title: 'types',
-    purpose: 'Type definitions for DevTools frontend and internal server protocol structures.',
-    keyFiles: [{ name: 'devtools-frontend.d.ts', desc: 'DevTools frontend interface definitions' }],
-    instructions: ['TypeScript interface definitions.'],
-    testing: 'Verified during typecheck.',
-    patterns: 'Type definitions.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  bin: {
-    title: 'bin',
-    purpose:
-      'Executable binary entry points for running BrowserPaw directly from the command line or global npx / npm execution.',
-    keyFiles: [
-      {
-        name: 'browserpaw.cjs',
-        desc: 'CommonJS CLI wrapper launching the native server or registration commands',
-      },
-    ],
-    instructions: [
-      'Keep browserpaw.cjs lightweight with minimal dependencies to ensure fast CLI startup.',
-      'Ensure proper shebang (`#!/usr/bin/env node`) and executable file permissions.',
-    ],
-    testing:
-      'Verify execution via `node ./bin/browserpaw.cjs --help` or `node ./bin/browserpaw.cjs doctor`.',
-    patterns: 'Command-line argument routing and delegation to app/native-server/dist/cli.js',
-    internalDeps: ['app/native-server/dist/cli.js'],
-    externalDeps: ['Node.js standard library (child_process, path, fs)'],
+    testing: 'Run jest tests in command-server.test.ts and token.test.ts.',
+    patterns: 'Native node:http server, timing-safe bearer auth, exclusive token file creation.',
+    internalDeps: ['app/native-server/src/constant', 'packages/shared'],
+    externalDeps: ['Node.js node:http'],
   },
 
   docs: {
@@ -987,7 +892,11 @@ const METADATA = {
         name: 'ARCHITECTURE.md',
         desc: 'Comprehensive 3-tier architecture, IPC protocols, and design decisions',
       },
-      { name: 'TOOLS.md', desc: 'Auto-generated reference for canonical tools and arguments' },
+      { name: 'COMMANDS.md', desc: 'Auto-generated reference for CLI commands and arguments' },
+      {
+        name: 'MIGRATION.md',
+        desc: 'v4 to v5 migration guide (English and Simplified Chinese mirror)',
+      },
       {
         name: 'TROUBLESHOOTING.md',
         desc: 'Diagnostic checklists for connection issues, token mismatch, and CDP',
@@ -1000,66 +909,16 @@ const METADATA = {
         name: 'CONTRIBUTING.md',
         desc: 'Guidelines for contributors covering workflows and PR protocols',
       },
-      {
-        name: 'mcp-cli-config.md',
-        desc: 'MCP configuration snippets for various CLI environments',
-      },
     ],
     instructions: [
-      'Do not edit docs/TOOLS.md manually; regenerate it using `node scripts/gen-tools-doc.mjs`.',
+      'Do not edit docs/COMMANDS.md manually; regenerate it using `pnpm docs:commands`.',
       'English remains canonical; every `*.zh-CN.md` file is a full Simplified Chinese translation kept in sync with its English source.',
     ],
     testing: 'Verify markdown link validity and table formatting.',
     patterns:
       'English canonical documentation with parallel Simplified Chinese translations; clear ASCII diagrams.',
-    internalDeps: ['scripts/gen-tools-doc.mjs'],
+    internalDeps: ['scripts/gen-commands-doc.mjs'],
     externalDeps: ['Markdown / GitHub-flavored markdown'],
-  },
-
-  'docs/analysis': {
-    title: 'analysis',
-    purpose:
-      'Architectural analysis and comparative benchmark studies evaluating BrowserPaw against Playwright, Puppeteer, and browser-use.',
-    keyFiles: [
-      {
-        name: 'browser-automation-deep-comparison-2026-09-22.md',
-        desc: 'Comprehensive comparative report on browser automation architectures',
-      },
-    ],
-    instructions: ['Maintains in-depth performance, security, and developer ergonomics analyses.'],
-    testing: 'Documentation review.',
-    patterns: 'Comparative technical analysis.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  'docs/analysis/subagent-reports': {
-    title: 'subagent-reports',
-    purpose:
-      'Detailed research reports on JEV ultrafast engine, browser-use architecture, harness integration, and self-analysis.',
-    keyFiles: [
-      {
-        name: 'appendix-A-jev-ultrafast.md',
-        desc: 'Research report on JEV ultrafast decision engine',
-      },
-      {
-        name: 'appendix-B-browser-use.md',
-        desc: 'Architecture analysis of browser-use agent framework',
-      },
-      {
-        name: 'appendix-C-browser-harness.md',
-        desc: 'Browser automation test harness comparative review',
-      },
-      {
-        name: 'appendix-D-mcp-chrome-self-analysis.md',
-        desc: 'Self-audit and architectural gap analysis',
-      },
-    ],
-    instructions: ['Archived findings and appendices from deep research runs.'],
-    testing: 'Documentation review.',
-    patterns: 'Research reports.',
-    internalDeps: [],
-    externalDeps: [],
   },
 
   'docs/images': {
@@ -1228,7 +1087,7 @@ const METADATA = {
   'packages/shared': {
     title: 'shared',
     purpose:
-      'Single Source of Truth (SSOT) shared package defining canonical tool schemas, profile subsets, coordinate models, and standardized error formatting.',
+      'Single Source of Truth (SSOT) shared package defining the v5 CLI command registry, internal extension tool schemas, coordinate models, and standardized error formatting.',
     keyFiles: [
       { name: 'package.json', desc: 'Shared package configuration and build scripts' },
       { name: 'tsconfig.json', desc: 'TypeScript compiler configuration' },
@@ -1238,7 +1097,8 @@ const METADATA = {
       'Keep code strictly platform-agnostic (no DOM or Node.js built-ins in shared types).',
     ],
     testing: 'Run `pnpm --filter chrome-mcp-shared build` to verify compilation.',
-    patterns: 'TypeScript schema definitions; profile mapping; Ajv schema compliance.',
+    patterns:
+      'TypeScript command and schema definitions; coordinate normalization; semver comparison.',
     internalDeps: [],
     externalDeps: ['typescript'],
   },
@@ -1246,27 +1106,20 @@ const METADATA = {
   'packages/shared/src': {
     title: 'src',
     purpose:
-      'Source files for canonical tool schemas, profile definitions, coordinate types, error formatting, and version constants.',
+      'Source files for the v5 CLI command registry, internal extension schemas, coordinate types, error formatting, and version constants.',
     keyFiles: [
+      { name: 'commands.ts', desc: 'Single-source CLI command specs, help, and search metadata' },
       { name: 'constants.ts', desc: 'Shared operational constants and magic numbers' },
       { name: 'coordinate.ts', desc: 'Coordinate model normalization supporting [x,y] and {x,y}' },
       { name: 'error-format.ts', desc: 'Standardized error response formatter with stack control' },
       { name: 'index.ts', desc: 'Barrel export for shared contracts and tools' },
-      {
-        name: 'tool-name-resolver.ts',
-        desc: 'Resolves alias tool names to canonical implementations',
-      },
-      {
-        name: 'tool-profiles.ts',
-        desc: 'Tool subset definitions for Core, Crawl, and Full profiles',
-      },
-      { name: 'tools.ts', desc: 'Canonical schema definitions for BrowserPaw tools' },
+      { name: 'tools.ts', desc: 'Internal extension execution schema definitions' },
       { name: 'types.ts', desc: 'Universal coordinate, batch action, and diff payload interfaces' },
       { name: 'version.ts', desc: 'Single source of truth version constant' },
     ],
     instructions: [
-      'tools.ts contains the canonical tool schemas; any tool argument change must begin here.',
-      'tool-profiles.ts defines the tool subsets for core, crawl, and full profiles.',
+      'commands.ts defines the public v5 CLI command surface, help text, and search metadata.',
+      'tools.ts defines internal extension tool contracts shared with app/chrome-extension.',
       'error-format.ts provides standardized error reporting with stack control.',
     ],
     testing: 'Run typecheck and consumer package tests.',
@@ -1286,7 +1139,7 @@ const METADATA = {
     ],
     testing: 'Run root script tests and `pytest plugins/browserpaw-hermes/tests`.',
     patterns:
-      'Portable Agent Plugins, Hermes native plugins, Claude Code plugins, and DSH Cordis bundles.',
+      'Unified v5 CLI-backed client plugins: Portable Agent Plugins, Hermes native plugins, Claude Code plugins, and DSH Cordis bundles.',
     internalDeps: ['skills/browserpaw'],
     externalDeps: ['Python 3.9+ (optional test environment)'],
   },
@@ -1300,34 +1153,32 @@ const METADATA = {
     ],
     instructions: [
       'Manifest lives at .claude-plugin/plugin.json; its name must match the catalog entry name in .claude-plugin/marketplace.json.',
-      'Skills are mirrored verbatim from skills/browserpaw/ by scripts/sync-skills.mjs and must keep canonical chrome_* tool names.',
-      'Plugin contract coverage lives in scripts/browserpaw-claude-plugin.test.mjs.',
+      'Skills are mirrored verbatim from skills/browserpaw/ by scripts/sync-skills.mjs.',
+      'Plugin contract coverage lives in scripts/browserpaw-plugins.test.mjs.',
     ],
     testing:
-      '`node --test scripts/browserpaw-claude-plugin.test.mjs`; when Claude Code is installed, also run `claude plugin validate plugins/browserpaw-claude --strict`.',
-    patterns:
-      'Claude Code plugin manifest, marketplace catalog entry, and stdio .mcp.json server declaration.',
+      '`node --test scripts/browserpaw-plugins.test.mjs`; when Claude Code is installed, also run `claude plugin validate plugins/browserpaw-claude --strict`.',
+    patterns: 'Claude Code plugin manifest, marketplace catalog entry, and SessionStart hook.',
     internalDeps: ['skills/browserpaw'],
-    externalDeps: ['Claude Code 2.1.309+', 'mcp-chrome-stdio on PATH'],
+    externalDeps: ['Claude Code', 'browserpaw CLI on PATH'],
   },
 
   'plugins/browserpaw': {
     title: 'browserpaw',
     purpose:
-      'Portable Agent Plugins package for ChatGPT/Codex, backed by the shared BrowserPaw MCP server.',
+      'Portable Agent Plugins v1.0.0 package for ChatGPT/Codex, bundling the read-only BrowserPaw Skill and icons.',
     keyFiles: [
       {
         name: 'plugin.json',
         desc: 'Portable Agent Plugins v1 manifest and OpenAI presentation metadata',
       },
-      { name: 'mcp.json', desc: 'Standard stdio MCP server declaration' },
     ],
     instructions: [
       'Keep skills/browserpaw synchronized with the canonical skill.',
       'Do not recreate .codex-plugin/ or mcp-skills/ compatibility copies.',
     ],
-    testing: '`node --test scripts/browserpaw-portable-plugin.test.mjs`',
-    patterns: 'Portable Agent Plugins v1 plugin.json plus mcp.json.',
+    testing: '`node --test scripts/browserpaw-plugins.test.mjs`',
+    patterns: 'Portable Agent Plugins v1 plugin.json plus canonical skills.',
     internalDeps: ['skills/browserpaw'],
     externalDeps: [],
   },
@@ -1356,21 +1207,6 @@ const METADATA = {
     externalDeps: [],
   },
 
-  'plugins/browserpaw/skills/browserpaw/scripts': {
-    title: 'scripts',
-    purpose: 'Client-neutral diagnostic and repair utilities.',
-    keyFiles: [
-      { name: 'doctor.mjs', desc: 'Automated diagnostic connectivity test script' },
-      { name: 'repair.bat', desc: 'Windows automated repair batch script' },
-      { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
-    ],
-    instructions: ['Mirrored from skills/browserpaw/scripts.'],
-    testing: 'Verify file parity.',
-    patterns: 'Standalone diagnostic utilities.',
-    internalDeps: ['skills/browserpaw/scripts'],
-    externalDeps: [],
-  },
-
   'plugins/browserpaw/skills/browserpaw/assets/recipes': {
     title: 'recipes',
     purpose: 'Bundled static site recipes copied into the Native runtime.',
@@ -1385,24 +1221,18 @@ const METADATA = {
   'plugins/browserpaw/skills/browserpaw/references': {
     title: 'references',
     purpose:
-      'Reference documentation on batch pipelines, the interactive Jev micro-loop, tool cheat sheets, and visual fallback.',
+      'Reference documentation on CLI commands, browser data management, debugging, recipes, and troubleshooting.',
     keyFiles: [
+      { name: 'commands.md', desc: 'CLI command patterns and execution guidance' },
       {
-        name: 'batch-pipeline.md',
-        desc: 'Guide to batch action pipelines for zero-roundtrip execution',
+        name: 'browser-data.md',
+        desc: 'History, bookmarks, downloads, storage, and cookies workflows',
       },
       {
-        name: 'dual-brain-jev.md',
-        desc: 'Architecture guide for the bounded interactive micro-loop',
+        name: 'debugging.md',
+        desc: 'Network, console, performance, emulation, PDF, and CDP guidance',
       },
-      {
-        name: 'tool-cheatsheet.md',
-        desc: 'Quick reference cheatsheet of tools and usage patterns',
-      },
-      {
-        name: 'visual-fallback.md',
-        desc: 'Playbook for visual screenshot and coordinate fallbacks',
-      },
+      { name: 'recipe-contract.md', desc: 'Self-learned recipe format and validation rules' },
     ],
     instructions: ['Mirrored from skills/browserpaw/references.'],
     testing: 'Verify file parity.',
@@ -1413,62 +1243,61 @@ const METADATA = {
 
   'plugins/browserpaw-hermes': {
     title: 'browserpaw-hermes',
-    purpose: 'Native Hermes plugin exposing the curated browserpaw_* wrapper surface.',
+    purpose:
+      'Native Hermes plugin providing the unified `browserpaw` CLI tool and read-only skill mirror.',
     keyFiles: [
-      { name: 'plugin.yaml', desc: 'Hermes manifest and provided wrapper list' },
-      { name: 'core_schemas.json', desc: 'Hermes wrapper JSON schemas' },
+      { name: 'plugin.yaml', desc: 'Hermes manifest and declared tool entry' },
       { name: '__init__.py', desc: 'Hermes plugin implementation' },
     ],
     instructions: [
-      'Keep the declared wrapper list identical across plugin.yaml and __init__.py; the count is derived from that list.',
-      'Keep Hermes-specific source text inside skill-template/; scripts/sync-skills.mjs owns the generated skills/browserpaw mirror.',
+      'Keep `plugin.yaml` and `__init__.py` aligned with the unified `browserpaw` CLI tool contract.',
+      'Mirrored skills live under skills/browserpaw/ via scripts/sync-skills.mjs.',
     ],
     testing: '`pytest plugins/browserpaw-hermes/tests`',
-    patterns: 'Hermes native Python plugin and wrapper skill.',
+    patterns: 'Hermes native Python plugin forwarding CLI execution and gateway `MEDIA:` paths.',
     internalDeps: ['skills/browserpaw'],
     externalDeps: ['Python 3.9+', 'Hermes >=0.21.5'],
   },
 
   'plugins/browserpaw-hermes/tests': {
     title: 'tests',
-    purpose: 'Python integration tests for bridge tokens, display integration, and MCP sessions.',
+    purpose:
+      'Python integration tests for the Hermes `browserpaw` CLI wrapper and media forwarding.',
     keyFiles: [
       {
-        name: 'test_bridge_token.py',
-        desc: 'Verifies token generation and bearer token authentication',
+        name: 'test_plugin.py',
+        desc: 'Verifies Hermes CLI execution, MEDIA output, and schema validation',
       },
-      {
-        name: 'test_display_integration.py',
-        desc: 'Tests visual overlay and display output compatibility',
-      },
-      { name: 'test_mcp_session.py', desc: 'Tests MCP session lifecycle and request forwarding' },
     ],
     instructions: ['Run with pytest in a Python 3.9+ environment.'],
     testing: '`pytest plugins/browserpaw-hermes/tests/`',
-    patterns: 'Pytest test cases testing MCP client connections.',
+    patterns: 'Pytest unit tests for Hermes plugin tool invocation.',
     internalDeps: ['plugins/browserpaw-hermes'],
-    externalDeps: ['pytest', 'requests'],
+    externalDeps: ['pytest'],
   },
 
   'plugins/browserpaw-dsh': {
     title: 'browserpaw-dsh',
     purpose:
-      'DeepSeek Harness Cordis plugin distribution for the canonical BrowserPaw MCP service.',
+      'DeepSeek Harness Cordis plugin distribution bundling `browserpaw` CLI, read-only skill, and `~/.browserpaw` routing.',
     keyFiles: [
       {
         name: 'package.json',
-        desc: 'DSH adapter package metadata and Cordis bundle patch declaration',
+        desc: 'DSH adapter package metadata, `browserpaw` dependency, and Cordis bundle declaration',
       },
-      { name: 'index.js', desc: 'DSH plugin entry point and BrowserPaw MCP runtime adapter' },
+      {
+        name: 'index.js',
+        desc: 'DSH plugin entry point injecting skill and `~/.browserpaw` learned-workflow context',
+      },
       { name: 'cordis.patch.yml', desc: 'Cordis profile patch installed by DeepSeek Harness' },
     ],
     instructions: [
-      'Keep the adapter version distinct from the BrowserPaw product version and the MCP tools/listChanged handling.',
+      'Keep the adapter version aligned with its release and avoid overwriting ~/.browserpaw.',
       'Store only the generated canonical skill mirror in skills/browserpaw.',
     ],
-    testing:
-      '`node --test scripts/browserpaw-dsh-plugin.test.mjs` and `npm pack --dry-run --json`.',
-    patterns: 'Cordis plugin bundle with runtime MCP configuration and canonical skill injection.',
+    testing: '`node --test scripts/browserpaw-plugins.test.mjs` and `npm pack --dry-run --json`.',
+    patterns:
+      'Cordis plugin bundle with bundled `browserpaw` CLI dependency and canonical skill injection.',
     internalDeps: ['skills/browserpaw', 'packages/shared'],
     externalDeps: ['DeepSeek Harness', 'Node.js 22+'],
   },
@@ -1486,90 +1315,6 @@ const METADATA = {
     externalDeps: [],
   },
 
-  prompt: {
-    title: 'prompt',
-    purpose:
-      'Specialized prompt templates, LLM system instructions, and task prompts used for content analysis and web modifications.',
-    keyFiles: [
-      {
-        name: 'content-analize.md',
-        desc: 'Structured prompts for deep webpage and article content analysis',
-      },
-      {
-        name: 'excalidraw-prompt.md',
-        desc: 'Instructions for converting DOM or UI structures into Excalidraw diagrams',
-      },
-      {
-        name: 'modify-web.md',
-        desc: 'System instructions for guiding DOM manipulation and styling edits',
-      },
-    ],
-    instructions: [
-      'Prompt files should provide clear input/output schemas for the LLM to follow.',
-      'Ensure prompt templates are tested across major LLM architectures (Claude, OpenAI, Gemini).',
-    ],
-    testing: 'Validate prompt clarity and variable interpolation syntax.',
-    patterns: 'Markdown-formatted prompt roleplay with XML tags.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  releases: {
-    title: 'releases',
-    purpose:
-      'Distribution archive directory holding prebuilt zip files for the Chrome extension and skill packages.',
-    keyFiles: [
-      {
-        name: 'README.md',
-        desc: 'Release index describing packaged extension versions and installation steps',
-      },
-      {
-        name: 'browserpaw-extension-latest.zip',
-        desc: 'Latest prebuilt Chrome extension zip bundle',
-      },
-      { name: 'browserpaw-extension-v2.0.0.zip', desc: 'v2.0.0 packaged extension zip archive' },
-      { name: 'browserpaw-extension-v3.1.0.zip', desc: 'v3.1.0 packaged extension zip archive' },
-      { name: 'browserpaw-skill-latest.zip', desc: 'Latest prebuilt skill bundle' },
-      { name: 'browserpaw-skill-v2.0.0.zip', desc: 'v2.0.0 packaged skill bundle' },
-      { name: 'browserpaw-skill-v3.1.0.zip', desc: 'v3.1.0 packaged skill bundle' },
-    ],
-    instructions: [
-      'Do not commit large temporary builds here; only tagged release packages are stored here.',
-      'Ensure latest zip symlinks/copies point to the current release build.',
-    ],
-    testing: 'Verify zip archive integrity by unzipping in a clean directory.',
-    patterns: 'Prebuilt clean production builds.',
-    internalDeps: ['app/chrome-extension'],
-    externalDeps: [],
-  },
-
-  'releases/chrome-extension': {
-    title: 'chrome-extension',
-    purpose: 'Container directory for Chrome extension zip release distributions.',
-    keyFiles: [],
-    instructions: ['Holds versioned and latest extension zip packages.'],
-    testing: 'Verify zip contents.',
-    patterns: 'Release packaging.',
-    internalDeps: ['app/chrome-extension'],
-    externalDeps: [],
-  },
-
-  'releases/chrome-extension/latest': {
-    title: 'latest',
-    purpose: 'Always-current packaged extension zip archive for direct download and installation.',
-    keyFiles: [
-      {
-        name: 'browserpaw-extension-latest.zip',
-        desc: 'Latest prebuilt Chrome extension zip archive',
-      },
-    ],
-    instructions: ['Contains the latest browserpaw-extension-latest.zip archive.'],
-    testing: 'Unpack test.',
-    patterns: 'Release distribution.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
   scripts: {
     title: 'scripts',
     purpose: 'Repository lifecycle, build automation, and documentation generation scripts.',
@@ -1579,12 +1324,22 @@ const METADATA = {
         desc: 'Cross-platform directory cleaner for dist, build, and node_modules',
       },
       {
-        name: 'gen-tools-doc.mjs',
-        desc: 'Generator extracting parameter documentation from tools.ts into docs/TOOLS.md',
+        name: 'gen-commands-doc.mjs',
+        desc: 'Generator extracting CLI command docs from packages/shared/src/commands.ts into docs/COMMANDS.md',
       },
       {
         name: 'generate-agents-docs.mjs',
         desc: 'Hierarchical AGENTS.md documentation generator for deepinit',
+      },
+      { name: 'verify.mjs', desc: 'Full local verification gate runner' },
+      {
+        name: 'release-notes.mjs',
+        desc: 'Validates release notes against docs/releases/TEMPLATE.md',
+      },
+      { name: 'validate-docs.mjs', desc: 'Validates markdown links, text integrity, and versions' },
+      {
+        name: 'extension-artifacts.mjs',
+        desc: 'Packages release artifacts and verifies extension deployment',
       },
       {
         name: 'sync-skills.mjs',
@@ -1596,13 +1351,13 @@ const METADATA = {
       },
     ],
     instructions: [
-      'Whenever skills/browserpaw/SKILL.md or package tool schemas are updated, run `node scripts/sync-skills.mjs` and `node scripts/gen-tools-doc.mjs`.',
+      'Whenever skills/browserpaw/SKILL.md or commands.ts are updated, run `node scripts/sync-skills.mjs` and `pnpm docs:commands`.',
       'Use pure Node.js APIs (node:fs, node:path) to preserve cross-platform compatibility on Windows and POSIX.',
     ],
     testing:
-      'Test script execution: `node scripts/sync-skills.mjs` and `node scripts/gen-tools-doc.mjs`.',
+      'Test script execution: `node scripts/sync-skills.mjs --check` and `node --test scripts/*.test.mjs`.',
     patterns: 'ES Modules with `node:` prefix; AST and source extraction for automated docs.',
-    internalDeps: ['packages/shared/src/tools.ts', 'skills/browserpaw/SKILL.md'],
+    internalDeps: ['packages/shared/src/commands.ts', 'skills/browserpaw/SKILL.md'],
     externalDeps: ['node:fs', 'node:path', 'node:crypto'],
   },
 
@@ -1620,40 +1375,23 @@ const METADATA = {
   'skills/browserpaw': {
     title: 'browserpaw',
     purpose:
-      'Canonical AI Agent Skill package for BrowserPaw. Encodes execution ladders, prompt recipes, troubleshooting tools, and reference documentation for AI agents.',
+      'Canonical AI Agent Skill package for BrowserPaw. Encodes CLI workflow, task ownership, self-learned recipe routing, and reference documentation.',
     keyFiles: [
       {
         name: 'SKILL.md',
-        desc: 'Canonical skill definition containing tool escalation ladders and decision trees',
+        desc: 'Canonical skill definition containing CLI workflow, safety rules, and learned-routing markers',
       },
     ],
     instructions: [
       'This directory is the Single Source of Truth for skills. Edit this canonical directory; plugin bundles are generated from it.',
       'After modifying SKILL.md, run `node scripts/sync-skills.mjs` to propagate changes to all mirrors.',
     ],
-    testing: 'Verify schema names and tool arguments against packages/shared/src/tools.ts.',
+    testing:
+      'Verify command syntax against packages/shared/src/commands.ts and run `node scripts/sync-skills.mjs --check`.',
     patterns:
-      'Tiered execution ladder: Tier 1 Micro-Loop -> Tier 0 Primitives -> Tier 2 Scripting -> Tier 3 Visual -> Tier 4 Human; anti-bot escalation.',
+      'Progressive disclosure with compact SKILL.md, references/, and bundled recipes under assets/recipes/.',
     internalDeps: ['scripts/sync-skills.mjs'],
     externalDeps: ['Agent Skills protocol'],
-  },
-
-  'skills/browserpaw/scripts': {
-    title: 'scripts',
-    purpose: 'Client-neutral diagnostic doctor and repair scripts for the BrowserPaw skill.',
-    keyFiles: [
-      { name: 'doctor.mjs', desc: 'Automated diagnostic connectivity test script' },
-      { name: 'repair.bat', desc: 'Windows automated repair batch script' },
-      { name: 'repair.ps1', desc: 'PowerShell automated repair script' },
-    ],
-    instructions: [
-      'doctor.mjs performs automated connectivity checks for MCP and native host.',
-      'repair.bat / repair.ps1 restore registry entries and clean stale locks.',
-    ],
-    testing: 'Run `node skills/browserpaw/scripts/doctor.mjs`.',
-    patterns: 'Cross-platform diagnostic and repair scripts.',
-    internalDeps: [],
-    externalDeps: ['node:fs', 'node:child_process'],
   },
 
   'skills/browserpaw/assets/recipes': {
@@ -1672,25 +1410,22 @@ const METADATA = {
   'skills/browserpaw/references': {
     title: 'references',
     purpose:
-      'Deep architectural references covering batch pipelines, the bounded interactive JEV micro-loop, tool cheatsheets, and visual fallback strategies.',
+      'Reference documentation covering CLI commands, browser data management, debugging, recipes, and troubleshooting.',
     keyFiles: [
+      { name: 'commands.md', desc: 'CLI command patterns and execution guidance' },
       {
-        name: 'batch-pipeline.md',
-        desc: 'Comprehensive guide to chrome_batch_actions zero-roundtrip pipeline',
+        name: 'browser-data.md',
+        desc: 'History, bookmarks, downloads, storage, and cookies workflows',
       },
       {
-        name: 'dual-brain-jev.md',
-        desc: 'Guide to the bounded interactive micro-loop and Jev heuristics',
+        name: 'debugging.md',
+        desc: 'Network, console, performance, emulation, PDF, and CDP guidance',
       },
-      {
-        name: 'tool-cheatsheet.md',
-        desc: 'Quick-reference guide to canonical tools with sample calls',
-      },
-      { name: 'visual-fallback.md', desc: 'Guide for visual screenshot and coordinate fallbacks' },
+      { name: 'recipe-contract.md', desc: 'Self-learned recipe format and validation rules' },
+      { name: 'TROUBLESHOOTING.md', desc: 'Troubleshooting guide mirrored for skill consumers' },
     ],
     instructions: [
-      'Consult batch-pipeline.md for constructing zero-roundtrip multi-action arrays.',
-      'Consult dual-brain-jev.md for the bounded interactive micro-loop.',
+      'Consult commands.md, browser-data.md, debugging.md, and recipe-contract.md for detailed workflows.',
     ],
     testing: 'Documentation integrity checks.',
     patterns: 'Detailed reference specifications.',
@@ -1701,285 +1436,22 @@ const METADATA = {
   test: {
     title: 'test',
     purpose:
-      'Root directory for integration and end-to-end testing suites, mock servers, stress tests, and automated browser verification harnesses.',
+      'Root directory for packaged npm CLI smoke tests and isolated live Chrome for Testing verification suites.',
     keyFiles: [
-      { name: 'BROWSERPAW_MANUAL.md', desc: 'Manual testing checklist and verification guide' },
       {
-        name: 'BROWSERPAW_MANUAL.zh-CN.md',
-        desc: 'Simplified Chinese translation of the integration and control manual',
+        name: 'package-smoke.mjs',
+        desc: 'Verifies packed npm tarball installation, setup scopes, and host launch',
       },
-      { name: 'mcp-client.mjs', desc: 'Stand-alone MCP test client utility' },
-      { name: 'mcp-runner.mjs', desc: 'MCP test execution runner' },
-      { name: 'rd.mjs', desc: 'DOM read utility test script' },
     ],
     instructions: [
-      'Do not rely on live Chrome instances for automated CI tests; use mocks provided in test/e2e/mocks/.',
-      'Follow the 4-tier testing hierarchy defined in TEST_INFRA.md.',
+      'Use isolated temporary directories and BROWSERPAW_TEST_CHROME for live browser verification; never clobber user profiles.',
+      'Historical MCP integration manuals are archived under docs/archive/testing/.',
     ],
     testing:
-      'Run `node --experimental-strip-types test/e2e/runner.ts` to execute the full E2E suite.',
-    patterns:
-      'Mock MCP server and CDP event emitter mocks; oracle evaluators verifying action outcomes against ground truth.',
+      'Run `node test/package-smoke.mjs` (included in `pnpm verify`) and `pnpm test:e2e` with `BROWSERPAW_TEST_CHROME` set.',
+    patterns: 'Isolated BrowserPaw home and Chrome for Testing E2E harness.',
     internalDeps: ['packages/shared', 'app/native-server'],
-    externalDeps: ['Node.js test runner / TypeScript strip-types'],
-  },
-
-  'test/e2e': {
-    title: 'e2e',
-    purpose:
-      'End-to-End test suite orchestrator and test runner verifying complete client-to-browser automation pipelines.',
-    keyFiles: [
-      {
-        name: 'runner.ts',
-        desc: 'Master test runner orchestrating Tier 1-4 test execution and result reporting',
-      },
-    ],
-    instructions: [
-      'runner.ts executes test tiers with mock server and CDP harnesses.',
-      'Run without a live Chrome instance using `node --experimental-strip-types test/e2e/runner.ts`.',
-    ],
-    testing: 'Run `pnpm test`.',
-    patterns: 'Tiered test runner with reporting.',
-    internalDeps: ['test/e2e/fixtures', 'test/e2e/mocks', 'packages/shared'],
-    externalDeps: ['node:test', 'node:assert'],
-  },
-
-  'test/e2e/fixtures': {
-    title: 'fixtures',
-    purpose:
-      'Static DOM samples, mock server definitions, oracle evaluators, and standardized tool input fixtures.',
-    keyFiles: [
-      { name: 'dom-samples.ts', desc: 'Predefined DOM sample trees representing complex webpages' },
-      { name: 'mock-server.ts', desc: 'In-memory HTTP mock server simulating web applications' },
-      {
-        name: 'oracle-evaluators.ts',
-        desc: 'Ground-truth oracle validators asserting correct action outcomes',
-      },
-      { name: 'tool-inputs.ts', desc: 'Standardized tool input payloads for test runs' },
-    ],
-    instructions: ['Provides reproducible DOM structures and mock server responses for E2E tests.'],
-    testing: 'Used across tier 1-4 tests.',
-    patterns: 'Test fixture factories and ground-truth oracle validators.',
-    internalDeps: [],
-    externalDeps: [],
-  },
-
-  'test/e2e/mocks': {
-    title: 'mocks',
-    purpose:
-      'High-fidelity mock implementations of CDP protocol, Chrome extension runtime, MCP server, and batch pipelines.',
-    keyFiles: [
-      { name: 'mock-batch-pipeline.ts', desc: 'Mock executor for chrome_batch_actions pipeline' },
-      { name: 'mock-cdp.ts', desc: 'Mock Chrome DevTools Protocol session and event dispatcher' },
-      { name: 'mock-dom-engine.ts', desc: 'Mock in-page DOM indexing engine' },
-      { name: 'mock-extension.ts', desc: 'Mock Chrome extension runtime message router' },
-      { name: 'mock-mcp-server.ts', desc: 'Mock MCP server handling tool call requests' },
-    ],
-    instructions: [
-      'Allows running full E2E test suite hermetically in CI without physical Chrome instances.',
-    ],
-    testing: 'Used by test runner.',
-    patterns: 'In-memory protocol mocks and event emitters.',
-    internalDeps: ['packages/shared'],
-    externalDeps: [],
-  },
-
-  'test/e2e/tier1-feature-coverage': {
-    title: 'tier1-feature-coverage',
-    purpose:
-      'Tier 1 E2E tests verifying fundamental feature coverage across all 13 core capabilities (concurrency, headers, Stdio, handshake, security, uploads, indexing, pruning, batch pipelines, markdown, build, tests, adversarial).',
-    keyFiles: [
-      {
-        name: 'f01-multi-client-concurrency.test.ts',
-        desc: 'Verifies concurrent multi-client requests and session isolation',
-      },
-      {
-        name: 'f02-http-headers-sent.test.ts',
-        desc: 'Verifies HTTP headers and auth token validation',
-      },
-      {
-        name: 'f03-stdio-termination.test.ts',
-        desc: 'Verifies clean Stdio transport shutdown without zombies',
-      },
-      {
-        name: 'f04-extension-handshake.test.ts',
-        desc: 'Verifies extension connection handshake and version check',
-      },
-      {
-        name: 'f05-tool-security-annotations.test.ts',
-        desc: 'Verifies read-only vs mutating tool security annotations',
-      },
-      {
-        name: 'f06-file-upload-protocol.test.ts',
-        desc: 'Verifies CDP file upload protocol integration',
-      },
-      {
-        name: 'f07-index-interaction.test.ts',
-        desc: 'Verifies indexed clicks, fills, and hover interactions',
-      },
-      {
-        name: 'f08-dom-pruning-visibility.test.ts',
-        desc: 'Verifies DOM tree pruning and viewport-only filtering',
-      },
-      {
-        name: 'f09-batch-actions-pipeline.test.ts',
-        desc: 'Verifies batch pipeline atomicity and failure handling',
-      },
-      {
-        name: 'f10-markdown-visual-boxes.test.ts',
-        desc: 'Verifies markdown conversion with visual bounding boxes',
-      },
-      { name: 'f11-build-typecheck.test.ts', desc: 'Verifies build artifacts and type safety' },
-      { name: 'f12-automated-tests.test.ts', desc: 'Automated test suite regression test' },
-      {
-        name: 'f13-acceptance-adversarial.test.ts',
-        desc: 'Adversarial acceptance test under high load',
-      },
-    ],
-    instructions: ['All tests in this tier must pass 100% before committing.'],
-    testing: 'Included in `pnpm test`.',
-    patterns: 'Feature-specific contract tests.',
-    internalDeps: ['test/e2e/mocks', 'test/e2e/fixtures'],
-    externalDeps: [],
-  },
-
-  'test/e2e/tier2-boundary-corner': {
-    title: 'tier2-boundary-corner',
-    purpose:
-      'Tier 2 E2E tests focusing on boundary conditions, edge cases, buffer limits, malformed inputs, and disconnect handling.',
-    keyFiles: [
-      {
-        name: 'f01-multi-client-boundary.test.ts',
-        desc: 'Client limit boundaries and connection pool exhaustion',
-      },
-      {
-        name: 'f02-http-headers-boundary.test.ts',
-        desc: 'Malformed or oversized headers boundary tests',
-      },
-      {
-        name: 'f03-stdio-termination-boundary.test.ts',
-        desc: 'Abrupt process termination and pipe break handling',
-      },
-      {
-        name: 'f04-extension-handshake-boundary.test.ts',
-        desc: 'Handshake timeout and version mismatch boundaries',
-      },
-      {
-        name: 'f05-tool-annotations-boundary.test.ts',
-        desc: 'Boundary testing of tool schema edge cases',
-      },
-      {
-        name: 'f06-file-upload-boundary.test.ts',
-        desc: 'Large file and missing path upload boundaries',
-      },
-      {
-        name: 'f07-index-interaction-boundary.test.ts',
-        desc: 'Out-of-range index and detached element boundaries',
-      },
-      {
-        name: 'f08-dom-pruning-boundary.test.ts',
-        desc: 'Deeply nested DOM and shadow DOM pruning boundaries',
-      },
-      {
-        name: 'f09-batch-actions-boundary.test.ts',
-        desc: 'Max pipeline length and mid-pipeline error boundaries',
-      },
-      {
-        name: 'f10-markdown-boxes-boundary.test.ts',
-        desc: 'Empty page and circular DOM markdown boundaries',
-      },
-      { name: 'f11-build-typecheck-boundary.test.ts', desc: 'Typecheck edge cases' },
-      { name: 'f12-automated-tests-boundary.test.ts', desc: 'Automated test boundary checks' },
-      {
-        name: 'f13-acceptance-adversarial-boundary.test.ts',
-        desc: 'Adversarial boundary stress tests',
-      },
-    ],
-    instructions: [
-      'Validates system resilience against pathological inputs and network edge conditions.',
-    ],
-    testing: 'Included in `pnpm test`.',
-    patterns: 'Adversarial input testing and error boundary checks.',
-    internalDeps: ['test/e2e/mocks', 'test/e2e/fixtures'],
-    externalDeps: [],
-  },
-
-  'test/e2e/tier3-pairwise-combinations': {
-    title: 'tier3-pairwise-combinations',
-    purpose:
-      'Tier 3 E2E tests evaluating combinatorial pairwise interactions between features (e.g. batch actions + network capture + multi-tab affinity).',
-    keyFiles: [
-      {
-        name: 'cross-feature-combinations.test.ts',
-        desc: 'Evaluates pairwise feature combinations for race conditions and state leakage',
-      },
-    ],
-    instructions: [
-      'Ensures orthogonal features do not introduce race conditions or state pollution when combined.',
-    ],
-    testing: 'Included in `pnpm test`.',
-    patterns: 'Combinatorial matrix testing.',
-    internalDeps: ['test/e2e/mocks'],
-    externalDeps: [],
-  },
-
-  'test/e2e/tier4-real-world-scenarios': {
-    title: 'tier4-real-world-scenarios',
-    purpose:
-      'Tier 4 E2E tests simulating end-to-end real-world browser automation scenarios (form wizards, shopping checkouts, dashboard navigation).',
-    keyFiles: [
-      {
-        name: 'application-scenarios.test.ts',
-        desc: 'Simulates complete multi-step real-world automation tasks',
-      },
-    ],
-    instructions: ['Validates multi-step agent workflows from start to finish.'],
-    testing: 'Included in `pnpm test`.',
-    patterns: 'Scenario-based workflow validation.',
-    internalDeps: ['test/e2e/mocks', 'test/e2e/fixtures'],
-    externalDeps: [],
-  },
-
-  'test/manual': {
-    title: 'manual',
-    purpose:
-      'Manual live testing scripts and client tools for testing BrowserPaw against real browser instances.',
-    keyFiles: [
-      { name: 'live-verify-html.mjs', desc: 'Tests live MCP bridge with HTML fixtures' },
-      {
-        name: 'live-verify.mjs',
-        desc: 'Tests live MCP bridge connection and tools against active Chrome',
-      },
-      { name: 'mcp-http-client.mjs', desc: 'HTTP client for manual MCP endpoint testing' },
-      { name: 'reload-extension.mjs', desc: 'Triggers extension reload via management API' },
-      {
-        name: 'test-agent-switch.mjs',
-        desc: 'Tests quick switching between agent automation and user input',
-      },
-    ],
-    instructions: [
-      'live-verify.mjs and live-verify-html.mjs test live MCP bridge connections against real Chrome.',
-      'test-agent-switch.mjs tests fast switching between automation and manual user control.',
-    ],
-    testing: 'Run ad-hoc: `node test/manual/live-verify.mjs`.',
-    patterns: 'Ad-hoc verification scripts.',
-    internalDeps: ['app/native-server'],
-    externalDeps: ['Node.js'],
-  },
-
-  'test/manual/fixtures': {
-    title: 'fixtures',
-    purpose:
-      'HTML test files (simple-page.html, multi-frame-page.html) for manual browser verification and cross-frame testing.',
-    keyFiles: [
-      { name: 'multi-frame-page.html', desc: 'Nested cross-origin iframe test page' },
-      { name: 'simple-page.html', desc: 'Simple test page with basic form inputs and buttons' },
-    ],
-    instructions: ['Load in browser to test iframe penetration and multi-frame scanning.'],
-    testing: 'Manual browser inspection.',
-    patterns: 'Static HTML fixtures with nested iframes.',
-    internalDeps: [],
-    externalDeps: [],
+    externalDeps: ['Node.js test runner', 'Chrome for Testing'],
   },
 };
 

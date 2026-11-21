@@ -42,8 +42,6 @@ export interface ScreenshotCoordinateBindingOptions {
   tabId: number;
   captureId?: string;
   coordinateSpace?: 'viewport' | 'screenshot';
-  /** Jev vision-frame identity. Kept distinct from the ordinary captureId path. */
-  visionFrameId?: string;
 }
 
 export interface ScreenshotCoordinateBindingValidation {
@@ -347,25 +345,13 @@ export function validateScreenshotCapture(
   return { valid: true, record };
 }
 
-/**
- * The single source of truth for screenshot-bound coordinate dispatch.
- * Screenshot-space coordinates must name the exact capture they came from;
- * Jev's expectedScreenshotId is a separate, already-validated identity.
- */
 export async function validateScreenshotCoordinateBinding(
   options: ScreenshotCoordinateBindingOptions,
 ): Promise<ScreenshotCoordinateBindingValidation> {
   const captureId = options.captureId?.trim() || undefined;
 
-  if (captureId && options.visionFrameId) {
-    return {
-      error:
-        'captureId and expectedScreenshotId are distinct screenshot identities and cannot be combined. Use captureId for ordinary screenshot coordinates or expectedScreenshotId for a Jev vision-frame click.',
-    };
-  }
-
   if (!captureId) {
-    if (options.coordinateSpace === 'screenshot' && !options.visionFrameId) {
+    if (options.coordinateSpace === 'screenshot') {
       return {
         error:
           'coordinateSpace "screenshot" requires an explicit captureId from a fresh screenshot; the latest screenshot context is not a valid identity. Capture a fresh screenshot and pass its captureId before dispatching coordinates.',

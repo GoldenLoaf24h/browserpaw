@@ -5,6 +5,7 @@ import {
   splitSelectorSafely,
   splitByCharacterUnlessQuoted,
   parentElementOrShadowHost,
+  inPageExtractMarkdown,
 } from '../entrypoints/background/tools/browser/dom-indexer';
 import { BaseBrowserToolExecutor } from '../entrypoints/background/tools/base-browser';
 import {
@@ -300,6 +301,26 @@ describe('BrowserPaw Shadow DOM & Core Resilience Architectural Upgrade (Plan 2)
       expect(text).toContain('Browser Navigation / Network Error');
       expect(text).toContain('chrome-error://chromewebdata/');
       expect(text).toContain('browserpaw nav');
+    });
+  });
+
+  describe('Markdown extraction across slotted Shadow DOM hosts', () => {
+    it('extracts slotted light-DOM content inside Web Component shadow roots', () => {
+      document.body.innerHTML = `
+        <shreddit-app>
+          <article>
+            <h2>Slotted Reddit Post Title</h2>
+            <p>Body text inside slotted light DOM.</p>
+          </article>
+        </shreddit-app>
+      `;
+      const host = document.querySelector('shreddit-app')!;
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.innerHTML = '<div class="shell"><slot></slot></div>';
+
+      const md = inPageExtractMarkdown(true, false);
+      expect(md).toContain('Slotted Reddit Post Title');
+      expect(md).toContain('Body text inside slotted light DOM.');
     });
   });
 });

@@ -322,8 +322,14 @@ describe('W5 Observation Lifecycle & Performance Regressions', () => {
       await startTool.execute({ tabId: 1, sessionId: 'session-A' } as any);
       await startTool.execute({ tabId: 2, sessionId: 'session-B' } as any);
 
-      // Call stop with explicit tabId: 2 (without conflicting principal) -> MUST stop tab 2!
-      const stopRes = await stopTool.execute({ tabId: 2, saveToDownloads: false } as any);
+      const noOwner = await stopTool.execute({ tabId: 2, saveToDownloads: false });
+      expect(noOwner.isError).toBe(true);
+      expect(perfSessions.has(2)).toBe(true);
+      const stopRes = await stopTool.execute({
+        tabId: 2,
+        sessionId: 'session-B',
+        saveToDownloads: false,
+      });
       expect(stopRes.isError).toBe(false);
       const parsedStop = JSON.parse((stopRes.content[0] as any).text);
       expect(parsedStop.tabId).toBe(2);
@@ -331,7 +337,7 @@ describe('W5 Observation Lifecycle & Performance Regressions', () => {
       expect(perfSessions.has(1)).toBe(true); // tab 1 must still be recording
 
       // Clean up tab 1
-      await stopTool.execute({ tabId: 1, saveToDownloads: false } as any);
+      await stopTool.execute({ tabId: 1, sessionId: 'session-A', saveToDownloads: false });
 
       // Now session-C analyzes insight -> must NOT fall back to session-A or session-B results!
       const analyzeC = await analyzeTool.execute({ sessionId: 'session-C' } as any);
@@ -375,7 +381,7 @@ describe('W5 Observation Lifecycle & Performance Regressions', () => {
       } as any);
 
       expect(stopByY.isError).toBe(true);
-      expect((stopByY.content[0] as any).text).toContain('owned by another session');
+      expect((stopByY.content[0] as any).text).toContain('belongs to another task');
 
       // Clean up
       await networkCaptureTool.execute({

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -92,47 +93,47 @@ def _resolve_cli(configured_path: str = "") -> str | None:
 
 
 def _extract_media_paths(stdout: str) -> list[str]:
-    """Collect existing local image paths emitted by browserpaw screenshot receipts."""
-    candidates: list[str] = []
-    text = stdout.strip()
-    if not text:
-        return []
-
-    def _walk(obj: Any) -> None:
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                if key in {"path", "filePath", "outputPath", "artifactPath", "file"} and isinstance(
-                    value, str
-                ):
-                    candidates.append(value)
-                else:
-                    _walk(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                _walk(item)
-
+    """Read only CLI-created image artifacts from a successful screenshot receipt."""
     try:
-        _walk(json.loads(text))
+        receipt = json.loads(stdout)
     except ValueError:
-        for line in text.splitlines():
-            cleaned = line.strip().strip('"').strip("'")
-            if cleaned and Path(cleaned).suffix.lower() in IMAGE_EXTENSIONS:
-                candidates.append(cleaned)
-
-    seen: set[str] = set()
-    media: list[str] = []
-    for raw in candidates:
-        p = Path(raw)
-        if p.suffix.lower() not in IMAGE_EXTENSIONS:
+        return []
+    if not isinstance(receipt, dict) or receipt.get("ok") is not True:
+        return []
+    if receipt.get("command") != "screenshot" or not isinstance(receipt.get("data"), dict):
+        return []
+    request_id = receipt.get("requestId")
+    task_id = receipt.get("taskId", "misc")
+    uuid = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+    if not isinstance(request_id, str) or not re.fullmatch(uuid, request_id):
+        return []
+    if not isinstance(task_id, str) or (task_id != "misc" and not re.fullmatch(uuid, task_id)):
+        return []
+    root = Path(os.environ.get("BROWSERPAW_HOME") or Path.home() / ".browserpaw")
+    directory = (root / "out" / task_id / request_id).absolute()
+    data = receipt["data"]
+    blocks = data.get("content", data.get("artifacts", []))
+    if not isinstance(blocks, list):
+        return []
+    media = []
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "artifact_ref":
+            continue
+        if block.get("originalType") != "image" or not isinstance(block.get("path"), str):
+            continue
+        if any(char in block["path"] for char in "\r\n\x00"):
+            continue
+        image = Path(block["path"])
+        if image.parent != directory or image.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        if not re.fullmatch(r"item-[1-9]\d*", image.stem):
             continue
         try:
-            resolved = str(p.resolve())
+            if image.resolve(strict=True) == image and image.is_file():
+                media.append(str(image))
         except OSError:
-            continue
-        if resolved not in seen and os.path.isfile(resolved):
-            seen.add(resolved)
-            media.append(resolved)
-    return media
+            pass
+    return list(dict.fromkeys(media))
 
 
 def _validate_args(raw_args: Any) -> tuple[list[str] | None, str | None]:
@@ -154,6 +155,9 @@ def _make_handler(ctx: Any):
         argv, err = _validate_args((args or {}).get("args"))
         if err or argv is None:
             return json.dumps({"ok": False, "error": err}, ensure_ascii=False)
+        screenshot = argv[0] == "screenshot" or argv[:2] == ["--json", "screenshot"]
+        if screenshot and argv[0] != "--json" and "--json" not in argv[:argv.index("--") if "--" in argv else len(argv)]:
+            argv.insert(0, "--json")
 
         configured_cli, default_timeout = _read_config(ctx)
         exe = _resolve_cli(configured_cli)
@@ -205,7 +209,9 @@ def _make_handler(ctx: Any):
         if completed.stderr.strip():
             payload["stderr"] = completed.stderr.strip()
 
-        media_paths = _extract_media_paths(completed.stdout)
+        media_paths = (
+            _extract_media_paths(completed.stdout) if screenshot and completed.returncode == 0 else []
+        )
         if media_paths:
             payload["media"] = media_paths
         output = json.dumps(payload, ensure_ascii=False)

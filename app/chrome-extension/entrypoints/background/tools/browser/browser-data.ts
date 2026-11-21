@@ -1,4 +1,5 @@
 import { createErrorResponse, type ToolResult } from '@/common/tool-handler';
+import { raceInjection } from '../base-browser';
 
 function result(data: Record<string, unknown>): ToolResult {
   return { content: [], structuredContent: data, isError: false };
@@ -406,22 +407,30 @@ export const storageTool = {
     const origin = document?.url && URL.parse(document.url)?.origin;
     if (!document?.documentId || !origin || origin === 'null')
       return createErrorResponse('Storage requires a verifiable page origin.');
-    const [execution] = await chrome.scripting.executeScript({
-      target: { tabId, documentIds: [document.documentId] },
-      world: 'MAIN',
-      func: (expected, area, action, key, value) => {
-        if (location.origin !== expected) return null;
-        const store = area === 'session' ? sessionStorage : localStorage;
-        if (action === 'get')
-          return key === null ? { keys: Object.keys(store) } : { key, value: store.getItem(key) };
-        if (action === 'clear') store.clear();
-        else if (action === 'rm' && key !== null) store.removeItem(key);
-        else if (action === 'set' && key !== null && value !== null) store.setItem(key, value);
-        else return null;
-        return key === null ? { changed: true } : { changed: true, key };
-      },
-      args: [origin, area, action, key ?? null, value ?? null],
-    });
+    const [execution] = await raceInjection(
+      chrome.scripting.executeScript({
+        target: { tabId, documentIds: [document.documentId] },
+        func: (expected, area, action, key, value) => {
+          if (location.origin !== expected) return null;
+          try {
+            const store = area === 'session' ? sessionStorage : localStorage;
+            if (action === 'get')
+              return key === null
+                ? { keys: Object.keys(store) }
+                : { key, value: store.getItem(key) };
+            if (action === 'clear') store.clear();
+            else if (action === 'rm' && key !== null) store.removeItem(key);
+            else if (action === 'set' && key !== null && value !== null) store.setItem(key, value);
+            else return null;
+            return key === null ? { changed: true } : { changed: true, key };
+          } catch (error) {
+            return { error: String(error) };
+          }
+        },
+        args: [origin, area, action, key ?? null, value ?? null],
+      }),
+      2500,
+    ).catch(() => []);
     if (execution?.result === null)
       return createErrorResponse('The selected document changed before the storage action.');
     if (!execution?.result)
@@ -435,6 +444,7 @@ export const storageTool = {
         }),
         isError: true,
       };
+    if ('error' in execution.result) return createErrorResponse(execution.result.error!);
     return result({ origin, area, ...execution.result });
   },
 };

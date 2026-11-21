@@ -193,13 +193,8 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       summary: { id: 'shared-workflow', kind: 'skill' },
     });
 
-    const listed = await dispatchCommand(
-      parseCommand(['recipe', 'list']),
-      new AbortController().signal,
-    );
-    expect(listed.structuredContent?.workflows).toEqual([
-      expect.objectContaining({ id: 'shared-workflow', kind: 'skill' }),
-    ]);
+    const listed = loadLearnedWorkflows(homeDir, { includeCandidates: false });
+    expect(listed).toEqual([expect.objectContaining({ id: 'shared-workflow', kind: 'skill' })]);
 
     mockedBrowserCall
       .mockResolvedValueOnce(
@@ -270,7 +265,7 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       status: 'cleanup_pending',
       cleanupPending: true,
       cleanupError: 'close denied',
-      recovery: `browserpaw task finish ${autoTaskId}`,
+      recovery: `browserpaw task finish --task ${autoTaskId}`,
     });
   });
 
@@ -312,13 +307,12 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
         },
       );
       expect(saveRes.isError).toBeFalsy();
-      expect(fs.existsSync(path.join(homeDir, 'recipes', 'x-hot.json'))).toBe(true);
+      expect(fs.existsSync(path.join(homeDir, 'recipes', 'x-hot.candidate.json'))).toBe(true);
       expect(fs.existsSync(path.join(homeDir, 'learned-index.json'))).toBe(true);
 
       for (const skillDir of [userSkill.installedPath, projectSkill.installedPath]) {
         const content = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
-        expect(content).toContain('x-hot (x.com)');
-        expect(content).toContain('browserpaw recipe run x-hot query=<query>');
+        expect(content).not.toContain('x-hot (x.com)');
       }
 
       // Opening x.com returns matchedRecipes hint automatically
@@ -330,17 +324,9 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
         parseCommand(['open', 'https://x.com/home']),
         new AbortController().signal,
       );
-      expect(opened.structuredContent).toMatchObject({
-        tabId: 42,
-        matchedRecipes: [
-          {
-            id: 'x-hot',
-            command: 'browserpaw recipe run x-hot query=<query>',
-          },
-        ],
-      });
+      expect(opened.structuredContent?.matchedRecipes).toBeUndefined();
 
-      // Standalone recipe run with open step auto-starts and finishes a temporary task
+      // Candidate recipes remain explicitly runnable without entering automatic routing.
       mockedBrowserCall.mockClear();
       const autoTaskId = '11111111-1111-4111-8111-111111111111';
       mockedBrowserCall
@@ -434,7 +420,7 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
 
       // Removing the recipe clears it from ~/.browserpaw and synced skills
       await dispatchCommand(parseCommand(['recipe', 'rm', 'x-hot']), new AbortController().signal);
-      expect(fs.existsSync(path.join(homeDir, 'recipes', 'x-hot.json'))).toBe(false);
+      expect(fs.existsSync(path.join(homeDir, 'recipes', 'x-hot.candidate.json'))).toBe(false);
       const afterRemove = fs.readFileSync(path.join(userSkill.installedPath, 'SKILL.md'), 'utf8');
       expect(afterRemove).not.toContain('x-hot');
       expect(syncLearnedRouting(homeDir).workflowCount).toBe(0);
@@ -443,5 +429,148 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       fs.rmSync(userRoot, { recursive: true, force: true });
       fs.rmSync(projectRoot, { recursive: true, force: true });
     }
+  });
+
+  it('patches a candidate without replacing the active revision and promotes only a verified read-only candidate', async () => {
+    writeSavedRecipe(homeDir, 'x-search', [
+      ['open', 'https://x.com/search?q={{query}}'],
+      ['text', 'css:main'],
+    ]);
+    const activePath = path.join(homeDir, 'recipes', 'x-search.json');
+    const candidatePath = path.join(homeDir, 'recipes', 'x-search.candidate.json');
+    const activeBefore = fs.readFileSync(activePath, 'utf8');
+
+    const patched = await dispatchCommand(
+      parseCommand(['recipe', 'patch', 'x-search', '--step', '1', '--', 'text', 'css:article']),
+      new AbortController().signal,
+    );
+    expect(patched.structuredContent).toMatchObject({ status: 'candidate', stepIndex: 1 });
+    expect(fs.readFileSync(activePath, 'utf8')).toBe(activeBefore);
+    expect(JSON.parse(fs.readFileSync(candidatePath, 'utf8'))).toMatchObject({
+      id: 'x-search',
+      status: 'candidate',
+      steps: [
+        ['open', 'https://x.com/search?q={{query}}'],
+        ['text', 'css:article'],
+      ],
+    });
+    expect(loadLearnedWorkflows(homeDir, { includeCandidates: false })).toHaveLength(1);
+    expect(
+      loadLearnedWorkflows(homeDir, { includeCandidates: true, bundledDir: homeDir }).find(
+        (workflow) => workflow.id === 'x-search',
+      ),
+    ).toMatchObject({ id: 'x-search', status: 'candidate' });
+
+    mockedBrowserCall
+      .mockResolvedValueOnce(result({ ok: true, tabId: 7 }))
+      .mockResolvedValueOnce(result({ success: true, text: 'active' }));
+    await dispatchCommand(
+      parseCommand(['recipe', 'run', 'x-search', 'query=codex', '--tab', '7']),
+      new AbortController().signal,
+    );
+    expect(mockedBrowserCall).toHaveBeenCalledTimes(2);
+    expect(mockedBrowserCall.mock.calls[0]).toEqual([
+      'chrome_navigate',
+      { tabId: 7, url: 'https://x.com/search?q=codex' },
+      'cli-tab:7',
+      expect.any(AbortSignal),
+    ]);
+    expect(JSON.stringify(mockedBrowserCall.mock.calls[1])).toContain('main');
+    mockedBrowserCall.mockClear();
+
+    const autoTaskId = '33333333-3333-4333-8333-333333333333';
+    mockedBrowserCall
+      .mockResolvedValueOnce(result({ ok: true, task: { id: autoTaskId } }))
+      .mockResolvedValueOnce(result({ ok: true, tabId: 77 }))
+      .mockResolvedValueOnce(result({ success: true, text: 'results' }))
+      .mockResolvedValueOnce(result({ ok: true }));
+
+    const validated = await dispatchCommand(
+      parseCommand(['recipe', 'validate', 'x-search', 'query=codex']),
+      new AbortController().signal,
+    );
+    expect(validated.structuredContent).toMatchObject({ status: 'active', taskId: autoTaskId });
+    expect(validated.isError).toBeFalsy();
+    expect(fs.existsSync(candidatePath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(activePath, 'utf8'))).toMatchObject({
+      status: 'active',
+      steps: [
+        ['open', 'https://x.com/search?q={{query}}'],
+        ['text', 'css:article'],
+      ],
+    });
+  });
+
+  it('keeps write-capable candidates manual and returns failed-step context without page text', async () => {
+    writeSavedRecipe(homeDir, 'write-candidate', [
+      ['open', 'https://example.com'],
+      ['click', 'css:button'],
+    ]);
+    fs.writeFileSync(
+      path.join(homeDir, 'recipes', 'write-candidate.candidate.json'),
+      JSON.stringify({
+        id: 'write-candidate',
+        status: 'candidate',
+        steps: [
+          ['open', 'https://example.com'],
+          ['click', 'css:button'],
+        ],
+      }),
+    );
+    const manual = await dispatchCommand(
+      parseCommand(['recipe', 'validate', 'write-candidate']),
+      new AbortController().signal,
+    );
+    expect(manual.isError).toBe(true);
+    expect(manual.structuredContent).toMatchObject({ code: 'manual_validation_required' });
+    expect(mockedBrowserCall).not.toHaveBeenCalled();
+
+    const autoTaskId = '44444444-4444-4444-8444-444444444444';
+    mockedBrowserCall
+      .mockResolvedValueOnce(result({ ok: true, task: { id: autoTaskId } }))
+      .mockResolvedValueOnce(result({ ok: true, tabId: 77 }))
+      .mockResolvedValueOnce(result({ success: false, error: 'button missing' }, true))
+      .mockResolvedValueOnce(
+        result({ tabUrl: 'https://example.com', tabTitle: 'Example', interactiveCount: 3 }),
+      )
+      .mockResolvedValueOnce(result({ ok: true }));
+    const failed = await dispatchCommand(
+      parseCommand(['recipe', 'run', 'write-candidate']),
+      new AbortController().signal,
+    );
+    expect(failed.isError).toBe(true);
+    expect(failed.structuredContent).toMatchObject({
+      recipeId: 'write-candidate',
+      failedStepIndex: 1,
+      failedStep: { index: 1, command: 'click', template: ['click', 'css:button'] },
+      completedSteps: 1,
+      pageSummary: { url: 'https://example.com', title: 'Example', interactiveElements: 3 },
+    });
+    expect(JSON.stringify(failed.structuredContent)).not.toContain('button missing'.repeat(100));
+  });
+
+  it('validates expanded inputs on an existing tab and preserves a candidate edited mid-run', async () => {
+    const directory = path.join(homeDir, 'recipes');
+    const candidatePath = path.join(directory, 'lookup.candidate.json');
+    const candidate = {
+      id: 'lookup',
+      status: 'candidate',
+      inputs: { query: { type: 'string' } },
+      steps: [['find', '{{query}}']],
+    };
+    fs.mkdirSync(directory);
+    fs.writeFileSync(candidatePath, JSON.stringify(candidate));
+    mockedBrowserCall.mockImplementationOnce(async (_, fields) => {
+      expect(fields).toMatchObject({ query: 'actual input' });
+      fs.writeFileSync(candidatePath, JSON.stringify({ ...candidate, name: 'New draft' }));
+      return result({ success: true });
+    });
+    const validation = await dispatchCommand(
+      parseCommand(['recipe', 'validate', 'lookup', 'query=actual input', '--tab', '7']),
+      new AbortController().signal,
+    );
+    expect(validation.structuredContent).toMatchObject({ code: 'recipe_candidate_changed' });
+    expect(fs.existsSync(path.join(directory, 'lookup.json'))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(candidatePath, 'utf8')).name).toBe('New draft');
   });
 });

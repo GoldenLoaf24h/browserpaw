@@ -6,12 +6,6 @@ import {
   TabGroupManager,
   tabGroupManager,
 } from '../entrypoints/background/tools/browser/tab-group-manager';
-import {
-  scoreCandidate,
-  matchSemantically,
-  heuristicSemanticMatch,
-  tokenizeText,
-} from '../utils/form-semantic-matcher';
 import * as fillCore from '../entrypoints/background/tools/browser/fill-core';
 import { fillIndexTool } from '../entrypoints/background/tools/browser/fill-index';
 import * as inPageEngine from '../entrypoints/background/tools/browser/in-page-engine';
@@ -133,72 +127,6 @@ describe('Boost Skeptical Review Hardening: Tab Titles, Form Semantic Matcher & 
       expect(isManaged99).toBe(true);
       expect(isManaged100).toBe(false);
       expect(mgr.getManagedGroupIds()).toEqual([42, 99]);
-    });
-  });
-
-  // =========================================================================
-  // 2. Form Semantic Matcher: Zero Substring Collisions
-  // =========================================================================
-  describe('2. Form Semantic Matcher: Zero Substring Collisions', () => {
-    it('does NOT collide on substring matches in scoreCandidate', () => {
-      // "no" must not match "Phone Number"
-      expect(scoreCandidate('no', 'Phone Number')).toBe(0);
-
-      // "male" must not match "Female"
-      expect(scoreCandidate('male', 'Female')).toBe(0);
-
-      // "city" must not match "Electricity"
-      expect(scoreCandidate('city', 'Electricity')).toBe(0);
-
-      // "man" must not match "Command Center"
-      expect(scoreCandidate('man', 'Command Center')).toBe(0);
-    });
-
-    it('scores exact token matches and synonyms with high confidence', () => {
-      // Whole-token match
-      expect(scoreCandidate('phone', 'Mobile Phone')).toBe(0.95);
-      expect(scoreCandidate('no', 'Please select: No')).toBe(0.95);
-
-      // Synonym category match
-      expect(scoreCandidate('手机号', 'phone')).toBe(0.9);
-      expect(scoreCandidate('确认', 'yes')).toBe(0.9);
-      expect(scoreCandidate('男', 'male')).toBe(0.9);
-      expect(scoreCandidate('女', 'female')).toBe(0.9);
-    });
-
-    it('matchSemantically selects exact match even when another candidate contains query as substring', async () => {
-      const candidates = [
-        { id: 'phone', text: 'Phone Number' },
-        { id: 'no', text: 'No' },
-      ];
-
-      const res = await matchSemantically('choice', 'no', candidates, 'no');
-      expect(res).not.toBeNull();
-      expect(res?.matchedId).toBe('no');
-      expect(res?.confidence).toBe(1.0);
-    });
-
-    it('matchSemantically strictly distinguishes "male" and "female"', async () => {
-      const candidates = [
-        { id: 'female', text: 'Female' },
-        { id: 'male', text: 'Male' },
-      ];
-
-      const res = await matchSemantically('choice', 'male', candidates, 'male');
-      expect(res).not.toBeNull();
-      expect(res?.matchedId).toBe('male');
-      expect(res?.confidence).toBe(1.0);
-
-      const resFemale = await matchSemantically('choice', 'female', candidates, 'female');
-      expect(resFemale?.matchedId).toBe('female');
-    });
-
-    it('does not falsely match unrelated candidates in Tier 1 literal matcher', async () => {
-      const candidates = [{ id: 'electricity', text: 'Electricity Billing Details' }];
-
-      // Query "city" should NOT match Electricity Billing Details
-      const res = await matchSemantically('field', 'city', candidates);
-      expect(res).toBeNull();
     });
   });
 

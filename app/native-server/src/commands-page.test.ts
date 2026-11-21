@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import type { CallToolResult, ParsedCommand } from 'chrome-mcp-shared';
+import { resultData } from './command-client';
 import { dispatchPage } from './commands-page';
 import type { CommandRun } from './command-utils';
 
@@ -60,30 +61,26 @@ describe('page command dispatch', () => {
     await expect(dispatchPage(command('tabs', ['alpha']), run)).resolves.toBe(failure);
   });
 
-  it('routes --content to content-only markdown and honors max-chars', async () => {
-    const run = jest.fn(async () => ({
-      content: [{ type: 'text' as const, text: 'abcdef' }],
-      isError: false,
-    })) as CommandRun;
-    const response = await dispatchPage(
-      command('text', [], { content: true, 'max-chars': '4' }),
-      run,
-    );
-    expect(run).toHaveBeenCalledWith('chrome_get_markdown', { fit: true });
-    expect(response).toMatchObject({
-      content: [{ type: 'text', text: 'abcd' }],
-      structuredContent: { truncated: true, originalChars: 6 },
-    });
-  });
-
   it('routes links to chrome_page with the target and a bounded limit', async () => {
     const run = jest.fn(async () => result({ success: true })) as CommandRun;
-    await dispatchPage(command('text', ['css:main'], { links: true, limit: '25' }), run);
+    await dispatchPage(
+      command('text', ['css:main'], { links: true, limit: '25', frame: '2' }),
+      run,
+    );
     expect(run).toHaveBeenCalledWith('chrome_page', {
       action: 'text_links',
       selector: 'main',
+      frameId: 2,
       limit: 25,
     });
+  });
+
+  it('rejects unsupported targets instead of extracting unscoped links', () => {
+    const run = jest.fn() as CommandRun;
+    expect(() => dispatchPage(command('text', ['role:navigation'], { links: true }), run)).toThrow(
+      'Link extraction requires a ref',
+    );
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('uses explicit IDs for window close and refuses it inside a task', async () => {
@@ -134,5 +131,16 @@ describe('page command dispatch', () => {
         timeoutMs: 5000,
       },
     });
+  });
+
+  it('ignores non-string text blocks in resultData and inventory parsing', async () => {
+    const malformed = {
+      content: [{ type: 'text', text: { isErrorPage: true } as unknown as string }],
+      isError: false,
+    } as CallToolResult;
+    expect(resultData(malformed)).toBeUndefined();
+    const run = jest.fn(async () => malformed) as CommandRun;
+    const out = await dispatchPage(command('window list'), run);
+    expect(out?.isError).toBe(true);
   });
 });

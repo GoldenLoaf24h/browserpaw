@@ -36,6 +36,44 @@ afterEach(async () => {
 });
 
 describe('debug slice network regressions', () => {
+  it('replaces an auto-stopped debugger capture with the new task’s webRequest capture', async () => {
+    const target = { ...tab, id: 42 };
+    const invoke = (
+      action: 'start' | 'list' | 'show' | 'stop' | 'clear',
+      sessionId: string,
+      args?: { needResponseBody?: boolean; requestId?: string },
+    ) => networkCaptureTool.execute({ action, tabId: target.id, sessionId, ...args });
+    vi.stubGlobal('chrome', {
+      tabs: { get: vi.fn().mockResolvedValue(target), query: vi.fn().mockResolvedValue([target]) },
+    });
+    vi.spyOn(networkDebuggerStartTool, 'execute').mockImplementation(async () => {
+      networkDebuggerStartTool.terminalResults.set(target.id!, {
+        expiresAt: Date.now() + 30_000,
+        result: { requests: [{ requestId: 'old', responseBody: 'fixture private body' }] },
+      });
+      return { content: [] };
+    });
+    expect((await invoke('start', 'first', { needResponseBody: true })).isError).not.toBe(true);
+    expect(JSON.parse(text(await invoke('list', 'first'))).requests).toHaveLength(1);
+    expect((await invoke('show', 'second', { requestId: 'old' })).isError).toBe(true);
+    vi.spyOn(networkCaptureStartTool, 'execute').mockImplementation(async () => {
+      networkCaptureStartTool.terminalResults.set(target.id!, {
+        expiresAt: Date.now() + 30_000,
+        result: { requests: [{ requestId: 'new', method: 'GET', url: target.url }] },
+      });
+      return { content: [] };
+    });
+    expect((await invoke('start', 'second')).isError).not.toBe(true);
+    expect((await invoke('stop', 'second')).isError).toBe(false);
+    expect((await invoke('list', 'first')).isError).toBe(true);
+    expect(JSON.parse(text(await invoke('list', 'second'))).requests).toMatchObject([
+      { id: 'new' },
+    ]);
+    expect((await invoke('show', 'second', { requestId: 'old' })).isError).toBe(true);
+    await invoke('clear', 'second');
+    expect(JSON.parse(text(await invoke('list', 'second'))).requests).toHaveLength(0);
+  });
+
   it('lists filtered requests, shows one textual body, and clears only current events', async () => {
     vi.stubGlobal('chrome', {
       tabs: { get: vi.fn().mockResolvedValue(tab), query: vi.fn().mockResolvedValue([tab]) },

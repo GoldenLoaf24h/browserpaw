@@ -46,6 +46,8 @@ export function inPageExtractMarkdown(includeLinks = true, fit = false): string 
     } catch {}
   }
 
+  const visited = new Set<Node>();
+
   function serializeChildren(node: Node): string {
     let res = '';
     for (const child of Array.from(node.childNodes)) {
@@ -55,6 +57,8 @@ export function inPageExtractMarkdown(includeLinks = true, fit = false): string 
   }
 
   function serializeNode(node: Node): string {
+    if (visited.has(node)) return '';
+    visited.add(node);
     if (node.nodeType === Node.TEXT_NODE) {
       return (node.textContent || '').replace(/\r\n/g, '\n');
     }
@@ -82,6 +86,16 @@ export function inPageExtractMarkdown(includeLinks = true, fit = false): string 
     if (tag === 'br') return '\n';
 
     let inner = '';
+    if (tag === 'slot') {
+      const assigned =
+        typeof (el as HTMLSlotElement).assignedNodes === 'function'
+          ? (el as HTMLSlotElement).assignedNodes({ flatten: true })
+          : [];
+      if (assigned.length > 0) {
+        return assigned.map((n) => serializeNode(n)).join('');
+      }
+      return serializeChildren(el);
+    }
     const shadow = getShadowRoot(el);
     if (shadow) {
       for (const child of Array.from(shadow.childNodes)) {

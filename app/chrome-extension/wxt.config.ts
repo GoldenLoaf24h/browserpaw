@@ -3,6 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { config } from 'dotenv';
 import { resolve } from 'path';
+import { readFileSync } from 'node:fs';
 import Icons from 'unplugin-icons/vite';
 import Components from 'unplugin-vue-components/vite';
 import IconsResolver from 'unplugin-icons/resolver';
@@ -14,12 +15,7 @@ config({ path: resolve(process.cwd(), '.env.local') });
 const CHROME_EXTENSION_KEY =
   process.env.CHROME_EXTENSION_KEY ??
   'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAjeRNSo9KPde+/H7G9RyKcjZsPTRC3sBfdTRHndgSIFJaeM5WDZRF5xgEmkeW66x6oEr4IeOcWNMbIL8Z33c4kX3PzObV6GyhiaISwSJLfBL3awnFJ1+sQj4lPcAiwpC3ppTTXX7teuDGp0tmxGQlZVS/zHDJqa4xW9AUd02JkCgQ3NLVAzlAwFaqEkNteG1A7SKNExfrVmdm6BAy0HSNFgmgvM76CRP/kUWl9vYOsQHKslCBC56WnUTKAsGaNE7RCKmLIH12LfCMwE7fXkK81Jar7iltUGm8AXUwRL0XJay1+6XqMwgqb4NPF1P4aAKoeNb4kWb1QkDhf1UG/wNaawIDAQAB';
-// Detect dev mode early for manifest-level switches
-const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'production';
-
-const buildInfo = createBuildInfo({
-  repoRoot: resolve(__dirname, '../..'),
-});
+const repoRoot = resolve(__dirname, '../..');
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -31,7 +27,17 @@ export default defineConfig({
       }
     },
     'build:done': async (wxt) => {
-      writeBuildProvenance(wxt.config.outDir, buildInfo);
+      const manifest = JSON.parse(
+        readFileSync(resolve(wxt.config.outDir, 'manifest.json'), 'utf8'),
+      );
+      writeBuildProvenance(
+        wxt.config.outDir,
+        createBuildInfo({
+          repoRoot,
+          extensionKey: manifest.key,
+          buildMode: wxt.config.mode === 'production' ? 'production' : 'development',
+        }),
+      );
     },
   },
   webExt: {
@@ -99,7 +105,13 @@ export default defineConfig({
   },
   vite: (env) => ({
     define: {
-      __BROWSERPAW_BUILD_ID__: JSON.stringify(buildInfo.buildId),
+      __BROWSERPAW_BUILD_ID__: JSON.stringify(
+        createBuildInfo({
+          repoRoot,
+          extensionKey: CHROME_EXTENSION_KEY,
+          buildMode: env.mode === 'production' ? 'production' : 'development',
+        }).buildId,
+      ),
     },
     plugins: [
       // TailwindCSS v4 Vite plugin – no PostCSS config required

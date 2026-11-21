@@ -27,16 +27,24 @@ export function argumentCount(command: ParsedCommand, minimum: number, maximum =
     throw new CommandError(`Incorrect operands. Run browserpaw help ${command.name}.`);
 }
 
-const CLI_ONLY_COMMANDS = new Set(['setup', 'status', 'uninstall', 'help', 'search', 'batch']);
+const STANDALONE_COMMANDS = new Set([
+  'setup',
+  'status',
+  'uninstall',
+  'help',
+  'search',
+  'batch',
+  'task resume',
+]);
 
 export function assertBatchStep({ name, options }: ParsedCommand): void {
   if (
-    CLI_ONLY_COMMANDS.has(name) ||
+    STANDALONE_COMMANDS.has(name) ||
     isProfileCommand(name) ||
     name.startsWith('recipe ') ||
     options.file ||
     options.input ||
-    (name !== 'screenshot' && name !== 'download' && options.out)
+    (name !== 'download' && options.out !== undefined)
   )
     throw new CommandError(`Command ${name} is unavailable inside a batch.`);
 }

@@ -16,6 +16,11 @@ import { scrubUrl } from '@/utils/url-sanitizer';
 import type { FastSnapshotOptions, FastSnapshotResult } from './fast-snapshot';
 import { describeFrameCoverage } from '@/utils/frame-coverage';
 import { observationPriority } from '@/utils/observation-priority';
+import {
+  rebuildTreeAfterAxFusion,
+  roundRobinUniqueByFrame,
+  mergeStandardFrames,
+} from './dom-indexer/frame-merge';
 
 export interface ReadDOMParams {
   viewportThreshold?: number;
@@ -76,34 +81,6 @@ export interface ReadDOMParams {
    * [role="listitem"], li) and aggregates fragmented leaf text nodes into unified structured card summaries.
    */
   flattenCards?: boolean;
-}
-
-function roundRobinUniqueByFrame<T>(
-  buckets: Array<{ frameId: number; items: T[] }>,
-  keyOf: (item: T) => string | number,
-  priorityOf: (item: T) => number,
-  limit = Number.POSITIVE_INFINITY,
-): T[] {
-  const seen = new Set<string | number>();
-  const ordered: T[] = [];
-  let offset = 0;
-
-  while (true) {
-    let progressed = false;
-    for (const bucket of buckets) {
-      const item = bucket.items[offset];
-      if (item === undefined) continue;
-      progressed = true;
-      const key = keyOf(item);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      ordered.push(item);
-    }
-    if (!progressed) break;
-    offset++;
-  }
-
-  return ordered.sort((a, b) => priorityOf(b) - priorityOf(a)).slice(0, limit);
 }
 
 export class ReadDOMTool extends BaseBrowserToolExecutor {
@@ -658,121 +635,13 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
         );
       }
 
-      const mergedData: PrunedDOMTreeResult = {
-        treeString: mainData.treeString,
-        elementCount: mainData.elementCount,
-        interactiveCount: mainData.interactiveCount,
-        compressionRatio: mainData.compressionRatio,
-        indexMap: { ...mainData.indexMap },
-        indexedElements: [...(mainData.indexedElements || [])],
-        assets: [...(mainData.assets || [])],
-        pages_up: mainData.pages_up,
-        pages_down: mainData.pages_down,
-        scrollInfo: mainData.scrollInfo,
-        activeModal: mainData.activeModal,
-        focusTrapped: mainData.focusTrapped,
-        isConfirmationTrap: mainData.isConfirmationTrap,
-        modalIsolated: mainData.modalIsolated,
-        virtualizedCount: mainData.virtualizedCount,
-        virtualizedSummary: mainData.virtualizedSummary,
-        flattenedCardCount: mainData.flattenedCardCount,
-        selectorMatched: results.some((r) => r.result?.selectorMatched === true),
-      };
-      const standardCoverage = await describeFrameCoverage(tab.id, results);
-
-      let currentAssetIndex = (mergedData.assets?.length || 0) + 1;
-      const subframeLines: string[] = [];
-      const assetRoutes = new Map<number, { frameId: number; localIndex: number }>();
-
-      if (mainData.assets) {
-        for (const a of mainData.assets) {
-          if (typeof a.index === 'number') {
-            assetRoutes.set(a.index, {
-              frameId: mainFrame?.frameId ?? 0,
-              localIndex: (a.index || 1) - 1,
-            });
-          }
-        }
-      }
-
-      for (const r of results) {
-        if (r === mainFrame || !r.result || (r.result as any).isErrorPage) continue;
-        const subData = r.result;
-        mergedData.elementCount += subData.elementCount;
-
-        if (typeof subData.virtualizedCount === 'number' && subData.virtualizedCount > 0) {
-          mergedData.virtualizedCount =
-            (mergedData.virtualizedCount || 0) + subData.virtualizedCount;
-        }
-        if (Array.isArray(subData.virtualizedSummary) && subData.virtualizedSummary.length > 0) {
-          if (!mergedData.virtualizedSummary) mergedData.virtualizedSummary = [];
-          for (const s of subData.virtualizedSummary) {
-            mergedData.virtualizedSummary.push({
-              selector: `iframe[${r.frameId}] ${s.selector}`,
-              count: s.count,
-            });
-          }
-        }
-
-        if (subData.indexedElements && subData.indexedElements.length > 0) {
-          subframeLines.push(`\n<!-- Frame ${r.frameId} -->`);
-          for (const el of subData.indexedElements) {
-            mergedData.indexedElements!.push(el);
-            mergedData.indexMap[el.index] = {
-              selector: subData.indexMap?.[el.index]?.selector,
-              frameId: String(r.frameId),
-              tagName: el.tagName,
-            };
-
-            if (args.format === 'html') {
-              const attrStr = Object.entries(el.attributes || {})
-                .map(([k, v]) => `${k}="${v}"`)
-                .join(' ');
-              const textPart = el.text ? ` "${el.text}"` : '';
-              const shadowPart = el.inShadowDom ? ' [shadow]' : '';
-              subframeLines.push(
-                `[${el.index}]${shadowPart} <${el.tagName}${attrStr ? ' ' + attrStr : ''} frame="${r.frameId}">${textPart}</${el.tagName}>`,
-              );
-            } else {
-              subframeLines.push(renderCompactElementLine(el, r.frameId));
-            }
-          }
-        }
-        if (subData.assets && subData.assets.length > 0) {
-          if (!mergedData.assets) mergedData.assets = [];
-          // Subframe asset geometry is viewport-local to that frame; tag them
-          // with frameId and remapped index so downstream crop/fetch can resolve without collision.
-          for (let localIdx = 0; localIdx < subData.assets.length; localIdx++) {
-            const a = subData.assets[localIdx];
-            const globalIndex = currentAssetIndex++;
-            mergedData.assets.push({
-              ...a,
-              index: globalIndex,
-              src: a.src ? `${a.src}#@frame=${r.frameId}` : undefined,
-            });
-            assetRoutes.set(globalIndex, {
-              frameId: r.frameId,
-              localIndex: (typeof a.index === 'number' ? a.index : localIdx + 1) - 1,
-            });
-          }
-        }
-      }
-
-      const orderedFrames = [mainFrame, ...results.filter((result) => result !== mainFrame)];
-      const standardFrameBuckets = orderedFrames
-        .filter((result) => result?.result && !(result.result as any).isErrorPage)
-        .map((result) => ({ frameId: result.frameId, items: [] as IndexedElement[] }));
-      const bucketByFrameId = new Map(
-        standardFrameBuckets.map((bucket) => [String(bucket.frameId), bucket]),
+      const { mergedData, subframeLines, assetRoutes, standardFrameBuckets } = mergeStandardFrames(
+        results,
+        mainFrame,
+        args.format,
+        renderCompactElementLine,
       );
-      const mainFrameId = String(mainFrame.frameId);
-      for (const element of mergedData.indexedElements || []) {
-        const mappedFrameId = mergedData.indexMap[element.index]?.frameId;
-        const bucket =
-          bucketByFrameId.get(mappedFrameId === undefined ? mainFrameId : String(mappedFrameId)) ||
-          bucketByFrameId.get(mainFrameId);
-        bucket?.items.push(element);
-      }
+      const standardCoverage = await describeFrameCoverage(tab.id, results);
       const fairStandardElements = roundRobinUniqueByFrame(
         standardFrameBuckets,
         (element) => element.index,
@@ -875,25 +744,16 @@ export class ReadDOMTool extends BaseBrowserToolExecutor {
               }
 
               if (treeChanged && args.format !== 'html') {
-                const mainElements = mergedData.indexedElements.filter((el) => {
-                  const fId = mergedData.indexMap[el.index]?.frameId;
-                  return !fId || fId === '0';
-                });
-                mergedData.treeString = mainElements
-                  .map((el) => renderCompactElementLine(el))
-                  .join('\n');
-
-                subframeLines.length = 0;
-                for (const r of results) {
-                  if (r === mainFrame || !r.result) continue;
-                  subframeLines.push('\n<!-- Frame ' + r.frameId + ' -->');
-                  const frameElements = mergedData.indexedElements.filter(
-                    (el) => String(mergedData.indexMap[el.index]?.frameId) === String(r.frameId),
-                  );
-                  for (const el of frameElements) {
-                    subframeLines.push(renderCompactElementLine(el, r.frameId));
-                  }
-                }
+                subframeLines.splice(
+                  0,
+                  subframeLines.length,
+                  ...rebuildTreeAfterAxFusion(
+                    mergedData,
+                    results,
+                    mainFrame,
+                    renderCompactElementLine,
+                  ),
+                );
               }
             }
           }

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { commandHelp, parseCommand } from 'chrome-mcp-shared';
 
@@ -103,6 +103,69 @@ describe('CLI host transport', () => {
       release();
     }
     expect((await first).status).toBe(200);
+  });
+
+  it('dispatches task cancellation without releasing the running task lock', async () => {
+    const task = randomUUID();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    dispatch
+      .mockImplementationOnce(async () => {
+        entered();
+        await pending;
+        return { content: [] };
+      })
+      .mockResolvedValueOnce({ content: [] });
+    const first = post(['wait', '--text', 'fixture', '--task', task]);
+    try {
+      await started;
+      expect((await post(['task', 'cancel', '--task', task])).status).toBe(200);
+      expect((await post(['observe', '--task', task])).status).toBe(409);
+    } finally {
+      release();
+      await first;
+    }
+  });
+
+  it.each([
+    ['--out=fixture', resolve('fixture')],
+    ['--out', resolve('fixture')],
+  ])('sends the parsed absolute download destination for %s', async (option, destination) => {
+    const env = jest.replaceProperty(process, 'env', {
+      ...process.env,
+      BROWSERPAW_HOME: join(directory, '.browserpaw'),
+      BROWSERPAW_PORT: String(server.port),
+      BROWSERPAW_NO_UPDATE_CHECK: '1',
+    });
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      dispatch.mockResolvedValueOnce({ content: [] });
+      expect(
+        await runCommands([
+          'download',
+          '--url',
+          'https://example.test/file',
+          '--tab',
+          '10',
+          option,
+          ...(option === '--out' ? ['fixture'] : []),
+          '--json',
+        ]),
+      ).toBe(0);
+      expect(dispatch.mock.lastCall?.[0]).toMatchObject({
+        name: 'download',
+        options: { out: destination },
+      });
+    } finally {
+      log.mockRestore();
+      env.restore();
+    }
   });
 
   it('parses inline option values and keeps unknown or boolean flags rejected', () => {

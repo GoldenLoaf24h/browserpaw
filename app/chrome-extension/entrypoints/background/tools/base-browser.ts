@@ -36,7 +36,7 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
   });
 }
 
-async function raceInjection<T>(p: Promise<T>, ms = INJECTION_TIMEOUT_MS): Promise<T> {
+export async function raceInjection<T>(p: Promise<T>, ms = INJECTION_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([

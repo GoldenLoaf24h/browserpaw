@@ -9,6 +9,7 @@ import { isPopupUrl } from '@/utils/popup-guard';
 import { waitForPageSettle } from '@/utils/action-watchdog';
 import { executeInPage } from './in-page-engine';
 import { getBrowserInstanceId } from '@/utils/browser-identity';
+import { cdpSessionManager } from '@/utils/cdp-session-manager';
 
 export { isPopupUrl };
 
@@ -143,6 +144,26 @@ class NavigateTool extends BaseBrowserToolExecutor {
     } catch {
       // Non-blocking fallback
     }
+  }
+
+  private async createWindowQuietly(
+    createData: chrome.windows.CreateData,
+  ): Promise<chrome.windows.Window> {
+    const previousFocused =
+      createData.focused === false && typeof chrome.windows?.getLastFocused === 'function'
+        ? await chrome.windows.getLastFocused({ populate: false }).catch(() => null)
+        : null;
+    const created = await chrome.windows.create(createData);
+    if (
+      createData.focused === false &&
+      previousFocused?.focused === true &&
+      typeof previousFocused.id === 'number' &&
+      previousFocused.id !== created?.id &&
+      typeof chrome.windows?.update === 'function'
+    ) {
+      await chrome.windows.update(previousFocused.id, { focused: true }).catch(() => {});
+    }
+    return created;
   }
 
   async execute(args: NavigateToolParams): Promise<ToolResult> {
@@ -555,7 +576,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
         console.log('Opening URL in a new window.');
 
         // Create new window (default focused: false to never steal user focus)
-        const newWindow = await chrome.windows.create({
+        const newWindow = await this.createWindowQuietly({
           url: url,
           width: typeof width === 'number' ? width : DEFAULT_WINDOW_WIDTH,
           height: typeof height === 'number' ? height : DEFAULT_WINDOW_HEIGHT,
@@ -731,7 +752,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
           // Fall back to opening in a new window
           console.warn('No last focused window found, falling back to creating a new window.');
 
-          const fallbackWindow = await chrome.windows.create({
+          const fallbackWindow = await this.createWindowQuietly({
             url: url,
             width: DEFAULT_WINDOW_WIDTH,
             height: DEFAULT_WINDOW_HEIGHT,
@@ -810,6 +831,83 @@ interface CloseTabsToolParams {
  */
 class CloseTabsTool extends BaseBrowserToolExecutor {
   name = TOOL_NAMES.BROWSER.CLOSE_TABS;
+
+  private async removeTabsCleanly(target: number | number[]): Promise<void> {
+    const tabIds = Array.isArray(target) ? target : [target];
+    for (const tid of tabIds) {
+      await tabFaviconManager.restoreFavicon(tid).catch(() => {});
+    }
+    await tabGroupManager.detachManagedTabsBeforeClose(tabIds).catch(() => {});
+
+    const tabSet = new Set(tabIds);
+    const acceptBeforeUnload = (tid: number, sessionId?: string) => {
+      void cdpSessionManager
+        .sendFrameCommand(tid, sessionId, 'Page.handleJavaScriptDialog', { accept: true })
+        .catch(() => {});
+    };
+    const observer = (tid: number, method: string, params: any, source?: any) => {
+      if (tabSet.has(tid) && method === 'Page.javascriptDialogOpening' && params?.type === 'beforeunload') {
+        acceptBeforeUnload(tid, source?.sessionId);
+      }
+    };
+
+    cdpSessionManager.addCdpEventObserver(observer);
+    for (const tid of tabIds) {
+      for (const dlg of cdpSessionManager.getPendingDialogs(tid)) {
+        if (dlg.type === 'beforeunload') {
+          acceptBeforeUnload(tid, dlg.sessionId);
+        }
+      }
+    }
+
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const attachedForClose: number[] = [];
+    try {
+      const removePromise = Promise.resolve(chrome.tabs.remove(target as any));
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        fallbackTimer = setTimeout(async () => {
+          for (const tid of tabIds) {
+            if (cdpSessionManager.isAttached(tid)) {
+              acceptBeforeUnload(tid);
+              continue;
+            }
+            if (typeof chrome?.debugger?.attach !== 'function') continue;
+            try {
+              await chrome.debugger.attach({ tabId: tid }, '1.3');
+              attachedForClose.push(tid);
+              await chrome.debugger.sendCommand({ tabId: tid }, 'Page.enable', {}).catch(() => {});
+              await chrome.debugger
+                .sendCommand({ tabId: tid }, 'Page.handleJavaScriptDialog', { accept: true })
+                .catch(() => {});
+            } catch {}
+          }
+        }, 600);
+        timeoutTimer = setTimeout(() => {
+          reject(
+            new Error(
+              `Timed out closing tab(s) ${tabIds.join(', ')} (blocked by beforeunload or native dialog)`,
+            ),
+          );
+        }, 5000);
+      });
+      await Promise.race([removePromise, timeoutPromise]);
+    } finally {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      cdpSessionManager.removeCdpEventObserver(observer);
+      for (const tid of attachedForClose) {
+        if (typeof chrome?.debugger?.detach === 'function') {
+          await Promise.resolve(chrome.debugger.detach({ tabId: tid })).catch(() => {});
+        }
+      }
+    }
+
+    await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+    setTimeout(() => {
+      tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
+    }, 150);
+  }
 
   async execute(args: CloseTabsToolParams): Promise<ToolResult> {
     const rawTabIds = args.tabIds ?? (typeof args.tabId === 'number' ? [args.tabId] : undefined);
@@ -971,14 +1069,7 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
           return createErrorResponse('Found tabs but could not get their IDs');
         }
 
-        for (const tid of tabIdsToClose) {
-          await tabFaviconManager.restoreFavicon(tid).catch(() => {});
-        }
-        await chrome.tabs.remove(tabIdsToClose);
-        await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-        setTimeout(() => {
-          tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-        }, 150);
+        await this.removeTabsCleanly(tabIdsToClose);
 
         return {
           content: [
@@ -1079,14 +1170,7 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
           };
         }
 
-        for (const tid of validTabIds) {
-          await tabFaviconManager.restoreFavicon(tid).catch(() => {});
-        }
-        await chrome.tabs.remove(validTabIds);
-        await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-        setTimeout(() => {
-          tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-        }, 150);
+        await this.removeTabsCleanly(validTabIds);
 
         return {
           content: [
@@ -1122,15 +1206,10 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
         targetTabId = activeTab.id;
       }
 
-      await tabFaviconManager.restoreFavicon(targetTabId).catch(() => {});
-      await chrome.tabs.remove(targetTabId);
+      await this.removeTabsCleanly(targetTabId);
       if (sessionId && affinityTab?.id === targetTabId) {
         sessionTabAffinity.removeAffinity(sessionId);
       }
-      await tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-      setTimeout(() => {
-        tabGroupManager.cleanupEmptyOrOrphanGroups().catch(() => {});
-      }, 150);
 
       return {
         content: [

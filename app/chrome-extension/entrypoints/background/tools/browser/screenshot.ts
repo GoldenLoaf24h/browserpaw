@@ -11,7 +11,6 @@ import {
   compressImage,
   overlayCoordinateGrid,
   smartCompressForTransport,
-  prepareImageForJevVision,
 } from '../../../../utils/image-utils';
 import { screenshotContextManager } from '@/utils/screenshot-context';
 import {
@@ -21,7 +20,6 @@ import {
   SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY,
   type ScreenshotPageStateProbe,
 } from '@/utils/screenshot-validity';
-import { diffPerceptiveSignatures } from '@/utils/screenshot-guard';
 import { executeInPage } from './in-page-engine';
 import { screenshotRingBuffer } from '@/utils/screenshot-ring-buffer';
 import { isRestrictedChromeUrl, logUnexpectedToolError } from '@/utils/restricted-url';
@@ -173,8 +171,6 @@ interface ScreenshotToolParams {
   som?: boolean; // Overlay Set-of-Mark numbered badges on interactive elements before capture
   highlight?: boolean; // Alias for som
   setOfMark?: boolean; // Alias for som
-  /** Internal flag for TypeSafe Jev Vision preparation and frame-binding */
-  _jevVision?: boolean;
   /** View a single visual asset listed by chrome_read_dom (1-based asset index). Bytes first, viewport-crop fallback */
   assetIndex?: number;
   /** Sub-region ROI crop (lossless zoom into specified bounding box [ymin, xmin, ymax, xmax] or { x0, y0, x1, y1 }) */
@@ -465,21 +461,11 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       rawArgs.som === true ||
       (rawArgs as any).highlight === true ||
       (rawArgs as any).setOfMark === true;
-    const isJevVision = rawArgs._jevVision === true;
-
     const args: ScreenshotToolParams = {
       ...rawArgs,
       targetIndex,
       grid,
       som,
-      ...(isJevVision
-        ? {
-            fullPage: false,
-            saveToDisk: false,
-            savePng: false,
-            format: rawArgs.format === 'png' ? 'png' : 'jpeg',
-          }
-        : {}),
     };
 
     const {
@@ -494,7 +480,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     const format: 'png' | 'jpeg' = args.format === 'png' ? 'png' : 'jpeg';
     args.format = format;
     const saveRequested =
-      !isJevVision &&
       (savePng === true || saveToDisk === true || (args as any).saveToDisk === true) &&
       args.savePng !== false &&
       (args as any).saveToDisk !== false;
@@ -519,7 +504,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let fullResolutionPngDataUrl: string | undefined;
     let finalImageWidthCss: number | undefined;
     let finalImageHeightCss: number | undefined;
-    let jevVisionFrame: { id: string; width: number; height: number } | undefined = undefined;
     const results: any = { base64: null, fileSaved: false };
     let originalScroll: { x: number; y: number } | null = null;
     let didPreparePage = false;
@@ -557,67 +541,17 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       typeof args.quality === 'number' ? Math.max(0, Math.min(1, args.quality / 100)) : 0.85;
 
     try {
-      let preUrl: string = '';
-      let preSig: any = null;
-
       let preCaptureState: ScreenshotPageStateProbe | undefined;
       try {
         preCaptureState = await readScreenshotPageState(tab.id!);
-        preUrl = preCaptureState.documentURL || tab.url || '';
       } catch {
         pageStateProbeAvailable = false;
-        if (isJevVision) {
-          const fallback = await executeInPage(
-            { tabId: tab.id! },
-            'inPageGetScrollState',
-            [],
-          ).catch(() => null);
-          const state = fallback?.[0]?.result;
-          const documentId = fallback?.[0]?.documentId || state?.documentId;
-          if (state && documentId) {
-            preCaptureState = {
-              documentId,
-              documentURL: state.documentURL,
-              width: state.viewportWidth,
-              height: state.viewportHeight,
-              dpr: 1,
-              scrollX: state.scrollX,
-              scrollY: state.scrollY,
-              domRevision: -1,
-              observerInitializedNow: true,
-            };
-          }
-        }
-        preUrl = preCaptureState?.documentURL || tab.url || '';
       }
 
       if (retryState) {
         if (!preCaptureState)
           throw new Error('Failed to verify page identity before screenshot retry');
         assertScreenshotCaptureStable(retryState, preCaptureState);
-      }
-
-      if (isJevVision) {
-        if (!preCaptureState) {
-          throw new Error('Failed to capture initial page probes for TypeSafe Jev vision frame');
-        }
-        const preSigRes = await executeInPage(
-          { tabId: tab.id! },
-          'inPageDetectPerceptiveSignature',
-          [],
-        ).catch(() => null);
-        preSig = preSigRes?.[0]?.result;
-        const preSigDocId = preSigRes?.[0]?.documentId;
-        preUrl = preSig?.url || preCaptureState.documentURL || tab.url || '';
-
-        if (!preSig || !preUrl) {
-          throw new Error('Failed to capture initial page probes for TypeSafe Jev vision frame');
-        }
-        if (preSigDocId && preSigDocId !== preCaptureState.documentId) {
-          throw new Error(
-            `Document changed during screenshot probes: pre="${preCaptureState.documentId}" signature="${preSigDocId}"`,
-          );
-        }
       }
 
       const enableSoM = args.som === true || args.highlight === true || args.setOfMark === true;
@@ -1017,16 +951,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
                 scale: 1,
               },
             };
-            // A clipped compositor capture can stall; Jev must reach the existing fallback promptly.
             let shot: any;
-            if (isJevVision) {
-              shot = await cdpSessionManager.sendDebuggerCommand(
-                tabId,
-                'Page.captureScreenshot',
-                captureParams,
-                1500,
-              );
-            } else if (tab.active === false) {
+            if (tab.active === false) {
               try {
                 shot = await cdpSessionManager.sendDebuggerCommand(
                   tabId,
@@ -1286,27 +1212,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       if (finalImageDataUrl && preCaptureState) {
         if (pageStateProbeAvailable) {
           captureState = await readScreenshotPageState(tab.id!);
-        } else if (isJevVision) {
-          const fallback = await executeInPage(
-            { tabId: tab.id! },
-            'inPageGetScrollState',
-            [],
-          ).catch(() => null);
-          const state = fallback?.[0]?.result;
-          const documentId = fallback?.[0]?.documentId || state?.documentId;
-          if (state && documentId) {
-            captureState = {
-              documentId,
-              documentURL: state.documentURL,
-              width: state.viewportWidth,
-              height: state.viewportHeight,
-              dpr: 1,
-              scrollX: state.scrollX,
-              scrollY: state.scrollY,
-              domRevision: -1,
-              observerInitializedNow: true,
-            };
-          }
         }
         if (!captureState) {
           throw new Error('Failed to capture post-screenshot page state');
@@ -1332,100 +1237,7 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         }
       }
 
-      if (isJevVision && finalImageDataUrl && captureState) {
-        const postSigRes = await executeInPage(
-          { tabId: tab.id! },
-          'inPageDetectPerceptiveSignature',
-          [],
-        ).catch(() => null);
-        const postSig = postSigRes?.[0]?.result;
-        const postSigDocId = postSigRes?.[0]?.documentId;
-        const postUrl = postSig?.url || captureState.documentURL || tab.url || '';
-
-        if (!postSig || !postUrl) {
-          throw new Error(
-            'Failed to capture post-screenshot verification probes for TypeSafe Jev vision frame',
-          );
-        }
-
-        if (postSigDocId && postSigDocId !== captureState.documentId) {
-          throw new Error(
-            `Document changed during screenshot probes: state="${captureState.documentId}" signature="${postSigDocId}"`,
-          );
-        }
-
-        if (preUrl !== postUrl) {
-          throw new Error(
-            `Page URL changed during screenshot capture: pre="${preUrl}" vs post="${postUrl}"`,
-          );
-        }
-
-        if (preSig && postSig) {
-          const sigDrift = diffPerceptiveSignatures(preSig, postSig);
-          if (sigDrift) {
-            throw new Error(`Perceptive signature changed during screenshot capture: ${sigDrift}`);
-          }
-        }
-
-        const preferredMime = args.format === 'png' ? 'image/png' : 'image/jpeg';
-        const jevImg = await prepareImageForJevVision(finalImageDataUrl, {
-          preferredFormat: preferredMime,
-          quality: qualityFraction,
-        });
-        finalImageDataUrl = jevImg.dataUrl;
-        finalImageWidthCss = jevImg.width;
-        finalImageHeightCss = jevImg.height;
-
-        const isRoiOrElement = Boolean(elementCropOrigin);
-        const cropW =
-          elementOriginalCrop?.width ?? (isRoiOrElement ? finalImageWidthCss : undefined);
-        const cropH =
-          elementOriginalCrop?.height ?? (isRoiOrElement ? finalImageHeightCss : undefined);
-        const viewportWidth = captureState.width;
-        const viewportHeight = captureState.height;
-        const captureMode: 'viewport' | 'fullpage' | 'element' = isRoiOrElement
-          ? 'element'
-          : 'viewport';
-        const scrollX = captureState.scrollX;
-        const scrollY = captureState.scrollY;
-
-        const documentId = captureState.documentId;
-        const frameUrl = postSig?.url || postUrl || tab.url || '';
-
-        const visionFrameId =
-          'vf_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
-        const frame = screenshotContextManager.createVisionFrame({
-          id: visionFrameId,
-          tabId: tab.id!,
-          url: frameUrl,
-          documentId,
-          title: tab.title,
-          width: jevImg.width,
-          height: jevImg.height,
-          contentWidth: jevImg.contentWidth,
-          contentHeight: jevImg.contentHeight,
-          padX: jevImg.padX,
-          padY: jevImg.padY,
-          scaleRatio: jevImg.scaleRatio,
-          viewportWidth,
-          viewportHeight,
-          scrollX,
-          scrollY,
-          devicePixelRatio: captureState.dpr,
-          captureMode,
-          originX: elementCropOrigin?.x,
-          originY: elementCropOrigin?.y,
-          cropWidth: cropW,
-          cropHeight: cropH,
-          perceptiveSignature: postSig,
-        });
-
-        jevVisionFrame = {
-          id: frame.id,
-          width: frame.width,
-          height: frame.height,
-        };
-      } else {
+      {
         // Update the context used by screenshot-coordinate actions.
         try {
           if (typeof finalImageWidthCss === 'number' && typeof finalImageHeightCss === 'number') {
@@ -1585,16 +1397,10 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalBase64 =
       results.base64 ||
       (finalImageDataUrl ? finalImageDataUrl.replace(/^data:[^;]+;base64,/, '') : undefined);
-    let finalMime: 'image/png' | 'image/jpeg' = isJevVision
-      ? args.format === 'png'
-        ? 'image/png'
-        : 'image/jpeg'
-      : format === 'png'
-        ? 'image/png'
-        : 'image/jpeg';
+    let finalMime: 'image/png' | 'image/jpeg' = format === 'png' ? 'image/png' : 'image/jpeg';
     let isThumbnailFinal = false;
 
-    if (!isJevVision && finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
+    if (finalBase64 && finalBase64.length > 450 * 1024 && finalImageDataUrl) {
       try {
         const isHighClarity =
           args.highClarity === true || fullPage === true || Boolean(results.roi);
@@ -1706,7 +1512,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         text: JSON.stringify({
           success: true,
           message: `Screenshot [${name}] captured successfully`,
-          ...(jevVisionFrame ? { visionFrame: jevVisionFrame } : {}),
           ...captureMetadata,
           tabId: tab.id,
           url: scrubUrl(tab.url || ''),

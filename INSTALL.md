@@ -17,6 +17,7 @@ BrowserPaw connects any shell-capable AI Agent to your existing Chrome or Chromi
 
 - **Base Skill**: Instructs the Agent on CLI syntax, task lifecycle, and verification. Lives globally in `~/.agents/skills/browserpaw` (recommended Quick Start), in a project at `./.agents/skills/browserpaw`, or read-only inside an optional client plugin directory.
 - **Self-Learned Workflows (`~/.browserpaw`)**: Saved recipes (`recipes/`), verified site skills (`skills/`), and the routing index (`learned-index.json`) always stay in `~/.browserpaw` and never conflict with read-only base skills bundled by client plugins.
+- **Windows path equivalents**: Replace `~/.browserpaw` with `%USERPROFILE%\.browserpaw` and `~/.agents/skills/browserpaw` with `%USERPROFILE%\.agents\skills\browserpaw`.
 
 ## Choose Your Installation Path
 
@@ -54,6 +55,8 @@ npm install -g browserpaw@5.0.0
 browserpaw setup
 ```
 
+> **Note on npm availability:** The `npm install -g browserpaw@5.0.0` and `npx browserpaw@5.0.0` commands apply once `5.0.0` is published to npm. For a pre-release tarball or local build, use `npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup`.
+
 Alternative without global install (after npm publication) or from a local release tarball:
 
 ```sh
@@ -76,7 +79,7 @@ Managed base Skill copies are refreshed automatically by `browserpaw setup`; no 
 
 ### 2. Load the unpacked Chrome extension
 
-On first setup, `browserpaw setup` installs the host outside npm's cache, registers `com.browserpaw.nativehost`, and prepares the bundled MV3 extension at `~/.browserpaw/extension` (printed in setup output).
+On first setup, `browserpaw setup` installs the host outside npm's cache, registers `com.browserpaw.nativehost`, and prepares the bundled MV3 extension at `~/.browserpaw/extension` (printed in setup output on Windows, macOS, and Linux).
 
 1. Open `chrome://extensions` in Google Chrome (or `chromium://extensions` in Chromium).
 2. Enable **Developer mode** in the top-right corner.
@@ -100,7 +103,7 @@ The CLI checks npm's stable `latest` tag at most once every 24 hours per Browser
 
 1. Finish any active browser work. For a global install, run `npm install -g browserpaw@latest` followed by `browserpaw setup`. For npx, run `npx browserpaw@latest setup` and use that version for later commands. Use the same package manager or plugin that installed your CLI.
 2. Setup refreshes the Native Host and the base Skills it manages in their existing locations, then regenerates learned routing from `~/.browserpaw`. For a Skill shipped inside a client plugin, run setup with `--no-skill` and update the client plugin through its manager.
-3. Download `browserpaw-extension.zip` from the [GitHub release](https://github.com/GoldenLoaf24h/browserpaw/releases) matching `browserpaw --version`. Unpack it and select the folder containing `manifest.json` with **Load unpacked** in `chrome://extensions` after disabling the old copy. If you replace the files in the folder Chrome already loads, click **Reload** on its existing card. This browser step reconnects the upgraded Native Host.
+3. **Extension updates remain manual**: download `browserpaw-extension.zip` from the [GitHub release](https://github.com/GoldenLoaf24h/browserpaw/releases) matching `browserpaw --version`. Unpack it and select the folder containing `manifest.json` with **Load unpacked** in `chrome://extensions` (or `chromium://extensions`) after disabling the old copy. If you overwrite the files in the folder Chrome already loads, click **Reload** on its existing card. This browser step reconnects the upgraded Native Host.
 4. Run `browserpaw status --json`. For build verification, compare `data.extension.buildId` with `browserpaw-build.json` in the folder loaded by Chrome.
 
 ## Path 2: Official Client Plugins (Unified v5 Integration)
@@ -177,3 +180,9 @@ browserpaw uninstall
 ```
 
 By default, `browserpaw uninstall` removes the managed host registration and unpacked extension while preserving learned workflows under `~/.browserpaw`. Pass `--purge` to delete BrowserPaw data inside `~/.browserpaw` as well.
+
+## Troubleshooting & Policies
+
+- **Check live bridge and build identity**: Run `browserpaw status --json` and `browserpaw doctor`. Verify `data.extension.buildId` matches `browserpaw-build.json` in the folder Chrome loaded (if not, reload or re-select the unpacked folder).
+- **Repair Native Messaging registration**: Run `browserpaw doctor --fix`. If migrating from v4, confirm Chrome is not running a stale v4 unpacked extension tied to `com.chromemcp.nativehost` (port `12306`) instead of v5 `com.browserpaw.nativehost` (port `12307`).
+- **Further help & policies**: [Troubleshooting Guide](docs/TROUBLESHOOTING.md) · [Migration Guide](docs/MIGRATION.md) · [Security Policy](SECURITY.md) · [Privacy Policy](PRIVACY.md)

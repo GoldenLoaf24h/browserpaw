@@ -35,9 +35,9 @@ Stop on any nonzero exit. Preserve the generated verification report unchanged. 
 
 ## Commit, CI and tag
 
-Commit and push only within the authorized task. Use a clean release checkout and do not include unrelated work. Require the CI workflow on the exact source commit to pass on both Ubuntu and Windows.
+Commit and push only within the authorized task. Use a clean release checkout and do not include unrelated work. Require CI for the exact source commit to pass on Linux, Windows and macOS.
 
-Create and push the annotated tag on that verified commit. Wait for the tag-triggered CI workflow to pass on both platforms as well; do not publish while it is queued, cancelled or failing.
+Create and push the annotated tag on that verified commit. Wait for the tag-triggered CI workflow to pass on all three platforms before publishing.
 
 ```powershell
 git tag -a $releaseTag -m "BrowserPaw $releaseTag"
@@ -50,7 +50,7 @@ Check that local HEAD, the remote tag and the successful CI head SHA agree. If s
 
 ## Package the verified output
 
-`pnpm verify` already builds the extension. `pnpm build` alone does **not** create these release ZIPs. Do not rebuild merely to package: doing so changes the build ID and invalidates any loaded-runtime evidence for the prior build.
+`pnpm verify` already builds the extension. Package that verified output to preserve its exact artifact hashes. The build ID is stable for unchanged extension inputs, while build timestamps and archive hashes can differ between runs.
 
 The following pwsh example creates a new local directory for this version and packages the existing build. If it already exists, inspect its contents rather than overwriting a frozen release. Run commands separately and stop on errors.
 
@@ -65,6 +65,8 @@ Get-FileHash "$releaseDir/browserpaw-extension.zip", "$releaseDir/browserpaw-ski
 
 Inspect both archives: the extension must contain `manifest.json` and `browserpaw-build.json` at its root; the skill must contain `browserpaw/SKILL.md` plus its referenced resources. Do not include local configuration, API keys, caches or developer instruction files. Confirm the embedded version and build ID against the verification report.
 
+From `app/native-server`, run `npm pack --json --pack-destination ABSOLUTE_RELEASE_DIR`. Inspect the resulting `browserpaw-X.Y.Z.tgz` and include it alongside the two ZIPs in `SHA256SUMS.txt`. Run the isolated browser fixture against the CLI extracted from that tarball.
+
 Keep computed SHA-256 values with local release evidence. Do not put build-dependent hashes into tracked notes and trigger a build/hash/rewrite loop. Compare local and downloaded draft assets before publication.
 
 ## Create and inspect a draft
@@ -72,7 +74,7 @@ Keep computed SHA-256 values with local release evidence. Do not put build-depen
 A release task must authorize remote creation and publication. Existing authorization suffices; do not ask for it again. This guide and its checks do not themselves grant publication permission.
 
 ```powershell
-gh release create $releaseTag "$releaseDir/browserpaw-extension.zip" "$releaseDir/browserpaw-skill.zip" --verify-tag --draft --title "BrowserPaw $releaseTag" --notes-file $releaseNote
+gh release create $releaseTag "$releaseDir/browserpaw-extension.zip" "$releaseDir/browserpaw-skill.zip" "$releaseDir/browserpaw-$($releaseTag.TrimStart('v')).tgz" "$releaseDir/SHA256SUMS.txt" --verify-tag --draft --title "BrowserPaw $releaseTag" --notes-file $releaseNote
 gh release view $releaseTag --json tagName,name,body,isDraft,isPrerelease,targetCommitish,assets
 ```
 
@@ -81,9 +83,9 @@ For a prerelease tag, add `--prerelease --latest=false` to creation and keep `--
 Before publication:
 
 - Inspect Markdown rendering and compare the title/body with the canonical file.
-- Verify the remote tag resolves to the tested commit and both CI platforms passed for it.
+- Verify the remote tag resolves to the tested commit and all three CI platforms passed for it.
 - Confirm exactly the intended assets are attached with the stable names.
-- Download the draft's two ZIPs into a new local directory with `gh release download $releaseTag --dir <new-directory>`; compare both SHA-256 values with the local files.
+- Download the draft assets into a new local directory with `gh release download $releaseTag --dir <new-directory>` and compare all three package hashes with the local checksum file.
 - Confirm the verification scope describes the packaged build and states every untested boundary. If a new build was required, repeat affected runtime checks.
 
 Once the authorized release is ready:
@@ -94,6 +96,8 @@ gh release view $releaseTag --json url,tagName,name,isDraft,isPrerelease,assets
 ```
 
 Confirm the release is public and its extension ZIP can be downloaded before making the matching CLI version available on npm's `latest` tag. The update notice directs users to that ZIP. Keep any corrections to the canonical release note and public release body in sync.
+
+Publish the tested npm tarball before distributing the matching DeepSeek Harness, Hermes, Claude Code and Codex plugin releases. Their installation instructions depend on the CLI being available.
 
 ## Automation boundary
 

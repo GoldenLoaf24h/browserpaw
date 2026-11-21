@@ -135,13 +135,13 @@ function wsFrameType(opcode: number): WebSocketFrameInfo['type'] {
  */
 class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
   name = 'chrome_network_debugger_start';
-  private captureData: Map<number, any> = new Map(); // tabId -> capture data
+  public captureData: Map<number, any> = new Map(); // tabId -> capture data
   public terminalResults = new Map<number, { result: any; expiresAt: number }>();
   private captureTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> max capture timer
   private inactivityTimers: Map<number, NodeJS.Timeout> = new Map(); // tabId -> inactivity timer
   private lastActivityTime: Map<number, number> = new Map(); // tabId -> timestamp of last network activity
   private pendingResponseBodies: Map<string, Promise<any>> = new Map(); // requestId -> promise for getResponseBody
-  private requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests (after filtering)
+  public requestCounters: Map<number, number> = new Map(); // tabId -> count of captured requests (after filtering)
   private responseBodyBytes: Map<number, number> = new Map();
   private static MAX_REQUESTS_PER_CAPTURE = 100; // Max requests to store to prevent memory issues
   public static instance: NetworkDebuggerStartTool | null = null;
@@ -938,9 +938,7 @@ class NetworkDebuggerStartTool extends BaseBrowserToolExecutor {
       `NetworkDebuggerStartTool: Capture stopped for tab ${tabId}. ${resultData.requestCount} requests processed. Limit reached: ${resultData.requestLimitReached}. Stopped by: ${resultData.stoppedBy}`,
     );
 
-    if (isAutoStop) {
-      this.retainTerminalResult(tabId, resultData);
-    }
+    this.retainTerminalResult(tabId, resultData);
     this.cleanupCapture(tabId); // Final cleanup of all internal states for this tab
 
     return {
@@ -1159,7 +1157,7 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
     NetworkDebuggerStopTool.instance = this;
   }
 
-  async execute(args?: { tabId?: number }): Promise<ToolResult> {
+  async execute(args?: { tabId?: number; keepResult?: boolean }): Promise<ToolResult> {
     console.log(`NetworkDebuggerStopTool: Executing command.`);
 
     const startTool = NetworkDebuggerStartTool.instance;
@@ -1179,7 +1177,10 @@ class NetworkDebuggerStopTool extends BaseBrowserToolExecutor {
 
     if (typeof args?.tabId === 'number') {
       if (!startTool['captureData'].has(args.tabId)) {
-        const retained = startTool.takeTerminalResult(args.tabId);
+        const retained = args.keepResult
+          ? startTool.hasTerminalResult(args.tabId) &&
+            startTool.terminalResults.get(args.tabId)?.result
+          : startTool.takeTerminalResult(args.tabId);
         if (retained) return this.makeStopResponse(startTool, args.tabId, retained);
         return createErrorResponse(`No active network captures found on tab ${args.tabId}.`);
       }

@@ -2,25 +2,34 @@
 
 [Simplified Chinese](README.zh-CN.md)
 
-BrowserPaw gives any shell-capable AI Agent command-line control of your existing Chrome or Chromium profile—reusing your logins, cookies, and extensions. The Agent reads the BrowserPaw Agent Skill, executes `browserpaw` CLI commands, and receives compact receipts or local file references.
+BrowserPaw gives any shell-capable AI Agent fast, deterministic command-line control of your everyday desktop Chrome or Chromium profile—reusing your active logins, cookies, and extensions without starting a separate headless browser or bloating Agent context with dozens of MCP schemas.
+
+The Agent reads the BrowserPaw Agent Skill, runs compact `browserpaw` CLI commands over an authenticated local loopback bridge (`com.browserpaw.nativehost`), and receives concise JSON/text receipts or local file paths for screenshots, traces, and exports.
 
 > **Upgrading from v4.x?** BrowserPaw v5.0.0 replaces the v4 MCP server, REPL, and Jev service with the unified `browserpaw` CLI, standard Agent Skill, and v5 client plugins. Read the [Migration Guide](docs/MIGRATION.md) ([Simplified Chinese](docs/MIGRATION.zh-CN.md)), or ask your Agent to read `docs/MIGRATION.md` and migrate your configuration.
 
 ## Quick Start (Recommended: Global Skill + npm + Extension)
 
-Requires **Node.js 22.6+** and desktop Chrome or Chromium. Install the CLI globally, run `setup` to register the Native Messaging host and install the global Agent Skill (`~/.agents/skills/browserpaw`), then load the unpacked extension in Chrome:
+Requires **Node.js 22.6+** and desktop Chrome or Chromium on Windows, macOS, or Linux. Install the CLI globally, run `setup` to register the Native Messaging host and install the global Agent Skill (`~/.agents/skills/browserpaw`, Windows `%USERPROFILE%\.agents\skills\browserpaw`), then load the unpacked extension in Chrome or Chromium:
 
 ```sh
 npm install -g browserpaw@5.0.0
 browserpaw setup
 ```
 
-Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the extension directory printed by `setup` (default `~/.browserpaw/extension`).
+> **Note on npm availability:** `npm install -g browserpaw@5.0.0` and `npx browserpaw@5.0.0` apply once `5.0.0` is published to npm. For a pre-release local tarball, use `npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup`.
 
-- **Alternative install options:** Run `npx browserpaw@5.0.0 setup` without global install (prefix later calls with `npx --yes browserpaw@5.0.0`), or install a local candidate with `npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup`.
-- **Skill scope & browser flags:** `--skill-scope user` (default `~/.agents/skills/browserpaw`), `--skill-scope project` (`./.agents/skills/browserpaw`), `--skill-dir DIR`, `--no-skill`, and `--browser chromium`.
+Open `chrome://extensions` (or `chromium://extensions`), enable **Developer mode**, click **Load unpacked**, and select the extension directory printed by `setup` (default `~/.browserpaw/extension`, Windows `%USERPROFILE%\.browserpaw\extension`), then verify with `browserpaw status`.
+
+| Install Option                             | Best For                                                                    | Command                                               |
+| :----------------------------------------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
+| **Global Skill + npm CLI** _(Recommended)_ | Everyday use across Codex, Claude Code, Cursor, Windsurf, and DSH           | `npm install -g browserpaw@5.0.0 && browserpaw setup` |
+| **`npx` / Tarball / Project Skill**        | No global install or workspace-scoped Skill (`./.agents/skills/browserpaw`) | `npx browserpaw@5.0.0 setup --skill-scope project`    |
+| **Native Client Plugin**                   | Host-native marketplace/plugin install (read-only base Skill + npm CLI)     | See [Client Plugins](#client-plugins) below           |
+
+- **Setup flags:** `--skill-scope user` (default), `--skill-scope project`, `--skill-dir DIR`, `--no-skill`, and `--browser chromium`.
 - See the full multi-path [Installation Guide](INSTALL.md) for human and Agent-assisted onboarding.
-- Each new CLI version is announced once. Use the new CLI to refresh its managed base Skill and Native Host, then update the Chrome extension manually. [Upgrade guide](INSTALL.md#upgrade-an-existing-v5-installation)
+- **Upgrades:** Each newer CLI version is announced once on `stderr`. Upgrade the CLI and re-run `browserpaw setup` to refresh the Native Host and managed base Skill; Chrome MV3 extension updates remain manual in `chrome://extensions`. See the [Upgrade guide](INSTALL.md#upgrade-an-existing-v5-installation).
 
 ## Client Plugins
 
@@ -42,6 +51,7 @@ Use `browserpaw help data` for history, bookmarks, downloads, storage and cookie
 ```text
 browserpaw status
 browserpaw help
+browserpaw search "network"
 browserpaw task start research --json
 browserpaw open https://example.com --task TASK_ID
 browserpaw observe --task TASK_ID
@@ -52,8 +62,16 @@ browserpaw task finish --task TASK_ID
 
 Replace `TASK_ID` with the returned task ID. To operate on an existing page, run `browserpaw tabs` and select it with `--tab ID`. Read [command reference](docs/COMMANDS.md) and the [Agent Skill](skills/browserpaw/SKILL.md) for refs, frames, recipes, and receipts.
 
-Self-learned site skills and saved CLI recipes live under `~/.browserpaw` (`skills/`, `recipes/`, and `learned-index.json`). Run `browserpaw recipe find <query>` or `browserpaw recipe list --all` to discover workflows, `browserpaw recipe validate ID` to activate a candidate skill, `browserpaw recipe run ID key=value` to call one directly, and `browserpaw recipe save FILE` to teach a new workflow. Saving or validating automatically refreshes the installed Skill routing table so Agents route to learned workflows without extra reminders.
+Self-learned site skills and saved CLI recipes live under `~/.browserpaw` (`skills/`, `recipes/`, and `learned-index.json`). Run `browserpaw recipe find <query>` or `browserpaw recipe list --all` to discover workflows, `browserpaw recipe save FILE` to create a candidate, `browserpaw recipe patch ID --step INDEX -- ARGS...` to repair one step, and `browserpaw recipe validate ID key=value` to verify a read-only candidate before activation. `browserpaw recipe run ID key=value` executes a workflow directly. Candidates remain outside automatic routing, and successful activation refreshes the installed Skill routing table.
 
-Run `browserpaw doctor` for installation checks and `browserpaw doctor --fix` to repair the registered host. `browserpaw uninstall` removes the managed installation and preserves task and recipe data. `--purge` also removes the BrowserPaw data from its installation directory.
+## Troubleshooting & Maintenance
 
-See [installation guide](INSTALL.md), [architecture](docs/ARCHITECTURE.md), [troubleshooting](docs/TROUBLESHOOTING.md), [plugin compatibility](docs/development/PLUGIN_COMPATIBILITY.md), and [release history](docs/releases/README.md).
+- **Verify bridge & build match**: Run `browserpaw status` (or `browserpaw status --json`) and `browserpaw doctor`. Compare `data.extension.buildId` with `browserpaw-build.json` inside Chrome's loaded extension folder.
+- **Repair host registration**: Run `browserpaw doctor --fix` to re-register `com.browserpaw.nativehost`. If upgrading from v4, confirm Chrome is not pointing to the retired v4 `com.chromemcp.nativehost` (port `12306`) or an old unpacked extension copy.
+- **Uninstall cleanly**: `browserpaw uninstall` removes the managed host registration and extension copy while preserving learned workflows under `~/.browserpaw`; pass `--purge` to remove BrowserPaw data there as well.
+
+## Security, Privacy & Documentation
+
+- [Security Policy](SECURITY.md) — supported versions, loopback auth, SSRF/path guards, and vulnerability reporting
+- [Privacy Policy](PRIVACY.md) — local-first boundaries, update checks, and Chrome permissions
+- [Installation Guide](INSTALL.md) · [Migration Guide](docs/MIGRATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Plugin Compatibility](docs/development/PLUGIN_COMPATIBILITY.md) · [Release History](docs/releases/README.md)
