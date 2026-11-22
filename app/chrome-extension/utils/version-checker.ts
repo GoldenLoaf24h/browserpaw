@@ -1,6 +1,8 @@
 import {
   checkVersionUpdate,
   CURRENT_VERSION,
+  EXTENSION_RELEASE_ASSET,
+  type CheckVersionUpdateOptions,
   type VersionCacheStorage,
   type VersionCacheEntry,
   type VersionCheckResult,
@@ -27,7 +29,9 @@ export const chromeVersionStorage: VersionCacheStorage = {
   },
 };
 
-export async function checkExtensionVersionUpdate(): Promise<VersionCheckResult> {
+export async function checkExtensionVersionUpdate(
+  options?: Partial<CheckVersionUpdateOptions>,
+): Promise<VersionCheckResult> {
   let currentVersion = CURRENT_VERSION;
   try {
     if (typeof chrome !== 'undefined' && chrome.runtime?.getManifest) {
@@ -41,5 +45,7 @@ export async function checkExtensionVersionUpdate(): Promise<VersionCheckResult>
   return checkVersionUpdate({
     currentVersion,
     storage: chromeVersionStorage,
+    requiredAssetName: EXTENSION_RELEASE_ASSET,
+    ...options,
   });
 }

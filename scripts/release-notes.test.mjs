@@ -160,18 +160,36 @@ test('validateReleaseNote rejects missing required sections', () => {
   );
 });
 
-test('validateReleaseNote rejects missing stable assets', () => {
+test('validateReleaseNote rejects missing required stable skill asset', () => {
   const missingAsset = VALID_RELEASE_CONTENT.replace(
-    /`browserpaw-extension\.zip`/g,
-    '`other-extension.zip`',
+    /`browserpaw-skill\.zip`/g,
+    '`other-skill.zip`',
   );
   const result = validateReleaseNote(missingAsset, 'v4.2.0.md');
   assert.equal(result.valid, false);
   assert.ok(
-    result.errors.some((e) =>
-      e.includes('Missing required stable asset: "browserpaw-extension.zip"'),
-    ),
+    result.errors.some((e) => e.includes('Missing required stable asset: "browserpaw-skill.zip"')),
   );
+});
+
+test('validateReleaseNote allows omitting browserpaw-extension.zip when extension is unchanged', () => {
+  const cliOnlyRelease = VALID_RELEASE_CONTENT.replace(
+    /\| `browserpaw-extension\.zip`[^\n]*\r?\n/,
+    '',
+  );
+  const result = validateReleaseNote(cliOnlyRelease, 'v4.2.0.md');
+  assert.equal(result.valid, true, `Validation errors: ${result.errors.join(', ')}`);
+  assert.equal(result.errors.length, 0);
+});
+
+test('validateReleaseNote rejects versioned extension or skill archive filenames', () => {
+  const versionedAsset = VALID_RELEASE_CONTENT.replace(
+    '`browserpaw-extension.zip`',
+    '`browserpaw-extension-v4.2.0.zip`',
+  );
+  const result = validateReleaseNote(versionedAsset, 'v4.2.0.md');
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes('must use stable filenames')));
 });
 
 test('validateReleaseNote rejects unexpanded placeholders in real release note', () => {

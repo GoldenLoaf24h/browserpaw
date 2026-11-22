@@ -41,5 +41,7 @@ describe('Extension popup v5 contract', () => {
   it('leaves the current version inert until an update is available', () => {
     expect(appSource).toContain('<span v-else class="version">v{{ version }}</span>');
     expect(appSource).not.toMatch(/class="version"[^>]*title=/);
+    expect(appSource).toContain('resolveReleaseUrl(result.releaseUrl)');
+    expect(appSource).toContain('Extension update available — open release');
   });
 });

@@ -8,10 +8,18 @@ export const GITHUB_REPO_OWNER = 'GoldenLoaf24h';
 export const GITHUB_REPO_NAME = 'browserpaw';
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
 export const GITHUB_API_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`;
+export const GITHUB_API_RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases?per_page=20`;
+export const EXTENSION_RELEASE_ASSET = 'browserpaw-extension.zip';
 export const CURRENT_VERSION = '5.0.1';
+export const LATEST_EXTENSION_VERSION = '5.0.1';
 export const MIN_COMPATIBLE_EXTENSION_VERSION = '5.0.0';
 export const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour sliding TTL
 export const DEFAULT_MAX_SLIDING_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours maximum sliding window
+
+export function extensionReleaseAssetUrl(version: string = LATEST_EXTENSION_VERSION): string {
+  const clean = version.trim().replace(/^[vV]/, '');
+  return `${GITHUB_REPO_URL}/releases/download/v${clean}/${EXTENSION_RELEASE_ASSET}`;
+}
 
 export interface SemVerParsed {
   major: number;
@@ -175,6 +183,7 @@ export interface VersionCacheEntry {
   etag?: string;
   lastChecked: number;
   expiresAt: number;
+  requiredAssetName?: string;
 }
 
 export interface VersionCacheStorage {
@@ -214,6 +223,66 @@ export interface CheckVersionUpdateOptions {
   fallbackReleaseUrl?: string;
   fetchFn?: typeof fetch;
   forceRefresh?: boolean;
+  requiredAssetName?: string;
+}
+
+interface GitHubReleaseAssetLike {
+  name?: unknown;
+}
+
+interface GitHubReleaseLike {
+  tag_name?: unknown;
+  name?: unknown;
+  html_url?: unknown;
+  draft?: unknown;
+  prerelease?: unknown;
+  assets?: unknown;
+}
+
+function releaseHasAsset(release: GitHubReleaseLike, assetName: string): boolean {
+  if (!Array.isArray(release.assets)) return false;
+  return release.assets.some(
+    (asset) =>
+      asset !== null &&
+      typeof asset === 'object' &&
+      typeof (asset as GitHubReleaseAssetLike).name === 'string' &&
+      (asset as GitHubReleaseAssetLike).name === assetName,
+  );
+}
+
+function selectMatchingRelease(
+  data: unknown,
+  requiredAssetName?: string,
+): GitHubReleaseLike | null {
+  if (Array.isArray(data)) {
+    let bestRelease: GitHubReleaseLike | null = null;
+    let bestParsed: SemVerParsed | null = null;
+    for (const item of data) {
+      if (!item || typeof item !== 'object') continue;
+      const release = item as GitHubReleaseLike;
+      if (release.draft === true || release.prerelease === true) continue;
+      if (requiredAssetName && !releaseHasAsset(release, requiredAssetName)) continue;
+      const rawTag = String(release.tag_name || release.name || '').trim();
+      const parsed = parseSemver(rawTag);
+      if (!parsed) continue;
+      if (parsed.prerelease) continue;
+      if (!bestParsed || compareSemver(parsed.raw, bestParsed.raw) > 0) {
+        bestParsed = parsed;
+        bestRelease = release;
+      }
+    }
+    return bestRelease;
+  }
+
+  if (!data || typeof data !== 'object') return null;
+  const release = data as GitHubReleaseLike;
+  if (requiredAssetName) {
+    if (release.draft === true || release.prerelease === true) return null;
+    if (!releaseHasAsset(release, requiredAssetName)) return null;
+    const rawTag = String(release.tag_name || release.name || '').trim();
+    if (parseSemver(rawTag)?.prerelease) return null;
+  }
+  return release;
 }
 
 /**
@@ -228,8 +297,13 @@ export async function checkVersionUpdate(
   const ttlMs = options?.ttlMs ?? DEFAULT_CACHE_TTL_MS;
   const maxSlidingWindowMs = options?.maxSlidingWindowMs ?? DEFAULT_MAX_SLIDING_WINDOW_MS;
   const timeoutMs = options?.timeoutMs ?? 3000;
-  const apiUrl = options?.apiUrl || GITHUB_API_LATEST_RELEASE_URL;
-  const fallbackReleaseUrl = options?.fallbackReleaseUrl || `${GITHUB_REPO_URL}/releases/latest`;
+  const requiredAssetName = options?.requiredAssetName?.trim() || undefined;
+  const apiUrl =
+    options?.apiUrl ||
+    (requiredAssetName ? GITHUB_API_RELEASES_URL : GITHUB_API_LATEST_RELEASE_URL);
+  const fallbackReleaseUrl =
+    options?.fallbackReleaseUrl ||
+    (requiredAssetName ? `${GITHUB_REPO_URL}/releases` : `${GITHUB_REPO_URL}/releases/latest`);
   const customFetch = options?.fetchFn || (typeof fetch !== 'undefined' ? fetch : null);
   const forceRefresh = options?.forceRefresh ?? false;
 
@@ -239,6 +313,9 @@ export async function checkVersionUpdate(
   try {
     cached = await storage.get();
   } catch {
+    cached = null;
+  }
+  if (cached && (cached.requiredAssetName || undefined) !== requiredAssetName) {
     cached = null;
   }
 
@@ -335,8 +412,13 @@ export async function checkVersionUpdate(
     // 4. Handle 200 OK: Process new release info
     if (res.status === 200) {
       const data = await res.json();
-      const rawTag = (data?.tag_name || data?.name || '').trim();
-      const releaseUrl = (data?.html_url || fallbackReleaseUrl).trim();
+      const matchedRelease = selectMatchingRelease(data, requiredAssetName);
+      const rawTag = matchedRelease
+        ? String(matchedRelease.tag_name || matchedRelease.name || '').trim()
+        : '';
+      const releaseUrl = matchedRelease?.html_url
+        ? String(matchedRelease.html_url).trim()
+        : fallbackReleaseUrl;
       const etag = res.headers?.get?.('etag') || undefined;
 
       const remoteParsed = parseSemver(rawTag);
@@ -350,6 +432,7 @@ export async function checkVersionUpdate(
         etag,
         lastChecked: now,
         expiresAt: now + ttlMs,
+        ...(requiredAssetName ? { requiredAssetName } : {}),
       };
 
       try {
@@ -392,6 +475,7 @@ export async function checkVersionUpdate(
         releaseUrl: fallbackReleaseUrl,
         lastChecked: now,
         expiresAt: now + Math.min(ttlMs, 5 * 60 * 1000),
+        ...(requiredAssetName ? { requiredAssetName } : {}),
       });
     } catch {}
 

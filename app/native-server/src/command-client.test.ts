@@ -127,4 +127,95 @@ describe('Extension version compatibility and CLI status reporting', () => {
       error: { code: 'version_mismatch' },
     });
   });
+
+  it('suppresses extensionUpdateAvailable on CLI-only releases when loaded extension matches LATEST_EXTENSION_VERSION', async () => {
+    const token = 'c'.repeat(64);
+    writeFileSync(join(homeDir, 'token'), token, { mode: 0o600 });
+
+    let reportedExtensionVersion = '5.0.1';
+    const fakeHost = await startHttpServer((req, res) => {
+      if (req.headers['x-browserpaw-token'] !== token) {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/v1/status') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            protocol: 1,
+            version: '5.0.2',
+            connected: true,
+            pid: process.pid,
+            port: fakeHost.port,
+            extension: { manifestVersion: reportedExtensionVersion },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    servers.push(fakeHost.server);
+    writeFileSync(
+      join(homeDir, 'host.json'),
+      JSON.stringify({ port: fakeHost.port, pid: process.pid, version: '5.0.2', protocol: 1 }),
+    );
+
+    const stdout: string[] = [];
+    jest.spyOn(console, 'log').mockImplementation((...args) => {
+      stdout.push(args.map(String).join(' '));
+    });
+
+    const actualShared =
+      jest.requireActual<typeof import('chrome-mcp-shared')>('chrome-mcp-shared');
+    jest.resetModules();
+    jest.doMock('chrome-mcp-shared', () => ({
+      ...actualShared,
+      CURRENT_VERSION: '5.0.2',
+      LATEST_EXTENSION_VERSION: '5.0.1',
+    }));
+    const { runCommands } = await import('./command-client');
+
+    const matchingExit = await runCommands(['status', '--json']);
+    expect(matchingExit).toBe(0);
+    const matchingReceipt = JSON.parse(stdout[0]!) as {
+      ok: boolean;
+      data: {
+        extensionUpdateAvailable?: boolean;
+        extensionLatestVersion?: string;
+        extensionReleaseAsset?: string;
+      };
+    };
+    expect(matchingReceipt.ok).toBe(true);
+    expect(matchingReceipt.data.extensionUpdateAvailable).toBeUndefined();
+    expect(matchingReceipt.data.extensionLatestVersion).toBeUndefined();
+    expect(matchingReceipt.data.extensionReleaseAsset).toBeUndefined();
+
+    stdout.length = 0;
+    reportedExtensionVersion = '5.0.0';
+    const olderExit = await runCommands(['status', '--json']);
+    expect(olderExit).toBe(0);
+    const olderReceipt = JSON.parse(stdout[0]!) as {
+      ok: boolean;
+      data: {
+        extensionUpdateAvailable?: boolean;
+        extensionLatestVersion?: string;
+        extensionReleaseAsset?: string;
+      };
+    };
+    expect(olderReceipt.data.extensionUpdateAvailable).toBe(true);
+    expect(olderReceipt.data.extensionLatestVersion).toBe('5.0.1');
+    expect(olderReceipt.data.extensionReleaseAsset).toBe(
+      `${GITHUB_REPO_URL}/releases/download/v5.0.1/browserpaw-extension.zip`,
+    );
+
+    stdout.length = 0;
+    reportedExtensionVersion = '4.9.0';
+    const incompatibleExit = await runCommands(['status', '--json']);
+    expect(incompatibleExit).toBe(3);
+    expect(JSON.parse(stdout[0]!).error.message).toContain(
+      `${GITHUB_REPO_URL}/releases/download/v5.0.1/browserpaw-extension.zip`,
+    );
+  });
 });

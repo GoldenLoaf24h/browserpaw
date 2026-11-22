@@ -7,4 +7,4 @@ This ledger tracks changes queued after the current release baseline.
 
 ## Queued Post-v5.0.1 Changes
 
-- No queued changes yet beyond [v5.0.1](./v5.0.1.md). Record new post-v5.0.1 work here before the next version bump.
+- **Conditional Chrome Extension Releases & Asset-Aware Popup Update Check:** Made `browserpaw-extension.zip` optional in `scripts/release-notes.mjs`, `docs/releases/TEMPLATE.md`, and `docs/releases/RELEASING.md` so releases without extension changes omit the extension archive; updated `checkVersionUpdate` / `checkExtensionVersionUpdate`, the extension popup footer badge, and CLI status/setup release URLs (`LATEST_EXTENSION_VERSION`) to only flag extension updates for published GitHub releases that actually attach `browserpaw-extension.zip`.

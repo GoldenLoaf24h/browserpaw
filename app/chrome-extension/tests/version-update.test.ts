@@ -4,6 +4,8 @@ import {
   compareSemver,
   isNewerVersion,
   checkVersionUpdate,
+  EXTENSION_RELEASE_ASSET,
+  GITHUB_API_RELEASES_URL,
   formatAgentUpdateNotice,
   MemoryVersionCacheStorage,
   VersionCacheEntry,
@@ -355,11 +357,128 @@ describe('Chrome Extension Storage Adapter & Popup Integration', () => {
       releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v2.9.4',
       lastChecked: now,
       expiresAt: now + 3600_000,
+      requiredAssetName: EXTENSION_RELEASE_ASSET,
     });
 
-    const res = await checkExtensionVersionUpdate();
+    const mockFetch = vi.fn();
+    const res = await checkExtensionVersionUpdate({ fetchFn: mockFetch as any });
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(res.currentVersion).toBe('2.9.3');
     expect(res.latestVersion).toBe('2.9.4');
     expect(res.hasUpdate).toBe(true);
+  });
+
+  it('ignores newer CLI-only releases without browserpaw-extension.zip so the red dot stays off', async () => {
+    (globalThis as any).chrome.runtime.getManifest = () => ({ version: '5.0.1' });
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ etag: '"etag-cli-only"' }),
+      json: async () => [
+        {
+          tag_name: 'v5.0.2',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.2',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: 'browserpaw-skill.zip' }, { name: 'browserpaw-5.0.2.tgz' }],
+        },
+        {
+          tag_name: 'v5.0.1',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.1',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: EXTENSION_RELEASE_ASSET }, { name: 'browserpaw-skill.zip' }],
+        },
+      ],
+    });
+
+    const res = await checkExtensionVersionUpdate({ fetchFn: mockFetch as any });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toBe(GITHUB_API_RELEASES_URL);
+    expect(res.hasUpdate).toBe(false);
+    expect(res.latestVersion).toBe('v5.0.1');
+    expect(res.releaseUrl).toBe('https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.1');
+  });
+
+  it('points to the newest release containing browserpaw-extension.zip even when a newer CLI-only release exists', async () => {
+    (globalThis as any).chrome.runtime.getManifest = () => ({ version: '5.0.1' });
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ etag: '"etag-mixed"' }),
+      json: async () => [
+        {
+          tag_name: 'v5.0.3',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.3',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: 'browserpaw-skill.zip' }],
+        },
+        {
+          tag_name: 'v5.0.2',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.2',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: EXTENSION_RELEASE_ASSET }, { name: 'browserpaw-skill.zip' }],
+        },
+        {
+          tag_name: 'v5.0.1',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.1',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: EXTENSION_RELEASE_ASSET }],
+        },
+      ],
+    });
+
+    const res = await checkExtensionVersionUpdate({ fetchFn: mockFetch as any });
+    expect(res.hasUpdate).toBe(true);
+    expect(res.latestVersion).toBe('v5.0.2');
+    expect(res.releaseUrl).toBe('https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.2');
+  });
+
+  it('ignores draft, prerelease, and unmatched releases and invalidates legacy unfiltered cache', async () => {
+    (globalThis as any).chrome.runtime.getManifest = () => ({ version: '5.0.1' });
+    const now = Date.now();
+    await chromeVersionStorage.set({
+      latestVersion: 'v5.0.9',
+      releaseUrl: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.9',
+      etag: '"legacy-latest-etag"',
+      lastChecked: now,
+      expiresAt: now + 3600_000,
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 200,
+      headers: new Headers({ etag: '"etag-filtered"' }),
+      json: async () => [
+        {
+          tag_name: 'v5.1.0',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.1.0',
+          draft: true,
+          prerelease: false,
+          assets: [{ name: EXTENSION_RELEASE_ASSET }],
+        },
+        {
+          tag_name: 'v5.1.0-rc.1',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.1.0-rc.1',
+          draft: false,
+          prerelease: true,
+          assets: [{ name: EXTENSION_RELEASE_ASSET }],
+        },
+        {
+          tag_name: 'v5.0.5',
+          html_url: 'https://github.com/GoldenLoaf24h/browserpaw/releases/tag/v5.0.5',
+          draft: false,
+          prerelease: false,
+          assets: [{ name: 'browserpaw-skill.zip' }],
+        },
+      ],
+    });
+
+    const res = await checkExtensionVersionUpdate({ fetchFn: mockFetch as any });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][1].headers['If-None-Match']).toBeUndefined();
+    expect(res.hasUpdate).toBe(false);
+    expect(res.latestVersion).toBe('5.0.1');
+    expect((await chromeVersionStorage.get())?.requiredAssetName).toBe(EXTENSION_RELEASE_ASSET);
   });
 });

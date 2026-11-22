@@ -36,11 +36,11 @@
 
 ## Release Assets
 
-Release assets (verify their SHA-256 values against the uploaded files before publication):
+Release assets (verify their SHA-256 values against the uploaded files before publication; include `browserpaw-extension.zip` only when the Chrome extension changed in this release, and omit it from both this table and the GitHub release otherwise):
 
 | Asset Name | Description |
 | :--- | :--- |
-| `browserpaw-extension.zip` | Chrome MV3 extension bundle |
+| `browserpaw-extension.zip` | Chrome MV3 extension bundle (include only when the extension changed; omit otherwise) |
 | `browserpaw-skill.zip` | Canonical agent skill bundle |
 
 ## Diff & Commits

@@ -10,13 +10,13 @@ This is the release procedure. [TEMPLATE.md](./TEMPLATE.md) owns the body format
 - Use the template's six sections once, in order. Record breaking changes, migration instructions, compatibility, tests, CI, loaded runtime checks and exclusions explicitly. Use "None" or "Not tested: reason" when accurate.
 - GitHub owns draft/published status; do not duplicate a mutable status in the version note.
 - Do not leave placeholders, TODO markers or raw HTML in version notes. Do not prefill passing results, invented counts or performance claims.
-- Keep stable assets `browserpaw-extension.zip` and `browserpaw-skill.zip`. The tag, package versions and embedded build metadata identify the version.
+- Keep stable asset names `browserpaw-skill.zip` (always) and `browserpaw-extension.zip` (only when the Chrome extension changed in this release). Omit `browserpaw-extension.zip` from both the GitHub release and `## Release Assets` when the extension is unchanged; the extension popup update indicator only activates on published releases that attach `browserpaw-extension.zip`. The tag, package versions and embedded build metadata identify the version.
 - `pnpm release:check` validates structure, metadata, version agreement, required asset references, compare links and unresolved placeholders. It does **not** prove test results, artifact checksums or successful publication.
 - The checker exempts a fixed historical filename list, including the old v3.3.0 draft. It does not exempt every version below the current version. Use `--file` to check any file explicitly without rewriting history.
 
 ## Prepare the release
 
-1. Review the changes since the preceding published tag. Reconcile package and manifest versions, client mirrors and install instructions; use the repository's existing build and synchronization commands.
+1. Review the changes since the preceding published tag. Reconcile package and manifest versions, client mirrors and install instructions; use the repository's existing build and synchronization commands. Only update `LATEST_EXTENSION_VERSION` in `packages/shared/src/version.ts` when this release updates the Chrome extension and attaches `browserpaw-extension.zip`; keep it at the previous extension-bearing release tag for CLI, skill, or plugin-only releases.
 2. Copy TEMPLATE to the new version note, fill it from observed evidence, register it in the [release ledger](./README.md), and move only included entries out of [unreleased.md](./unreleased.md). Leave unfinished changes in the ledger.
 3. Run focused tests during preparation. Update the note with actual results and explicit exclusions, then run the final gate below. Any subsequent tracked source or documentation change requires a fresh final gate.
 4. Follow QUALITY for browser acceptance of changed browser behavior. A docs-only change does not require deployment. If loading an extension is needed, stage all artifacts before one manual reload and verify the loaded build identity.
@@ -53,20 +53,27 @@ Check that local HEAD, the remote tag and the successful CI head SHA agree. If s
 
 `pnpm verify` already builds the extension. Package that verified output to preserve its exact artifact hashes. The build ID is stable for unchanged extension inputs, while build timestamps and archive hashes can differ between runs.
 
+Only package and attach `browserpaw-extension.zip` when the Chrome extension changed in this release (`$includeExtension = $true`). When the extension did not change, omit `browserpaw-extension.zip` from the local archive directory, `SHA256SUMS.txt`, the GitHub release, and `## Release Assets` so existing extension installations do not show a false update badge.
+
 The following pwsh example creates a new local directory for this version and packages the existing build. If it already exists, inspect its contents rather than overwriting a frozen release. Run commands separately and stop on errors.
 
 ```powershell
+$includeExtension = $false # Set to $true only when the Chrome extension changed in this release.
 $releaseDir = Join-Path 'releases' $releaseTag
 if (Test-Path -LiteralPath $releaseDir) { throw "Inspect existing release directory: $releaseDir" }
 New-Item -ItemType Directory -Path $releaseDir -ErrorAction Stop | Out-Null
-Compress-Archive -Path 'app/chrome-extension/.output/chrome-mv3/*' -DestinationPath "$releaseDir/browserpaw-extension.zip" -ErrorAction Stop
+$zipAssets = @("$releaseDir/browserpaw-skill.zip")
 Compress-Archive -LiteralPath 'skills/browserpaw' -DestinationPath "$releaseDir/browserpaw-skill.zip" -ErrorAction Stop
-Get-FileHash "$releaseDir/browserpaw-extension.zip", "$releaseDir/browserpaw-skill.zip" -Algorithm SHA256
+if ($includeExtension) {
+  Compress-Archive -Path 'app/chrome-extension/.output/chrome-mv3/*' -DestinationPath "$releaseDir/browserpaw-extension.zip" -ErrorAction Stop
+  $zipAssets = @("$releaseDir/browserpaw-extension.zip") + $zipAssets
+}
+Get-FileHash $zipAssets -Algorithm SHA256
 ```
 
-Inspect both archives: the extension must contain `manifest.json` and `browserpaw-build.json` at its root; the skill must contain `browserpaw/SKILL.md` plus its referenced resources. Do not include local configuration, API keys, caches or developer instruction files. Confirm the embedded version and build ID against the verification report.
+Inspect the generated archives: the skill must contain `browserpaw/SKILL.md` plus its referenced resources, and when `browserpaw-extension.zip` is included it must contain `manifest.json` and `browserpaw-build.json` at its root. Do not include local configuration, API keys, caches or developer instruction files. Confirm the embedded version and build ID against the verification report.
 
-From `app/native-server`, run `npm pack --json --pack-destination ABSOLUTE_RELEASE_DIR`. Inspect the resulting `browserpaw-X.Y.Z.tgz` and include it alongside the two ZIPs in `SHA256SUMS.txt`. Run the isolated browser fixture against the CLI extracted from that tarball.
+From `app/native-server`, run `npm pack --json --pack-destination ABSOLUTE_RELEASE_DIR`. Inspect the resulting `browserpaw-X.Y.Z.tgz` and include it alongside the packaged ZIP(s) in `SHA256SUMS.txt`. Run the isolated browser fixture against the CLI extracted from that tarball.
 
 Keep computed SHA-256 values with local release evidence. Do not put build-dependent hashes into tracked notes and trigger a build/hash/rewrite loop. Compare local and downloaded draft assets before publication.
 
@@ -75,7 +82,8 @@ Keep computed SHA-256 values with local release evidence. Do not put build-depen
 A release task must authorize remote creation and publication. Existing authorization suffices; do not ask for it again. This guide and its checks do not themselves grant publication permission.
 
 ```powershell
-gh release create $releaseTag "$releaseDir/browserpaw-extension.zip" "$releaseDir/browserpaw-skill.zip" "$releaseDir/browserpaw-$($releaseTag.TrimStart('v')).tgz" "$releaseDir/SHA256SUMS.txt" --verify-tag --draft --title "BrowserPaw $releaseTag" --notes-file $releaseNote
+$releaseAssets = $zipAssets + @("$releaseDir/browserpaw-$($releaseTag.TrimStart('v')).tgz", "$releaseDir/SHA256SUMS.txt")
+gh release create $releaseTag @releaseAssets --verify-tag --draft --title "BrowserPaw $releaseTag" --notes-file $releaseNote
 gh release view $releaseTag --json tagName,name,body,isDraft,isPrerelease,targetCommitish,assets
 ```
 
@@ -86,7 +94,7 @@ Before publication:
 - Inspect Markdown rendering and compare the title/body with the canonical file.
 - Verify the remote tag resolves to the tested commit and all three CI platforms passed for it.
 - Confirm exactly the intended assets are attached with the stable names.
-- Download the draft assets into a new local directory with `gh release download $releaseTag --dir <new-directory>` and compare all three package hashes with the local checksum file.
+- Download the draft assets into a new local directory with `gh release download $releaseTag --dir <new-directory>` and compare all uploaded package hashes with the local checksum file.
 - Confirm the verification scope describes the packaged build and states every untested boundary. If a new build was required, repeat affected runtime checks.
 
 Once the authorized release is ready:
@@ -96,7 +104,7 @@ gh release edit $releaseTag --draft=false --latest=true
 gh release view $releaseTag --json url,tagName,name,isDraft,isPrerelease,assets
 ```
 
-Confirm the release is public and its extension ZIP can be downloaded before making the matching CLI version available on npm's `latest` tag. The update notice directs users to that ZIP. Keep any corrections to the canonical release note and public release body in sync.
+Confirm the release is public—and when `browserpaw-extension.zip` is attached, confirm the ZIP can be downloaded—before making the matching CLI version available on npm's `latest` tag. Keep any corrections to the canonical release note and public release body in sync.
 
 Publish the tested npm tarball before distributing the matching DeepSeek Harness, Hermes, Claude Code and Codex plugin releases. Their installation instructions depend on the CLI being available.
 

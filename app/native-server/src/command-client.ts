@@ -10,8 +10,11 @@ import {
   parseCommand,
   CURRENT_VERSION,
   DEFAULT_SERVER_PORT,
+  EXTENSION_RELEASE_ASSET,
   GITHUB_REPO_URL,
+  LATEST_EXTENSION_VERSION,
   MIN_COMPATIBLE_EXTENSION_VERSION,
+  extensionReleaseAssetUrl,
   isCompatibleExtensionVersion,
   isNewerVersion,
 } from 'chrome-mcp-shared';
@@ -584,7 +587,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
         return failure(
           3,
           'version_mismatch',
-          `BrowserPaw ${CURRENT_VERSION} requires host ${CURRENT_VERSION} and a compatible extension (>= ${MIN_COMPATIBLE_EXTENSION_VERSION}, same major). Run setup with the matching CLI to update the host and Skill. For an incompatible extension, manually install ${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip and reload it.`,
+          `BrowserPaw ${CURRENT_VERSION} requires host ${CURRENT_VERSION} and a compatible extension (>= ${MIN_COMPATIBLE_EXTENSION_VERSION}, same major). Run setup with the matching CLI to update the host and Skill. For an incompatible extension, manually install ${extensionReleaseAssetUrl(LATEST_EXTENSION_VERSION)} and reload it.`,
           data,
         );
       }
@@ -613,12 +616,12 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
           data,
         );
       const statusData =
-        extensionVersion && isNewerVersion(CURRENT_VERSION, extensionVersion)
+        extensionVersion && isNewerVersion(LATEST_EXTENSION_VERSION, extensionVersion)
           ? {
               ...data,
               extensionUpdateAvailable: true,
-              extensionLatestVersion: CURRENT_VERSION,
-              extensionReleaseAsset: `${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip`,
+              extensionLatestVersion: LATEST_EXTENSION_VERSION,
+              extensionReleaseAsset: extensionReleaseAssetUrl(LATEST_EXTENSION_VERSION),
             }
           : data;
       writeReceipt({ ok: true, command: command.name, outcome: 'done', data: statusData }, json);
@@ -752,7 +755,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
           'Finish the current task before upgrading with your existing installation method.',
           `Global npm: npm install -g browserpaw@${latest}, then browserpaw setup.`,
           `npx: npx browserpaw@${latest} setup. Setup refreshes the host and managed base Skills.`,
-          `Chrome extension (manual download, unpack and load): ${GITHUB_REPO_URL}/releases/download/v${latest}/browserpaw-extension.zip`,
+          `Chrome extension (only if v${latest} includes ${EXTENSION_RELEASE_ASSET}): ${GITHUB_REPO_URL}/releases/tag/v${latest}`,
         ].join('\n'),
       );
     }

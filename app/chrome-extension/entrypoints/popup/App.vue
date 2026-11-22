@@ -8,7 +8,8 @@ declare const __BROWSERPAW_BUILD_ID__: string;
 
 const buildId = __BROWSERPAW_BUILD_ID__;
 const version = chrome.runtime.getManifest().version;
-const releaseUrl = GITHUB_REPO_URL + '/releases/latest';
+const DEFAULT_RELEASE_URL = GITHUB_REPO_URL + '/releases/latest';
+const releaseUrl = ref(DEFAULT_RELEASE_URL);
 const cursorIconUrl = chrome.runtime.getURL('images/cursor-chat.png');
 const windowHint =
   'Tab: Works quietly in color-grouped tabs in your current window.\nWindow: Opens a separate dedicated OS window for agent tasks.';
@@ -126,12 +127,23 @@ function handleVisibilityChange() {
   }
 }
 
+function resolveReleaseUrl(candidate?: string): string {
+  if (typeof candidate === 'string' && candidate.startsWith(`${GITHUB_REPO_URL}/releases/`)) {
+    return candidate;
+  }
+  return DEFAULT_RELEASE_URL;
+}
+
 async function checkForUpdate() {
   try {
     const result = await checkExtensionVersionUpdate();
     hasUpdate.value = result.hasUpdate;
+    releaseUrl.value = result.hasUpdate
+      ? resolveReleaseUrl(result.releaseUrl)
+      : DEFAULT_RELEASE_URL;
   } catch {
     hasUpdate.value = false;
+    releaseUrl.value = DEFAULT_RELEASE_URL;
   }
 }
 
@@ -269,8 +281,8 @@ onUnmounted(() => {
         :href="releaseUrl"
         target="_blank"
         rel="noopener noreferrer"
-        title="Update available — open latest release"
-        :aria-label="'v' + version + ' · Update available — open latest release'"
+        title="Extension update available — open release"
+        :aria-label="'v' + version + ' · Extension update available — open release'"
         >v{{ version }}</a
       >
       <span v-else class="version">v{{ version }}</span>

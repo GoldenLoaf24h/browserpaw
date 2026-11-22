@@ -60,7 +60,9 @@ export const REQUIRED_SECTIONS = Object.freeze([
   { name: '## Diff & Commits' },
 ]);
 
-export const STABLE_ASSETS = Object.freeze(['browserpaw-extension.zip', 'browserpaw-skill.zip']);
+export const REQUIRED_STABLE_ASSETS = Object.freeze(['browserpaw-skill.zip']);
+export const OPTIONAL_STABLE_ASSETS = Object.freeze(['browserpaw-extension.zip']);
+export const STABLE_ASSETS = Object.freeze([...OPTIONAL_STABLE_ASSETS, ...REQUIRED_STABLE_ASSETS]);
 
 const PLACEHOLDER_PATTERNS = Object.freeze([
   /<[^>\r\n]+>/,
@@ -162,10 +164,16 @@ export function validateReleaseNote(content, filename = 'release-note.md') {
       errors.push(`${filename}: Missing required section: ${section.name}`);
     }
   }
-  for (const asset of STABLE_ASSETS) {
-    if (!bodies.get('## Release Assets')?.includes('`' + asset + '`')) {
+  const releaseAssetsBody = bodies.get('## Release Assets') || '';
+  for (const asset of REQUIRED_STABLE_ASSETS) {
+    if (!releaseAssetsBody.includes('`' + asset + '`')) {
       errors.push(`${filename}: Missing required stable asset: "${asset}"`);
     }
+  }
+  if (/\bbrowserpaw-(?:extension|skill)-v?\d/i.test(releaseAssetsBody)) {
+    errors.push(
+      `${filename}: Release assets must use stable filenames ("browserpaw-extension.zip", "browserpaw-skill.zip"), not versioned ZIP names`,
+    );
   }
   const comparisons = [
     ...(bodies.get('## Diff & Commits') || '').matchAll(

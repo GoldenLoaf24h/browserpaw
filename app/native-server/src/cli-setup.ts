@@ -14,7 +14,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { HOST_NAME, CURRENT_VERSION, GITHUB_REPO_URL, type ParsedCommand } from 'chrome-mcp-shared';
+import {
+  HOST_NAME,
+  CURRENT_VERSION,
+  LATEST_EXTENSION_VERSION,
+  extensionReleaseAssetUrl,
+  type ParsedCommand,
+} from 'chrome-mcp-shared';
 import { BrowserType, getBrowserConfig } from './scripts/browser-config';
 import { installSkill, upgradeInstalledSkill, type InstalledSkillScope } from './skill-install';
 import { loadLearnedWorkflows, syncLearnedRouting } from './learned-recipes';
@@ -417,7 +423,7 @@ export async function manageInstallation(command: ParsedCommand, requestHost: ty
       skillPaths: [...skillPaths],
       extensionId,
     });
-    const releaseAsset = `${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip`;
+    const releaseAsset = extensionReleaseAssetUrl(LATEST_EXTENSION_VERSION);
     return {
       installed: true,
       extension: join(root, 'extension'),
