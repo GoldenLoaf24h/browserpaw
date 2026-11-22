@@ -179,13 +179,22 @@ test('portable ChatGPT/Codex plugin satisfies Agent Plugins v1 interface icons a
     fs.readFileSync(path.join(repoRoot, '.agents/plugins/marketplace.json'), 'utf8'),
   );
   assert.equal(manifest.name, 'browserpaw');
+  assert.equal(manifest.license, 'AGPL-3.0-or-later');
   assert.equal(fs.existsSync(path.join(portableDir, 'hooks')), false);
   assert.equal(manifest.extensions?.['com.openai']?.hooks, undefined);
+  assert.equal(manifest.extensions?.['com.openai']?.requires_local_executor, true);
   const ui = manifest.extensions?.['com.openai']?.interface;
   assert.equal(typeof ui?.composerIcon, 'string');
   assert.equal(typeof ui?.logo, 'string');
   assert.equal(fs.existsSync(path.join(portableDir, ui.composerIcon)), true);
   assert.equal(fs.existsSync(path.join(portableDir, ui.logo)), true);
+  assert.match(String(ui?.privacyPolicyURL || ''), /^https:\/\//);
+  assert.match(String(ui?.supportURL || ''), /^https:\/\//);
+  assert.ok(
+    Array.isArray(ui?.defaultPrompt) &&
+      ui.defaultPrompt.length >= 2 &&
+      ui.defaultPrompt.length <= 3,
+  );
   assert.ok(
     marketplace.plugins?.some(
       (entry) => entry.name === 'browserpaw' && entry.source?.path === './plugins/browserpaw',

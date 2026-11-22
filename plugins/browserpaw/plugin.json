@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
   "repository": "https://github.com/GoldenLoaf24h/browserpaw",
-  "license": "AGPL-3.0",
+  "license": "AGPL-3.0-or-later",
   "keywords": ["browser", "chrome", "automation", "cli", "agent", "cdp"],
   "extensions": {
     "com.openai": {
@@ -26,10 +26,17 @@
           "Session Reuse"
         ],
         "websiteURL": "https://github.com/GoldenLoaf24h/browserpaw",
-        "defaultPrompt": ["Open Chrome and inspect my active webpage"],
+        "privacyPolicyURL": "https://github.com/GoldenLoaf24h/browserpaw/blob/main/PRIVACY.md",
+        "supportURL": "https://github.com/GoldenLoaf24h/browserpaw/issues",
+        "defaultPrompt": [
+          "Open Chrome and inspect my active webpage",
+          "Search the active page and extract the key items",
+          "Check BrowserPaw connection status and learned site recipes"
+        ],
         "composerIcon": "./assets/icon.png",
         "logo": "./assets/logo.png"
-      }
+      },
+      "requires_local_executor": true
     }
   }
 }

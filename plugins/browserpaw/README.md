@@ -20,7 +20,7 @@ Portable Agent Plugins v1.0.0 package for **ChatGPT**, **Codex**, and Agent Plug
 
    Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the extension directory printed by `setup` (default `~/.browserpaw/extension`).
 
-2. Add this repository as a Codex plugin marketplace and install the plugin (or pass a local checkout path via `.agents/plugins/marketplace.json` before `v5.0.0` is merged to `main`):
+2. Add this repository as a Codex plugin marketplace and install the plugin (or pass a local checkout path via `.agents/plugins/marketplace.json` for local development):
 
    ```sh
    codex plugin marketplace add GoldenLoaf24h/browserpaw
