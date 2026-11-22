@@ -1112,7 +1112,7 @@ function initAgentCursor() {
     { passive: true },
   );
 
-  let activeInterventionCleanup: (() => void) | null = null;
+  let activeInterventionCleanup: ((cancelReason?: 'cancelled' | 'preempted') => void) | null = null;
 
   // Message listener for Background commands
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1121,7 +1121,7 @@ function initAgentCursor() {
     if (message.type === 'HUMAN_INTERVENTION_REQUEST') {
       if (activeInterventionCleanup) {
         try {
-          activeInterventionCleanup();
+          activeInterventionCleanup('preempted');
         } catch {}
         activeInterventionCleanup = null;
       }
@@ -1129,10 +1129,10 @@ function initAgentCursor() {
       // Move virtual cursor smoothly to standby corner
       moveTo(window.innerWidth - 60, 40, null, false);
 
-      let banner = shadow.getElementById('codex-human-intervention-banner');
-      if (banner) banner.remove();
+      const existingBanner = shadow.getElementById('codex-human-intervention-banner');
+      if (existingBanner) existingBanner.remove();
 
-      banner = document.createElement('div');
+      const banner = document.createElement('div');
       banner.id = 'codex-human-intervention-banner';
       banner.style.cssText = [
         'position: fixed',
@@ -1207,23 +1207,40 @@ function initAgentCursor() {
 
       shadow.appendChild(banner);
 
-      const cleanup = () => {
+      let responded = false;
+      const respondOnce = (payload: Record<string, unknown>) => {
+        if (responded) return;
+        responded = true;
+        try {
+          sendResponse(payload);
+        } catch {}
+      };
+
+      const cleanup = (cancelReason?: 'cancelled' | 'preempted') => {
+        continueBtn.removeEventListener('click', onDone);
         window.removeEventListener('keydown', onKey);
         if (activeInterventionCleanup === cleanup) {
           activeInterventionCleanup = null;
         }
         if (banner && banner.parentNode) {
-          banner.style.transition = 'opacity 0.25s, transform 0.25s';
-          banner.style.opacity = '0';
-          banner.style.transform = 'translate(-50%, -15px) scale(0.95)';
-          setTimeout(() => banner?.remove(), 260);
+          if (cancelReason === 'preempted') {
+            banner.remove();
+          } else {
+            banner.style.transition = 'opacity 0.25s, transform 0.25s';
+            banner.style.opacity = '0';
+            banner.style.transform = 'translate(-50%, -15px) scale(0.95)';
+            setTimeout(() => banner?.remove(), 260);
+          }
+        }
+        if (cancelReason) {
+          respondOnce({ ok: false, cancelled: true, reason: cancelReason });
         }
       };
       activeInterventionCleanup = cleanup;
 
       const onDone = () => {
         cleanup();
-        sendResponse({ ok: true, action: 'completed_by_user' });
+        respondOnce({ ok: true, action: 'completed_by_user' });
       };
 
       const onKey = (e: KeyboardEvent) => {
@@ -1243,7 +1260,7 @@ function initAgentCursor() {
         }
       };
 
-      banner.querySelector('#codex-btn-continue')?.addEventListener('click', onDone);
+      continueBtn.addEventListener('click', onDone);
       window.addEventListener('keydown', onKey);
       return true;
     }
@@ -1251,7 +1268,7 @@ function initAgentCursor() {
     if (message.type === 'HUMAN_INTERVENTION_CANCEL') {
       if (activeInterventionCleanup) {
         try {
-          activeInterventionCleanup();
+          activeInterventionCleanup('cancelled');
         } catch {}
         activeInterventionCleanup = null;
       } else {

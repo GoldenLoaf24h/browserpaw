@@ -606,7 +606,8 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
           // If error indicates already running or port occupied, self-heal via HTTP /ping probe immediately
           if (isBenign) {
             const targetPort = port || currentServerStatus.port || NATIVE_HOST.DEFAULT_PORT;
-            verifyServerViaHttp(targetPort).then(async (isAlive) => {
+            try {
+              const isAlive = await verifyServerViaHttp(targetPort);
               if (isAlive && isCurrentPort()) {
                 handshakeConfirmed = true;
                 clearHandshakeTimer();
@@ -624,7 +625,12 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
                   `${LOG_PREFIX} Self-healed existing running server via HTTP /ping on port ${targetPort}`,
                 );
               }
-            });
+            } catch (err) {
+              console.error(
+                `${LOG_PREFIX} Failed HTTP /ping self-heal probe on port ${targetPort}:`,
+                err,
+              );
+            }
           }
         } else if (message.type === 'file_operation_response') {
           const reqId = message.responseToRequestId;
@@ -646,12 +652,18 @@ export function connectNativeHost(port: number = NATIVE_HOST.DEFAULT_PORT): bool
 
       if (
         chunkReassembler.processMessage(rawMessage, (fullMessage) => {
-          void handleMessage(fullMessage);
+          void handleMessage(fullMessage).catch((err) => {
+            console.error(`${LOG_PREFIX} Error handling reassembled native message:`, err);
+          });
         })
       ) {
         return;
       }
-      await handleMessage(rawMessage);
+      try {
+        await handleMessage(rawMessage);
+      } catch (err) {
+        console.error(`${LOG_PREFIX} Error handling native message:`, err);
+      }
     });
 
     connectedPort.onDisconnect.addListener(() => {

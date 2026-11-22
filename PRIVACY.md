@@ -41,7 +41,7 @@ Declared in [wxt.config.ts](app/chrome-extension/wxt.config.ts):
 | :-------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`debugger`**              | Dispatches native trusted CDP input events (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`) across Web Components, Shadow DOM, and Canvas.     |
 | **`nativeMessaging`**       | Establishes the local Chrome Native Messaging pipe to `com.browserpaw.nativehost`.                                                                   |
-| **`tabs` & `activeTab`**    | Discovers, switches, and manages browser tabs targeted by agent actions.                                                                             |
+| **`tabs`**                  | Discovers, switches, and manages browser tabs targeted by agent actions.                                                                             |
 | **`scripting`**             | Injects in-page DOM perception and coordinate helpers into targeted pages.                                                                           |
 | **`storage`**               | Persists local popup preferences (`agentCursorMode`, `agentWindowMode`), version cache, and MV3 session state (`agentControlEnabled`, tab affinity). |
 | **`downloads`**             | Monitors file downloads initiated by agent automation.                                                                                               |

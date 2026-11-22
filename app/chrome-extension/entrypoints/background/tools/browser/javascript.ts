@@ -29,6 +29,9 @@ import {
   sanitizeAndLimitOutput,
   sanitizeText,
 } from '@/utils/output-sanitizer';
+import { detectSingleExpression, prepareUserCodeBody } from './js-code-analyzer';
+
+export { detectSingleExpression };
 
 // ============================================================================
 // Constants
@@ -823,63 +826,6 @@ function isDebuggerConflictError(error: unknown): boolean {
 }
 
 /**
- * Detect if user code is a single expression, correctly handling trailing semicolons,
- * single-line comments, and multi-line comments. Returns the expression string to return,
- * or null if code contains declarations or multi-statement blocks.
- */
-export function detectSingleExpression(code: string): string | null {
-  const rawTrimmed = code.trim();
-  if (!rawTrimmed || rawTrimmed.startsWith('return ') || rawTrimmed === 'return') {
-    return null;
-  }
-
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-  const isEvalBlocked = (err: any) =>
-    err instanceof EvalError ||
-    /eval|unsafe-eval|CSP|call to Function/i.test(String(err?.message || ''));
-  const isStatement = (s: string) =>
-    /^(?:const|let|var|function|class|if|for|while|do|switch|try|throw|return|break|continue|debugger|import|export)\b/.test(
-      s,
-    );
-
-  // 1. Direct check after stripping trailing semicolons
-  const direct = rawTrimmed.replace(/;+$/, '').trim();
-  try {
-    new AsyncFunction('return (\n' + direct + '\n);');
-    return direct;
-  } catch (err: any) {
-    if (isEvalBlocked(err) && !isStatement(direct) && !direct.includes(';')) {
-      return direct;
-    }
-  }
-
-  // 2. Clean comments and semicolons
-  const cleaned = direct
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .map((line) => line.replace(/\/\/.*$/, '').trim())
-    .filter(Boolean)
-    .join(' ')
-    .trim()
-    .replace(/;+$/, '')
-    .trim();
-
-  if (cleaned && cleaned !== direct) {
-    try {
-      new AsyncFunction('return (\n' + cleaned + '\n);');
-      return cleaned;
-    } catch (err: any) {
-      if (isEvalBlocked(err) && !isStatement(cleaned) && !cleaned.includes(';')) {
-        return cleaned;
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
  * Wrap user code in an async IIFE to support top-level await and return statements.
  * Automatically adds a return statement if user code is a single expression.
  */
@@ -888,23 +834,8 @@ export function wrapUserCode(code: string, refAttr = ''): string {
     // No helpers are injected for empty code, so there is nothing to scope.
     return `(async () => {\n${code}\n})()`;
   }
-  const expr = detectSingleExpression(code);
-  if (expr !== null) {
-    return wrapInScopedEvaluation(`return (\n${expr}\n);\n`, refAttr);
-  }
-  const trimmed = code.trim();
-  const declMatch = /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=([\s\S]+)$/.exec(
-    trimmed,
-  );
-  if (declMatch) {
-    const varName = declMatch[1];
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    try {
-      new AsyncFunction(`${trimmed}\nreturn ${varName};`);
-      return wrapInScopedEvaluation(`${trimmed}\nreturn ${varName};\n`, refAttr);
-    } catch {}
-  }
-  return wrapInScopedEvaluation(`${code}\n`, refAttr);
+  const { body } = prepareUserCodeBody(code);
+  return wrapInScopedEvaluation(body, refAttr);
 }
 
 /**
@@ -1197,12 +1128,24 @@ async function executeViaCdp(
 
 interface ScriptingExecutionResult {
   ok: boolean;
+  pending?: boolean;
+  missing?: boolean;
+  slotKey?: string;
   value?: unknown;
   error?: {
     name?: string;
     message?: string;
     stack?: string;
   };
+}
+
+const SCRIPTING_ASYNC_MARKER = '/*__PAW_ASYNC__*/\n';
+
+function isStrictCspEvalError(errorName: string | undefined, rawMessage: string): boolean {
+  return (
+    errorName === 'EvalError' ||
+    /unsafe-eval|Content Security Policy|\bCSP\b|call to Function/i.test(rawMessage)
+  );
 }
 
 async function executeViaScripting(
@@ -1213,71 +1156,91 @@ async function executeViaScripting(
   frameId?: number,
 ): Promise<ExecutionResult> {
   const execution = { dispatched: false };
+  const target: chrome.scripting.InjectionTarget =
+    typeof frameId === 'number' && frameId > 0 ? { tabId, frameIds: [frameId] } : { tabId };
+  let activeSlotKey: string | null = null;
+  let cancelled = false;
+
+  const cleanupSlot = async (slotKey: string): Promise<void> => {
+    try {
+      await withTimeout(
+        chrome.scripting.executeScript({
+          target,
+          world: 'MAIN',
+          func: (key: string) => {
+            const g = globalThis as Record<string, unknown>;
+            if (g && Object.prototype.hasOwnProperty.call(g, key)) {
+              delete g[key];
+            }
+          },
+          args: [slotKey],
+        }),
+        CLEANUP_TIMEOUT_MS,
+      );
+    } catch {}
+  };
+
   const innerExecute = async (): Promise<ExecutionResult> => {
     await assertTabInjectable(tabId);
+    const { body: preparedBody, needsAsync } = prepareUserCodeBody(code);
+    const taggedBody = needsAsync ? `${SCRIPTING_ASYNC_MARKER}${preparedBody}` : preparedBody;
     execution.dispatched = true;
-    const target: chrome.scripting.InjectionTarget =
-      typeof frameId === 'number' && frameId > 0 ? { tabId, frameIds: [frameId] } : { tabId };
+
+    // Chrome (verified on 150) does NOT await a Promise returned by an injected
+    // async func: InjectionResult.result silently becomes undefined. Keep the
+    // injected start func strictly synchronous, returning immediately for sync
+    // results and stashing async promises on globalThis for background polling.
     const results = await chrome.scripting.executeScript({
       target,
       world: 'MAIN',
-      func: async (
-        userCode: string,
+      func: (
+        codeBody: string,
         inpageHelpers?: string,
         refAttrName?: string,
-      ): Promise<ScriptingExecutionResult> => {
+      ): ScriptingExecutionResult => {
         try {
-          // Use AsyncFunction constructor to support top-level await
-          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-          let codeToRun = userCode;
-          const rawTrimmed = userCode.trim();
-          if (rawTrimmed && !rawTrimmed.startsWith('return ') && rawTrimmed !== 'return') {
-            const direct = rawTrimmed.replace(/;+$/, '').trim();
-            let validExpr: string | null = null;
-            try {
-              new AsyncFunction(`return (\n${direct}\n);`);
-              validExpr = direct;
-            } catch {}
-            if (!validExpr) {
-              let cleaned = direct;
-              let changed = true;
-              while (changed) {
-                const prev = cleaned;
-                cleaned = cleaned
-                  .replace(/\/\/[^\r\n]*$/, '')
-                  .replace(/\/\*[\s\S]*?\*\/\s*$/, '')
-                  .trim()
-                  .replace(/;+$/, '')
-                  .trim();
-                changed = cleaned !== prev;
-              }
-              if (cleaned && cleaned !== direct) {
-                try {
-                  new AsyncFunction(`return (\n${cleaned}\n);`);
-                  validExpr = cleaned;
-                } catch {}
-              }
-            }
-            if (validExpr !== null) {
-              codeToRun = `return (\n${validExpr}\n);`;
-            } else {
-              const declMatch =
-                /^\s*(?:const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*([\s\S]+?);?\s*$/.exec(
-                  rawTrimmed,
-                );
-              if (declMatch && !declMatch[2].includes(';\n') && !declMatch[2].includes(';\r\n')) {
-                codeToRun = `${userCode}\nreturn ${declMatch[1]};`;
-              }
-            }
+          const asyncMarker = '/*__PAW_ASYNC__*/\n';
+          const isAsync = codeBody.startsWith(asyncMarker);
+          const bodyToRun = isAsync ? codeBody.slice(asyncMarker.length) : codeBody;
+          const fullBody = `${inpageHelpers || ''}\n__browserpawRefAttr = ${JSON.stringify(refAttrName || '')};\ntry {\n${bodyToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`;
+          const FnCtor = isAsync
+            ? Object.getPrototypeOf(async function () {}).constructor
+            : Function;
+          const fn = new FnCtor(fullBody);
+          const raw = fn();
+          const isThenable =
+            raw !== null &&
+            (typeof raw === 'object' || typeof raw === 'function') &&
+            typeof raw.then === 'function';
+          if (!isThenable) {
+            return { ok: true, value: raw };
           }
-          // Helpers share the generated function scope with the user code, so
-          // `mcp` is a local binding and the teardown never touches page globals.
-          // The ref binding is assigned here rather than passed through user code.
-          const fn = new AsyncFunction(
-            `${inpageHelpers || ''}\n__browserpawRefAttr = ${JSON.stringify(refAttrName || '')};\ntry {\n${codeToRun}\n} finally {\ntry {\nmcp.restoreHasTextPolyfill();\n} catch {}\n}`,
+          const slotKey = `__pawEval_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+          const box: {
+            settled: boolean;
+            ok: boolean;
+            value?: unknown;
+            error?: { name?: string; message?: string; stack?: string };
+          } = { settled: false, ok: false };
+          (globalThis as Record<string, unknown>)[slotKey] = box;
+          Promise.resolve(raw).then(
+            (resolvedValue) => {
+              box.ok = true;
+              box.value = resolvedValue;
+              box.settled = true;
+            },
+            (rejectedErr: unknown) => {
+              const errObj = rejectedErr as Error;
+              box.ok = false;
+              box.error = {
+                name: errObj?.name ?? undefined,
+                message: errObj?.message ?? String(rejectedErr),
+                stack: errObj?.stack ?? undefined,
+              };
+              box.settled = true;
+            },
           );
-          const value = await fn();
-          return { ok: true, value };
+          return { ok: false, pending: true, slotKey };
         } catch (err: unknown) {
           const error = err as Error;
           return {
@@ -1290,12 +1253,67 @@ async function executeViaScripting(
           };
         }
       },
-      args: [code, MCP_INPAGE_HELPERS, refAttr],
+      args: [taggedBody, MCP_INPAGE_HELPERS, refAttr],
     });
 
     // Extract the first result
     const firstFrame = results?.[0];
-    const result = (firstFrame as { result?: ScriptingExecutionResult })?.result;
+    let result = (firstFrame as { result?: ScriptingExecutionResult })?.result;
+
+    if (result?.pending && typeof result.slotKey === 'string') {
+      const slotKey = result.slotKey;
+      activeSlotKey = slotKey;
+      let delayMs = 10;
+      while (!cancelled) {
+        const pollResults = await chrome.scripting.executeScript({
+          target,
+          world: 'MAIN',
+          func: (key: string): ScriptingExecutionResult => {
+            const g = globalThis as Record<string, any>;
+            const box = g?.[key];
+            if (!box) {
+              return { ok: false, missing: true };
+            }
+            if (!box.settled) {
+              return { ok: false, pending: true, slotKey: key };
+            }
+            delete g[key];
+            return box.ok ? { ok: true, value: box.value } : { ok: false, error: box.error };
+          },
+          args: [slotKey],
+        });
+        const pollResult = (pollResults?.[0] as { result?: ScriptingExecutionResult })?.result;
+        if (!pollResult || typeof pollResult !== 'object') {
+          activeSlotKey = null;
+          return markOutcomeUnknown({
+            ok: false,
+            engine: 'scripting',
+            error: {
+              kind: 'scripting_error',
+              message: 'No result returned while polling async executeScript',
+            },
+          });
+        }
+        if (pollResult.missing) {
+          activeSlotKey = null;
+          return markOutcomeUnknown({
+            ok: false,
+            engine: 'scripting',
+            error: {
+              kind: 'scripting_error',
+              message: 'Async script state lost before completion (page may have navigated)',
+            },
+          });
+        }
+        if (!pollResult.pending) {
+          activeSlotKey = null;
+          result = pollResult;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        delayMs = Math.min(50, delayMs * 2);
+      }
+    }
 
     if (!result || typeof result !== 'object') {
       return markOutcomeUnknown({
@@ -1309,10 +1327,14 @@ async function executeViaScripting(
       const rawMessage = result.error?.message ?? 'JavaScript execution failed';
       const rawStack = result.error?.stack;
 
-      const message = sanitizeText(rawMessage).text;
+      let message = sanitizeText(rawMessage).text;
       const sanitizedStack = rawStack ? sanitizeText(rawStack).text : undefined;
 
       const isSyntaxError = result.error?.name === 'SyntaxError' || /SyntaxError/i.test(rawMessage);
+      if (isStrictCspEvalError(result.error?.name, rawMessage)) {
+        message +=
+          " (Blocked by the page's strict Content Security Policy in the scripting fallback. Close DevTools or detach any other debugger on this tab so BrowserPaw can run via CDP Runtime.evaluate, which bypasses page CSP.)";
+      }
 
       return {
         ok: false,
@@ -1339,6 +1361,7 @@ async function executeViaScripting(
   try {
     return await withTimeout(innerExecute(), options.timeoutMs);
   } catch (error) {
+    cancelled = true;
     if (isTimeoutError(error)) {
       const failure: ExecutionFailure = {
         ok: false,
@@ -1355,6 +1378,13 @@ async function executeViaScripting(
       error: { kind: 'scripting_error', message },
     };
     return execution.dispatched ? markOutcomeUnknown(failure) : failure;
+  } finally {
+    cancelled = true;
+    if (activeSlotKey) {
+      const slotToClean = activeSlotKey;
+      activeSlotKey = null;
+      await cleanupSlot(slotToClean);
+    }
   }
 }
 

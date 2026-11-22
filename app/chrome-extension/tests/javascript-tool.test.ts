@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { javascriptTool, wrapUserCode } from '../entrypoints/background/tools/browser/javascript';
+import {
+  detectSingleExpression,
+  javascriptTool,
+  wrapUserCode,
+} from '../entrypoints/background/tools/browser/javascript';
 import { cdpSessionManager } from '@/utils/cdp-session-manager';
 
 describe('wrapUserCode', () => {
@@ -1052,5 +1056,127 @@ describe('findings 1 & 2 regression: unified index resolution & subframe targeti
     expect(res.isError).toBe(false);
     expect(JSON.parse((res.content[0] as { text: string }).text).result).toBe('open-shadow-target');
     expect(inner.attributes).toHaveLength(1);
+  });
+});
+
+describe('MV3 CSP-safe code analysis & synchronous scripting fallback', () => {
+  const tab = { id: 42, url: 'https://example.com/' } as chrome.tabs.Tab;
+
+  beforeEach(() => {
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue(tab);
+  });
+
+  afterEach(() => {
+    delete (chrome as unknown as { scripting?: unknown }).scripting;
+    vi.restoreAllMocks();
+  });
+
+  it('detects single expressions and single var declarations without invoking Function/AsyncFunction', () => {
+    // Expressions containing semicolons in strings, regexes, templates, or nested IIFEs
+    expect(detectSingleExpression('"https://example.com;test"; // trailing comment')).toBe(
+      '"https://example.com;test"',
+    );
+    expect(detectSingleExpression('(() => { const x = 1; return x + 2; })()')).toBe(
+      '(() => { const x = 1; return x + 2; })()',
+    );
+    expect(detectSingleExpression('{ return: 1, class: "btn" }')).toBe(
+      '{ return: 1, class: "btn" }',
+    );
+    expect(detectSingleExpression('/a;b/gi.test("a;b")')).toBe('/a;b/gi.test("a;b")');
+    expect(detectSingleExpression('`a;${1 + 2};b`')).toBe('`a;${1 + 2};b`');
+    expect(detectSingleExpression('async (x) => { const y = await x; return y; }')).toBe(
+      'async (x) => { const y = await x; return y; }',
+    );
+
+    // Multi-statement sequences (including ASI without semicolons) must NOT be wrapped as single expressions
+    expect(detectSingleExpression('x = 1\ny = 2')).toBeNull();
+    expect(detectSingleExpression('foo()\nbar()')).toBeNull();
+    expect(detectSingleExpression('a++\nb++')).toBeNull();
+    expect(detectSingleExpression('a\n++b')).toBeNull();
+    expect(detectSingleExpression('{ const x = 1; return x; }')).toBeNull();
+    expect(detectSingleExpression('label: foo()')).toBeNull();
+
+    // Single var declaration auto-returns without needing AsyncFunction syntax checks
+    const declWrapped = wrapUserCode('const items = [1, 2, 3]; // list');
+    expect(declWrapped).toContain('const items = [1, 2, 3]; // list\nreturn items;\n');
+
+    // Multi-statement starting with var declaration must NOT append auto-return of first var
+    const multiDeclWrapped = wrapUserCode('const x = 10;\nconst y = 20;\nreturn x + y;');
+    expect(multiDeclWrapped).not.toContain('\nreturn x;\n');
+    expect(multiDeclWrapped).toContain('return x + y;');
+
+    const multiLetWrapped = wrapUserCode('let x = 1;\nx++;');
+    expect(multiLetWrapped).not.toContain('\nreturn x;\n');
+  });
+
+  it('uses a synchronous executeScript func and polls async results without awaiting an async func', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    // Simulate Chrome 150 behavior: if an injected func returns a Promise, result becomes undefined!
+    const executeScript = vi.fn(
+      async (opts: { func: (...a: any[]) => unknown; args?: unknown[] }) => {
+        const raw = opts.func(...(opts.args ?? []));
+        const isPromiseLike =
+          raw !== null &&
+          (typeof raw === 'object' || typeof raw === 'function') &&
+          typeof (raw as { then?: unknown }).then === 'function';
+        return [{ result: isPromiseLike ? undefined : raw }];
+      },
+    );
+    (chrome as unknown as { scripting: unknown }).scripting = { executeScript };
+
+    // 1. Synchronous single-expression evaluation completes in one turn
+    const syncRes = await javascriptTool.execute({
+      tabId: 42,
+      code: '21 * 2',
+    });
+    expect(syncRes.isError).toBe(false);
+    expect(JSON.parse((syncRes.content[0] as { text: string }).text).result).toBe('42');
+    expect(executeScript).toHaveBeenCalledTimes(1);
+
+    // 2. Async top-level await evaluation starts synchronously and polls until settled
+    executeScript.mockClear();
+    const asyncRes = await javascriptTool.execute({
+      tabId: 42,
+      code: 'const val = await new Promise((resolve) => setTimeout(() => resolve("async-ok"), 15));\nreturn val;',
+    });
+    expect(asyncRes.isError).toBe(false);
+    expect(JSON.parse((asyncRes.content[0] as { text: string }).text).result).toBe('async-ok');
+    expect(executeScript.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Ensure none of the injected funcs are AsyncFunction instances
+    for (const [opts] of executeScript.mock.calls) {
+      expect(opts.func.constructor.name).toBe('Function');
+    }
+    // Ensure no __pawEval_ slot leaked on globalThis
+    const leakedSlots = Object.keys(globalThis).filter((key) => key.startsWith('__pawEval_'));
+    expect(leakedSlots).toEqual([]);
+  });
+
+  it('surfaces an actionable strict-CSP hint when scripting fallback hits EvalError', async () => {
+    vi.spyOn(cdpSessionManager, 'withSession').mockRejectedValue(
+      new Error('Another debugger is already attached to this target'),
+    );
+
+    const executeScript = vi.fn(async () => [
+      {
+        result: {
+          ok: false,
+          error: {
+            name: 'EvalError',
+            message:
+              "Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive.",
+          },
+        },
+      },
+    ]);
+    (chrome as unknown as { scripting: unknown }).scripting = { executeScript };
+
+    const res = await javascriptTool.execute({ tabId: 42, code: 'document.title' });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain('Content Security Policy');
+    expect(text).toContain('CDP Runtime.evaluate');
   });
 });

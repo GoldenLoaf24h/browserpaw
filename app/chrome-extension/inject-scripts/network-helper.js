@@ -347,6 +347,7 @@ if (window.__NETWORK_CAPTURE_HELPER_INITIALIZED__) {
 
   // Listen for messages from the extension
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (!request || typeof request !== 'object') return false;
     // Respond to ping message
     if (
       request.action === 'chrome_network_request_ping' ||
@@ -372,5 +373,6 @@ if (window.__NETWORK_CAPTURE_HELPER_INITIALIZED__) {
         });
       return true; // Indicates async response
     }
+    return false;
   });
 }

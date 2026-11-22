@@ -35,7 +35,9 @@ export class HumanInterventionTool extends BaseBrowserToolExecutor {
         targetTab = await this.resolveAffinityTab({ tabId: args.tabId, sessionId });
       }
     } catch (error) {
-      return createErrorResponse(`Failed to resolve tab: ${error instanceof Error ? error.message : String(error)}`);
+      return createErrorResponse(
+        `Failed to resolve tab: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     const tabId = targetTab.id;
@@ -60,7 +62,11 @@ export class HumanInterventionTool extends BaseBrowserToolExecutor {
       const timeoutPromise = new Promise((_, reject) => {
         timer = setTimeout(() => {
           // Tell content script to dismiss banner
-          try { Promise.resolve(chrome.tabs.sendMessage(tabId, { type: 'HUMAN_INTERVENTION_CANCEL' })).catch(() => {}); } catch {}
+          try {
+            Promise.resolve(
+              chrome.tabs.sendMessage(tabId, { type: 'HUMAN_INTERVENTION_CANCEL' }),
+            ).catch(() => {});
+          } catch {}
           reject(new Error(`Human intervention timed out after ${timeoutMs / 1000}s`));
         }, timeoutMs);
       });
@@ -73,6 +79,13 @@ export class HumanInterventionTool extends BaseBrowserToolExecutor {
           clearTimeout(timer);
           timer = null;
         }
+      }
+      if (response && (response.ok === false || response.cancelled)) {
+        const cancelReason =
+          (typeof response.reason === 'string' && response.reason.trim()) ||
+          (typeof response.error === 'string' && response.error.trim()) ||
+          'cancelled';
+        return createErrorResponse(`Human intervention not completed: ${cancelReason}`);
       }
       const durationMs = Date.now() - startTime;
 

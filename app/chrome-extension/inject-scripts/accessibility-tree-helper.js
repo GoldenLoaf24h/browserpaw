@@ -828,38 +828,107 @@
     };
   }
 
+  let activePickerCancel = null;
+
+  function resolveFrameTargetOrigin(frame, contentWindow) {
+    try {
+      const origin = contentWindow?.location?.origin;
+      if (origin && origin !== 'null' && /^https?:\/\//i.test(origin)) {
+        return origin;
+      }
+    } catch {}
+    try {
+      const src =
+        (typeof frame?.getAttribute === 'function' && frame.getAttribute('src')) || frame?.src;
+      if (src) {
+        const parsed = new URL(src, location.href);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          return parsed.origin;
+        }
+      }
+    } catch {}
+    return '*';
+  }
+
   function forwardHoverRefToChildren(ref) {
     return new Promise((resolve) => {
       const frames = Array.from(document.querySelectorAll('iframe, frame'));
-      if (!frames.length) {
+      const targetEntries = [];
+      const targetWindows = new Set();
+      for (const frame of frames) {
+        try {
+          const contentWindow = frame && frame.contentWindow;
+          if (contentWindow && !targetWindows.has(contentWindow)) {
+            targetWindows.add(contentWindow);
+            targetEntries.push({ frame, contentWindow });
+          }
+        } catch {}
+      }
+      if (targetWindows.size === 0) {
         resolve({ success: false, error: `ref "${ref}" not found` });
         return;
       }
       const reqId = `hover_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const respondedWindows = new Set();
+      let lastErrorResult = null;
+      let settled = false;
+      let timeoutHandle = null;
+
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener('message', listener, true);
+        if (timeoutHandle !== null) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        resolve(result);
+      };
+
       const listener = (ev) => {
+        if (settled) return;
         const data = ev?.data;
         if (!data || data.type !== 'rr-bridge-hover-ref-result' || data.reqId !== reqId) return;
         // Verify response comes from one of the targeted child frames
-        const isFromChild = frames.some((f) => f && f.contentWindow === ev.source);
-        if (!isFromChild) return;
-        window.removeEventListener('message', listener, true);
-        resolve(data.result);
+        if (!targetWindows.has(ev.source)) return;
+        if (data.result?.success) {
+          settle(data.result);
+          return;
+        }
+        respondedWindows.add(ev.source);
+        lastErrorResult = data.result || {
+          success: false,
+          error: `ref "${ref}" not found in child frame`,
+        };
+        if (respondedWindows.size >= targetWindows.size) {
+          settle(lastErrorResult);
+        }
       };
       window.addEventListener('message', listener, true);
-      setTimeout(() => {
-        window.removeEventListener('message', listener, true);
-        resolve({ success: false, error: `ref "${ref}" not found in child frames` });
+      timeoutHandle = setTimeout(() => {
+        settle(
+          lastErrorResult || { success: false, error: `ref "${ref}" not found in child frames` },
+        );
       }, 1500);
-      for (const frame of frames) {
+      for (const { frame, contentWindow } of targetEntries) {
         try {
-          frame.contentWindow?.postMessage({ type: 'rr-bridge-hover-ref', reqId, ref }, '*');
-        } catch {}
+          const targetOrigin = resolveFrameTargetOrigin(frame, contentWindow);
+          contentWindow.postMessage({ type: 'rr-bridge-hover-ref', reqId, ref }, targetOrigin);
+        } catch {
+          respondedWindows.add(contentWindow);
+        }
+      }
+      if (respondedWindows.size >= targetWindows.size) {
+        settle(
+          lastErrorResult || { success: false, error: `ref "${ref}" not found in child frames` },
+        );
       }
     });
   }
 
   // Chrome message bridge for ping and tree generation
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (!request || typeof request !== 'object') return false;
     try {
       if (
         request &&
@@ -913,15 +982,29 @@
             root.style.opacity = '0.5';
           }
           sendResponse({ success: true });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       // Element picker: start a temporary overlay to let user pick an element
       if (request && request.action === 'rr_picker_start') {
+        let responded = false;
+        const respondOnce = (payload) => {
+          if (responded) return;
+          responded = true;
+          try {
+            sendResponse(payload);
+          } catch {}
+        };
         try {
+          if (typeof activePickerCancel === 'function') {
+            try {
+              activePickerCancel('preempted');
+            } catch {}
+            activePickerCancel = null;
+          }
           // state
           const state = { active: true };
           const hostId = '__rr_picker_host__';
@@ -974,6 +1057,14 @@
               document.removeEventListener('keydown', onKey, true);
             } catch {}
             state.active = false;
+            if (activePickerCancel === cancelPicker) {
+              activePickerCancel = null;
+            }
+          };
+
+          const cancelPicker = (reason) => {
+            cleanup();
+            respondOnce({ success: false, cancelled: true, reason });
           };
 
           const onMove = (e) => {
@@ -1079,8 +1170,8 @@
             const el = e.target instanceof Element ? e.target : null;
             if (!el) {
               cleanup();
-              sendResponse({ success: false, error: 'no element' });
-              return true;
+              respondOnce({ success: false, error: 'no element' });
+              return;
             }
             // create ref
             let refId = null;
@@ -1089,33 +1180,39 @@
             } catch {}
             const cands = computeCandidates(el);
             cleanup();
-            sendResponse({ success: true, ref: refId, candidates: cands });
-            return true;
+            respondOnce({ success: true, ref: refId, candidates: cands });
           };
           const onKey = (e) => {
             if (e.key === 'Escape') {
               cleanup();
-              sendResponse({ success: false, cancelled: true });
+              respondOnce({ success: false, cancelled: true });
             }
           };
+          activePickerCancel = cancelPicker;
           document.addEventListener('mousemove', onMove, true);
           document.addEventListener('click', onClick, true);
           document.addEventListener('keydown', onKey, true);
           return true; // async
         } catch (e) {
-          sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          respondOnce({ success: false, error: String(e && e.message ? e.message : e) });
+          return false;
         }
       }
       if (request && request.action === 'rr_picker_stop') {
         try {
+          if (typeof activePickerCancel === 'function') {
+            try {
+              activePickerCancel('stopped');
+            } catch {}
+            activePickerCancel = null;
+          }
           const host = document.getElementById('__rr_picker_host__');
           if (host) host.remove();
           sendResponse({ success: true });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'generateAccessibilityTree') {
@@ -1125,10 +1222,10 @@
         });
         if (result && result.error) {
           sendResponse({ success: false, error: result.error });
-          return true;
+          return false;
         }
         sendResponse({ success: true, ...result });
-        return true;
+        return false;
       }
       if (request && request.action === 'ensureRefForSelector') {
         try {
@@ -1157,7 +1254,7 @@
                     success: false,
                     error: `Composite frame selector not found: ${frameSel}`,
                   });
-                  return true;
+                  return false;
                 }
                 const cw = frameEl.contentWindow;
                 if (!cw) {
@@ -1165,7 +1262,7 @@
                     success: false,
                     error: 'Unable to obtain contentWindow of target frame',
                   });
-                  return true;
+                  return false;
                 }
                 // Bridge to child frame via postMessage with timeout
                 const reqId = `rrc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1248,7 +1345,7 @@
               }
             } catch (e) {
               sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-              return true;
+              return false;
             }
           }
           // Support CSS selector, XPath, or visible text search
@@ -1337,51 +1434,51 @@
           } else if (isXPath) {
             if (!sel) {
               sendResponse({ success: false, error: 'selector is required' });
-              return true;
+              return false;
             }
             const result = queryXPathWithUniquenessCheck(sel, allowMultiple);
             if (result.error) {
               sendResponse({ success: false, error: result.error });
-              return true;
+              return false;
             }
             if (result.matchCount === 0) {
               sendResponse({ success: false, error: `selector not found: ${sel}` });
-              return true;
+              return false;
             }
             if (!allowMultiple && result.matchCount > 1) {
               sendResponse({
                 success: false,
                 error: `Selector "${sel}" matched multiple elements. Please refine the selector to match only one element.`,
               });
-              return true;
+              return false;
             }
             el = result.element;
           } else {
             if (!sel) {
               sendResponse({ success: false, error: 'selector is required' });
-              return true;
+              return false;
             }
             const result = querySelectorWithUniquenessCheck(sel, allowMultiple);
             if (result.error) {
               sendResponse({ success: false, error: result.error });
-              return true;
+              return false;
             }
             if (result.matchCount === 0) {
               sendResponse({ success: false, error: `selector not found: ${sel}` });
-              return true;
+              return false;
             }
             if (!allowMultiple && result.matchCount > 1) {
               sendResponse({
                 success: false,
                 error: `Selector "${sel}" matched multiple elements. Please refine the selector to match only one element.`,
               });
-              return true;
+              return false;
             }
             el = result.element;
           }
           if (!el) {
             sendResponse({ success: false, error: `selector not found: ${sel}` });
-            return true;
+            return false;
           }
           const refId = getOrAssignElementRef(el);
           const rect = /** @type {HTMLElement} */ (el).getBoundingClientRect();
@@ -1393,10 +1490,10 @@
               y: Math.round(rect.top + rect.height / 2),
             },
           });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'dispatchHoverForRef') {
@@ -1413,12 +1510,12 @@
           const name = String(request.name || '').trim();
           if (!sel || !name) {
             sendResponse({ success: false, error: 'selector and name are required' });
-            return true;
+            return false;
           }
           const el = document.querySelector(sel) || querySelectorDeepFirst(sel);
           if (!el) {
             sendResponse({ success: false, error: `selector not found: ${sel}` });
-            return true;
+            return false;
           }
           let value = null;
           if (name === 'text' || name === 'textContent') {
@@ -1433,10 +1530,10 @@
             value = el.getAttribute(name);
           }
           sendResponse({ success: true, value });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'collectVariables') {
@@ -1462,7 +1559,7 @@
               values[key] = val;
             }
             sendResponse({ success: true, values });
-            return true;
+            return false;
           }
           // Build overlay form
           const hostId = '__rr_var_overlay__';
@@ -1573,7 +1670,7 @@
           return true; // async
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'resolveRef') {
@@ -1584,7 +1681,7 @@
           const el = weak && typeof weak.deref === 'function' ? weak.deref() : null;
           if (!el || !(el instanceof Element)) {
             sendResponse({ success: false, error: `ref "${ref}" not found or expired` });
-            return true;
+            return false;
           }
           const rect = /** @type {HTMLElement} */ (el).getBoundingClientRect();
           sendResponse({
@@ -1656,10 +1753,10 @@
               return generateSelector(el);
             })(),
           });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'verifyFingerprint') {
@@ -1668,14 +1765,14 @@
           const fingerprint = String(request.fingerprint || '').trim();
           if (!ref || !fingerprint) {
             sendResponse({ success: false, error: 'ref and fingerprint are required' });
-            return true;
+            return false;
           }
           const map = window.__mcpElementMap || window.__claudeElementMap;
           const weak = map && map[ref];
           const el = weak && typeof weak.deref === 'function' ? weak.deref() : null;
           if (!el || !(el instanceof Element)) {
             sendResponse({ success: false, error: `ref "${ref}" not found or expired` });
-            return true;
+            return false;
           }
           // Verify fingerprint: parse stored fingerprint and compare against current element
           const parts = fingerprint.split('|');
@@ -1684,7 +1781,7 @@
           // Tag names must match
           if (storedTag !== currentTag) {
             sendResponse({ success: true, match: false });
-            return true;
+            return false;
           }
           // If stored fingerprint includes an id, current element must have the same id
           const storedIdPart = parts.find((p) => p.startsWith('id='));
@@ -1693,14 +1790,14 @@
             const currentId = el.id ? String(el.id).trim() : '';
             if (storedId !== currentId) {
               sendResponse({ success: true, match: false });
-              return true;
+              return false;
             }
           }
           sendResponse({ success: true, match: true });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
       if (request && request.action === 'focusByRef') {
@@ -1711,7 +1808,7 @@
           const el = weak && typeof weak.deref === 'function' ? weak.deref() : null;
           if (!el || !(el instanceof Element)) {
             sendResponse({ success: false, error: `ref "${ref}" not found or expired` });
-            return true;
+            return false;
           }
           try {
             /** @type {HTMLElement} */ (el).scrollIntoView({
@@ -1724,15 +1821,15 @@
             /** @type {HTMLElement} */ (el).focus && /** @type {HTMLElement} */ (el).focus();
           } catch {}
           sendResponse({ success: true });
-          return true;
+          return false;
         } catch (e) {
           sendResponse({ success: false, error: String(e && e.message ? e.message : e) });
-          return true;
+          return false;
         }
       }
     } catch (e) {
       sendResponse({ success: false, error: e && e.message ? e.message : String(e) });
-      return true;
+      return false;
     }
     return false;
   });

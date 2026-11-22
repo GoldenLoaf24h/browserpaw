@@ -62,7 +62,6 @@ export default defineConfig({
     permissions: [
       'nativeMessaging',
       'tabs',
-      'activeTab',
       'scripting',
       'downloads',
       'webRequest',
@@ -78,7 +77,7 @@ export default defineConfig({
     host_permissions: ['<all_urls>'],
     action: {
       default_popup: 'popup.html',
-      default_title: 'browserpaw',
+      default_title: 'BrowserPaw',
       default_icon: {
         '16': 'icon/16.png',
         '32': 'icon/32.png',
@@ -88,10 +87,7 @@ export default defineConfig({
     },
     web_accessible_resources: [
       {
-        resources: [
-          '/inject-scripts/*', // Helper scripts accessible for content script injection
-          '/images/*',
-        ],
+        resources: ['/images/cursor-chat.png'],
         matches: ['<all_urls>'],
       },
     ],
@@ -123,7 +119,7 @@ export default defineConfig({
       }) as any,
       Icons({ compiler: 'vue3', autoInstall: false }) as any,
       // Ensure static assets are available as early as possible to avoid race conditions in dev
-      // Copy _locales/inject-scripts into the build output before other steps
+      // Copy inject-scripts into the build output before other steps
       viteStaticCopy({
         targets: [
           {

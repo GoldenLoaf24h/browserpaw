@@ -76,7 +76,39 @@ describe('HumanInterventionTool (Human-in-the-Loop Barrier Solver)', () => {
     // chrome.tabs.sendMessage should ONLY have been called once for HUMAN_INTERVENTION_REQUEST
     // and NEVER for HUMAN_INTERVENTION_CANCEL
     expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(1);
-    expect((chrome.tabs.sendMessage as any).mock.calls[0][1].type).toBe('HUMAN_INTERVENTION_REQUEST');
+    expect((chrome.tabs.sendMessage as any).mock.calls[0][1].type).toBe(
+      'HUMAN_INTERVENTION_REQUEST',
+    );
     vi.useRealTimers();
+  });
+
+  it('returns an error when the intervention request is cancelled or preempted', async () => {
+    (chrome.tabs.sendMessage as any).mockResolvedValueOnce({
+      ok: false,
+      cancelled: true,
+      reason: 'preempted',
+    });
+
+    const preemptedRes = await tool.execute({
+      tabId: 1,
+      reason: 'Complete login verification',
+    });
+
+    expect(preemptedRes.isError).toBe(true);
+    expect((preemptedRes.content[0] as any).text).toContain('preempted');
+
+    (chrome.tabs.sendMessage as any).mockResolvedValueOnce({
+      ok: false,
+      cancelled: true,
+      reason: 'cancelled',
+    });
+
+    const cancelledRes = await tool.execute({
+      tabId: 1,
+      reason: 'Complete login verification',
+    });
+
+    expect(cancelledRes.isError).toBe(true);
+    expect((cancelledRes.content[0] as any).text).toContain('cancelled');
   });
 });

@@ -363,17 +363,27 @@ if (window.__KEYBOARD_HELPER_INITIALIZED__) {
 
   // Listener for messages from the extension
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (!request || typeof request !== 'object') return false;
     if (request.action === 'simulateKeyboard') {
       let targetEl = null;
       if (request.selector) {
-        targetEl = document.querySelector(request.selector);
+        try {
+          targetEl = document.querySelector(request.selector);
+        } catch (error) {
+          sendResponse({
+            success: false,
+            error: `Invalid selector "${request.selector}": ${error?.message || String(error)}`,
+            results: [],
+          });
+          return false;
+        }
         if (!targetEl) {
           sendResponse({
             success: false,
             error: `Element with selector "${request.selector}" not found`,
             results: [],
           });
-          return true; // Keep channel open for async response
+          return false; // Synchronous response
         }
       }
 
