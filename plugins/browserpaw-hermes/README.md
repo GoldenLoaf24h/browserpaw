@@ -43,7 +43,9 @@ Native Hermes Agent plugin for **BrowserPaw v5.0.1**. It bundles the read-only c
 
 ## Security & Behavioral Disclosures
 
-- **Local CLI execution**: Invokes the local `browserpaw` executable via `subprocess.run(..., shell=False)` with caller-supplied argv tokens; never invokes a shell interpreter and never executes arbitrary binaries outside `browserpaw` (or operator-configured `cli_path`).
+- **Local CLI execution**: Invokes the local `browserpaw` executable via `subprocess.run(..., shell=False, stdin=subprocess.DEVNULL)` with validated argv tokens; never invokes a shell interpreter, never executes arbitrary binaries outside `browserpaw` (or operator-configured `cli_path`), and sets `BROWSERPAW_NO_AUTO_UPDATE=1` / `BROWSERPAW_NO_UPDATE_CHECK=1` so agent tool calls never download CLI updates.
+- **File-safety enforcement**: Model-supplied write paths (`--out` / `--out=`) are checked with Hermes `agent.file_safety.is_write_denied` and confined strictly to `~/.browserpaw/out` (symlinks, traversal, NT/device namespaces, and UNC paths are refused). Model-supplied read paths (`--input`, `--file`, `upload` file operands, `recipe save FILE`, `batch FILE`, plus nested batch and recipe steps) are checked with Hermes `agent.file_safety.raise_if_read_blocked` and credential-store guards. `--skill-dir` is refused.
+- **Installer command guard**: Agent calls to host-management subcommands (`setup`, `uninstall`, and `doctor --fix`) are refused; those commands remain user-only. Read-only `doctor` and `status` remain available.
 - **Local browser control**: Commands communicate through `browserpaw` and Chrome Native Messaging (`com.browserpaw.nativehost` on loopback port `12307`) with the user's loaded Chrome extension.
 - **No credentials or third-party network calls**: The plugin reads no secrets, tokens, or browser profile files and makes no outbound network requests itself.
 
