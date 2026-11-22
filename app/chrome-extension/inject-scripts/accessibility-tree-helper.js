@@ -13,11 +13,151 @@
   const MAX_LINE_LABEL = 100; // max characters for a single label in output
   const REF_MAP_LIMIT = 1000; // limit size of the ref map to keep payload small
 
-  // Keep a weak map from ref id to elements
-  if (!window.__mcpElementMap) window.__mcpElementMap = window.__claudeElementMap || {};
-  if (!window.__mcpRefCounter) window.__mcpRefCounter = window.__claudeRefCounter || 0;
-  window.__claudeElementMap = window.__mcpElementMap;
-  window.__claudeRefCounter = window.__mcpRefCounter;
+  const TAG_ROLE_MAP = new Map([
+    ['a', 'link'],
+    ['button', 'button'],
+    ['select', 'combobox'],
+    ['textarea', 'textbox'],
+    ['h1', 'heading'],
+    ['h2', 'heading'],
+    ['h3', 'heading'],
+    ['h4', 'heading'],
+    ['h5', 'heading'],
+    ['h6', 'heading'],
+    ['img', 'image'],
+    ['nav', 'navigation'],
+    ['main', 'main'],
+    ['header', 'banner'],
+    ['footer', 'contentinfo'],
+    ['section', 'region'],
+    ['article', 'article'],
+    ['aside', 'complementary'],
+    ['form', 'form'],
+    ['table', 'table'],
+    ['ul', 'list'],
+    ['ol', 'list'],
+    ['li', 'listitem'],
+    ['label', 'label'],
+  ]);
+
+  const INPUT_TYPE_ROLE_MAP = new Map([
+    ['submit', 'button'],
+    ['button', 'button'],
+    ['checkbox', 'checkbox'],
+    ['radio', 'radio'],
+    ['file', 'button'],
+  ]);
+
+  const TEXT_LABEL_TAGS = new Set(['button', 'a', 'summary']);
+  const HEADING_TAG_RE = /^h[1-6]$/;
+  const INTERACTIVE_TAGS = new Set([
+    'a',
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'details',
+    'summary',
+  ]);
+  const INTERACTIVE_ROLES = new Set([
+    'button',
+    'link',
+    'checkbox',
+    'radio',
+    'switch',
+    'slider',
+    'option',
+    'menuitem',
+    'textbox',
+    'searchbox',
+    'combobox',
+    'spinbutton',
+    'tab',
+    'treeitem',
+  ]);
+  const SHADOW_INTERACTIVE_SELECTOR =
+    'input, textarea, select, button, a[href], [contenteditable="true"], [role="button"], [role="link"], [role="textbox"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="option"], [role="switch"], [role="radio"], [role="checkbox"], [role="tab"], [role="slider"]';
+  const STRUCTURAL_TAGS = new Set([
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'nav',
+    'main',
+    'header',
+    'footer',
+    'section',
+    'article',
+    'aside',
+  ]);
+  const FORMISH_ROLES = new Set(['search', 'form', 'group', 'toolbar', 'navigation']);
+  const FORMISH_TAGS = new Set(['form', 'fieldset', 'nav', 'legend']);
+  const EXCLUDED_TAGS = new Set(['script', 'style', 'meta', 'link', 'title', 'noscript']);
+  const SELECTOR_IDENTITY_ATTRS = ['data-testid', 'data-cy', 'name'];
+  const EMPTY_GENERIC_LINE_RE = /^\s*- generic \[ref=ref_\d+\]$/;
+
+  function syncReverseMapAndPrune(map, reverseMap) {
+    for (const key in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+      const weak = map[key];
+      const derefed = weak && typeof weak.deref === 'function' ? weak.deref() : null;
+      if (!derefed) {
+        delete map[key];
+      } else if (typeof derefed === 'object' || typeof derefed === 'function') {
+        reverseMap.set(derefed, key);
+      }
+    }
+  }
+
+  function ensureElementRefRegistry() {
+    if (!window.__mcpElementMap) window.__mcpElementMap = window.__claudeElementMap || {};
+    if (!window.__mcpRefCounter) window.__mcpRefCounter = window.__claudeRefCounter || 0;
+    window.__claudeElementMap = window.__mcpElementMap;
+    window.__claudeRefCounter = window.__mcpRefCounter;
+
+    const map = window.__mcpElementMap;
+    let reverseMap = window.__mcpElementReverseMap;
+    let rebuilt = false;
+    if (!(reverseMap instanceof WeakMap) || window.__mcpElementReverseMapSource !== map) {
+      reverseMap = new WeakMap();
+      window.__mcpElementReverseMap = reverseMap;
+      window.__mcpElementReverseMapSource = map;
+      syncReverseMapAndPrune(map, reverseMap);
+      rebuilt = true;
+    }
+    return { map, reverseMap, rebuilt };
+  }
+
+  function syncAndPruneElementRefs() {
+    const { map, reverseMap, rebuilt } = ensureElementRefRegistry();
+    if (!rebuilt) {
+      syncReverseMapAndPrune(map, reverseMap);
+    }
+    return { map, reverseMap };
+  }
+
+  function getOrAssignElementRef(el) {
+    const { map, reverseMap } = ensureElementRefRegistry();
+    const existing = reverseMap.get(el);
+    if (existing) {
+      const existingWeak = Object.prototype.hasOwnProperty.call(map, existing)
+        ? map[existing]
+        : null;
+      if (existingWeak && typeof existingWeak.deref === 'function' && existingWeak.deref() === el) {
+        return existing;
+      }
+    }
+    const refId = `ref_${++window.__mcpRefCounter}`;
+    window.__claudeRefCounter = window.__mcpRefCounter;
+    map[refId] = new WeakRef(el);
+    reverseMap.set(el, refId);
+    return refId;
+  }
+
+  // Keep a weak map from ref id to elements and an O(1) reverse WeakMap
+  ensureElementRefRegistry();
 
   /**
    * Infer ARIA-like role from element
@@ -28,44 +168,11 @@
     const role = el.getAttribute('role');
     if (role) return role;
     const tag = el.tagName.toLowerCase();
-    const type = el.getAttribute('type') || '';
-    const map = {
-      a: 'link',
-      button: 'button',
-      input:
-        type === 'submit' || type === 'button'
-          ? 'button'
-          : type === 'checkbox'
-            ? 'checkbox'
-            : type === 'radio'
-              ? 'radio'
-              : type === 'file'
-                ? 'button'
-                : 'textbox',
-      select: 'combobox',
-      textarea: 'textbox',
-      h1: 'heading',
-      h2: 'heading',
-      h3: 'heading',
-      h4: 'heading',
-      h5: 'heading',
-      h6: 'heading',
-      img: 'image',
-      nav: 'navigation',
-      main: 'main',
-      header: 'banner',
-      footer: 'contentinfo',
-      section: 'region',
-      article: 'article',
-      aside: 'complementary',
-      form: 'form',
-      table: 'table',
-      ul: 'list',
-      ol: 'list',
-      li: 'listitem',
-      label: 'label',
-    };
-    return map[tag] || 'generic';
+    if (tag === 'input') {
+      const type = el.getAttribute('type') || '';
+      return INPUT_TYPE_ROLE_MAP.get(type) || 'textbox';
+    }
+    return TAG_ROLE_MAP.get(tag) || 'generic';
   }
 
   /**
@@ -99,7 +206,7 @@
       if (type === 'submit' && val && val.trim()) return val.trim();
       if (input.value && input.value.length < 50 && input.value.trim()) return input.value.trim();
     }
-    if (['button', 'a', 'summary'].includes(tag)) {
+    if (TEXT_LABEL_TAGS.has(tag)) {
       let text = '';
       for (let i = 0; i < el.childNodes.length; i++) {
         const n = el.childNodes[i];
@@ -107,7 +214,7 @@
       }
       if (text.trim()) return text.trim();
     }
-    if (/^h[1-6]$/.test(tag)) {
+    if (HEADING_TAG_RE.test(tag)) {
       const t = el.textContent;
       if (t && t.trim()) return t.trim().substring(0, MAX_LINE_LABEL);
     }
@@ -130,12 +237,45 @@
     return '';
   }
 
+  function getCachedComputedStyle(el, state) {
+    const cache = state && state.styleCache;
+    if (cache && cache.has(el)) return cache.get(el);
+    const cs = window.getComputedStyle(/** @type {HTMLElement} */ (el));
+    if (cache) cache.set(el, cs);
+    return cs;
+  }
+
+  function getCachedBoundingRect(el, state) {
+    const cache = state && state.rectCache;
+    if (cache && cache.has(el)) return cache.get(el);
+    const rect = /** @type {HTMLElement} */ (el).getBoundingClientRect();
+    if (cache) cache.set(el, rect);
+    return rect;
+  }
+
+  function getCachedLabel(el, state) {
+    const cache = state && state.labelCache;
+    if (cache && cache.has(el)) return cache.get(el);
+    const label = inferLabel(el);
+    if (cache) cache.set(el, label);
+    return label;
+  }
+
+  function getCachedInteractive(el, state) {
+    const cache = state && state.interactiveCache;
+    if (cache && cache.has(el)) return cache.get(el);
+    const interactive = isInteractive(el);
+    if (cache) cache.set(el, interactive);
+    return interactive;
+  }
+
   /**
    * Check if element is visible in DOM
    * @param {Element} el
+   * @param {{styleCache?: WeakMap<Element, CSSStyleDeclaration>}=} state
    */
-  function isVisible(el) {
-    const cs = window.getComputedStyle(/** @type {HTMLElement} */ (el));
+  function isVisible(el, state) {
+    const cs = getCachedComputedStyle(el, state);
     if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
     const he = /** @type {HTMLElement} */ (el);
     return he.offsetWidth > 0 && he.offsetHeight > 0;
@@ -148,8 +288,7 @@
   function isInteractive(el) {
     // Native interactive tags
     const tag = el.tagName.toLowerCase();
-    if (['a', 'button', 'input', 'select', 'textarea', 'details', 'summary'].includes(tag))
-      return true;
+    if (INTERACTIVE_TAGS.has(tag)) return true;
 
     // Generic interactive hints
     if (el.getAttribute('onclick') != null) return true;
@@ -163,23 +302,7 @@
 
     // ARIA roles commonly used by custom elements
     const role = (el.getAttribute && el.getAttribute('role')) || '';
-    const interactiveRoles = new Set([
-      'button',
-      'link',
-      'checkbox',
-      'radio',
-      'switch',
-      'slider',
-      'option',
-      'menuitem',
-      'textbox',
-      'searchbox',
-      'combobox',
-      'spinbutton',
-      'tab',
-      'treeitem',
-    ]);
-    if (role && interactiveRoles.has(role.toLowerCase())) return true;
+    if (role && INTERACTIVE_ROLES.has(role.toLowerCase())) return true;
 
     // Shadow host case: treat host as interactive if its open shadow root contains
     // an interactive control (textarea/input/select/button/a or contenteditable).
@@ -187,9 +310,7 @@
       const anyEl = /** @type {any} */ (el);
       const sr = anyEl && anyEl.shadowRoot ? anyEl.shadowRoot : null;
       if (sr) {
-        const inner = sr.querySelector(
-          'input, textarea, select, button, a[href], [contenteditable="true"], [role="button"], [role="link"], [role="textbox"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="option"], [role="switch"], [role="radio"], [role="checkbox"], [role="tab"], [role="slider"]',
-        );
+        const inner = sr.querySelector(SHADOW_INTERACTIVE_SELECTOR);
         if (inner) return true;
       }
     } catch (_) {
@@ -204,24 +325,7 @@
    */
   function isStructural(el) {
     const tag = el.tagName.toLowerCase();
-    if (
-      [
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'nav',
-        'main',
-        'header',
-        'footer',
-        'section',
-        'article',
-        'aside',
-      ].includes(tag)
-    )
-      return true;
+    if (STRUCTURAL_TAGS.has(tag)) return true;
     return el.getAttribute('role') != null;
   }
 
@@ -232,6 +336,7 @@
   function isFormishContainer(el) {
     const tag = el.tagName.toLowerCase();
     const role = (el.getAttribute && el.getAttribute('role')) || '';
+    if (FORMISH_TAGS.has(tag) || FORMISH_ROLES.has(role)) return true;
     const id = /** @type {HTMLElement} */ (el).id || '';
     // Normalize className for HTML/SVG elements
     let cls = '';
@@ -247,15 +352,6 @@
       /* ignore */
     }
     return (
-      role === 'search' ||
-      role === 'form' ||
-      role === 'group' ||
-      role === 'toolbar' ||
-      role === 'navigation' ||
-      tag === 'form' ||
-      tag === 'fieldset' ||
-      tag === 'nav' ||
-      tag === 'legend' ||
       id.includes('search') ||
       cls.includes('search') ||
       id.includes('form') ||
@@ -462,14 +558,15 @@
    * Whether to include element in tree under config
    * @param {Element} el
    * @param {{filter?: 'all'|'interactive'}} cfg
+   * @param {object=} state
    */
-  function shouldInclude(el, cfg) {
+  function shouldInclude(el, cfg, state) {
     const tag = el.tagName.toLowerCase();
-    if (['script', 'style', 'meta', 'link', 'title', 'noscript'].includes(tag)) return false;
+    if (EXCLUDED_TAGS.has(tag)) return false;
     if (el.getAttribute('aria-hidden') === 'true') return false;
-    if (!isVisible(el)) return false;
+    if (!isVisible(el, state)) return false;
     if (cfg.filter !== 'all') {
-      const r = /** @type {HTMLElement} */ (el).getBoundingClientRect();
+      const r = getCachedBoundingRect(el, state);
       if (!(
         r.top < window.innerHeight &&
         r.bottom > 0 &&
@@ -478,10 +575,10 @@
       ))
         return false;
     }
-    if (cfg.filter === 'interactive') return isInteractive(el);
-    if (isInteractive(el)) return true;
+    if (cfg.filter === 'interactive') return getCachedInteractive(el, state);
+    if (getCachedInteractive(el, state)) return true;
     if (isStructural(el)) return true;
-    if (inferLabel(el).length > 0) return true;
+    if (getCachedLabel(el, state).length > 0) return true;
     return isFormishContainer(el);
   }
 
@@ -496,7 +593,7 @@
       const idSel = `#${CSS.escape(/** @type {HTMLElement} */ (el).id)}`;
       if (document.querySelectorAll(idSel).length === 1) return idSel;
     }
-    for (const attr of ['data-testid', 'data-cy', 'name']) {
+    for (const attr of SELECTOR_IDENTITY_ATTRS) {
       const attrValue = el.getAttribute(attr);
       if (attrValue) {
         const s = `[${attr}="${CSS.escape(attrValue)}"]`;
@@ -537,22 +634,12 @@
     if (state.processed >= MAX_NODES) return;
     if (state.visited.has(el)) return;
     state.visited.add(el);
-    const include = shouldInclude(el, cfg) || depth === 0;
+    const include = shouldInclude(el, cfg, state) || depth === 0;
     if (include) {
       const role = inferRole(el);
-      let label = inferLabel(el);
-      let refId = null;
-      for (const k in window.__mcpElementMap) {
-        if (window.__mcpElementMap[k].deref && window.__mcpElementMap[k].deref() === el) {
-          refId = k;
-          break;
-        }
-      }
-      if (!refId) {
-        refId = `ref_${++window.__mcpRefCounter}`;
-        window.__mcpElementMap[refId] = new WeakRef(el);
-      }
-      const rect = /** @type {HTMLElement} */ (el).getBoundingClientRect();
+      let label = getCachedLabel(el, state);
+      const refId = getOrAssignElementRef(el);
+      const rect = getCachedBoundingRect(el, state);
       const cx = Math.round(rect.left + rect.width / 2);
       const cy = Math.round(rect.top + rect.height / 2);
       let line = `${'  '.repeat(depth)}- ${role}`;
@@ -572,7 +659,7 @@
       try {
         const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
         if (disabled) line += ` disabled`;
-        const cs = window.getComputedStyle(/** @type {HTMLElement} */ (el));
+        const cs = getCachedComputedStyle(el, state);
         if (cs && cs.pointerEvents === 'none') line += ` pe=none`;
       } catch (_) {
         /* ignore style issues */
@@ -582,7 +669,7 @@
       state.processed++;
 
       // Only collect ref mapping for interactive elements to limit cost
-      if (isInteractive(el) && refMap.length < REF_MAP_LIMIT) {
+      if (getCachedInteractive(el, state) && refMap.length < REF_MAP_LIMIT) {
         refMap.push({
           ref: /** @type {string} */ (refId),
           selector: generateSelector(el),
@@ -637,7 +724,17 @@
       }
 
       const refMap = [];
-      const state = { processed: 0, included: 0, visited: new WeakSet() };
+      const state = {
+        processed: 0,
+        included: 0,
+        visited: new WeakSet(),
+        styleCache: new WeakMap(),
+        rectCache: new WeakMap(),
+        labelCache: new WeakMap(),
+        interactiveCache: new WeakMap(),
+      };
+
+      syncAndPruneElementRefs();
 
       // Determine root element (body or refId-specified element)
       let focus = null;
@@ -655,13 +752,7 @@
       }
 
       if (root) traverse(root, 0, cfg, out, refMap, state);
-      for (const k in window.__mcpElementMap) {
-        if (!window.__mcpElementMap[k].deref || !window.__mcpElementMap[k].deref())
-          delete window.__mcpElementMap[k];
-      }
-      const pageContent = out
-        .filter((line) => !/^\s*- generic \[ref=ref_\d+\]$/.test(line))
-        .join('\n');
+      const pageContent = out.filter((line) => !EMPTY_GENERIC_LINE_RE.test(line)).join('\n');
       const end = performance && performance.now ? performance.now() : Date.now();
       return {
         pageContent,
@@ -705,7 +796,7 @@
 
   function resolveRef(ref) {
     const map = window.__mcpElementMap || window.__claudeElementMap || {};
-    const weak = map[ref];
+    const weak = Object.prototype.hasOwnProperty.call(map, ref) ? map[ref] : null;
     return weak && typeof weak.deref === 'function' ? weak.deref() : null;
   }
 
@@ -992,24 +1083,9 @@
               return true;
             }
             // create ref
-            try {
-              if (!window.__mcpElementMap) window.__mcpElementMap = window.__claudeElementMap || {};
-              if (!window.__mcpRefCounter) window.__mcpRefCounter = window.__claudeRefCounter || 0;
-              window.__claudeElementMap = window.__mcpElementMap;
-              window.__claudeRefCounter = window.__mcpRefCounter;
-            } catch {}
             let refId = null;
             try {
-              for (const k in window.__mcpElementMap) {
-                if (window.__mcpElementMap[k].deref && window.__mcpElementMap[k].deref() === el) {
-                  refId = k;
-                  break;
-                }
-              }
-              if (!refId) {
-                refId = `ref_${++window.__mcpRefCounter}`;
-                window.__mcpElementMap[refId] = new WeakRef(el);
-              }
+              refId = getOrAssignElementRef(el);
             } catch {}
             const cands = computeCandidates(el);
             cleanup();
@@ -1307,17 +1383,7 @@
             sendResponse({ success: false, error: `selector not found: ${sel}` });
             return true;
           }
-          let refId = null;
-          for (const k in window.__mcpElementMap) {
-            if (window.__mcpElementMap[k].deref && window.__mcpElementMap[k].deref() === el) {
-              refId = k;
-              break;
-            }
-          }
-          if (!refId) {
-            refId = `ref_${++window.__mcpRefCounter}`;
-            window.__mcpElementMap[refId] = new WeakRef(el);
-          }
+          const refId = getOrAssignElementRef(el);
           const rect = /** @type {HTMLElement} */ (el).getBoundingClientRect();
           sendResponse({
             success: true,
@@ -1846,22 +1912,7 @@
               respond({ success: false, error: 'Element not found in child frame' });
               return;
             }
-            if (!window.__mcpElementMap) window.__mcpElementMap = window.__claudeElementMap || {};
-            if (!window.__mcpRefCounter) window.__mcpRefCounter = window.__claudeRefCounter || 0;
-            window.__claudeElementMap = window.__mcpElementMap;
-            window.__claudeRefCounter = window.__mcpRefCounter;
-            let refId = null;
-            for (const k in window.__mcpElementMap) {
-              const w = window.__mcpElementMap[k];
-              if (w && typeof w.deref === 'function' && w.deref && w.deref() === el) {
-                refId = k;
-                break;
-              }
-            }
-            if (!refId) {
-              refId = `ref_${++window.__mcpRefCounter}`;
-              window.__mcpElementMap[refId] = new WeakRef(el);
-            }
+            const refId = getOrAssignElementRef(el);
             const rect = el.getBoundingClientRect();
             respond({
               success: true,

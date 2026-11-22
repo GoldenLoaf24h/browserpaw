@@ -46,10 +46,13 @@ const hasUpdate = ref(false);
 const settled = ref(false);
 let statusRead = 0;
 let preferencesRead = 0;
-let pollTimer: ReturnType<typeof setInterval>;
+let inFlightStatusReads = 0;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function refreshStatus() {
   const read = ++statusRead;
+  inFlightStatusReads++;
   try {
     const reply = await chrome.runtime.sendMessage({
       type: BACKGROUND_MESSAGE_TYPES.GET_SERVER_STATUS,
@@ -63,6 +66,8 @@ async function refreshStatus() {
         : 'unavailable';
   } catch {
     if (read === statusRead) status.value = 'unavailable';
+  } finally {
+    inFlightStatusReads = Math.max(0, inFlightStatusReads - 1);
   }
 }
 
@@ -115,6 +120,12 @@ function handleRuntimeMessage(message: { type?: string }) {
   if (message?.type === BACKGROUND_MESSAGE_TYPES.SERVER_STATUS_CHANGED) void refreshStatus();
 }
 
+function handleVisibilityChange() {
+  if (!document.hidden) {
+    void refreshStatus();
+  }
+}
+
 async function checkForUpdate() {
   try {
     const result = await checkExtensionVersionUpdate();
@@ -125,19 +136,34 @@ async function checkForUpdate() {
 }
 
 onMounted(() => {
-  setTimeout(() => (settled.value = true), 80);
+  settleTimer = setTimeout(() => {
+    settleTimer = undefined;
+    settled.value = true;
+  }, 80);
   chrome.runtime.onMessage.addListener(handleRuntimeMessage);
   chrome.storage.onChanged.addListener(handleStorageChange);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   void refreshStatus();
   void readPreferences();
   void checkForUpdate();
-  pollTimer = setInterval(() => void refreshStatus(), 3000);
+  pollTimer = setInterval(() => {
+    if (document.hidden || inFlightStatusReads > 0) return;
+    void refreshStatus();
+  }, 3000);
 });
 
 onUnmounted(() => {
   chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
   chrome.storage.onChanged.removeListener(handleStorageChange);
-  clearInterval(pollTimer);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  if (settleTimer !== undefined) {
+    clearTimeout(settleTimer);
+    settleTimer = undefined;
+  }
+  if (pollTimer !== undefined) {
+    clearInterval(pollTimer);
+    pollTimer = undefined;
+  }
 });
 </script>
 

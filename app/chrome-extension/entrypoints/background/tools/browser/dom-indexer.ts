@@ -1,10 +1,4 @@
-import {
-  type IndexedElement,
-  type PrunedDOMTreeResult,
-  type ScrollInfo,
-  type ScrollUntilFoundOptions,
-  type ScrollUntilFoundResult,
-} from 'chrome-mcp-shared';
+import { type IndexedElement, type PrunedDOMTreeResult, type ScrollInfo } from 'chrome-mcp-shared';
 import {
   derefElement,
   getIsolatedIndexMap,
@@ -14,6 +8,12 @@ import {
 } from './dom-indexer/index-state';
 import { samplePage } from './dom-indexer/page-sampling';
 import {
+  createDomQueryCache,
+  getCachedBoundingClientRect,
+  getCachedComputedStyle,
+  type DomQueryCache,
+} from './dom-indexer/dom-cache';
+import {
   composedChildNodes,
   composedChildren,
   composedClosest,
@@ -26,9 +26,67 @@ import {
   isCustomElement,
   isElementHiddenInComposedTree,
 } from './dom-indexer/composed-dom';
+import {
+  parentElementOrShadowHost,
+  querySelectorAllDeep,
+  querySelectorDeep,
+  splitByCharacterUnlessQuoted,
+  splitSelectorSafely,
+} from './dom-indexer/deep-query';
+import {
+  inPageRealignHighlights,
+  inPageRenderHighlights,
+  inPageScrollToIndex,
+} from './dom-indexer/highlights';
+import {
+  buildScopedScrollInfo,
+  computeInteractionScope,
+  detectActiveModalBlocker,
+  inPageEnsureModalFocus,
+  type ActiveModalBlockerInfo,
+  type InteractionScopeInfo,
+} from './dom-indexer/modal-scope';
+import {
+  getTableObservationRole,
+  createTableObservationCache,
+  isPresentationalNativeTable,
+  buildTableObservation,
+  hasDirectTableAction,
+  type TableObservationRole,
+  type TableObservation,
+  type TableObservationMetadata,
+  type TableObservationCache,
+} from './dom-indexer/table-observation';
+import {
+  inPageLocateBySelector,
+  getLocatorAccessibleName,
+  inPageLocateByLabel,
+  inPageLocateByRole,
+  inPageLocateByText,
+  getAriaLabelledByText,
+  getNativeLabelText,
+  type LocateByLabelOptions,
+  type LocateByRoleOptions,
+  type LocateByTextOptions,
+} from './dom-indexer/locators';
+import {
+  cleanAndNormalizeText,
+  inPageVerifyActiveElement,
+  inPageGetActiveElementSummary,
+  inPageSelectCustomCombobox,
+  inPageVerifyInputCommitment,
+} from './dom-indexer/input-commitment';
+import {
+  inPageFindSmartScrollTarget,
+  inPagePerformSmartScroll,
+  type SmartScrollTargetInfo,
+} from './dom-indexer/smart-scroll';
+import { renderCompactElementLine } from './dom-indexer/compact-renderer';
+import { isClippedOutOfView } from './dom-indexer/inpage-interactions';
 
 export {
   derefElement,
+  findExistingElementIndex,
   getIsolatedIndexMap,
   INDEX_NAMESPACE_SIZE,
   indexElement,
@@ -38,6 +96,12 @@ export {
   wrapElement,
 } from './dom-indexer/index-state';
 export {
+  createDomQueryCache,
+  getCachedBoundingClientRect,
+  getCachedComputedStyle,
+  type DomQueryCache,
+} from './dom-indexer/dom-cache';
+export {
   composedChildNodes,
   composedChildren,
   composedClosest,
@@ -50,7 +114,61 @@ export {
   isCustomElement,
   isElementHiddenInComposedTree,
 } from './dom-indexer/composed-dom';
-
+export {
+  parentElementOrShadowHost,
+  querySelectorAllDeep,
+  querySelectorDeep,
+  splitByCharacterUnlessQuoted,
+  splitSelectorSafely,
+};
+export { inPageScrollUntilFound } from './dom-indexer/scroll-until-found';
+export { inPageRealignHighlights, inPageRenderHighlights, inPageScrollToIndex };
+export {
+  buildScopedScrollInfo,
+  computeInteractionScope,
+  detectActiveModalBlocker,
+  inPageEnsureModalFocus,
+  type ActiveModalBlockerInfo,
+  type InteractionScopeInfo,
+};
+export {
+  getTableObservationRole,
+  createTableObservationCache,
+  isPresentationalNativeTable,
+  buildTableObservation,
+  hasDirectTableAction,
+  type TableObservationRole,
+  type TableObservation,
+  type TableObservationMetadata,
+  type TableObservationCache,
+};
+export {
+  inPageLocateBySelector,
+  getLocatorAccessibleName,
+  inPageLocateByLabel,
+  inPageLocateByRole,
+  inPageLocateByText,
+  getAriaLabelledByText,
+  getNativeLabelText,
+  type LocateByLabelOptions,
+  type LocateByRoleOptions,
+  type LocateByTextOptions,
+};
+export {
+  inPageGetElementCoordinates,
+  inPageWaitForActionable,
+  inPageSnapCoordinate,
+  inPageArmDeliveryProbe,
+  inPageReadDeliveryProbe,
+  inPageGetFrameOrigin,
+  inPageGetIndexCropRect,
+  inPagePointerDragMove,
+  inPageFocusIndex,
+  inPageInteractIndex,
+  inPagePrepareAppend,
+  inPageFillIndex,
+  type ActionableResult,
+} from './dom-indexer/inpage-interactions';
 /**
  * Standard structured self-healing guidance when an element is not found or expired
  */
@@ -123,29 +241,6 @@ export function readFormObservationMetadata(el: Element): FormObservationMetadat
   };
 }
 
-import {
-  getTableObservationRole,
-  createTableObservationCache,
-  isPresentationalNativeTable,
-  buildTableObservation,
-  hasDirectTableAction,
-  type TableObservationRole,
-  type TableObservation,
-  type TableObservationMetadata,
-  type TableObservationCache,
-} from './dom-indexer/table-observation';
-
-export {
-  getTableObservationRole,
-  createTableObservationCache,
-  isPresentationalNativeTable,
-  buildTableObservation,
-  hasDirectTableAction,
-  type TableObservationRole,
-  type TableObservation,
-  type TableObservationMetadata,
-  type TableObservationCache,
-};
 /**
  * Shadow DOM and composed tree traversal helpers.
  * These enable penetrating Shadow DOM boundaries to find the true interactive target.
@@ -359,626 +454,6 @@ export function deepElementFromPoint(
   return current;
 }
 
-/**
- * Split a string by a single character delimiter unless that delimiter is inside quotes (single or double).
- * Reference: webdriverio/query-selector-shadow-dom (splitByCharacterUnlessQuoted)
- */
-export function splitByCharacterUnlessQuoted(selector: string, character: string): string[] {
-  const matches = selector.match(/\\?.|^$/gs);
-  if (!matches) return [selector];
-  return matches.reduce(
-    (p: { quote: number; sQuote: number; a: string[] }, c: string) => {
-      if (c === '"' && !p.sQuote) {
-        p.quote ^= 1;
-        p.a[p.a.length - 1] += c;
-      } else if (c === "'" && !p.quote) {
-        p.sQuote ^= 1;
-        p.a[p.a.length - 1] += c;
-      } else if (!p.quote && !p.sQuote && c === character) {
-        p.a.push('');
-      } else {
-        p.a[p.a.length - 1] += c;
-      }
-      return p;
-    },
-    { quote: 0, sQuote: 0, a: [''] },
-  ).a;
-}
-
-/**
- * Traverse across shadow boundaries upwards to find parent element or host element.
- * Reference: Playwright (parentElementOrShadowHost) & WebdriverIO (findParentOrHost)
- */
-export function parentElementOrShadowHost(element: Element): Element | null {
-  if (element.parentElement) return element.parentElement;
-  if (!element.parentNode) return null;
-  if (element.parentNode.nodeType === 11 && (element.parentNode as ShadowRoot).host) {
-    return (element.parentNode as ShadowRoot).host as Element;
-  }
-  return null;
-}
-
-/**
- * Normalizes explicit shadow-piercing combinators ('>>>', '/deep/', and '>>') outside quotes to whitespace.
- */
-function normalizeExplicitCombinators(selector: string): string {
-  const matches = selector.match(/\\?.|^$/gs) || [];
-  let quote = 0;
-  let sQuote = 0;
-  let result = '';
-
-  for (let i = 0; i < matches.length; i++) {
-    const c = matches[i];
-    if (c === '"' && !sQuote) {
-      quote ^= 1;
-      result += c;
-    } else if (c === "'" && !quote) {
-      sQuote ^= 1;
-      result += c;
-    } else if (!quote && !sQuote) {
-      if (
-        c === '/' &&
-        matches[i + 1] === 'd' &&
-        matches[i + 2] === 'e' &&
-        matches[i + 3] === 'e' &&
-        matches[i + 4] === 'p' &&
-        matches[i + 5] === '/'
-      ) {
-        result += ' ';
-        i += 5;
-        continue;
-      }
-      if (c === '>' && matches[i + 1] === '>' && matches[i + 2] === '>') {
-        result += ' ';
-        i += 2;
-        continue;
-      }
-      if (c === '>' && matches[i + 1] === '>') {
-        result += ' ';
-        i += 1;
-        continue;
-      }
-      result += c;
-    } else {
-      result += c;
-    }
-  }
-  return result;
-}
-
-/**
- * Atomic in-page client-side auto-scroll until target element is found.
- * Executes smooth step-by-step scrolling, waits for virtual lists / dynamic DOM recycling
- * to settle, searches both standard light DOM and encapsulated open/closed ShadowRoots,
- * centers matched target in the viewport, allocates/refreshes a live 1-based index,
- * and returns live index and coordinates.
- */
-export async function inPageScrollUntilFound(
-  options: ScrollUntilFoundOptions,
-): Promise<ScrollUntilFoundResult> {
-  const query = options?.query?.trim();
-  const selector = options?.selector?.trim();
-  if (!query && !selector) {
-    return {
-      found: false,
-      stepsTaken: 0,
-      scrolledPx: 0,
-      message: 'Either query or selector must be provided for scroll_until_found',
-    };
-  }
-
-  const maxSteps = Math.min(Math.max(1, options?.maxSteps ?? 10), 30);
-  const stepPx = Math.min(Math.max(50, options?.stepPx ?? 800), 3000);
-  const direction = options?.direction === 'up' ? 'up' : 'down';
-  const settleMs = Math.min(Math.max(50, options?.settleMs ?? 150), 1000);
-  const timeoutMs = Math.min(Math.max(1000, options?.timeoutMs ?? 15000), 60000);
-  const startTime = Date.now();
-
-  let targetRegex: RegExp | null = null;
-  if (query) {
-    try {
-      targetRegex = options.isRegex
-        ? new RegExp(query, 'i')
-        : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    } catch {
-      targetRegex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    }
-  }
-
-  // Resolve scroll container
-  let container: HTMLElement | undefined;
-  if (options?.containerSelector) {
-    const el = querySelectorDeep(options.containerSelector);
-    if (el instanceof HTMLElement) {
-      container = el;
-    }
-  }
-
-  function probeTarget(): { element: Element; text: string } | null {
-    if (typeof document === 'undefined') return null;
-
-    const expectedRole = options?.role?.trim().toLowerCase();
-    function inferElementRole(el: Element): string | null {
-      const explicitRole = el.getAttribute('role')?.trim().toLowerCase();
-      if (explicitRole) return explicitRole;
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'button') return 'button';
-      if (tag === 'a' && el.hasAttribute('href')) return 'link';
-      if (tag === 'input') {
-        const type = (el.getAttribute('type') || 'text').trim().toLowerCase();
-        if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
-        if (type === 'checkbox') return 'checkbox';
-        if (type === 'radio') return 'radio';
-        if (type === 'search') return 'searchbox';
-        if (['text', 'email', 'tel', 'url', 'number', ''].includes(type)) return 'textbox';
-        return null;
-      }
-      if (tag === 'textarea') return 'textbox';
-      if (tag === 'select') return 'combobox';
-      if (tag === 'article') return 'article';
-      if (tag === 'nav') return 'navigation';
-      if (tag === 'main') return 'main';
-      if (tag === 'header') return 'banner';
-      if (tag === 'footer') return 'contentinfo';
-      if (tag === 'aside') return 'complementary';
-      if (tag === 'form') return 'form';
-      if (tag === 'dialog') return 'dialog';
-      if (tag === 'img') return 'img';
-      if (/^h[1-6]$/.test(tag)) return 'heading';
-      if (tag === 'ul' || tag === 'ol') return 'list';
-      if (tag === 'li') return 'listitem';
-      if (tag === 'table') return 'table';
-      if (tag === 'tr') return 'row';
-      if (tag === 'td') return 'cell';
-      if (tag === 'th') return 'columnheader';
-      return null;
-    }
-    function roleMatches(el: Element): boolean {
-      if (!expectedRole) return true;
-      const actualRole = inferElementRole(el);
-      return actualRole === expectedRole;
-    }
-
-    const candidates = querySelectorAllDeep(
-      selector ||
-        'button, a, input, textarea, select, h1, h2, h3, h4, h5, h6, [role], [data-testid], article, p, span, li, div, section, blockquote, label, td, th, dt, dd, strong, b, i, em, code, pre, figcaption',
-      document,
-    );
-    const matches = new Map<Element, string>();
-    for (const element of candidates) {
-      if (!roleMatches(element) || !isLocatorCandidateVisible(element)) continue;
-      const label = element.getAttribute('aria-label')?.trim() ?? '';
-      const visibleText = extractComposedVisibleText(element, targetRegex ? {} : { maxLen: 100 });
-      const control = element as HTMLInputElement;
-      const value =
-        control.type !== 'password' && typeof control.value === 'string' ? control.value : '';
-      const text = targetRegex
-        ? [visibleText, label, control.placeholder, value].find(
-            (part) => typeof part === 'string' && Boolean(part) && targetRegex.test(part),
-          )
-        : visibleText || label;
-      if (text === undefined) continue;
-      if (selector) return { element, text };
-      matches.set(element, text);
-    }
-    const element = collapseNestedLocatorMatches([...matches.keys()])[0];
-    return element ? { element, text: matches.get(element)! } : null;
-  }
-
-  function getScrollPos(): number {
-    if (!container) {
-      return window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0;
-    }
-    return container.scrollTop;
-  }
-
-  function doScroll(delta: number): void {
-    if (!container) {
-      window.scrollBy({ top: delta, left: 0, behavior: 'instant' as any });
-    } else {
-      container.scrollBy({ top: delta, left: 0, behavior: 'instant' as any });
-    }
-  }
-
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  let stepsTaken = 0;
-  let totalScrolledPx = 0;
-  let lastPos = getScrollPos();
-  let stallCount = 0;
-
-  for (let step = 0; step <= maxSteps; step++) {
-    if (Date.now() - startTime > timeoutMs) {
-      break;
-    }
-
-    const target = probeTarget();
-    if (target) {
-      const hit = target.element;
-      if (options?.actionOnFound === 'none') {
-        // actionOnFound none: do not force scrollIntoView
-      } else if (options?.actionOnFound === 'focus') {
-        // actionOnFound focus: focus within page with preventScroll to avoid implicit scrolling
-        try {
-          (hit as HTMLElement).focus?.({ preventScroll: true });
-        } catch {}
-      } else {
-        // scrollIntoView can move several nested containers in a single call.
-        const windowTop = window.scrollY;
-        const ancestorTops = new Map<Element, number>();
-        for (let ancestor = composedParent(hit); ancestor; ancestor = composedParent(ancestor)) {
-          if (ancestor !== document.scrollingElement) ancestorTops.set(ancestor, ancestor.scrollTop);
-        }
-        try {
-          hit.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' as any });
-        } catch {}
-        await wait(50);
-        totalScrolledPx += Math.abs(window.scrollY - windowTop);
-        for (const [ancestor, top] of ancestorTops) {
-          totalScrolledPx += Math.abs(ancestor.scrollTop - top);
-        }
-      }
-
-      // Resolve or allocate live 1-based index in isolatedMap
-      let targetIndex: number | undefined;
-      const isolatedMap = getIsolatedIndexMap();
-      for (const [idx, ref] of isolatedMap.entries()) {
-        if (derefElement(ref) === hit) {
-          targetIndex = idx;
-          break;
-        }
-      }
-
-      if (targetIndex === undefined) {
-        targetIndex = indexElement(hit);
-      }
-
-      const rect = hit.getBoundingClientRect();
-      const coords = {
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2),
-      };
-
-      const matchText = target.text.slice(0, 100);
-
-      return {
-        found: true,
-        index: targetIndex,
-        tagName: hit.tagName.toLowerCase(),
-        text: matchText,
-        stepsTaken,
-        scrolledPx: totalScrolledPx,
-        coordinates: coords,
-        message: `Found target "${matchText || query || selector}" at index [${targetIndex}] after ${stepsTaken} search step(s) (${totalScrolledPx}px scrolled).`,
-      };
-    }
-
-    if (step === maxSteps) {
-      break;
-    }
-
-    const delta = direction === 'up' ? -stepPx : stepPx;
-    doScroll(delta);
-    stepsTaken++;
-
-    await wait(settleMs);
-
-    const currentPos = getScrollPos();
-    const moved = Math.abs(currentPos - lastPos);
-    lastPos = currentPos;
-    totalScrolledPx += moved;
-    if (moved < 2) {
-      stallCount++;
-      // If initial window scroll did not move, attempt fallback to smart inner container
-      if (stallCount === 1 && !container && !options?.containerSelector) {
-        try {
-          const smart = inPageFindSmartScrollTarget({ direction });
-          if (smart && !smart.isWindow && smart.selector) {
-            const el = querySelectorDeep(smart.selector);
-            if (el instanceof HTMLElement) {
-              container = el;
-              lastPos = getScrollPos();
-              stallCount = 0;
-            }
-          }
-        } catch {}
-      } else if (stallCount >= 2) {
-        break;
-      }
-    } else {
-      stallCount = 0;
-    }
-  }
-
-  return {
-    found: false,
-    stepsTaken,
-    scrolledPx: totalScrolledPx,
-    message: `Target "${query || selector}" not found after ${stepsTaken} step(s) (${totalScrolledPx}px scrolled).`,
-  };
-}
-
-/**
- * Folds whitespace around standard CSS combinators ('>', '+', '~') outside quotes.
- */
-function foldCombinatorsUnlessQuoted(selector: string): string {
-  const matches = selector.match(/\\?.|^$/gs) || [];
-  let quote = 0;
-  let sQuote = 0;
-  let currentUnquoted = '';
-  let result = '';
-
-  const flushUnquoted = () => {
-    if (currentUnquoted) {
-      const folded = currentUnquoted
-        .replace(/\s*([+~])\s*/g, '$1')
-        .replace(/(?<!>)\s*>\s*(?!>)/g, '>');
-      result += folded;
-      currentUnquoted = '';
-    }
-  };
-
-  for (let i = 0; i < matches.length; i++) {
-    const c = matches[i];
-    if (c === '"' && !sQuote) {
-      if (!quote) flushUnquoted();
-      quote ^= 1;
-      result += c;
-    } else if (c === "'" && !quote) {
-      if (!sQuote) flushUnquoted();
-      sQuote ^= 1;
-      result += c;
-    } else if (quote || sQuote) {
-      result += c;
-    } else {
-      currentUnquoted += c;
-    }
-  }
-  flushUnquoted();
-  return result;
-}
-
-/**
- * Safely split a selector by delimiter (default space):
- * 1. Folds whitespace around child (>), next-sibling (+), and subsequent-sibling (~) combinators outside quotes;
- * 2. Splits using single/double quote and bracket/paren state machine so whitespace inside quotes,
- *    attribute brackets [...], and pseudo-classes (...) is preserved;
- * 3. Supports explicit piercing combinators ' >> ', '>>>', '/deep/'.
- */
-export function splitSelectorSafely(selector: string, delimiter: string = ' '): string[] {
-  if (!selector) return [];
-  const normalized = normalizeExplicitCombinators(selector);
-  const folded = foldCombinatorsUnlessQuoted(normalized);
-
-  const matches = folded.match(/\\?.|^$/gs);
-  if (!matches) return [folded.trim()].filter(Boolean);
-
-  let quote = 0;
-  let sQuote = 0;
-  let brackets = 0;
-  let parens = 0;
-  const parts: string[] = [''];
-
-  for (let i = 0; i < matches.length; i++) {
-    const c = matches[i];
-    if (c === '"' && !sQuote) {
-      quote ^= 1;
-      parts[parts.length - 1] += c;
-    } else if (c === "'" && !quote) {
-      sQuote ^= 1;
-      parts[parts.length - 1] += c;
-    } else if (!quote && !sQuote) {
-      if (c === '[') brackets++;
-      else if (c === ']' && brackets > 0) brackets--;
-      else if (c === '(') parens++;
-      else if (c === ')' && parens > 0) parens--;
-
-      if (
-        brackets === 0 &&
-        parens === 0 &&
-        (c === delimiter || (delimiter === ' ' && /\s/.test(c)))
-      ) {
-        parts.push('');
-      } else {
-        parts[parts.length - 1] += c;
-      }
-    } else {
-      parts[parts.length - 1] += c;
-    }
-  }
-
-  return parts.map((s) => s.trim()).filter(Boolean);
-}
-
-/**
- * Single-segment search within a root across all open and closed ShadowRoot boundaries.
- */
-function querySelectorAllDeepSingle(selector: string, root: ParentNode): Element[] {
-  const results: Element[] = [];
-  const seenResults = new Set<Element>();
-  const visitedRoots = new Set<Node>();
-  const isWildcard = selector.trim() === '*';
-
-  const pushResult = (el: Element) => {
-    if (!seenResults.has(el)) {
-      seenResults.add(el);
-      results.push(el);
-    }
-  };
-
-  const inspectSlotted = (el: Element) => {
-    if (isWildcard) {
-      pushResult(el);
-    } else {
-      try {
-        if (typeof el.matches === 'function' && el.matches(selector)) {
-          pushResult(el);
-        }
-      } catch {}
-    }
-    const sr = getShadowRoot(el);
-    if (sr) search(sr);
-    search(el);
-  };
-
-  function search(currentRoot: ParentNode) {
-    if (!currentRoot || visitedRoots.has(currentRoot)) return;
-    visitedRoots.add(currentRoot);
-
-    let allEls: NodeListOf<Element>;
-    try {
-      allEls = currentRoot.querySelectorAll('*');
-    } catch {
-      return;
-    }
-
-    if (isWildcard) {
-      for (let i = 0; i < allEls.length; i++) {
-        pushResult(allEls[i]);
-      }
-    } else {
-      try {
-        const matches = currentRoot.querySelectorAll(selector);
-        for (let i = 0; i < matches.length; i++) {
-          pushResult(matches[i]);
-        }
-      } catch {}
-    }
-
-    for (let i = 0; i < allEls.length; i++) {
-      const el = allEls[i];
-      const shadow = getShadowRoot(el);
-      if (shadow) {
-        search(shadow);
-      }
-      if (
-        el.tagName.toUpperCase() === 'SLOT' &&
-        typeof (el as HTMLSlotElement).assignedElements === 'function'
-      ) {
-        try {
-          for (const assigned of (el as HTMLSlotElement).assignedElements({ flatten: true })) {
-            inspectSlotted(assigned);
-          }
-        } catch {}
-      }
-    }
-  }
-
-  if (typeof Element !== 'undefined' && root instanceof Element) {
-    const rootShadow = getShadowRoot(root);
-    if (rootShadow) {
-      search(rootShadow);
-    }
-  }
-
-  search(root);
-  return results;
-}
-
-/**
- * Deep query selector that penetrates all open (and closed when supported) ShadowRoot boundaries.
- * Traverses recursively through both standard light DOM and encapsulated component shadow roots.
- * Supports explicit piercing (' >> ', '>>>', '/deep/') and composite descendant selectors
- * (e.g. 'shreddit-markdown-composer textarea') across shadow boundaries.
- */
-export function querySelectorAllDeep(
-  selector: string,
-  root: ParentNode = typeof document !== 'undefined' ? document : (null as any),
-): Element[] {
-  if (!root || !selector || typeof selector !== 'string') return [];
-
-  // Comma-separated selector list handling
-  const commaSeparators = splitSelectorSafely(selector, ',');
-  if (commaSeparators.length > 1) {
-    const hasComplexSegment = commaSeparators.some(
-      (sub) => splitSelectorSafely(sub, ' ').length > 1,
-    );
-    if (hasComplexSegment) {
-      const combined: Element[] = [];
-      const seenCombined = new Set<Element>();
-      for (const sub of commaSeparators) {
-        const subMatches = querySelectorAllDeep(sub, root);
-        for (const m of subMatches) {
-          if (!seenCombined.has(m)) {
-            seenCombined.add(m);
-            combined.push(m);
-          }
-        }
-      }
-      return combined;
-    }
-    return querySelectorAllDeepSingle(selector, root);
-  }
-
-  const segments = splitSelectorSafely(selector, ' ');
-  if (segments.length === 0) return [];
-
-  if (segments.length === 1) {
-    return querySelectorAllDeepSingle(segments[0], root);
-  }
-
-  // Multi-segment composite descendant selector piercing across Shadow DOM boundaries:
-  // Each segment is matched across Document and all reachable ShadowRoots.
-  // Between segments, context retains both the element itself and its shadowRoot (for slotted & shadow children).
-  let currentContexts: ParentNode[] = [root];
-  if (typeof Element !== 'undefined' && root instanceof Element) {
-    const rootShadow = getShadowRoot(root);
-    if (rootShadow) {
-      currentContexts.push(rootShadow);
-    }
-  }
-
-  for (let i = 0; i < segments.length; i++) {
-    const subSelector = segments[i];
-    const isLast = i === segments.length - 1;
-    const nextMatches: Element[] = [];
-    const seenNext = new Set<Element>();
-
-    for (const ctx of currentContexts) {
-      const matched = querySelectorAllDeepSingle(subSelector, ctx);
-      for (const m of matched) {
-        if (!seenNext.has(m)) {
-          seenNext.add(m);
-          nextMatches.push(m);
-        }
-      }
-    }
-
-    if (isLast) {
-      return nextMatches;
-    }
-
-    const nextContexts: ParentNode[] = [];
-    const seenContexts = new Set<ParentNode>();
-    for (const m of nextMatches) {
-      if (!seenContexts.has(m)) {
-        seenContexts.add(m);
-        nextContexts.push(m);
-      }
-      const sr = getShadowRoot(m);
-      if (sr && !seenContexts.has(sr)) {
-        seenContexts.add(sr);
-        nextContexts.push(sr);
-      }
-    }
-    currentContexts = nextContexts;
-    if (currentContexts.length === 0) return [];
-  }
-
-  return [];
-}
-
-/**
- * Deep query selector returning the first matching element across all shadow boundaries.
- */
-export function querySelectorDeep(
-  selector: string,
-  root: ParentNode = typeof document !== 'undefined' ? document : (null as any),
-): Element | null {
-  const all = querySelectorAllDeep(selector, root);
-  return all.length > 0 ? all[0] : null;
-}
-
 export function computeScopeHash(text: string): string {
   if (!text) return '';
   let hash = 5381;
@@ -1072,7 +547,47 @@ export function inPageRemoveHighlights(): boolean {
  * - For <select>, extracts only currently selected option text (saving 90%+ tokens and exposing form state)
  * - For elements without text, checks ::before and ::after pseudo-element content
  */
-export function extractCleanElementText(el: Element, maxLen = 120): string {
+const PRUNER_NON_INFORMATIONAL_TAGS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'meta',
+  'link',
+  'template',
+]);
+const PRUNER_ATTRS_TO_KEEP = [
+  'id',
+  'name',
+  'type',
+  'placeholder',
+  'aria-label',
+  'role',
+  'href',
+  'title',
+  'disabled',
+  'aria-disabled',
+  'readonly',
+  'aria-readonly',
+  'contenteditable',
+  'aria-checked',
+  'aria-selected',
+  'aria-expanded',
+  'aria-pressed',
+  'aria-haspopup',
+  'aria-current',
+  'aria-valuenow',
+  'aria-invalid',
+  'aria-required',
+  'aria-describedby',
+  'aria-errormessage',
+] as const;
+const FORM_CONSTRAINT_ATTRS = ['pattern', 'min', 'max', 'minlength', 'maxlength', 'step'] as const;
+
+export function extractCleanElementText(
+  el: Element,
+  maxLen = 120,
+  domCache?: DomQueryCache,
+): string {
   if (!el) return '';
   const tag = (el.tagName || '').toLowerCase();
   let text = '';
@@ -1081,7 +596,7 @@ export function extractCleanElementText(el: Element, maxLen = 120): string {
     const selectEl = el as HTMLSelectElement;
     text = (selectEl.selectedOptions?.[0]?.text || selectEl.value || '').trim();
   } else {
-    text = extractComposedVisibleText(el, { maxLen });
+    text = extractComposedVisibleText(el, { maxLen, cache: domCache });
   }
 
   if (!text) {
@@ -1250,219 +765,6 @@ function getAriaReferenceText(el: Element, attribute: string, maxLen = 120): str
 }
 
 /**
- * Re-align Set-of-Mark visual badges overlay after scrolling or dynamic layout shifts.
- * Re-reads bounding rects of indexed elements in isolatedMap and updates the visual overlay.
- */
-export function inPageRealignHighlights(): boolean {
-  const overlay = document.getElementById('__mcp_som_overlay_container__');
-  if (!overlay) return false;
-  const isolatedMap = getIsolatedIndexMap();
-  const reindexedElements: IndexedElement[] = [];
-
-  for (const [idx, wrapped] of isolatedMap.entries()) {
-    const el = derefElement(wrapped);
-    if (!el || !(el instanceof Element)) continue;
-    try {
-      const rect = el.getBoundingClientRect();
-      if (rect.width <= 0 && rect.height <= 0) continue;
-      const text = extractCleanElementText(el);
-      reindexedElements.push({
-        index: idx,
-        tagName: el.tagName.toLowerCase(),
-        role: el.getAttribute('role') || undefined,
-        text: text || undefined,
-        attributes: {},
-        rect: {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        },
-        isInteractive: true,
-      });
-    } catch {}
-  }
-
-  if (reindexedElements.length > 0) {
-    inPageRenderHighlights(reindexedElements);
-    return true;
-  }
-  return false;
-}
-
-/**
- * Scroll target element into center view by index inside active tab.
- */
-export function inPageScrollToIndex(index: number): boolean {
-  if (index <= 0) return false;
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) return false;
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-
-    // Secondary safety check: ensure element is not occluded by sticky top/bottom bars or within safe 80px viewport margins
-    const win = el.ownerDocument?.defaultView || window;
-    const vh = win.innerHeight || 800;
-    const margins = getStickyOcclusionMargins(win);
-    const elStyle = typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
-    const scrollMarginTop = parseFloat(elStyle?.scrollMarginTop || '0') || 0;
-    const scrollMarginBottom = parseFloat(elStyle?.scrollMarginBottom || '0') || 0;
-    const safeTop = Math.min(Math.max(margins.top, scrollMarginTop, 80), Math.round(vh * 0.35));
-    const safeBottom = Math.min(
-      Math.max(margins.bottom, scrollMarginBottom, 80),
-      Math.round(vh * 0.35),
-    );
-
-    try {
-      const r = el.getBoundingClientRect();
-      if (r.top < safeTop + 10) {
-        const delta = r.top - safeTop - 20;
-        win.scrollBy?.({ top: delta, behavior: 'instant' as any });
-        let anc = composedParent(el);
-        while (anc && anc !== win.document.body && anc !== win.document.documentElement) {
-          anc.scrollBy?.({ top: delta, behavior: 'instant' as any });
-          anc = composedParent(anc);
-        }
-      } else if (r.bottom > vh - safeBottom - 10) {
-        const delta = r.bottom - (vh - safeBottom) + 20;
-        win.scrollBy?.({ top: delta, behavior: 'instant' as any });
-        let anc = composedParent(el);
-        while (anc && anc !== win.document.body && anc !== win.document.documentElement) {
-          anc.scrollBy?.({ top: delta, behavior: 'instant' as any });
-          anc = composedParent(anc);
-        }
-      }
-    } catch {}
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Render high-contrast Set-of-Mark visual badges on top of indexed elements (Set-of-Mark 2.0).
- * Features:
- * 1. Frustum Culling: skips elements strictly outside the current viewport.
- * 2. Anti-Collision: tracks badge locations and offsets badges if within 25px of an existing badge.
- * 3. Micro-Pill design: high legibility, compact footprint, semi-transparent background to prevent obscuring content.
- */
-export function inPageRenderHighlights(indexedElements: IndexedElement[]): void {
-  inPageRemoveHighlights();
-
-  const overlay = document.createElement('div');
-  overlay.id = '__mcp_som_overlay_container__';
-  overlay.setAttribute('aria-hidden', 'true');
-  overlay.style.cssText =
-    [
-      'position: fixed',
-      'top: 0',
-      'left: 0',
-      'width: 100vw',
-      'height: 100vh',
-      'pointer-events: none',
-      'z-index: 2147483647',
-      'overflow: visible',
-      'margin: 0',
-      'padding: 0',
-    ].join(' !important;') + ' !important;';
-
-  const vw = window.innerWidth || document.documentElement.clientWidth || 1280;
-  const vh = window.innerHeight || document.documentElement.clientHeight || 800;
-
-  // Track placed badge centers for anti-collision
-  const placedBadges: Array<{ x: number; y: number }> = [];
-
-  for (const el of indexedElements) {
-    if (!el.rect || (el.rect.width <= 0 && el.rect.height <= 0)) continue;
-
-    // 1. Frustum Culling: skip elements completely outside the visible viewport
-    if (
-      el.rect.x + el.rect.width < 0 ||
-      el.rect.y + el.rect.height < 0 ||
-      el.rect.x > vw ||
-      el.rect.y > vh
-    ) {
-      continue;
-    }
-
-    // Outlined bounding box
-    const box = document.createElement('div');
-    box.style.cssText =
-      [
-        'position: fixed',
-        `left: ${el.rect.x}px`,
-        `top: ${el.rect.y}px`,
-        `width: ${el.rect.width}px`,
-        `height: ${el.rect.height}px`,
-        'border: 1.5px solid rgba(245, 158, 11, 0.85)',
-        'background: rgba(245, 158, 11, 0.08)',
-        'box-sizing: border-box',
-        'pointer-events: none',
-        'z-index: 2147483646',
-      ].join(' !important;') + ' !important;';
-    overlay.appendChild(box);
-
-    // Numbered Badge position calculation with Anti-Collision
-    const isSmall = el.rect.width < 60 || el.rect.height < 30;
-    let badgeTop = isSmall ? Math.max(0, el.rect.y - 14) : el.rect.y;
-    const badgeLeft = el.rect.x;
-
-    // 2. Anti-Collision: check proximity to placed badges (< 25px)
-    const isColliding = (bx: number, by: number): boolean => {
-      for (const placed of placedBadges) {
-        const dx = placed.x - bx;
-        const dy = placed.y - by;
-        if (dx * dx + dy * dy < 25 * 25) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-    if (isColliding(badgeLeft + 10, badgeTop + 7)) {
-      // Alternate placement: flip below element or shift vertically
-      const altTop = el.rect.y + el.rect.height - 2;
-      if (!isColliding(badgeLeft + 10, altTop + 7) && altTop + 14 <= vh) {
-        badgeTop = altTop;
-      } else {
-        badgeTop = Math.max(0, badgeTop + 14);
-      }
-    }
-
-    placedBadges.push({ x: badgeLeft + 10, y: badgeTop + 7 });
-
-    // 3. Micro-Pill Badge
-    const badge = document.createElement('div');
-    badge.textContent = String(el.index);
-    badge.style.cssText =
-      [
-        'position: fixed',
-        `left: ${badgeLeft}px`,
-        `top: ${badgeTop}px`,
-        'background: rgba(250, 204, 21, 0.9)',
-        'color: #000000',
-        'font-size: 9px',
-        'font-weight: 800',
-        'font-family: monospace, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        'line-height: 11px',
-        'padding: 1px 3px',
-        'border-radius: 9999px',
-        'border: 1px solid rgba(0, 0, 0, 0.7)',
-        'box-shadow: 0 1px 3px rgba(0,0,0,0.35)',
-        'pointer-events: none',
-        'z-index: 2147483647',
-        'user-select: none',
-        'white-space: nowrap',
-      ].join(' !important;') + ' !important;';
-
-    overlay.appendChild(badge);
-  }
-
-  (document.body || document.documentElement).appendChild(overlay);
-}
-
-/**
  * Detect rich text composer / editor semantics vs generic searchbox inputs.
  * Enables accurate input disambiguation in modern SPAs (Twitter/X, Notion, Slack, GitHub).
  */
@@ -1595,783 +897,6 @@ export function getStickyOcclusionMargins(
   };
 }
 
-export interface ActiveModalBlockerInfo {
-  el: HTMLElement;
-  coverage: number;
-  stackingScore: number;
-  kind: 'modal' | 'mask';
-  name: string;
-  isTrap?: boolean;
-}
-
-export interface InteractionScopeInfo {
-  activeModal?: string;
-  focusTrapped: boolean;
-  modalIsolated: boolean;
-  isConfirmationTrap: boolean;
-  blockingLayerKind?: 'modal' | 'mask';
-  modalElement?: HTMLElement;
-  roots: Element[];
-  scrollContainers: HTMLElement[];
-}
-
-/**
- * Detect active modal blocker using stacking score competition algorithm.
- * Evaluates Top-Layer, dialog role, aria-modal, z-index, and DOM order so
- * secondary confirmation traps are not obscured by large parent modals.
- */
-const MODAL_SURFACE_CONTROL_SELECTOR =
-  'input, textarea, select, button, a[href], [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [tabindex]:not([tabindex="-1"]), dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]';
-
-function hasPositionedOverlayAncestor(el: Element, win: Window): boolean {
-  const seen = new Set<Element>();
-  for (let cur = composedParent(el); cur && !seen.has(cur); cur = composedParent(cur)) {
-    seen.add(cur);
-    if (cur === win.document.body || cur === win.document.documentElement) break;
-    try {
-      const pos = win.getComputedStyle(cur).position;
-      if (pos === 'fixed' || pos === 'absolute' || pos === 'sticky') {
-        return true;
-      }
-    } catch {}
-  }
-  return false;
-}
-
-function isElementVisibleInViewport(
-  el: Element,
-  win: Window,
-  vpWidth: number,
-  vpHeight: number,
-): boolean {
-  if (!elementIsVisibleForScope(el, win)) return false;
-  try {
-    const rect = el.getBoundingClientRect();
-    return rect.right > 0 && rect.left < vpWidth && rect.bottom > 0 && rect.top < vpHeight;
-  } catch {
-    return false;
-  }
-}
-
-function maskHasVisibleModalSurface(
-  maskEl: HTMLElement,
-  win: Window,
-  vpWidth: number,
-  vpHeight: number,
-): boolean {
-  const active = getDeepActiveElement();
-  if (active && active !== maskEl && composedContains(maskEl, active)) {
-    return true;
-  }
-  const surfaceRoot = modalSurfaceRoot(maskEl, win);
-  const candidateRoots = outerMostRoots(
-    [
-      surfaceRoot,
-      ...modalPortalRoots(maskEl, win, surfaceRoot),
-      ...referencedModalRoots(surfaceRoot, win),
-      focusedOverlayRoot(maskEl, win),
-    ],
-    win,
-  );
-  for (const root of candidateRoots) {
-    if (
-      root !== maskEl &&
-      isTopLayerSurface(root) &&
-      isElementVisibleInViewport(root, win, vpWidth, vpHeight)
-    ) {
-      return true;
-    }
-    const descendants = querySelectorAllDeep(MODAL_SURFACE_CONTROL_SELECTOR, root);
-    for (const el of descendants) {
-      if (el === maskEl) continue;
-      if (isElementVisibleInViewport(el, win, vpWidth, vpHeight)) return true;
-    }
-  }
-  return false;
-}
-
-export function detectActiveModalBlocker(win: Window = window): ActiveModalBlockerInfo | null {
-  try {
-    const doc = win.document;
-    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
-    const vpWidth = win.innerWidth || doc.documentElement?.clientWidth || 1280;
-    const vpHeight = win.innerHeight || doc.documentElement?.clientHeight || 800;
-    const vpArea = vpWidth * vpHeight;
-
-    const positionedCandidates = Array.from(
-      doc.querySelectorAll(
-        'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover], [class*="modal"], [class*="dialog"], [class*="backdrop"], [class*="overlay"], [class*="mask"], [id*="modal"], [id*="dialog"], [id*="overlay"], [style*="fixed"], [style*="absolute"], body > div, body > section, body > aside',
-      ),
-    ) as HTMLElement[];
-    const seenPositionedCandidates = new Set<HTMLElement>(positionedCandidates);
-
-    try {
-      const shadowCandidates = querySelectorAllDeep(
-        'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"], [popover], [class*="modal"], [class*="dialog"]',
-        doc,
-      );
-      for (const sc of shadowCandidates) {
-        if (isHTMLElementInWindow(sc, win) && !seenPositionedCandidates.has(sc)) {
-          seenPositionedCandidates.add(sc);
-          positionedCandidates.push(sc);
-        }
-      }
-    } catch {}
-
-    let topBlocker: ActiveModalBlockerInfo | null = null;
-
-    for (let i = 0; i < positionedCandidates.length; i++) {
-      const d = positionedCandidates[i];
-      if (!d || isElementHiddenInComposedTree(d, win)) continue;
-      let style: CSSStyleDeclaration;
-      try {
-        style = win.getComputedStyle(d);
-      } catch {
-        continue;
-      }
-      if (
-        style.display === 'none' ||
-        style.visibility === 'hidden' ||
-        style.visibility === 'collapse' ||
-        style.pointerEvents === 'none' ||
-        (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0)
-      )
-        continue;
-      const pos = style.position;
-      const isPositioned =
-        pos === 'fixed' ||
-        pos === 'absolute' ||
-        pos === 'sticky' ||
-        hasPositionedOverlayAncestor(d, win);
-      const tag = d.tagName.toLowerCase();
-      const role = (d.getAttribute('role') || '').toLowerCase();
-      const ariaModal = (d.getAttribute('aria-modal') || '').toLowerCase();
-
-      const isNativeOpenDialog = tag === 'dialog' && Boolean((d as HTMLDialogElement).open);
-      let isNativeModalDialog = false;
-      if (isNativeOpenDialog) {
-        try {
-          isNativeModalDialog = (d as HTMLDialogElement).matches(':modal');
-        } catch {
-          isNativeModalDialog = false;
-        }
-      }
-      if (ariaModal === 'false' && !isNativeModalDialog) continue;
-      // An open non-modal <dialog> participates in the normal document flow and
-      // must not turn into an interaction blocker merely because of its tag.
-      if (isNativeOpenDialog && !isNativeModalDialog && ariaModal !== 'true') continue;
-      const isExplicitModal = ariaModal === 'true' || role === 'alertdialog' || isNativeModalDialog;
-      // Large positioned application shells are not evidence of a modal blocker.
-      const hasModalIdentity = /modal|dialog|backdrop|overlay|mask/i.test(
-        `${d.id} ${d.getAttribute('class') || ''}`,
-      );
-      const isPopover = Boolean((d as any).matches?.(':popover-open')) || d.hasAttribute('popover');
-      if (isPopover && !isExplicitModal) continue;
-      if (!isExplicitModal && !hasModalIdentity) continue;
-      if (!isPositioned && !isNativeOpenDialog) continue;
-
-      const rect = d.getBoundingClientRect();
-      const ix = Math.max(0, Math.min(rect.right, vpWidth) - Math.max(rect.left, 0));
-      const iy = Math.max(0, Math.min(rect.bottom, vpHeight) - Math.max(rect.top, 0));
-      const cov = vpArea > 0 ? (ix * iy) / vpArea : 0;
-      const declaredWidth = Number.parseFloat(style.width || d.style.width || '0');
-      const declaredHeight = Number.parseFloat(style.height || d.style.height || '0');
-      const hasBox =
-        rect.width > 0 ||
-        rect.height > 0 ||
-        d.offsetWidth > 0 ||
-        d.offsetHeight > 0 ||
-        declaredWidth > 0 ||
-        declaredHeight > 0;
-
-      const qualifies =
-        cov >= 0.6 ||
-        (isExplicitModal && hasBox) ||
-        (hasModalIdentity && hasBox && composedContains(d, getDeepActiveElement()));
-      if (!qualifies) continue;
-
-      const hasInputs = querySelectorAllDeep(
-        'input, textarea, select, button, a[href], [role="button"], [role="menuitem"], [role="option"]',
-        d,
-      ).some((el) => el !== d && el.getAttribute('aria-hidden') !== 'true');
-      const kind: 'modal' | 'mask' =
-        isExplicitModal || role === 'dialog' || hasInputs ? 'modal' : 'mask';
-      // A mask/backdrop without a visible modal surface or controls must not isolate the page.
-      if (kind === 'mask' && !maskHasVisibleModalSurface(d, win, vpWidth, vpHeight)) {
-        continue;
-      }
-
-      const id = d.id ? `#${d.id}` : '';
-      const name =
-        d.getAttribute('aria-label') ||
-        extractComposedVisibleText(querySelectorDeep('h1, h2, h3, [role="heading"]', d), {
-          maxLen: 40,
-        }) ||
-        undefined;
-      const desc = name
-        ? `${tag}${id} "${name}"`
-        : `${tag}${id || (kind === 'mask' ? '.mask' : '.modal')}`;
-
-      const textSnippet = `${desc} ${name || ''} ${extractComposedVisibleText(d, { maxLen: 300 })}`;
-      const isDiscardOrConfirm =
-        /(discard|abandon|unsaved|confirm|放弃|取消|未保存|确认放弃|是否放弃|离开)/i.test(
-          textSnippet,
-        );
-
-      // Stacking score: Top-Layer > confirmation trap > alertdialog > aria-modal > z-index > DOM order
-      let score = 0;
-      const isPopoverOpen =
-        Boolean((d as any).matches?.(':popover-open')) ||
-        (d.hasAttribute('popover') && style.display !== 'none');
-      if (isNativeOpenDialog || isPopoverOpen) {
-        score += 1_000_000;
-      }
-      if (isDiscardOrConfirm) {
-        score += 500_000;
-      } else if (d.getAttribute('role') === 'alertdialog') {
-        score += 200_000;
-      } else if (d.getAttribute('aria-modal') === 'true') {
-        score += 100_000;
-      } else if (kind === 'modal') {
-        score += 50_000;
-      }
-
-      let z = 0;
-      if (style.zIndex && style.zIndex !== 'auto') {
-        const parsedZ = parseInt(style.zIndex, 10);
-        if (!isNaN(parsedZ)) z = parsedZ;
-      }
-      score += Math.max(0, Math.min(z, 99_999)) * 10;
-      score += i;
-
-      if (!topBlocker || score > topBlocker.stackingScore) {
-        topBlocker = {
-          el: d,
-          coverage: cov,
-          stackingScore: score,
-          kind,
-          name: isDiscardOrConfirm ? `${desc} [CONFIRMATION_TRAP]` : desc,
-          isTrap: isDiscardOrConfirm,
-        };
-      }
-    }
-
-    return topBlocker;
-  } catch {
-    return null;
-  }
-}
-
-function elementIsVisibleForScope(el: Element, win: Window): boolean {
-  try {
-    if (isElementHiddenInComposedTree(el, win)) return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  } catch {
-    return false;
-  }
-}
-
-function isHTMLElementInWindow(
-  value: Element | null | undefined,
-  win: Window,
-): value is HTMLElement {
-  const ctor = (win as unknown as { HTMLElement?: typeof HTMLElement }).HTMLElement;
-  return Boolean(value && ctor && value instanceof ctor);
-}
-
-function isTopLayerSurface(el: Element): boolean {
-  const html = el as HTMLElement;
-  try {
-    if (html.matches(':popover-open')) return true;
-  } catch {}
-  return (
-    el.tagName.toLowerCase() === 'dialog' &&
-    Boolean((el as HTMLDialogElement).open) &&
-    (() => {
-      try {
-        return (el as HTMLDialogElement).matches(':modal');
-      } catch {
-        return el.getAttribute('aria-modal') === 'true';
-      }
-    })()
-  );
-}
-
-function isOverlaySurfaceElement(el: Element): boolean {
-  const role = (el.getAttribute('role') || '').toLowerCase();
-  if (role === 'dialog' || role === 'alertdialog') return true;
-  if (el.getAttribute('aria-modal') === 'true' || isTopLayerSurface(el)) return true;
-  const identity = [
-    el.id,
-    el.getAttribute('class'),
-    el.getAttribute('data-testid'),
-    el.getAttribute('data-state'),
-    el.tagName,
-  ]
-    .filter(Boolean)
-    .join(' ');
-  return /(?:modal|dialog|overlay|popup|popover|sheet|drawer|portal|backdrop|mask)/i.test(identity);
-}
-
-function isOverlaySurfaceContainer(parent: Element, child: Element): boolean {
-  if (isOverlaySurfaceElement(parent)) return true;
-  // Custom elements are structural overlay hosts even when the component
-  // author did not expose a framework-specific class or role.
-  return parent.tagName.includes('-') && composedContains(parent, child);
-}
-
-function modalSurfaceRoot(blocker: HTMLElement, win: Window): HTMLElement {
-  let current = blocker;
-  const seen = new Set<Element>();
-  while (!seen.has(current)) {
-    seen.add(current);
-    const parent = composedParent(current);
-    if (
-      !isHTMLElementInWindow(parent, win) ||
-      parent === win.document.body ||
-      parent === win.document.documentElement ||
-      !isOverlaySurfaceContainer(parent, current)
-    ) {
-      break;
-    }
-    current = parent;
-  }
-  return current;
-}
-
-function referencedModalRoots(root: HTMLElement, win: Window): HTMLElement[] {
-  const roots: HTMLElement[] = [];
-  const controls = querySelectorAllDeep(
-    '[aria-controls], [aria-owns], [popovertarget], [commandfor]',
-    root,
-  );
-  for (const control of controls) {
-    if (!isHTMLElementInWindow(control, win)) continue;
-    if (
-      control.getAttribute('aria-expanded') === 'false' ||
-      !elementIsVisibleForScope(control, win)
-    )
-      continue;
-    if ((control as HTMLButtonElement).disabled) continue;
-    const ids = [
-      control.getAttribute('aria-controls'),
-      control.getAttribute('aria-owns'),
-      control.getAttribute('popovertarget'),
-      control.getAttribute('commandfor'),
-    ]
-      .filter((value): value is string => Boolean(value))
-      .flatMap((value) => value.split(/\s+/))
-      .filter(Boolean);
-    for (const id of ids) {
-      const target = getSameRootReference(control, id);
-      if (
-        isHTMLElementInWindow(target, win) &&
-        target !== control &&
-        elementIsVisibleForScope(target, win)
-      ) {
-        roots.push(target);
-      }
-    }
-  }
-  return roots;
-}
-
-function focusedOverlayRoot(blocker: HTMLElement, win: Window): HTMLElement | null {
-  const active = getDeepActiveElement();
-  if (!active || composedContains(blocker, active)) return null;
-  for (let current: Element | null = active; current; current = composedParent(current)) {
-    if (current === win.document.body || current === win.document.documentElement) break;
-    if (isHTMLElementInWindow(current, win) && isTopLayerSurface(current)) return current;
-  }
-  return null;
-}
-
-function outerMostRoots(roots: Array<Element | null | undefined>, win: Window): HTMLElement[] {
-  const unique = Array.from(
-    new Set(
-      roots.filter(
-        (root): root is HTMLElement => isHTMLElementInWindow(root, win) && root.isConnected,
-      ),
-    ),
-  );
-  return unique.filter(
-    (root) =>
-      !unique.some(
-        (other) =>
-          other !== root && composedContains(other, root) && !composedContains(root, other),
-      ),
-  );
-}
-
-function portalHasOpenOwner(portal: HTMLElement, ownerRoot: HTMLElement, win: Window): boolean {
-  const portalId = portal.id;
-  if (!portalId) return false;
-  const controls = querySelectorAllDeep(
-    '[aria-controls], [aria-owns], [popovertarget], [commandfor]',
-    ownerRoot,
-  );
-  for (const control of controls) {
-    if (!elementIsVisibleForScope(control, win)) continue;
-    const references = [
-      control.getAttribute('aria-controls'),
-      control.getAttribute('aria-owns'),
-      control.getAttribute('popovertarget'),
-    ]
-      .filter((value): value is string => Boolean(value))
-      .flatMap((value) => value.split(/\s+/));
-    if (!references.includes(portalId)) continue;
-    if (control.getAttribute('aria-expanded') === 'false') continue;
-    return true;
-  }
-  return false;
-}
-
-function modalPortalRoots(
-  blocker: HTMLElement,
-  win: Window,
-  ownerRoot: HTMLElement = blocker,
-): HTMLElement[] {
-  const portalSelector = [
-    '[data-radix-popper-content-wrapper]',
-    '[data-radix-portal]',
-    '[data-floating-ui-portal]',
-    '[data-headlessui-portal]',
-    '[data-portal]',
-    ':popover-open',
-    'dialog[open]',
-    '[role="dialog"]',
-    '[role="alertdialog"]',
-    '[aria-modal="true"]',
-    '.ant-select-dropdown',
-    '.ant-picker-dropdown',
-    '.ant-dropdown',
-    '.ant-message',
-    '.ant-notification',
-    '.MuiMenu-root',
-    '.MuiPopover-root',
-    '.MuiAutocomplete-popper',
-    '.el-select-dropdown',
-    '.el-dropdown-menu',
-    '[role="menu"]',
-    '[role="listbox"]',
-    '[role="tooltip"]',
-  ].join(',');
-  const zIndex = (el: Element): number => {
-    const raw = win.getComputedStyle(el).zIndex;
-    const parsed = raw === 'auto' ? 0 : Number.parseInt(raw || '0', 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  const blockerZ = zIndex(blocker);
-  const all = querySelectorAllDeep('*', win.document);
-  return all.filter((el): el is HTMLElement => {
-    if (!isHTMLElementInWindow(el, win) || el === blocker) return false;
-    if (
-      (!el.matches(portalSelector) && !isOverlaySurfaceElement(el)) ||
-      !elementIsVisibleForScope(el, win)
-    )
-      return false;
-    if (composedContains(blocker, el)) return true;
-    if (composedContains(el, blocker)) return false;
-    // Class names and generic portal markers only discover a candidate. A
-    // detached portal enters the interaction scope only when it is a real
-    // top-layer surface, declares modal semantics, or an open trigger owns it.
-    const role = (el.getAttribute('role') || '').toLowerCase();
-    const explicitModal =
-      role === 'dialog' || role === 'alertdialog' || el.getAttribute('aria-modal') === 'true';
-    if (!isTopLayerSurface(el) && !explicitModal && !portalHasOpenOwner(el, ownerRoot, win))
-      return false;
-
-    const portalZ = zIndex(el);
-    if (isTopLayerSurface(el) && !isTopLayerSurface(blocker)) return true;
-    if (portalZ !== blockerZ) return portalZ > blockerZ;
-    return Boolean(blocker.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
-  });
-}
-
-function selectorForScopeElement(el: Element): string | undefined {
-  const escapeSelector = (value: string) =>
-    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-      ? CSS.escape(value)
-      : value.replace(/([^a-zA-Z0-9_-])/g, '\\$1');
-  if (el.id) return `#${escapeSelector(el.id)}`;
-  const testId = el.getAttribute('data-testid');
-  if (testId) return `[data-testid="${escapeSelector(testId)}"]`;
-  const role = el.getAttribute('role');
-  if (role) return `${el.tagName.toLowerCase()}[role="${escapeSelector(role)}"]`;
-  return undefined;
-}
-
-const NON_SCROLL_CONTAINER_TAGS = new Set([
-  'textarea',
-  'input',
-  'select',
-  'option',
-  'script',
-  'style',
-  'noscript',
-  'template',
-  'svg',
-  'path',
-  'img',
-  'br',
-  'hr',
-  'canvas',
-  'video',
-  'audio',
-]);
-
-function isSecondaryScrollChrome(el: HTMLElement, win: Window): boolean {
-  const tag = (el.tagName || '').toLowerCase();
-  const role = (el.getAttribute('role') || '').toLowerCase();
-  if (tag === 'main' || tag === 'article' || role === 'main') return false;
-  if (
-    tag === 'nav' ||
-    tag === 'aside' ||
-    tag === 'header' ||
-    tag === 'footer' ||
-    role === 'navigation' ||
-    role === 'complementary' ||
-    role === 'banner' ||
-    role === 'contentinfo' ||
-    role === 'menu' ||
-    role === 'menubar' ||
-    role === 'tablist'
-  ) {
-    return true;
-  }
-  const identity = [
-    el.id,
-    typeof el.className === 'string' ? el.className : el.getAttribute('class') || '',
-    el.getAttribute('data-testid'),
-    el.getAttribute('aria-label'),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  if (/(sidebar|side-nav|sidenav|navigation|navbar|rail|drawer|menu-list|toc|left-rail|right-rail)/i.test(identity)) {
-    return true;
-  }
-  try {
-    const rect = el.getBoundingClientRect();
-    const vw = win.innerWidth || win.document.documentElement?.clientWidth || 1280;
-    if (rect.width > 0 && rect.width < Math.min(320, vw * 0.3)) {
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
-function scrollContainersInRoots(roots: Element[], win: Window): HTMLElement[] {
-  const found: HTMLElement[] = [];
-  const seen = new Set<HTMLElement>();
-  for (const root of roots) {
-    const all = [
-      ...(isHTMLElementInWindow(root, win) ? [root] : []),
-      ...querySelectorAllDeep('*', root),
-    ];
-    for (const el of all) {
-      if (!isHTMLElementInWindow(el, win) || seen.has(el)) continue;
-      if (el === win.document.body || el === win.document.documentElement) continue;
-      const tag = (el.tagName || '').toLowerCase();
-      if (NON_SCROLL_CONTAINER_TAGS.has(tag)) continue;
-      if (!(el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2)) continue;
-      let style: CSSStyleDeclaration;
-      try {
-        style = win.getComputedStyle(el);
-      } catch {
-        // Inaccessible stylesheets must not make observation fail open.
-        continue;
-      }
-      if (!/(auto|scroll|overlay)/.test(style.overflowY)) continue;
-      if (isElementHiddenInComposedTree(el, win)) continue;
-      seen.add(el);
-      found.push(el);
-    }
-  }
-  return found;
-}
-
-export function buildScopedScrollInfo(
-  roots: Element[],
-  win: Window = window,
-  options?: { modalActive?: boolean; containers?: HTMLElement[] },
-): ScrollInfo {
-  const containers = options?.containers ?? scrollContainersInRoots(roots, win);
-  const doc = win.document;
-  const docViewportHeight = win.innerHeight || doc.documentElement?.clientHeight || 1;
-  const docScrollY = Math.max(
-    0,
-    win.scrollY || win.pageYOffset || doc.documentElement?.scrollTop || doc.body?.scrollTop || 0,
-  );
-  const docTotalHeight = Math.max(
-    doc.body?.scrollHeight || 0,
-    doc.documentElement?.scrollHeight || 0,
-    doc.body?.offsetHeight || 0,
-    doc.documentElement?.offsetHeight || 0,
-    docViewportHeight,
-  );
-  const docScrolls = docTotalHeight > docViewportHeight + 2;
-
-  if (
-    containers.length === 1 &&
-    (options?.modalActive || !docScrolls || !isSecondaryScrollChrome(containers[0], win))
-  ) {
-    const container = containers[0];
-    const viewportHeight = Math.max(1, container.clientHeight || 1);
-    const totalHeight = Math.max(container.scrollHeight, viewportHeight);
-    const scrollY = Math.max(0, container.scrollTop || 0);
-    return {
-      pages_up: Number((scrollY / viewportHeight).toFixed(1)),
-      pages_down: Number(
-        (Math.max(0, totalHeight - (scrollY + viewportHeight)) / viewportHeight).toFixed(1),
-      ),
-      scroll_y: Math.round(scrollY),
-      total_height: Math.round(totalHeight),
-      viewport_height: Math.round(viewportHeight),
-      containerIndex: indexElement(container),
-      containerTag: container.tagName.toLowerCase(),
-      ...(selectorForScopeElement(container)
-        ? { containerSelector: selectorForScopeElement(container) }
-        : {}),
-      ambiguous: false,
-      scope: 'element',
-    };
-  }
-
-  if (containers.length > 1 && (options?.modalActive || !docScrolls)) {
-    return {
-      pages_up: 0,
-      pages_down: 0,
-      scroll_y: 0,
-      total_height: 0,
-      viewport_height: 0,
-      ambiguous: true,
-      scope: 'ambiguous',
-    };
-  }
-
-  if (options?.modalActive) {
-    const viewportHeight = Math.max(
-      1,
-      win.innerHeight || win.document.documentElement?.clientHeight || 1,
-    );
-    return {
-      pages_up: 0,
-      pages_down: 0,
-      scroll_y: 0,
-      total_height: viewportHeight,
-      viewport_height: viewportHeight,
-      ambiguous: false,
-      scope: 'none',
-      backgroundBlocked: true,
-    };
-  }
-
-  return {
-    pages_up: Number((docScrollY / docViewportHeight).toFixed(1)),
-    pages_down: Number(
-      (Math.max(0, docTotalHeight - (docScrollY + docViewportHeight)) / docViewportHeight).toFixed(1),
-    ),
-    scroll_y: Math.round(docScrollY),
-    total_height: Math.round(docTotalHeight),
-    viewport_height: Math.round(docViewportHeight),
-    ambiguous: false,
-    scope: 'page',
-  };
-}
-
-export function computeInteractionScope(
-  win: Window = window,
-  options?: { explicitScope?: boolean; includeScrollContainers?: boolean },
-): InteractionScopeInfo {
-  const blocker = detectActiveModalBlocker(win);
-  const focusTrapped = Boolean(blocker);
-  const modalIsolated = Boolean(blocker && !options?.explicitScope);
-  let roots: Element[] = [];
-  let modalElement: HTMLElement | undefined;
-
-  if (blocker) {
-    const surfaceRoot = modalSurfaceRoot(blocker.el, win);
-    modalElement = surfaceRoot;
-    roots = outerMostRoots(
-      [
-        surfaceRoot,
-        blocker.el,
-        ...modalPortalRoots(blocker.el, win, surfaceRoot),
-        ...referencedModalRoots(surfaceRoot, win),
-        focusedOverlayRoot(blocker.el, win),
-      ],
-      win,
-    );
-  } else if (win.document.body) {
-    roots = [win.document.body];
-  }
-
-  return {
-    activeModal: blocker?.name,
-    focusTrapped,
-    modalIsolated,
-    isConfirmationTrap: blocker?.isTrap === true,
-    blockingLayerKind: blocker?.kind,
-    modalElement,
-    roots,
-    scrollContainers:
-      options?.includeScrollContainers === false ? [] : scrollContainersInRoots(roots, win),
-  };
-}
-
-/**
- * Focus Trap and Modal Focus Guard:
- * Pulls and locks DOM keyboard focus into the active modal dialog or specified modal root.
- * Ensures subsequent Tab, Enter, and keyboard shortcuts don't bleed into background DOM.
- */
-export function inPageEnsureModalFocus(modalEl?: Element): boolean {
-  if (typeof document === 'undefined') return false;
-  let target = modalEl;
-  if (!target) {
-    const blocker = detectActiveModalBlocker(typeof window !== 'undefined' ? window : undefined);
-    if (blocker?.el) {
-      target = blocker.el;
-    }
-  }
-  if (!target) return false;
-
-  // Check if current active element is already inside target
-  if (composedContains(target, getDeepActiveElement())) {
-    return true;
-  }
-
-  // Find first focusable element inside the modal (penetrating Shadow DOM)
-  const focusable = querySelectorAllDeep(
-    'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"], a[href]',
-    target,
-  );
-  for (const el of focusable) {
-    if (el instanceof HTMLElement) {
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        try {
-          el.focus();
-          return true;
-        } catch {}
-      }
-    }
-  }
-
-  // Fallback: focus modal container itself
-  if (target instanceof HTMLElement) {
-    if (!target.hasAttribute('tabindex')) {
-      target.setAttribute('tabindex', '-1');
-    }
-    try {
-      target.focus();
-      return true;
-    } catch {}
-  }
-  return false;
-}
-
 /**
  * W3C Standard Composite Card Flattening (Card-level Semantic Aggregation)
  *
@@ -2400,6 +925,7 @@ export function flattenCompositeCards(
     isVirtualMarker?: boolean;
   }>,
   maxTextLength: number = 120,
+  domCache?: DomQueryCache,
 ): number {
   if (!candidates || candidates.length < 3) return 0;
 
@@ -2439,7 +965,7 @@ export function flattenCompositeCards(
     if (hasFormInputs) continue;
 
     // Safety Guard 2: Card dimensions should be reasonable (not a giant page section)
-    const cardRect = card.getBoundingClientRect();
+    const cardRect = getCachedBoundingClientRect(card, domCache);
     if (cardRect.height > 1000 || (cardRect.width > 1200 && card.tagName.toLowerCase() !== 'li')) {
       continue;
     }
@@ -2453,7 +979,7 @@ export function flattenCompositeCards(
       );
       if (isControl) continue;
 
-      const t = extractCleanElementText(it.node, maxTextLength);
+      const t = extractCleanElementText(it.node, maxTextLength, domCache);
       if (t) {
         // Avoid duplicate or substring text
         const isRedundant = infoTexts.some(
@@ -2896,6 +1422,7 @@ export function inPageDOMPruner(options?: {
   const g = globalThis as any;
   g[Symbol.for('__browser_use_last_snapshot_type__')] = 'standard';
   pruneDetachedIndices();
+  const domCache = createDomQueryCache();
 
   const PROPAGATING_ELEMENTS = new Set([
     'p',
@@ -3112,12 +1639,7 @@ export function inPageDOMPruner(options?: {
           }
         } catch {}
 
-        if (
-          !topEl ||
-          topEl === el ||
-          composedContains(el, topEl) ||
-          composedContains(topEl, el)
-        ) {
+        if (!topEl || topEl === el || composedContains(el, topEl) || composedContains(topEl, el)) {
           const pt = makeSamplePoint(px, py);
           clearPoints.push(pt);
           if (rx === 0.5 && ry === 0.5) centerClearPoint = pt;
@@ -3125,7 +1647,8 @@ export function inPageDOMPruner(options?: {
         }
 
         try {
-          const topStyle = window.getComputedStyle(topEl);
+          const topStyle = getCachedComputedStyle(topEl, window, domCache);
+          if (!topStyle) continue;
           const isVisible = topStyle.display !== 'none' && topStyle.visibility !== 'hidden';
           const isPointerBlocking = topStyle.pointerEvents !== 'none';
           const isBackdropOrOverlay =
@@ -3250,8 +1773,8 @@ export function inPageDOMPruner(options?: {
     // Text budgets truncate long leaves during serialization instead of hiding their content.
     if (
       composedChildren(el).length === 0 &&
-      !['script', 'style', 'noscript', 'meta', 'link', 'template'].includes(tag) &&
-      extractComposedVisibleText(el, { maxLen: 16 }).length > 0
+      !PRUNER_NON_INFORMATIONAL_TAGS.has(tag) &&
+      extractComposedVisibleText(el, { maxLen: 16, cache: domCache }).length > 0
     ) {
       return true;
     }
@@ -3322,6 +1845,7 @@ export function inPageDOMPruner(options?: {
     isCustomElement,
     getTableObservationRole,
     composedContains,
+    domCache,
   });
 
   type TreeOutputItem = { type: 'element'; el: IndexedElement } | { type: 'marker'; line: string };
@@ -3382,7 +1906,7 @@ export function inPageDOMPruner(options?: {
   // Phase 2: Decoupled batch hit-testing & indexing pass (eliminates layout thrashing)
   let flattenedCardCount = 0;
   if (options?.flattenCards !== false) {
-    flattenedCardCount = flattenCompositeCards(candidates as any, maxTextLength);
+    flattenedCardCount = flattenCompositeCards(candidates as any, maxTextLength, domCache);
   }
 
   const deepActiveElement = getDeepActiveElement();
@@ -3416,33 +1940,7 @@ export function inPageDOMPruner(options?: {
     } catch {}
 
     const attributes: Record<string, string> = {};
-    const attrsToKeep = [
-      'id',
-      'name',
-      'type',
-      'placeholder',
-      'aria-label',
-      'role',
-      'href',
-      'title',
-      'disabled',
-      'aria-disabled',
-      'readonly',
-      'aria-readonly',
-      'contenteditable',
-      'aria-checked',
-      'aria-selected',
-      'aria-expanded',
-      'aria-pressed',
-      'aria-haspopup',
-      'aria-current',
-      'aria-valuenow',
-      'aria-invalid',
-      'aria-required',
-      'aria-describedby',
-      'aria-errormessage',
-    ];
-    for (const attr of attrsToKeep) {
+    for (const attr of PRUNER_ATTRS_TO_KEEP) {
       const val = cand.node.getAttribute(attr);
       if (val) attributes[attr] = val.slice(0, 100);
     }
@@ -3517,7 +2015,7 @@ export function inPageDOMPruner(options?: {
     try {
       if (
         cand.node.scrollHeight > cand.node.clientHeight + 2 &&
-        /(auto|scroll)/.test(window.getComputedStyle(cand.node).overflowY)
+        /(auto|scroll)/.test(getCachedComputedStyle(cand.node, window, domCache)?.overflowY || '')
       ) {
         attributes['scrollable'] = 'true';
       }
@@ -3537,7 +2035,7 @@ export function inPageDOMPruner(options?: {
       if (formMeta?.validationMessage) attributes['validationMessage'] = formMeta.validationMessage;
       if (formMeta?.required) attributes['required'] = 'true';
       // Constraint hints so an agent can satisfy the field without guessing.
-      for (const attr of ['pattern', 'min', 'max', 'minlength', 'maxlength', 'step']) {
+      for (const attr of FORM_CONSTRAINT_ATTRS) {
         if (attributes[attr]) continue;
         const val = cand.node.getAttribute(attr);
         if (val) attributes[attr] = val.slice(0, 100);
@@ -3623,7 +2121,7 @@ export function inPageDOMPruner(options?: {
       ? tableObservation.text || ''
       : isCard
         ? (cand as any).aggregatedText
-        : extractCleanElementText(cand.node, maxTextLength);
+        : extractCleanElementText(cand.node, maxTextLength, domCache);
     const editorSemantics = detectEditorSemantics(cand.node);
     let role =
       tableObservation?.role || (isCard ? 'card' : cand.node.getAttribute('role') || undefined);
@@ -4282,1571 +2780,7 @@ export function extractElementLocationDetails(
   };
 }
 
-/**
- * Retrieve element coordinates and info for native CDP interaction.
- * Supports numeric 1-based index or string ref (e.g. "1" or "ref_1").
- */
-export function inPageGetElementCoordinates(refOrIndex: number | string): {
-  success: boolean;
-  notFound?: boolean;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  tagName?: string;
-  inputType?: string;
-  text?: string;
-  value?: string;
-  frameOffsetX?: number;
-  frameOffsetY?: number;
-  attributes?: Record<string, string>;
-  isComposer?: boolean;
-  isEditor?: boolean;
-  isSearch?: boolean;
-  disabled?: boolean;
-  ariaDisabled?: boolean;
-  validity?: { valid: boolean };
-  invalidReason?: string;
-  checked?: boolean;
-  selected?: boolean;
-  scopeHash?: string;
-  warning?: string;
-  isSelectOption?: boolean;
-  error?: string;
-} {
-  const parsed = parseElementIndex(refOrIndex);
-  if (!parsed) {
-    return {
-      success: false,
-      error: `Invalid index or ref format: ${refOrIndex}`,
-    };
-  }
-  const index = parsed.numericIndex;
-
-  const el = findIndexedElement(refOrIndex);
-
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      notFound: true,
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  const details: any = extractElementLocationDetails(el);
-  if (el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option') {
-    details.isSelectOption = true;
-  }
-  return details;
-}
-
-export type ActionableResult = ReturnType<typeof inPageGetElementCoordinates> & {
-  actionable: boolean;
-  reason?: string;
-  stableFrames?: number;
-  durationMs?: number;
-  method?: 'raf' | 'timer';
-};
-
-function isClippedOutOfView(el: Element, rect: DOMRect, win: Window): boolean {
-  const visible = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
-  let positionMode: 'normal' | 'absolute' | 'fixed' = 'normal';
-  if (typeof win.getComputedStyle === 'function') {
-    try {
-      const ownPos = win.getComputedStyle(el).position;
-      if (ownPos === 'fixed') positionMode = 'fixed';
-      else if (ownPos === 'absolute') positionMode = 'absolute';
-    } catch {}
-  }
-  const createsFixedBlock = (style: CSSStyleDeclaration): boolean =>
-    (Boolean(style.transform) && style.transform !== 'none') ||
-    (Boolean(style.perspective) && style.perspective !== 'none') ||
-    (Boolean(style.filter) && style.filter !== 'none') ||
-    (Boolean((style as any).backdropFilter) && (style as any).backdropFilter !== 'none') ||
-    /\b(paint|layout|strict|content)\b/.test((style as any).contain || '');
-
-  let ancestor = composedParent(el);
-  const seenAnc = new Set<Element>();
-  while (
-    ancestor &&
-    !seenAnc.has(ancestor) &&
-    ancestor !== el.ownerDocument.body &&
-    ancestor !== el.ownerDocument.documentElement
-  ) {
-    seenAnc.add(ancestor);
-    if (typeof win.getComputedStyle === 'function') {
-      const style = win.getComputedStyle(ancestor);
-      const ancPos = style.position || 'static';
-      const isFixedContainer = createsFixedBlock(style);
-      let ancestorClips = true;
-      if (positionMode === 'fixed') {
-        if (!isFixedContainer) {
-          ancestorClips = false;
-        } else {
-          positionMode =
-            ancPos === 'fixed' ? 'fixed' : ancPos === 'absolute' ? 'absolute' : 'normal';
-        }
-      } else if (positionMode === 'absolute') {
-        if (ancPos === 'static' && !isFixedContainer) {
-          ancestorClips = false;
-        } else {
-          positionMode =
-            ancPos === 'fixed' ? 'fixed' : ancPos === 'absolute' ? 'absolute' : 'normal';
-        }
-      } else {
-        if (ancPos === 'fixed') positionMode = 'fixed';
-        else if (ancPos === 'absolute') positionMode = 'absolute';
-      }
-
-      if (ancestorClips) {
-        const overflowX = style.overflowX || style.overflow;
-        const overflowY = style.overflowY || style.overflow;
-        const clipsX = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowX);
-        const clipsY = /^(hidden|clip|auto|scroll|overlay)$/.test(overflowY);
-        if (clipsX || clipsY) {
-          const area = ancestor.getBoundingClientRect();
-          const left = area.left + (ancestor.clientLeft || 0);
-          const top = area.top + (ancestor.clientTop || 0);
-          const right = left + (ancestor.clientWidth || area.width);
-          const bottom = top + (ancestor.clientHeight || area.height);
-          if (clipsX) {
-            visible.left = Math.max(visible.left, left);
-            visible.right = Math.min(visible.right, right);
-          }
-          if (clipsY) {
-            visible.top = Math.max(visible.top, top);
-            visible.bottom = Math.min(visible.bottom, bottom);
-          }
-          if (visible.right <= visible.left || visible.bottom <= visible.top) {
-            return true;
-          }
-        }
-      }
-    }
-    ancestor = composedParent(ancestor);
-  }
-  return false;
-}
-
-function getActionableBlockReason(
-  el: Element,
-  action: string,
-  options?: { checkClipping?: boolean },
-): string | null {
-  if (!el.isConnected || el.ownerDocument !== document) return 'disconnected';
-  const checkClipping = options?.checkClipping !== false;
-
-  const isOption = el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option';
-  const isHover = action === 'hover' || action === 'mouse_move';
-  const isFill = action === 'fill' || action === 'type' || action === 'clear';
-
-  // 1. Disabled (hover allows disabled for tooltips)
-  if (!isHover) {
-    try {
-      if (el.matches?.(':disabled') || (el as any).disabled === true) return 'disabled';
-    } catch {
-      if ((el as any).disabled === true || el.hasAttribute('disabled')) return 'disabled';
-    }
-  }
-
-  // 2. Readonly for fill actions
-  if (isFill && ((el as any).readOnly === true || el.hasAttribute('readonly'))) {
-    return 'readonly';
-  }
-
-  // 3. Visibility on target element (descendant can override visible)
-  const win = el.ownerDocument?.defaultView || window;
-  if (typeof win.getComputedStyle === 'function') {
-    try {
-      const style = win.getComputedStyle(el);
-      if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
-    } catch {}
-  }
-
-  // 4. Single composed ancestor pass: inert, aria-disabled, display:none, hidden attribute
-  for (let cur: Element | null = el; cur; cur = composedParent(cur)) {
-    if ((cur as any).inert === true || cur.hasAttribute('inert')) return 'inert';
-    if (!isHover && cur.getAttribute('aria-disabled') === 'true') return 'aria-disabled';
-    if ((cur as any).hidden === true || cur.hasAttribute('hidden')) return 'hidden';
-    if (typeof win.getComputedStyle === 'function') {
-      try {
-        if (win.getComputedStyle(cur).display === 'none') return 'hidden';
-      } catch {}
-    }
-  }
-
-  // 5. Zero-size check: any dimension <= 0 is non-actionable (options exempt)
-  if (!isOption) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return 'hidden';
-    if (checkClipping && isClippedOutOfView(el, rect, win)) return 'out_of_view';
-  }
-
-  return null;
-}
-
-function waitForNextTick(): Promise<'raf' | 'timer'> {
-  return new Promise((resolve) => {
-    const isDocHidden = typeof document !== 'undefined' && document.hidden;
-    const hasRaf = typeof requestAnimationFrame === 'function';
-    if (isDocHidden || !hasRaf) {
-      setTimeout(() => resolve('timer'), 16);
-      return;
-    }
-    let settled = false;
-    let timerId: any = null;
-    const rafId = requestAnimationFrame(() => {
-      if (!settled) {
-        settled = true;
-        if (timerId) clearTimeout(timerId);
-        resolve('raf');
-      }
-    });
-    timerId = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
-        resolve('timer');
-      }
-    }, 50);
-  });
-}
-
-/**
- * Actionability pre-flight and 2-frame geometry stability watchdog.
- * Direct drop-in replacement for inPageGetElementCoordinates on user action paths.
- * Returns spread coordinate metadata on success, and distinguishes notFound: true vs false on errors.
- */
-export async function inPageWaitForActionable(
-  refOrIndex: number | string,
-  action: string = 'click',
-  timeoutMs = 1000,
-): Promise<ActionableResult> {
-  const parsed = parseElementIndex(refOrIndex);
-  if (!parsed) {
-    return {
-      success: false,
-      actionable: false,
-      notFound: true,
-      reason: 'not_found',
-      error: `Invalid index: ${refOrIndex}`,
-    };
-  }
-  const index = parsed.numericIndex;
-  const entry = getIsolatedIndexMap().get(index);
-  const el = entry ? derefElement(entry) : null;
-
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      actionable: false,
-      notFound: true,
-      reason: 'not_found',
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  let blockReason = getActionableBlockReason(el, action, { checkClipping: false });
-  if (blockReason) {
-    return {
-      success: false,
-      actionable: false,
-      notFound: false,
-      reason: blockReason,
-      error: `Element [${index}] is not actionable (${blockReason})`,
-    };
-  }
-
-  // Pre-scroll and initial coordinates resolution
-  const initialCoords = inPageGetElementCoordinates(refOrIndex);
-  if (!initialCoords?.success) {
-    return {
-      ...initialCoords,
-      actionable: false,
-      notFound: Boolean(initialCoords?.notFound),
-      error: initialCoords?.error || `Failed to resolve coords for [${index}]`,
-    };
-  }
-
-  // <option> elements have no separate layout box; delegate to select and bypass stability loop
-  const isOption = el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option';
-  if (isOption) {
-    return {
-      ...initialCoords,
-      success: true,
-      actionable: true,
-      notFound: false,
-    };
-  }
-
-  const STABILITY_THRESHOLD = 0.25;
-  const startTime = performance.now();
-  let prevRect = el.getBoundingClientRect();
-  // Verify clipping after scrolling the target into view so scrollable offscreen controls
-  // succeed while permanently clipped elements still report out_of_view.
-  const win = el.ownerDocument?.defaultView || window;
-  if (isClippedOutOfView(el, prevRect, win)) {
-    return {
-      ...initialCoords,
-      success: false,
-      actionable: false,
-      notFound: false,
-      reason: 'out_of_view',
-      error: `Element [${index}] is not actionable (out_of_view)`,
-    };
-  }
-  let stableFrames = 0;
-  let everUsedTimer = false;
-
-  while (true) {
-    const tickMethod = await waitForNextTick();
-    if (tickMethod === 'timer') everUsedTimer = true;
-
-    // Re-verify actionable state immediately after tick
-    blockReason = getActionableBlockReason(el, action);
-    if (blockReason) {
-      return {
-        ...initialCoords,
-        success: false,
-        actionable: false,
-        notFound: false,
-        reason: blockReason,
-        error: `Element [${index}] became non-actionable (${blockReason}) during stability wait`,
-        durationMs: Math.round(performance.now() - startTime),
-        method: everUsedTimer ? 'timer' : 'raf',
-      };
-    }
-
-    const currRect = el.getBoundingClientRect();
-    const dx = Math.abs(currRect.left - prevRect.left);
-    const dy = Math.abs(currRect.top - prevRect.top);
-    const dw = Math.abs(currRect.width - prevRect.width);
-    const dh = Math.abs(currRect.height - prevRect.height);
-
-    if (
-      dx <= STABILITY_THRESHOLD &&
-      dy <= STABILITY_THRESHOLD &&
-      dw <= STABILITY_THRESHOLD &&
-      dh <= STABILITY_THRESHOLD
-    ) {
-      stableFrames++;
-      if (stableFrames >= 2) {
-        // Final check before success return
-        blockReason = getActionableBlockReason(el, action);
-        if (blockReason) {
-          return {
-            ...initialCoords,
-            success: false,
-            actionable: false,
-            notFound: false,
-            reason: blockReason,
-            error: `Element [${index}] became non-actionable (${blockReason}) during stability wait`,
-            durationMs: Math.round(performance.now() - startTime),
-            method: everUsedTimer ? 'timer' : 'raf',
-          };
-        }
-
-        // Compute live safe point & fresh metadata with scrolling disabled
-        const finalCoords = extractElementLocationDetails(el, false);
-        return {
-          ...finalCoords,
-          success: true,
-          actionable: true,
-          notFound: false,
-          stableFrames,
-          durationMs: Math.round(performance.now() - startTime),
-          method: everUsedTimer ? 'timer' : 'raf',
-        };
-      }
-    } else {
-      stableFrames = 0;
-    }
-
-    prevRect = currRect;
-
-    if (performance.now() - startTime >= timeoutMs) {
-      return {
-        ...initialCoords,
-        success: false,
-        actionable: false,
-        notFound: false,
-        reason: 'unstable',
-        error: `Element [${index}] geometry did not stabilize within ${timeoutMs}ms (dx=${dx.toFixed(2)}, dy=${dy.toFixed(2)})`,
-        durationMs: Math.round(performance.now() - startTime),
-        method: everUsedTimer ? 'timer' : 'raf',
-      };
-    }
-  }
-}
-
-/**
- * Bounding box / interactive element auto-snapping.
- * If model eye measurement clicked slightly off-target (e.g. 10-25px outside a dice/button onto whitespace),
- * magnetically snap the coordinate to the closest interactive element.
- */
-export function inPageSnapCoordinate(
-  x: number,
-  y: number,
-  snapRadius = 24,
-  topLevelViewport = false,
-  editableOnly = false,
-): {
-  snapped: boolean;
-  x: number;
-  y: number;
-  originalX: number;
-  originalY: number;
-  targetIndex?: number;
-  targetTag?: string;
-  targetEditable?: boolean;
-  frameOffsetX?: number;
-  frameOffsetY?: number;
-  distance?: number;
-} {
-  const inputX = Math.round(x);
-  const inputY = Math.round(y);
-  let frameOffsetX = 0;
-  let frameOffsetY = 0;
-  if (topLevelViewport) {
-    try {
-      let curWin: Window = window;
-      while (curWin !== curWin.top) {
-        const frameEl = curWin.frameElement;
-        if (!frameEl) throw new Error('Frame owner unavailable');
-        const frameRect = frameEl.getBoundingClientRect();
-        const parentWin = curWin.parent || frameEl.ownerDocument?.defaultView || window;
-        const frameStyle =
-          typeof parentWin.getComputedStyle === 'function'
-            ? parentWin.getComputedStyle(frameEl)
-            : undefined;
-        const borderLeft = parseFloat(frameStyle?.borderLeftWidth || '0') || 0;
-        const borderTop = parseFloat(frameStyle?.borderTopWidth || '0') || 0;
-        const zoom = parseFloat((frameStyle as any)?.zoom || '1') || 1;
-        frameOffsetX += (frameRect.left + borderLeft) / zoom;
-        frameOffsetY += (frameRect.top + borderTop) / zoom;
-        curWin = curWin.parent;
-      }
-    } catch {
-      return {
-        snapped: false,
-        x: inputX,
-        y: inputY,
-        originalX: inputX,
-        originalY: inputY,
-        targetEditable: false,
-      };
-    }
-  }
-  const origX = inputX - Math.round(frameOffsetX);
-  const origY = inputY - Math.round(frameOffsetY);
-  const toViewportPoint = (localX: number, localY: number) => ({
-    x: topLevelViewport ? Math.round(localX + frameOffsetX) : localX,
-    y: topLevelViewport ? Math.round(localY + frameOffsetY) : localY,
-  });
-  const defaultViewportPoint = toViewportPoint(origX, origY);
-  const defaultRes = {
-    snapped: false,
-    ...defaultViewportPoint,
-    originalX: inputX,
-    originalY: inputY,
-    frameOffsetX: Math.round(frameOffsetX),
-    frameOffsetY: Math.round(frameOffsetY),
-  };
-
-  if (typeof document === 'undefined') return defaultRes;
-
-  const vw = window.innerWidth || document.documentElement?.clientWidth || 1280;
-  const vh = window.innerHeight || document.documentElement?.clientHeight || 800;
-  if (origX < 0 || origY < 0 || origX > vw || origY > vh) return defaultRes;
-
-  // 1. Direct hit test at (origX, origY) with deep Shadow DOM penetration
-  let hitEl: Element | null = null;
-  try {
-    hitEl = deepElementFromPoint(origX, origY);
-  } catch {}
-
-  const findEditableElement = (start: Element | null): Element | null => {
-    let current = start;
-    while (current && current !== document.body && current !== document.documentElement) {
-      const tag = current.tagName.toLowerCase();
-      const inputType = ((current as HTMLInputElement).type || '').toLowerCase();
-      const nonTextInput =
-        /^(button|submit|reset|checkbox|radio|hidden|image|file|range|color)$/.test(inputType);
-      if (
-        (tag === 'input' && !nonTextInput) ||
-        tag === 'textarea' ||
-        tag === 'select' ||
-        (current as HTMLElement).isContentEditable ||
-        current.getAttribute('contenteditable') === 'true' ||
-        current.getAttribute('contenteditable') === ''
-      ) {
-        return current;
-      }
-      current = composedParent(current);
-    }
-    return null;
-  };
-
-  const directEditable = editableOnly ? findEditableElement(hitEl) : null;
-  if (directEditable) {
-    let targetIndex: number | undefined;
-    for (const [idx, wrapped] of getIsolatedIndexMap().entries()) {
-      if (derefElement(wrapped) === directEditable) {
-        targetIndex = idx;
-        break;
-      }
-    }
-    if (targetIndex === undefined) targetIndex = indexElement(directEditable);
-    return {
-      ...defaultRes,
-      targetIndex,
-      targetTag: directEditable.tagName.toLowerCase(),
-      targetEditable: true,
-    };
-  }
-  if (editableOnly) {
-    return { ...defaultRes, targetEditable: false };
-  }
-
-  const isInteractiveNode = (el: Element | null): boolean => {
-    if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) return false;
-    const tag = el.tagName.toLowerCase();
-    if (/^(button|input|select|textarea|a|canvas|video|audio|summary)$/.test(tag)) return true;
-    const role = el.getAttribute('role')?.toLowerCase();
-    if (
-      role &&
-      /^(button|link|checkbox|radio|menuitem|tab|switch|option|combobox|treeitem)$/.test(role)
-    )
-      return true;
-    if (el.hasAttribute('onclick') || el.hasAttribute('data-action') || (el as any).onclick)
-      return true;
-    const tabIndex =
-      typeof (el as HTMLElement).tabIndex === 'number' ? (el as HTMLElement).tabIndex : -1;
-    if (tabIndex >= 0) return true;
-    if (tag === 'svg' || (el as any).ownerSVGElement) {
-      const svgRoot = tag === 'svg' ? el : (el as any).ownerSVGElement;
-      if (svgRoot && (svgRoot.hasAttribute('onclick') || svgRoot.getAttribute('role') === 'button'))
-        return true;
-    }
-    if (composedClosest(el, 'button, a, [role="button"], [onclick]')) return true;
-    try {
-      const style = window.getComputedStyle(el);
-      if (style.cursor === 'pointer' || /grab|grabbing/i.test(style.cursor)) return true;
-    } catch {}
-    if (isCustomElement(el) && (el.hasAttribute('aria-label') || el.hasAttribute('title'))) {
-      return true;
-    }
-    return false;
-  };
-
-  // If already directly hitting an interactive element or inside one, no snap needed
-  let cur: Element | null = hitEl;
-  while (cur && cur !== document.body && cur !== document.documentElement) {
-    if (isInteractiveNode(cur)) {
-      let targetIndex: number | undefined;
-      for (const [idx, wrapped] of getIsolatedIndexMap().entries()) {
-        if (derefElement(wrapped) === cur) {
-          targetIndex = idx;
-          break;
-        }
-      }
-      if (targetIndex === undefined) targetIndex = indexElement(cur);
-      return {
-        ...defaultRes,
-        targetIndex,
-        targetTag: cur.tagName.toLowerCase(),
-        targetEditable: Boolean(findEditableElement(cur)),
-      };
-    }
-    cur = composedParent(cur);
-  }
-
-  // 2. Search candidate elements in isolatedIndexMap within snapRadius
-  const isolatedMap = getIsolatedIndexMap();
-  let bestEl: Element | null = null;
-  let bestDist = Infinity;
-  let bestIndex: number | undefined;
-  let bestRect: DOMRect | undefined;
-
-  for (const [idx, wrapped] of isolatedMap.entries()) {
-    const el = derefElement(wrapped);
-    if (!el || (typeof Element !== 'undefined' && !(el instanceof Element))) continue;
-    try {
-      const rect = el.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) continue;
-      // Clamped point in rect closest to (origX, origY)
-      const cx = Math.max(rect.left, Math.min(rect.right, origX));
-      const cy = Math.max(rect.top, Math.min(rect.bottom, origY));
-      const dist = Math.hypot(origX - cx, origY - cy);
-      if (dist < bestDist && dist <= snapRadius) {
-        bestDist = dist;
-        bestEl = el;
-        bestIndex = idx;
-        bestRect = rect;
-      }
-    } catch {}
-  }
-
-  // 3. Fallback: Radial search if isolatedIndexMap had no candidates (penetrates Shadow DOM)
-  if (!bestEl) {
-    const searchDistances = [8, 16, snapRadius];
-    const angles = [0, 45, 90, 135, 180, 225, 270, 315];
-    for (const r of searchDistances) {
-      if (bestEl) break;
-      for (const a of angles) {
-        const rad = (a * Math.PI) / 180;
-        const px = Math.round(origX + r * Math.cos(rad));
-        const py = Math.round(origY + r * Math.sin(rad));
-        if (px < 0 || py < 0 || px > vw || py > vh) continue;
-        try {
-          const sampleEl = deepElementFromPoint(px, py);
-          let candidate: Element | null = sampleEl;
-          while (
-            candidate &&
-            candidate !== document.body &&
-            candidate !== document.documentElement
-          ) {
-            if (isInteractiveNode(candidate)) {
-              const b = candidate.getBoundingClientRect();
-              const cx = Math.max(b.left, Math.min(b.right, origX));
-              const cy = Math.max(b.top, Math.min(b.bottom, origY));
-              const d = Math.hypot(origX - cx, origY - cy);
-              if (d <= snapRadius) {
-                bestDist = d;
-                bestEl = candidate;
-                bestRect = b;
-                break;
-              }
-            }
-            candidate = composedParent(candidate);
-          }
-        } catch {}
-      }
-    }
-  }
-
-  // 4. Final deep query search for closest interactive Shadow DOM elements if still unhit
-  if (!bestEl && typeof document !== 'undefined') {
-    try {
-      const candidates = querySelectorAllDeep(
-        'button, a, input, select, textarea, [role="button"], [role="link"], [role="tab"], [aria-label], [data-action]',
-        document,
-      );
-      for (const candEl of candidates) {
-        if (!candEl || !(candEl instanceof Element)) continue;
-        const b = candEl.getBoundingClientRect();
-        if (b.width <= 0 || b.height <= 0) continue;
-        const cx = Math.max(b.left, Math.min(b.right, origX));
-        const cy = Math.max(b.top, Math.min(b.bottom, origY));
-        const d = Math.hypot(origX - cx, origY - cy);
-        if (d < bestDist && d <= snapRadius) {
-          bestDist = d;
-          bestEl = candEl;
-          bestRect = b;
-        }
-      }
-    } catch {}
-  }
-
-  if (bestEl && bestRect) {
-    // Bring element into comfortable viewport view if scrolled outside or clipped
-    try {
-      const curVh = window.innerHeight || 800;
-      const curVw = window.innerWidth || 1280;
-      if (
-        bestRect.top < 0 ||
-        bestRect.bottom > curVh ||
-        bestRect.left < 0 ||
-        bestRect.right > curVw
-      ) {
-        if (typeof (bestEl as any).scrollIntoView === 'function') {
-          (bestEl as any).scrollIntoView({
-            block: 'center',
-            inline: 'center',
-            behavior: 'instant',
-          });
-          bestRect = bestEl.getBoundingClientRect();
-        }
-      }
-    } catch {}
-
-    // For small/medium elements (<= 120px in width/height), snap to geometric center.
-    // For large elements (> 120px), clamp within the element with a safe margin to avoid jumping hundreds of pixels.
-    const isSmallOrMedium = bestRect.width <= 120 && bestRect.height <= 120;
-    let safeX: number;
-    let safeY: number;
-
-    if (isSmallOrMedium) {
-      safeX = Math.round((bestRect.left + bestRect.right) / 2);
-      safeY = Math.round((bestRect.top + bestRect.bottom) / 2);
-    } else {
-      const marginX = Math.min(12, Math.floor(bestRect.width * 0.1));
-      const marginY = Math.min(12, Math.floor(bestRect.height * 0.1));
-      safeX = Math.round(
-        Math.max(bestRect.left + marginX, Math.min(bestRect.right - marginX, origX)),
-      );
-      safeY = Math.round(
-        Math.max(bestRect.top + marginY, Math.min(bestRect.bottom - marginY, origY)),
-      );
-    }
-    const viewportPoint = toViewportPoint(safeX, safeY);
-    return {
-      snapped: true,
-      ...viewportPoint,
-      originalX: inputX,
-      originalY: inputY,
-      targetIndex: bestIndex,
-      targetTag: bestEl.tagName.toLowerCase(),
-      targetEditable: Boolean(findEditableElement(bestEl)),
-      frameOffsetX: Math.round(frameOffsetX),
-      frameOffsetY: Math.round(frameOffsetY),
-      distance: Math.round(bestDist),
-    };
-  }
-
-  return defaultRes;
-}
-
-/**
- * Post-dispatch delivery verification for CDP Input events.
- *
- * Chrome throttles CDP input to occluded/hidden tabs: the command acks
- * successfully but the renderer never records the event (TESTING-NOTES #27),
- * producing phantom successes. document.elementFromPoint cannot detect this -
- * layout is computed on demand even in hidden tabs - so verification uses
- * one-shot capture listeners armed BEFORE dispatch: if no trusted event
- * arrives, the input never reached the renderer.
- */
-// Returns a marker because executeInPage's retrieve protocol throws on
-// undefined returns (its undefined sentinel means 'entrypoint vanished').
-export function inPageArmDeliveryProbe(events: string[]): { armed: true } {
-  const g = globalThis as any;
-  const prev = g.__MCP_DELIVERY_PROBE__;
-  if (prev && typeof prev.remove === 'function') {
-    try {
-      prev.remove();
-    } catch {}
-  }
-  const probe: any = { events, hits: [], armed: true, remove: () => {} };
-  const listener = (e: Event) => {
-    if (!probe.armed) return;
-    probe.hits.push({
-      type: e.type,
-      isTrusted: (e as any).isTrusted === true,
-      target: (e.target as Element | null | undefined)?.tagName?.toLowerCase?.(),
-    });
-    if (probe.hits.length > 8) probe.hits.shift();
-  };
-  probe.remove = () => {
-    for (const t of events) {
-      document.removeEventListener(t, listener, true);
-    }
-  };
-  for (const t of events) {
-    document.addEventListener(t, listener, true);
-  }
-  g.__MCP_DELIVERY_PROBE__ = probe;
-  return { armed: true };
-}
-
-export function inPageReadDeliveryProbe(disarm?: boolean): {
-  delivered: boolean;
-  hits: any[];
-  missing?: boolean;
-} {
-  const probe = (globalThis as any).__MCP_DELIVERY_PROBE__;
-  if (!probe) return { delivered: false, hits: [], missing: true };
-  const hits = probe.hits.slice();
-  if (disarm !== false) {
-    probe.armed = false;
-    try {
-      probe.remove();
-    } catch {}
-  }
-  return { delivered: hits.length > 0, hits };
-}
-
-import {
-  collapseNestedLocatorMatches,
-  isLocatorCandidateVisible,
-  inPageLocateBySelector,
-  getLocatorAccessibleName,
-  inPageLocateByLabel,
-  inPageLocateByRole,
-  inPageLocateByText,
-  getAriaLabelledByText,
-  getNativeLabelText,
-  type LocateByLabelOptions,
-  type LocateByRoleOptions,
-  type LocateByTextOptions,
-} from './dom-indexer/locators';
-
-export {
-  inPageLocateBySelector,
-  getLocatorAccessibleName,
-  inPageLocateByLabel,
-  inPageLocateByRole,
-  inPageLocateByText,
-  getAriaLabelledByText,
-  getNativeLabelText,
-  type LocateByLabelOptions,
-  type LocateByRoleOptions,
-  type LocateByTextOptions,
-};
-export function inPageGetFrameOrigin(): string {
-  try {
-    return window.location.origin;
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Retrieve element crop rectangle (viewport-relative) with optional padding for region-of-interest screenshot.
- * Optionally expands small elements (< 100x100) to a contextual bounding box (Midscene-inspired expandSearchArea).
- */
-export function inPageGetIndexCropRect(
-  index: number,
-  padding: number = 0,
-  autoExpand: boolean = false,
-): {
-  success: boolean;
-  rect?: { x: number; y: number; width: number; height: number };
-  devicePixelRatio?: number;
-  error?: string;
-} {
-  if (index <= 0) {
-    return {
-      success: false,
-      error: `Index must be a positive 1-based integer. Received: ${index}`,
-    };
-  }
-
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-  } catch {}
-
-  const rawRect = el.getBoundingClientRect();
-
-  let frameOffsetX = 0;
-  let frameOffsetY = 0;
-  try {
-    let curWin: Window = window;
-    while (curWin !== curWin.top) {
-      if (curWin.frameElement) {
-        const fEl = curWin.frameElement;
-        const fRect = fEl.getBoundingClientRect();
-        const parentWin = curWin.parent || fEl.ownerDocument?.defaultView || window;
-        const fStyle =
-          typeof parentWin.getComputedStyle === 'function'
-            ? parentWin.getComputedStyle(fEl)
-            : undefined;
-        const borderLeft = parseFloat(fStyle?.borderLeftWidth || '0') || 0;
-        const borderTop = parseFloat(fStyle?.borderTopWidth || '0') || 0;
-        const zoom = parseFloat((fStyle as any)?.zoom || '1') || 1;
-
-        frameOffsetX += (fRect.left + borderLeft) / zoom;
-        frameOffsetY += (fRect.top + borderTop) / zoom;
-        curWin = curWin.parent;
-      } else {
-        break;
-      }
-    }
-  } catch {}
-
-  // Micro-element adaptive expansion (Midscene-inspired expandSearchArea)
-  // For small elements (< 100x100), expand to retain surrounding table headers, labels, and context
-  let effectivePadding = Math.max(0, padding);
-  if (autoExpand && (rawRect.width < 100 || rawRect.height < 100)) {
-    // Expand by at least 100px on each side (or expand to at least 200x200)
-    const minBoundingSize = 200;
-    const neededPadX = Math.max(0, Math.round((minBoundingSize - rawRect.width) / 2));
-    const neededPadY = Math.max(0, Math.round((minBoundingSize - rawRect.height) / 2));
-    effectivePadding = Math.max(effectivePadding, Math.max(100, Math.max(neededPadX, neededPadY)));
-  }
-
-  // Clamp in the element's own frame before projecting into each parent viewport.
-  // A subframe is often much smaller than its top-level offset, so subtracting that
-  // offset from the subframe viewport would collapse every crop to one pixel.
-  const hasViewportWidth = typeof window.innerWidth === 'number' && window.innerWidth > 0;
-  const hasViewportHeight = typeof window.innerHeight === 'number' && window.innerHeight > 0;
-  const localLeft = Math.max(0, rawRect.left - effectivePadding);
-  const localTop = Math.max(0, rawRect.top - effectivePadding);
-  const localRight = hasViewportWidth
-    ? Math.min(window.innerWidth, rawRect.right + effectivePadding)
-    : rawRect.right + effectivePadding;
-  const localBottom = hasViewportHeight
-    ? Math.min(window.innerHeight, rawRect.bottom + effectivePadding)
-    : rawRect.bottom + effectivePadding;
-  const left = Math.max(0, Math.round(localLeft + frameOffsetX));
-  const top = Math.max(0, Math.round(localTop + frameOffsetY));
-  const width = Math.max(1, Math.round(localRight - localLeft));
-  const height = Math.max(1, Math.round(localBottom - localTop));
-
-  return {
-    success: true,
-    rect: { x: left, y: top, width, height },
-    devicePixelRatio: window.devicePixelRatio || 1,
-  };
-}
-
-/**
- * One-shot pointer-move delivery for CDP-synthetic pointer drags: CDP routes
- * mouseMoved by hit-testing and page-side setPointerCapture does not stick
- * under synthetic presses, so narrow targets (resize handles, sliders) miss
- * every move once the cursor leaves their few-pixel hit area. Deliver the
- * final pointermove straight to the element under the press point carrying
- * the real end coordinates, so its onPointerMove sees the true final position.
- */
-export function inPagePointerDragMove(
-  fromX: number,
-  fromY: number,
-  toX: number,
-  toY: number,
-): { success: boolean; tag?: string; error?: string } {
-  try {
-    const el = document.elementFromPoint(fromX, fromY);
-    if (!el) {
-      return { success: false, error: `No element at point (${fromX}, ${fromY})` };
-    }
-    el.dispatchEvent(
-      new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true,
-        clientX: toX,
-        clientY: toY,
-        button: -1,
-        buttons: 1,
-      }),
-    );
-    return {
-      success: true,
-      tag: el.id || el.tagName.toLowerCase(),
-    };
-  } catch (err) {
-    return { success: false, error: String(err instanceof Error ? err.message : err) };
-  }
-}
-
-/**
- * Perform fallback in-page interaction by 1-based index inside active tab.
- */
-/**
- * Focus an indexed element without firing click handlers.
- * chrome_keyboard previously used inPageInteractIndex(index, 'click'), which both
- * fired the element's click handlers as a side effect and never actually moved
- * focus for non-focusable nodes — so subsequent key events landed on whatever
- * document.activeElement already was. This focuses first, then falls back to a
- * click only for elements that cannot take focus directly.
- */
-export function inPageFocusIndex(index: number): {
-  success: boolean;
-  index: number;
-  tagName?: string;
-  focused?: boolean;
-  error?: string;
-} {
-  if (index <= 0) {
-    return {
-      success: false,
-      index,
-      error: `Index must be a positive 1-based integer. Received: ${index}`,
-    };
-  }
-
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      index,
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-  } catch {}
-
-  const htmlEl = el as HTMLElement;
-  let focused = false;
-  try {
-    if (typeof htmlEl.focus === 'function') {
-      htmlEl.focus({ preventScroll: true });
-      focused = composedContains(el, getDeepActiveElement());
-    }
-  } catch {}
-
-  // Non-focusable containers (plain div/li/canvas): make them programmatically
-  // focusable for this session so keyboard events target the intended node.
-  if (!focused && !el.hasAttribute('tabindex')) {
-    try {
-      el.setAttribute('tabindex', '-1');
-      htmlEl.focus({ preventScroll: true });
-      focused = composedContains(el, getDeepActiveElement());
-    } catch {}
-  }
-
-  return {
-    success: true,
-    index,
-    tagName: el.tagName.toLowerCase(),
-    focused,
-  };
-}
-
-export function inPageInteractIndex(
-  index: number,
-  action: 'click' | 'hover' | 'double_click' | 'right_click' = 'click',
-): { success: boolean; index: number; tagName?: string; text?: string; error?: string } {
-  if (index <= 0) {
-    return {
-      success: false,
-      index,
-      error: `Index must be a positive 1-based integer. Received: ${index}`,
-    };
-  }
-
-  const el = findIndexedElement(index);
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      index,
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-  } catch {}
-
-  const text = ((el as HTMLElement).innerText || el.textContent || '').trim().slice(0, 100);
-
-  if (action === 'click') {
-    // Task B4: Direct single-step selection for HTMLOptionElement
-    if (el instanceof HTMLOptionElement || el.tagName.toLowerCase() === 'option') {
-      const opt = el as HTMLOptionElement;
-      const select = (
-        opt.parentElement instanceof HTMLSelectElement ? opt.parentElement : opt.closest?.('select')
-      ) as HTMLSelectElement | null;
-      if (select) {
-        select.value = opt.value;
-        opt.selected = true;
-        select.dispatchEvent(new Event('input', { bubbles: true }));
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        return {
-          success: true,
-          index,
-          tagName: 'option',
-          text: opt.label || opt.text || opt.value,
-        };
-      }
-    }
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    (el as HTMLElement).click?.();
-  } else if (action === 'double_click') {
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    (el as HTMLElement).click?.();
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    (el as HTMLElement).click?.();
-    el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
-  } else if (action === 'right_click') {
-    const rawRect = el.getBoundingClientRect();
-    const cx = Math.round(rawRect.left + rawRect.width / 2);
-    const cy = Math.round(rawRect.top + rawRect.height / 2);
-    const mouseOpts: MouseEventInit = {
-      bubbles: true,
-      cancelable: true,
-      button: 2,
-      buttons: 2,
-      clientX: cx,
-      clientY: cy,
-    };
-    try {
-      el.dispatchEvent(new PointerEvent('pointerdown', { ...mouseOpts, pointerType: 'mouse' }));
-    } catch {}
-    el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
-    try {
-      el.dispatchEvent(
-        new PointerEvent('pointerup', { ...mouseOpts, buttons: 0, pointerType: 'mouse' }),
-      );
-    } catch {}
-    el.dispatchEvent(new MouseEvent('mouseup', { ...mouseOpts, buttons: 0 }));
-    el.dispatchEvent(new MouseEvent('contextmenu', mouseOpts));
-  } else if (action === 'hover') {
-    el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true }));
-  }
-
-  return {
-    success: true,
-    index,
-    tagName: el.tagName.toLowerCase(),
-    text,
-  };
-}
-
-function resolveEditableTextTarget(el: Element): HTMLElement | null {
-  if (el instanceof HTMLInputElement) {
-    const type = (el.type || 'text').toLowerCase();
-    if (/^(text|search|email|url|tel|password|number)$/.test(type)) return el;
-    return null;
-  }
-  if (el instanceof HTMLTextAreaElement) return el;
-  const ownEditable =
-    (el as HTMLElement).isContentEditable ||
-    el.getAttribute('contenteditable') === 'true' ||
-    el.getAttribute('contenteditable') === '';
-  if (ownEditable) return el as HTMLElement;
-  return (
-    (el.querySelector?.('[contenteditable="true"], [contenteditable=""]') as HTMLElement) || null
-  );
-}
-
-function readEditableTextValue(el: Element): string {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value || '';
-  const target = resolveEditableTextTarget(el);
-  if (!target) return '';
-  return String(target.innerText ?? target.textContent ?? '');
-}
-
-/**
- * Focus the editable target, place its caret at the true end, and return the
- * pre-append value used by commitment verification.
- */
-export function inPagePrepareAppend(refOrIndex: number | string): {
-  success: boolean;
-  currentValue: string;
-  tagName?: string;
-  error?: string;
-} {
-  const parsed = parseElementIndex(refOrIndex);
-  if (!parsed) return { success: false, currentValue: '', error: 'Invalid index or ref format' };
-  const index = parsed.numericIndex;
-  const el = findIndexedElement(refOrIndex);
-  if (!el || !(el instanceof Element)) {
-    return { success: false, currentValue: '', error: `Element with index [${index}] not found` };
-  }
-
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-  } catch {}
-
-  const editTarget = resolveEditableTextTarget(el);
-  if (!editTarget) {
-    return {
-      success: false,
-      currentValue: '',
-      tagName: el.tagName.toLowerCase(),
-      error: `Element [${index}] is not a text-editable control`,
-    };
-  }
-
-  try {
-    editTarget.focus({ preventScroll: true });
-  } catch {
-    try {
-      editTarget.focus();
-    } catch {}
-  }
-
-  if (editTarget instanceof HTMLInputElement || editTarget instanceof HTMLTextAreaElement) {
-    try {
-      editTarget.setSelectionRange(editTarget.value.length, editTarget.value.length);
-    } catch {}
-  } else {
-    const doc = editTarget.ownerDocument || document;
-    const selection = doc.defaultView?.getSelection?.() || null;
-    if (selection && typeof doc.createRange === 'function') {
-      const range = doc.createRange();
-      range.selectNodeContents(editTarget);
-      range.collapse(false);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
-  }
-
-  return {
-    success: true,
-    currentValue: readEditableTextValue(el),
-    tagName: el.tagName.toLowerCase(),
-  };
-}
-
-/**
- * Fill input or textarea by 1-based index inside active tab.
- */
-export function inPageFillIndex(
-  refOrIndex: number | string,
-  textToFill: string,
-  clear = true,
-  pressEnter = false,
-  selectValues?: string[],
-): {
-  success: boolean;
-  committed?: boolean;
-  index: number;
-  tagName?: string;
-  filledText?: string;
-  submitButtonState?: { found: boolean; disabled?: boolean; text?: string };
-  pressEnterDispatched?: boolean;
-  diagnostics?: string;
-  error?: string;
-} {
-  const parsed = parseElementIndex(refOrIndex);
-  if (!parsed) {
-    return {
-      success: false,
-      index: 0,
-      error: `Invalid index or ref format: `,
-    };
-  }
-  const index = parsed.numericIndex;
-
-  const el = findIndexedElement(refOrIndex);
-  if (!el || !(el instanceof Element)) {
-    return {
-      success: false,
-      index,
-      error: `Element with index [${index}] not found in active DOM index map. ${DIAGNOSTIC_REFRESH_GUIDANCE}`,
-    };
-  }
-
-  if (selectValues) {
-    if (!(el instanceof HTMLSelectElement) || !el.multiple || el.disabled || !selectValues.length) {
-      return { success: false, index, error: 'Target must be an enabled multiple select.' };
-    }
-    const wanted = new Set(selectValues);
-    const options = Array.from(el.options);
-    const selectable = options.filter(
-      (option) =>
-        wanted.has(option.value) &&
-        !option.disabled &&
-        !(option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled),
-    );
-    if (selectable.length !== wanted.size) {
-      return { success: false, index, error: 'Each value must identify one enabled option.' };
-    }
-    for (const option of options) option.selected = selectable.includes(option);
-    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-    const selected = Array.from(el.selectedOptions, (option) => option.value);
-    const committed =
-      selected.length === wanted.size && selected.every((value) => wanted.has(value));
-    return {
-      success: committed,
-      committed,
-      index,
-      tagName: 'select',
-      filledText: selected.join(', '),
-    };
-  }
-
-  try {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as any });
-  } catch {}
-
-  if (typeof (el as HTMLElement).focus === 'function') {
-    (el as HTMLElement).focus();
-  }
-
-  let expectedAfterFill = textToFill;
-  if (!clear && resolveEditableTextTarget(el)) {
-    const prepared = inPagePrepareAppend(refOrIndex);
-    if (!prepared.success) {
-      return {
-        success: false,
-        index,
-        error: prepared.error || `Cannot prepare element [${index}] for append`,
-      };
-    }
-    expectedAfterFill = `${prepared.currentValue}${textToFill}`;
-  }
-
-  const getNativeSetter = (element: any, prop: string) => {
-    let proto = Object.getPrototypeOf(element);
-    while (proto) {
-      const desc = Object.getOwnPropertyDescriptor(proto, prop);
-      if (desc?.set) return desc.set;
-      proto = Object.getPrototypeOf(proto);
-    }
-    return null;
-  };
-
-  const nativeInputValueSetter = getNativeSetter(el, 'value');
-  const nativeCheckboxSetter = getNativeSetter(el, 'checked');
-  const nativeTextAreaValueSetter = nativeInputValueSetter;
-
-  if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
-    const isTruthy =
-      textToFill === 'true' ||
-      textToFill === '1' ||
-      textToFill === 'checked' ||
-      textToFill === 'on' ||
-      (textToFill !== 'false' && textToFill !== '0' && textToFill !== 'off' && Boolean(textToFill));
-    if (nativeCheckboxSetter) {
-      nativeCheckboxSetter.call(el, isTruthy);
-    } else {
-      el.checked = isTruthy;
-    }
-  } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
-    nativeInputValueSetter.call(el, clear ? textToFill : `${el.value || ''}${textToFill}`);
-    try {
-      el.setSelectionRange(el.value.length, el.value.length);
-    } catch {}
-    try {
-      el.dispatchEvent(
-        new InputEvent('input', {
-          bubbles: true,
-          composed: true,
-          inputType: 'insertText',
-          data: textToFill,
-        }),
-      );
-    } catch {
-      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    }
-    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-  } else if (el instanceof HTMLTextAreaElement && nativeTextAreaValueSetter) {
-    nativeTextAreaValueSetter.call(el, clear ? textToFill : `${el.value || ''}${textToFill}`);
-    try {
-      el.setSelectionRange(el.value.length, el.value.length);
-    } catch {}
-    try {
-      el.dispatchEvent(
-        new InputEvent('input', {
-          bubbles: true,
-          composed: true,
-          inputType: 'insertText',
-          data: textToFill,
-        }),
-      );
-    } catch {
-      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    }
-    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-  } else if (el instanceof HTMLSelectElement) {
-    let matched = false;
-    for (const opt of Array.from(el.options)) {
-      if (
-        opt.value === textToFill ||
-        opt.text === textToFill ||
-        opt.text.trim() === textToFill.trim()
-      ) {
-        el.value = opt.value;
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) el.value = textToFill;
-  } else if (
-    el.getAttribute('role') === 'combobox' ||
-    el.getAttribute('role') === 'listbox' ||
-    el.getAttribute('aria-haspopup') === 'listbox'
-  ) {
-    try {
-      void inPageSelectCustomCombobox(index, undefined, textToFill);
-    } catch {}
-  } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    el.value = clear ? textToFill : `${el.value || ''}${textToFill}`;
-    try {
-      el.setSelectionRange(el.value.length, el.value.length);
-    } catch {}
-  } else if (
-    (el as HTMLElement).isContentEditable ||
-    el.getAttribute('contenteditable') === 'true' ||
-    el.getAttribute('contenteditable') === '' ||
-    Boolean(el.querySelector?.('[contenteditable="true"]'))
-  ) {
-    const editTarget =
-      (el as HTMLElement).isContentEditable || el.getAttribute('contenteditable') === 'true'
-        ? (el as HTMLElement)
-        : (el.querySelector?.('[contenteditable="true"]') as HTMLElement) || (el as HTMLElement);
-
-    if (clear) {
-      const sel = window.getSelection();
-      if (sel && typeof document.createRange === 'function') {
-        try {
-          const range = document.createRange();
-          range.selectNodeContents(editTarget);
-          sel.removeAllRanges();
-          sel.addRange(range);
-          document.execCommand('delete', false);
-        } catch {}
-      }
-      editTarget.innerText = '';
-    }
-    const lines = textToFill ? textToFill.split(/\r?\n/) : [];
-    if (lines.length > 1) {
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].length > 0) {
-          const beforeLine = String(editTarget.innerText ?? editTarget.textContent ?? '');
-          let insertedLine = false;
-          try {
-            insertedLine = document.execCommand('insertText', false, lines[i]);
-          } catch {}
-          const afterLine = String(editTarget.innerText ?? editTarget.textContent ?? '');
-          if (
-            !insertedLine &&
-            (!clear || afterLine === beforeLine) &&
-            typeof editTarget.appendChild === 'function'
-          ) {
-            editTarget.appendChild(document.createTextNode(lines[i]));
-          }
-        }
-        if (i < lines.length - 1) {
-          const beforeBreak = String(editTarget.innerText ?? editTarget.textContent ?? '');
-          let paraInserted = false;
-          try {
-            paraInserted = document.execCommand('insertParagraph', false);
-          } catch {}
-          if (!paraInserted) {
-            try {
-              paraInserted = document.execCommand('insertLineBreak', false);
-            } catch {}
-          }
-          const afterBreak = String(editTarget.innerText ?? editTarget.textContent ?? '');
-          if (
-            !paraInserted &&
-            afterBreak === beforeBreak &&
-            typeof editTarget.appendChild === 'function'
-          ) {
-            editTarget.appendChild(document.createElement('br'));
-          }
-          try {
-            editTarget.dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13,
-                which: 13,
-                bubbles: true,
-                composed: true,
-              }),
-            );
-            editTarget.dispatchEvent(
-              new KeyboardEvent('keyup', {
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13,
-                which: 13,
-                bubbles: true,
-                composed: true,
-              }),
-            );
-          } catch {}
-        }
-      }
-    } else {
-      const beforeText = String(editTarget.innerText ?? editTarget.textContent ?? '');
-      let inserted = false;
-      try {
-        inserted = document.execCommand('insertText', false, textToFill);
-      } catch {}
-      if (!inserted) {
-        const afterText = String(editTarget.innerText ?? editTarget.textContent ?? '');
-        if (clear) {
-          editTarget.innerText = textToFill;
-        } else if (afterText === beforeText && typeof editTarget.appendChild === 'function') {
-          editTarget.appendChild(document.createTextNode(textToFill));
-        }
-      }
-    }
-    try {
-      editTarget.dispatchEvent(
-        new InputEvent('input', {
-          bubbles: true,
-          composed: true,
-          inputType: 'insertText',
-          data: textToFill,
-        }),
-      );
-    } catch {
-      editTarget.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    }
-    editTarget.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-  } else {
-    (el as any).value = textToFill;
-    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-  }
-
-  if (pressEnter) {
-    el.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    el.dispatchEvent(
-      new KeyboardEvent('keypress', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    el.dispatchEvent(
-      new KeyboardEvent('keyup', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  const verification: any = textToFill
-    ? inPageVerifyInputCommitment(index, expectedAfterFill)
-    : { committed: true };
-
-  return {
-    success: verification.committed,
-    committed: verification.committed,
-    index,
-    tagName: el.tagName.toLowerCase(),
-    filledText: textToFill,
-    ...(verification.submitButtonState
-      ? { submitButtonState: verification.submitButtonState }
-      : {}),
-    ...(pressEnter ? { pressEnterDispatched: true } : {}),
-    ...(verification.diagnostics ? { diagnostics: verification.diagnostics } : {}),
-  };
-}
-
 export { inPageWaitForDOMSettle } from '@/utils/action-watchdog';
-
-import {
-  cleanAndNormalizeText,
-  inPageVerifyActiveElement,
-  inPageGetActiveElementSummary,
-  inPageSelectCustomCombobox,
-  inPageVerifyInputCommitment,
-} from './dom-indexer/input-commitment';
-
 export {
   cleanAndNormalizeText,
   inPageVerifyActiveElement,
@@ -5871,12 +2805,6 @@ export {
   type DropdownOptionItem,
   type DropdownOptionsResult,
 } from './dom-indexer/dropdown-options';
-import {
-  inPageFindSmartScrollTarget,
-  inPagePerformSmartScroll,
-  type SmartScrollTargetInfo,
-} from './dom-indexer/smart-scroll';
-
 export { inPageFindSmartScrollTarget, inPagePerformSmartScroll, type SmartScrollTargetInfo };
 export {
   inPageGetAssetImage,
@@ -5888,10 +2816,7 @@ export {
   inPageDetectConfirmationTrap,
   type ConfirmationTrapInfo,
 } from './dom-indexer/confirmation-trap';
-import { renderCompactElementLine } from './dom-indexer/compact-renderer';
-
 export { renderCompactElementLine };
-
 export { inPageCheckCaptcha, type CaptchaDetectionResult } from './dom-indexer/captcha';
 export {
   inPageInsertMedia,

@@ -1,9 +1,11 @@
 import type { PageAsset } from 'chrome-mcp-shared';
+import { composedChildren, composedClosest, extractComposedVisibleText } from './composed-dom';
 import {
-  composedChildren,
-  composedClosest,
-  extractComposedVisibleText,
-} from './composed-dom';
+  createDomQueryCache,
+  getCachedBoundingClientRect,
+  getCachedComputedStyle,
+  type DomQueryCache,
+} from './dom-cache';
 
 export interface SamplingCandidate {
   node: Element;
@@ -55,6 +57,7 @@ export interface PageSamplingOptions {
   isCustomElement: (node: Node | null | undefined) => boolean;
   getTableObservationRole: (element: Element) => string | null;
   composedContains: (ancestor: Node | null, descendant: Node | null) => boolean;
+  domCache?: DomQueryCache;
 }
 
 const DROPPED_TAGS = new Set([
@@ -86,28 +89,40 @@ const SVG_INTERNAL_TAGS = new Set([
   'g',
 ]);
 
+const VIRTUALIZATION_PROTECTED_TAGS = new Set([
+  'header',
+  'nav',
+  'footer',
+  'dialog',
+  'form',
+  'main',
+]);
+const VIRTUALIZATION_PROTECTED_ROLES = new Set([
+  'navigation',
+  'banner',
+  'contentinfo',
+  'search',
+  'dialog',
+  'alertdialog',
+  'menu',
+  'menubar',
+  'tablist',
+]);
+const FORM_CONTROL_TAGS = new Set(['input', 'select', 'textarea', 'button']);
+const FORM_WRAPPER_TAGS = new Set(['label', 'span', 'div']);
+const NATIVE_SHADOW_SKIP_TAGS = new Set(['input', 'textarea', 'select']);
+
 function isProtectedFromVirtualization(
   element: Element,
   focused: Element | null,
   contains: PageSamplingOptions['composedContains'],
+  domCache?: DomQueryCache,
 ): boolean {
   if (contains(element, focused)) return true;
   const tag = (element.tagName || '').toLowerCase();
-  if (['header', 'nav', 'footer', 'dialog', 'form', 'main'].includes(tag)) return true;
+  if (VIRTUALIZATION_PROTECTED_TAGS.has(tag)) return true;
   const role = (element.getAttribute('role') || '').toLowerCase();
-  if (
-    [
-      'navigation',
-      'banner',
-      'contentinfo',
-      'search',
-      'dialog',
-      'alertdialog',
-      'menu',
-      'menubar',
-      'tablist',
-    ].includes(role)
-  ) {
+  if (VIRTUALIZATION_PROTECTED_ROLES.has(role)) {
     return true;
   }
   if (
@@ -118,10 +133,8 @@ function isProtectedFromVirtualization(
   ) {
     return true;
   }
-  try {
-    const position = window.getComputedStyle(element).position;
-    if (position === 'fixed' || position === 'sticky') return true;
-  } catch {}
+  const position = getCachedComputedStyle(element, window, domCache)?.position;
+  if (position === 'fixed' || position === 'sticky') return true;
   return false;
 }
 
@@ -159,11 +172,11 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
   const assetRegistry: Array<{ kind: string; el: Element; src?: string }> = [];
   const selectOptionOmissions = new Map<HTMLSelectElement, { total: number; shown: number }>();
   const virtualizedSummary: Array<{ selector: string; count: number }> = [];
+  const domCache = options.domCache ?? createDomQueryCache();
   let totalOriginalNodes = 0;
   let assetSequence = 0;
   let virtualizedCount = 0;
   const visited = new Set<Element>();
-  const NATIVE_SHADOW_SKIP_TAGS = new Set(['input', 'textarea', 'select']);
 
   const pushAsset = (
     kind: PageAsset['kind'],
@@ -210,10 +223,7 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
 
     const tag = (node.tagName || '').toLowerCase();
     if (tag === 'body' || tag === 'html') {
-      let style: CSSStyleDeclaration | null = null;
-      try {
-        style = window.getComputedStyle(node);
-      } catch {}
+      const style = getCachedComputedStyle(node, window, domCache);
       const nextPointer = style?.cursor === 'pointer' || parentHasPointer;
       for (const child of composedChildren(node)) {
         const childInShadow = insideShadow || child.getRootNode?.()?.nodeType === 11;
@@ -223,14 +233,14 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
     }
 
     if (tag === 'option' || DROPPED_TAGS.has(tag)) return;
+    let precomputedStyle: CSSStyleDeclaration | null | undefined;
     if (SVG_INTERNAL_TAGS.has(tag)) {
       const insideSvg = Boolean(composedClosest(node, 'svg'));
       if (insideSvg) {
-        let style: CSSStyleDeclaration | undefined;
-        try {
-          style = window.getComputedStyle(node);
-        } catch {}
-        if (!options.isInteractiveSvgNode(node, style, parentHasPointer)) return;
+        precomputedStyle = getCachedComputedStyle(node, window, domCache);
+        if (!options.isInteractiveSvgNode(node, precomputedStyle ?? undefined, parentHasPointer)) {
+          return;
+        }
       }
     }
     if (typeof Element !== 'undefined' && !(node instanceof Element)) return;
@@ -245,10 +255,10 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
       return;
     }
 
-    let style: CSSStyleDeclaration | null = null;
-    try {
-      style = window.getComputedStyle(node);
-    } catch {}
+    const style =
+      precomputedStyle !== undefined
+        ? precomputedStyle
+        : getCachedComputedStyle(node, window, domCache);
     if (!style) return;
 
     const isFile = tag === 'input' && (node as HTMLInputElement).type === 'file';
@@ -265,8 +275,7 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
           ? Array.from(node.children)
           : composedChildren(node);
         for (const child of hiddenChildren) {
-          const childInShadow =
-            child.getRootNode?.()?.nodeType === 11 || (insideShadow && !isSlot);
+          const childInShadow = child.getRootNode?.()?.nodeType === 11 || (insideShadow && !isSlot);
           traverse(child, propagatingParentRect, hiddenNextPointer, childInShadow);
         }
         return;
@@ -284,7 +293,7 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
       : composedChildren(node);
     const effectiveInShadow = insideShadow || node.getRootNode?.()?.nodeType === 11;
 
-    const rect = node.getBoundingClientRect();
+    const rect = getCachedBoundingClientRect(node, domCache);
     const isZeroSize = isContents || rect.width <= 0 || rect.height <= 0;
     if (!isFile) {
       if (isZeroSize) {
@@ -351,7 +360,7 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
     }
 
     const hasInformationalText =
-      informational && extractComposedVisibleText(node, { maxLen: 16 }).length > 0;
+      informational && extractComposedVisibleText(node, { maxLen: 16, cache: domCache }).length > 0;
     const isClosedShadowHost =
       options.isCustomElement(node) &&
       shadowRoot === null &&
@@ -364,13 +373,13 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
       if (maxDepth <= 0) return false;
       for (const child of composedChildren(element)) {
         const childTag = (child.tagName || '').toLowerCase();
-        if (['input', 'select', 'textarea', 'button'].includes(childTag)) return true;
+        if (FORM_CONTROL_TAGS.has(childTag)) return true;
         if (hasFormControlDescendant(child, maxDepth - 1)) return true;
       }
       return false;
     };
     const isWrapperOverFormControl =
-      ['label', 'span', 'div'].includes(tag) && hasFormControlDescendant(node, 2);
+      FORM_WRAPPER_TAGS.has(tag) && hasFormControlDescendant(node, 2);
 
     if (
       !isZeroSize &&
@@ -431,11 +440,10 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
     if (options.shouldVirtualize && rawChildren.length >= 4) {
       let containerRect: DOMRect | null = null;
       try {
-        const parentStyle = window.getComputedStyle(node);
         const inlineStyle = (node as HTMLElement).style;
-        const overflow = `${parentStyle?.overflowY || inlineStyle?.overflowY || ''} ${parentStyle?.overflow || inlineStyle?.overflow || ''}`;
+        const overflow = `${style.overflowY || inlineStyle?.overflowY || ''} ${style.overflow || inlineStyle?.overflow || ''}`;
         if (/(auto|scroll|hidden|clip)/i.test(overflow)) {
-          containerRect = node.getBoundingClientRect();
+          containerRect = rect;
         }
       } catch {}
 
@@ -458,12 +466,13 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
               item,
               options.focusForVirtualization,
               options.composedContains,
+              domCache,
             )
           ) {
             visible.push(item);
             continue;
           }
-          const childRect = item.getBoundingClientRect();
+          const childRect = getCachedBoundingClientRect(item, domCache);
           const insideContainer =
             !containerRect ||
             (childRect.bottom >= containerRect.top - 60 &&
@@ -492,7 +501,7 @@ export function samplePage(options: PageSamplingOptions): PageSamplingResult {
           selector: `${parentTag}${parentId || parentClass} > ${signature}`,
           count: foldedItems.length,
         });
-        const markerRect = offscreen[0].getBoundingClientRect();
+        const markerRect = getCachedBoundingClientRect(offscreen[0], domCache);
         candidates.push({
           node: items[0],
           tag: 'virtual_marker',

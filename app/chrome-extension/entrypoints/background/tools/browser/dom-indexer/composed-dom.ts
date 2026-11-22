@@ -5,6 +5,7 @@
  * Leaf module with zero imports from sibling indexer files to avoid circular
  * initialization issues inside the bundled in-page engine.
  */
+import { getCachedComputedStyle, getSubtreeHiddenCache, type DomQueryCache } from './dom-cache';
 
 const NON_CONTENT_TAGS = new Set([
   'script',
@@ -227,27 +228,36 @@ export function composedClosest(element: Element | null, selector: string): Elem
 export function isElementHiddenInComposedTree(
   el: Element | null,
   win?: Window | null,
-  options?: { checkAriaHidden?: boolean; checkOpacity?: boolean },
+  options?: { checkAriaHidden?: boolean; checkOpacity?: boolean; cache?: DomQueryCache },
 ): boolean {
   if (!el) return true;
   const view =
     win || el.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
   const checkAriaHidden = options?.checkAriaHidden !== false;
   const checkOpacity = options?.checkOpacity !== false;
+  const cache = options?.cache;
 
-  if (view && typeof view.getComputedStyle === 'function') {
-    try {
-      const ownStyle = view.getComputedStyle(el);
-      if (ownStyle.visibility === 'hidden' || ownStyle.visibility === 'collapse') {
-        return true;
-      }
-    } catch {}
+  const ownStyle = getCachedComputedStyle(el, view, cache);
+  if (ownStyle && (ownStyle.visibility === 'hidden' || ownStyle.visibility === 'collapse')) {
+    return true;
   }
+
+  const subtreeHiddenMap = cache
+    ? getSubtreeHiddenCache(cache, checkAriaHidden, checkOpacity)
+    : null;
 
   let cur: Element | null = el;
   const seen = new Set<Element>();
+  const trail: Element[] = [];
+  let hidden = false;
+
   while (cur && !seen.has(cur)) {
     seen.add(cur);
+    if (subtreeHiddenMap && subtreeHiddenMap.has(cur)) {
+      hidden = subtreeHiddenMap.get(cur) === true;
+      break;
+    }
+    trail.push(cur);
     if (
       (cur as HTMLElement).hidden === true ||
       cur.hasAttribute?.('hidden') ||
@@ -255,20 +265,28 @@ export function isElementHiddenInComposedTree(
       cur.hasAttribute?.('inert') ||
       (checkAriaHidden && cur.getAttribute?.('aria-hidden') === 'true')
     ) {
-      return true;
+      hidden = true;
+      break;
     }
-    if (view && typeof view.getComputedStyle === 'function') {
-      try {
-        const style = view.getComputedStyle(cur);
-        if (style.display === 'none') return true;
-        if (checkOpacity && style.opacity !== '' && Number.parseFloat(style.opacity) <= 0) {
-          return true;
-        }
-      } catch {}
+    const style = cur === el ? ownStyle : getCachedComputedStyle(cur, view, cache);
+    if (style) {
+      if (style.display === 'none') {
+        hidden = true;
+        break;
+      }
+      if (checkOpacity && style.opacity !== '' && Number.parseFloat(style.opacity) <= 0) {
+        hidden = true;
+        break;
+      }
     }
     cur = composedParent(cur);
   }
-  return false;
+  if (subtreeHiddenMap) {
+    for (let index = 0; index < trail.length; index++) {
+      subtreeHiddenMap.set(trail[index], hidden);
+    }
+  }
+  return hidden;
 }
 
 /**
@@ -279,16 +297,16 @@ export function isBlockLikeElement(
   el: Element,
   win?: Window | null,
   precomputedStyle?: CSSStyleDeclaration | null,
+  cache?: DomQueryCache,
 ): boolean {
   const tag = (el.tagName || '').toLowerCase();
   if (STANDARD_BLOCK_TAGS.has(tag)) return true;
   const view =
     win || el.ownerDocument?.defaultView || (typeof window !== 'undefined' ? window : null);
   let display = (precomputedStyle?.display || '').toLowerCase();
-  if (!display && view && typeof view.getComputedStyle === 'function') {
-    try {
-      display = (view.getComputedStyle(el).display || '').toLowerCase();
-    } catch {}
+  if (!display) {
+    const style = getCachedComputedStyle(el, view, cache);
+    display = (style?.display || '').toLowerCase();
   }
   if (BLOCK_DISPLAY_VALUES.has(display)) return true;
   if (isCustomElement(el) && !INLINE_DISPLAY_VALUES.has(display)) {
@@ -308,6 +326,7 @@ export interface ComposedVisibleTextOptions {
    * light-DOM children so semantic light-DOM fallbacks in slotless hosts are not lost.
    */
   fallbackLightDomWithoutSlot?: boolean;
+  cache?: DomQueryCache;
 }
 
 /**
@@ -325,6 +344,7 @@ export function extractComposedVisibleText(
   const skipAriaHidden = options.skipAriaHidden !== false;
   const stripPua = options.stripPua !== false;
   const fallbackLightDomWithoutSlot = options.fallbackLightDomWithoutSlot === true;
+  const cache = options.cache;
 
   const ownerDoc = root.nodeType === 9 ? (root as Document) : root.ownerDocument;
   const view = ownerDoc?.defaultView || (typeof window !== 'undefined' ? window : null);
@@ -349,23 +369,20 @@ export function extractComposedVisibleText(
     ) {
       return { pruneSubtree: true, visibilityHidden: true, style: null };
     }
-    let style: CSSStyleDeclaration | null = null;
-    if (view && typeof view.getComputedStyle === 'function') {
-      try {
-        style = view.getComputedStyle(el);
-        if (style.display === 'none') {
-          return { pruneSubtree: true, visibilityHidden: true, style };
-        }
-        if (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0) {
-          return { pruneSubtree: true, visibilityHidden: true, style };
-        }
-        if (style.visibility === 'hidden' || style.visibility === 'collapse') {
-          return { pruneSubtree: false, visibilityHidden: true, style };
-        }
-        if (style.visibility === 'visible') {
-          return { pruneSubtree: false, visibilityHidden: false, style };
-        }
-      } catch {}
+    const style = getCachedComputedStyle(el, view, cache);
+    if (style) {
+      if (style.display === 'none') {
+        return { pruneSubtree: true, visibilityHidden: true, style };
+      }
+      if (style.opacity !== '' && Number.parseFloat(style.opacity) <= 0) {
+        return { pruneSubtree: true, visibilityHidden: true, style };
+      }
+      if (style.visibility === 'hidden' || style.visibility === 'collapse') {
+        return { pruneSubtree: false, visibilityHidden: true, style };
+      }
+      if (style.visibility === 'visible') {
+        return { pruneSubtree: false, visibilityHidden: false, style };
+      }
     }
     return { pruneSubtree: false, visibilityHidden: parentVisibilityHidden, style };
   };
@@ -433,7 +450,7 @@ export function extractComposedVisibleText(
       return;
     }
 
-    const block = isBlockLikeElement(el, view, vis.style);
+    const block = isBlockLikeElement(el, view, vis.style, cache);
     if (block && parts.length > 0) pushChunk(' ');
 
     const shadow = getShadowRoot(el);

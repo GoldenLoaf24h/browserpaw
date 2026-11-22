@@ -96,6 +96,24 @@ export function indexElement(el: Element, key = '', minimum = 1): number {
   return index;
 }
 
+export function findExistingElementIndex(el: Element, key = ''): number | undefined {
+  const map = getIsolatedIndexMap();
+  const state = getIndexState();
+  const ids = state.ids.get(el);
+  if (ids) {
+    const exact = ids.get(key);
+    if (exact !== undefined && derefElement(map.get(exact)) === el) {
+      return exact;
+    }
+    for (const idx of ids.values()) {
+      if (derefElement(map.get(idx)) === el) {
+        return idx;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function pruneDetachedIndices(): void {
   for (const [index, entry] of getIsolatedIndexMap()) {
     const el = derefElement(entry);

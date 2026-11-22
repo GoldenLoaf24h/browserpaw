@@ -4,6 +4,11 @@ import { NATIVE_HOST, STORAGE_KEYS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '@/c
 import { handleCallTool } from './tools';
 import { acquireKeepalive } from './keepalive-manager';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
+import {
+  safePostMessage,
+  MAX_NATIVE_MESSAGE_BYTES,
+  ChunkReassembler,
+} from '@/utils/safe-post-message';
 
 const LOG_PREFIX = '[NativeHost]';
 
@@ -374,11 +379,6 @@ export async function ensureNativeConnected(
   return ensurePromise;
 }
 
-import {
-  safePostMessage,
-  MAX_NATIVE_MESSAGE_BYTES,
-  ChunkReassembler,
-} from '@/utils/safe-post-message';
 export { safePostMessage, MAX_NATIVE_MESSAGE_BYTES, ChunkReassembler };
 
 export type FileOperationResponseCallback = (response: any) => void;

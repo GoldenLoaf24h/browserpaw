@@ -1,27 +1,48 @@
 import {
-  composedParent,
   detectEditorSemantics,
   getSameRootReference,
-  querySelectorAllDeep,
   extractElementLocationDetails,
 } from '../dom-indexer';
+import { composedParent } from './composed-dom';
+import { querySelectorAllDeep } from './deep-query';
+import {
+  createDomQueryCache,
+  getCachedBoundingClientRect,
+  getCachedComputedStyle,
+  type DomQueryCache,
+} from './dom-cache';
 
-export function isLocatorCandidateVisible(el: Element): boolean {
+export function isLocatorCandidateVisible(el: Element, cache?: DomQueryCache): boolean {
   const view = el.ownerDocument?.defaultView || window;
-  const visibility = view.getComputedStyle(el).visibility;
+  const ownStyle = getCachedComputedStyle(el, view, cache);
+  const visibility = ownStyle?.visibility;
   if (visibility === 'hidden' || visibility === 'collapse') return false;
+  const subtreeHiddenMap = cache?.locatorSubtreeHidden ?? null;
+  const trail: Element[] = [];
+  let hidden = false;
   for (let current: Element | null = el; current; current = composedParent(current)) {
-    const style = view.getComputedStyle(current);
-    if (
-      current.hasAttribute('inert') ||
-      current.getAttribute('aria-hidden') === 'true' ||
-      style.display === 'none' ||
-      parseFloat(style.opacity || '1') <= 0
-    ) {
-      return false;
+    if (subtreeHiddenMap && subtreeHiddenMap.has(current)) {
+      hidden = subtreeHiddenMap.get(current) === true;
+      break;
+    }
+    trail.push(current);
+    if (current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true') {
+      hidden = true;
+      break;
+    }
+    const style = current === el ? ownStyle : getCachedComputedStyle(current, view, cache);
+    if (style && (style.display === 'none' || parseFloat(style.opacity || '1') <= 0)) {
+      hidden = true;
+      break;
     }
   }
-  const rect = el.getBoundingClientRect();
+  if (subtreeHiddenMap) {
+    for (let index = 0; index < trail.length; index++) {
+      subtreeHiddenMap.set(trail[index], hidden);
+    }
+  }
+  if (hidden) return false;
+  const rect = getCachedBoundingClientRect(el, cache);
   return (
     Number.isFinite(rect.left) &&
     Number.isFinite(rect.top) &&
@@ -129,9 +150,10 @@ export function inPageLocateBySelector(
 
     const uniqueElements = Array.from(new Set(rawElements));
     const eligibleMatches: Element[] = [];
+    const visibilityCache = createDomQueryCache();
 
     for (const el of uniqueElements) {
-      if (isLocatorCandidateVisible(el)) {
+      if (isLocatorCandidateVisible(el, visibilityCache)) {
         eligibleMatches.push(el);
       }
     }
@@ -401,8 +423,9 @@ export function inPageLocateByLabel(label: string, options: LocateByLabelOptions
     'input:not([type="hidden"]), textarea, select, button, [role], [aria-label], [aria-labelledby]',
     document,
   );
+  const visibilityCache = createDomQueryCache();
   const matches = candidates.filter((el) => {
-    if (!isLocatorCandidateVisible(el)) return false;
+    if (!isLocatorCandidateVisible(el, visibilityCache)) return false;
     const candidate = getLocatorLabelText(el);
     if (!candidate) return false;
     return options.exact ? candidate === target : candidate.toLowerCase().includes(targetLower);
@@ -429,8 +452,9 @@ export function inPageLocateByRole(role: string, options: LocateByRoleOptions = 
     'button, a, input, textarea, select, option, h1, h2, h3, h4, h5, h6, [role], [contenteditable]',
     document,
   );
+  const visibilityCache = createDomQueryCache();
   const matches = candidates.filter((el) => {
-    if (!isLocatorCandidateVisible(el)) return false;
+    if (!isLocatorCandidateVisible(el, visibilityCache)) return false;
     if (getLocatorRole(el) !== targetRole) return false;
     if (!targetName) return true;
     const accessibleName = getLocatorAccessibleName(el);
@@ -592,9 +616,10 @@ export function inPageLocateByText(
       return tag === normTarget;
     }
 
+    const visibilityCache = createDomQueryCache();
     for (let i = 0; i < candidates.length; i++) {
       const el = candidates[i];
-      if (!isLocatorCandidateVisible(el)) continue;
+      if (!isLocatorCandidateVisible(el, visibilityCache)) continue;
 
       const semantics = detectEditorSemantics(el);
       if (role === 'composer') {
