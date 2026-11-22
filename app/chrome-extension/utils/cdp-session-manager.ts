@@ -47,6 +47,30 @@ interface DialogBucket {
 
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 export const CDP_IDLE_DETACH_TIMEOUT_MS = 600000; // 10 minutes session-aware retention to prevent infobar flicker and viewport shift
+const CDP_SESSION_STORAGE_KEY = 'browserpaw_cdp_sessions_v1';
+const CDP_IDLE_ALARM_PREFIX = 'browserpaw-cdp-idle-detach:';
+
+interface PersistedTabCdpSession {
+  tabId: number;
+  attachedByUs: boolean;
+  idleDetachAt?: number;
+  domains: string[];
+}
+
+function idleAlarmName(tabId: number): string {
+  return `${CDP_IDLE_ALARM_PREFIX}${tabId}`;
+}
+
+function getCdpSessionStorage(): chrome.storage.SessionStorageArea | null {
+  if (
+    typeof chrome !== 'undefined' &&
+    typeof chrome.storage?.session?.get === 'function' &&
+    typeof chrome.storage?.session?.set === 'function'
+  ) {
+    return chrome.storage.session;
+  }
+  return null;
+}
 
 const CDP_READ_METHODS = new Set([
   'DOM.getDocument',
@@ -90,9 +114,216 @@ class CDPSessionManager {
   private autoAttachInFlight = new Map<number, Promise<void>>();
   private pendingChildSetups = new Map<number, Set<Promise<void>>>();
   private childSetupErrors = new Map<number, Error>();
+  private storageWriteQueue: Promise<void> = Promise.resolve();
+  private idleDeadlines = new Map<number, number>();
 
   private getTabEpoch(tabId: number): number {
     return this.tabEpochs.get(tabId) || 0;
+  }
+
+  private getActiveDomainList(tabId: number): string[] {
+    const tabDomains = this.domainRefCounts.get(tabId);
+    if (!tabDomains) return ['Page', 'Network'];
+    const active = new Set<string>(['Page', 'Network']);
+    for (const [domain, count] of tabDomains.entries()) {
+      if (count > 0) active.add(domain);
+    }
+    return Array.from(active);
+  }
+
+  private scheduleIdleDetachAlarm(tabId: number, whenMs: number): void {
+    this.idleDeadlines.set(tabId, whenMs);
+    if (typeof chrome !== 'undefined' && typeof chrome.alarms?.create === 'function') {
+      try {
+        void Promise.resolve(chrome.alarms.create(idleAlarmName(tabId), { when: whenMs })).catch(
+          () => {},
+        );
+      } catch {}
+    }
+  }
+
+  private clearIdleDetachAlarm(tabId: number): void {
+    this.idleDeadlines.delete(tabId);
+    if (typeof chrome !== 'undefined' && typeof chrome.alarms?.clear === 'function') {
+      try {
+        void Promise.resolve(chrome.alarms.clear(idleAlarmName(tabId))).catch(() => {});
+      } catch {}
+    }
+  }
+
+  private queueStorageUpdate(
+    updater: (records: Record<string, PersistedTabCdpSession>) => void,
+  ): Promise<void> {
+    const storage = getCdpSessionStorage();
+    if (!storage) return Promise.resolve();
+    const next = this.storageWriteQueue
+      .catch(() => {})
+      .then(async () => {
+        const currentStorage = getCdpSessionStorage();
+        if (!currentStorage) return;
+        const stored: Record<string, unknown> = await currentStorage
+          .get(CDP_SESSION_STORAGE_KEY)
+          .catch(() => ({}) as Record<string, unknown>);
+        const raw = stored?.[CDP_SESSION_STORAGE_KEY];
+        const records: Record<string, PersistedTabCdpSession> =
+          raw && typeof raw === 'object'
+            ? { ...(raw as Record<string, PersistedTabCdpSession>) }
+            : {};
+        updater(records);
+        await currentStorage.set({ [CDP_SESSION_STORAGE_KEY]: records }).catch(() => {});
+      });
+    this.storageWriteQueue = next.catch(() => {});
+    return next;
+  }
+
+  private persistTabSession(tabId: number, idleDetachAt?: number): void {
+    const domains = this.getActiveDomainList(tabId);
+    void this.queueStorageUpdate((records) => {
+      records[String(tabId)] = {
+        tabId,
+        attachedByUs: true,
+        ...(typeof idleDetachAt === 'number' ? { idleDetachAt } : {}),
+        domains,
+      };
+    });
+  }
+
+  private removePersistedTabSession(tabId: number): void {
+    void this.queueStorageUpdate((records) => {
+      delete records[String(tabId)];
+    });
+  }
+
+  private async readPersistedSessions(): Promise<Record<string, PersistedTabCdpSession>> {
+    const storage = getCdpSessionStorage();
+    if (!storage) return {};
+    try {
+      const stored = await storage.get(CDP_SESSION_STORAGE_KEY);
+      const raw = stored?.[CDP_SESSION_STORAGE_KEY];
+      if (raw && typeof raw === 'object') {
+        return raw as Record<string, PersistedTabCdpSession>;
+      }
+    } catch {}
+    return {};
+  }
+
+  private async readPersistedTabSession(
+    tabId: number,
+  ): Promise<PersistedTabCdpSession | undefined> {
+    const records = await this.readPersistedSessions();
+    const entry = records[String(tabId)];
+    if (!entry || typeof entry !== 'object' || entry.tabId !== tabId) return undefined;
+    return entry;
+  }
+
+  async handleIdleDetachAlarm(tabId: number): Promise<void> {
+    if (!Number.isInteger(tabId)) return;
+    await this.serializeTabOp(tabId, async () => {
+      const curState = this.getState(tabId);
+      if (curState) {
+        if (curState.refCount > 0 || !curState.attachedByUs) {
+          this.clearIdleDetachAlarm(tabId);
+          return;
+        }
+        const expectedDeadline = this.idleDeadlines.get(tabId);
+        if (expectedDeadline && expectedDeadline > Date.now() + 1000) {
+          this.scheduleIdleDetachAlarm(tabId, expectedDeadline);
+          return;
+        }
+        const activeCmdCount = this.activeCommands.get(tabId) || 0;
+        if (this.dialogStates.has(tabId) || activeCmdCount > 0) {
+          const nextDeadline = Date.now() + CDP_IDLE_DETACH_TIMEOUT_MS;
+          this.scheduleIdleDetachAlarm(tabId, nextDeadline);
+          this.persistTabSession(tabId, nextDeadline);
+          return;
+        }
+        if (this.idleTimers.has(tabId)) {
+          clearTimeout(this.idleTimers.get(tabId));
+          this.idleTimers.delete(tabId);
+        }
+        this.clearIdleDetachAlarm(tabId);
+        try {
+          await chrome.debugger.detach({ tabId });
+        } catch {
+        } finally {
+          this.bumpTabEpoch(tabId);
+          this.clearFlightEnables(tabId);
+          this.clearFrameSessions(tabId);
+          this.dialogStates.delete(tabId);
+          this.sessions.delete(tabId);
+          this.domainRefCounts.delete(tabId);
+          this.removePersistedTabSession(tabId);
+        }
+        return;
+      }
+
+      const persisted = await this.readPersistedTabSession(tabId);
+      if (!persisted || !persisted.attachedByUs) {
+        this.clearIdleDetachAlarm(tabId);
+        this.removePersistedTabSession(tabId);
+        return;
+      }
+      if (
+        typeof persisted.idleDetachAt === 'number' &&
+        persisted.idleDetachAt > Date.now() + 1000
+      ) {
+        this.scheduleIdleDetachAlarm(tabId, persisted.idleDetachAt);
+        return;
+      }
+      this.clearIdleDetachAlarm(tabId);
+      const rawTargets =
+        typeof chrome !== 'undefined' && typeof chrome.debugger?.getTargets === 'function'
+          ? await Promise.resolve(chrome.debugger.getTargets()).catch(() => [])
+          : [];
+      const targets = Array.isArray(rawTargets) ? rawTargets : [];
+      const isStillAttached = targets.some((target) => target.tabId === tabId && target.attached);
+      if (!isStillAttached) {
+        this.removePersistedTabSession(tabId);
+        return;
+      }
+      try {
+        await this.sendDebuggerCommand(tabId, 'Page.getLayoutMetrics', {}, 1000);
+        await chrome.debugger.detach({ tabId });
+      } catch {
+      } finally {
+        this.removePersistedTabSession(tabId);
+      }
+    });
+  }
+
+  async reconcilePersistedSessions(): Promise<void> {
+    const records = await this.readPersistedSessions();
+    const entries = Object.values(records);
+    if (entries.length === 0) return;
+    const rawTargets =
+      typeof chrome !== 'undefined' && typeof chrome.debugger?.getTargets === 'function'
+        ? await Promise.resolve(chrome.debugger.getTargets()).catch(() => [])
+        : [];
+    const attachedTabIds = new Set(
+      (Array.isArray(rawTargets) ? rawTargets : [])
+        .filter((target) => typeof target.tabId === 'number' && target.attached)
+        .map((target) => target.tabId as number),
+    );
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry || typeof entry.tabId !== 'number') continue;
+      if (!attachedTabIds.has(entry.tabId)) {
+        this.clearIdleDetachAlarm(entry.tabId);
+        this.removePersistedTabSession(entry.tabId);
+        continue;
+      }
+      if (typeof entry.idleDetachAt === 'number') {
+        if (entry.idleDetachAt <= now) {
+          void this.handleIdleDetachAlarm(entry.tabId);
+        } else {
+          this.scheduleIdleDetachAlarm(entry.tabId, entry.idleDetachAt);
+        }
+      } else if (!this.sessions.has(entry.tabId)) {
+        const fallbackDeadline = now + CDP_IDLE_DETACH_TIMEOUT_MS;
+        this.scheduleIdleDetachAlarm(entry.tabId, fallbackDeadline);
+        this.persistTabSession(entry.tabId, fallbackDeadline);
+      }
+    }
   }
 
   private bumpTabEpoch(tabId: number): void {
@@ -153,6 +384,16 @@ class CDPSessionManager {
         chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
           if (changeInfo.status === 'loading') {
             this.inFlightRequests.delete(tabId);
+          }
+        });
+      }
+      if (chrome.alarms?.onAlarm?.addListener) {
+        chrome.alarms.onAlarm.addListener((alarm) => {
+          if (alarm?.name?.startsWith(CDP_IDLE_ALARM_PREFIX)) {
+            const parsedTabId = Number(alarm.name.slice(CDP_IDLE_ALARM_PREFIX.length));
+            if (Number.isInteger(parsedTabId)) {
+              void this.handleIdleDetachAlarm(parsedTabId);
+            }
           }
         });
       }
@@ -388,6 +629,7 @@ class CDPSessionManager {
       clearTimeout(this.idleTimers.get(tabId));
       this.idleTimers.delete(tabId);
     }
+    this.clearIdleDetachAlarm(tabId);
     this.dialogStates.delete(tabId);
     this.inFlightRequests.delete(tabId);
     this.domainRefCounts.delete(tabId);
@@ -399,6 +641,7 @@ class CDPSessionManager {
       );
       this.sessions.delete(tabId);
     }
+    this.removePersistedTabSession(tabId);
   }
 
   private recordFrameSession(tabId: number, info: FrameSessionInfo): void {
@@ -502,11 +745,13 @@ class CDPSessionManager {
         clearTimeout(this.idleTimers.get(tabId));
         this.idleTimers.delete(tabId);
       }
+      this.clearIdleDetachAlarm(tabId);
 
       const state = this.getState(tabId);
       if (state && state.attachedByUs) {
         state.refCount += 1;
         state.owners.set(owner, (state.owners.get(owner) || 0) + 1);
+        this.persistTabSession(tabId);
         return;
       }
 
@@ -542,6 +787,7 @@ class CDPSessionManager {
         ).catch(() => {});
         await this.enablePageDomain(tabId);
         await this.enableNetworkDomain(tabId);
+        this.persistTabSession(tabId);
       } catch (initErr) {
         try {
           await chrome.debugger.detach({ tabId });
@@ -550,6 +796,7 @@ class CDPSessionManager {
         this.clearFlightEnables(tabId);
         this.sessions.delete(tabId);
         this.domainRefCounts.delete(tabId);
+        this.removePersistedTabSession(tabId);
         throw initErr;
       }
     });
@@ -588,7 +835,22 @@ class CDPSessionManager {
         }),
       ).catch(() => {});
 
+      const persisted = await this.readPersistedTabSession(tabId);
+      if (persisted && Array.isArray(persisted.domains) && persisted.domains.length > 0) {
+        let tabDomains = this.domainRefCounts.get(tabId);
+        if (!tabDomains) {
+          tabDomains = new Map<string, number>();
+          this.domainRefCounts.set(tabId, tabDomains);
+        }
+        for (const domain of persisted.domains) {
+          if (typeof domain === 'string' && domain && !tabDomains.has(domain)) {
+            tabDomains.set(domain, 1);
+          }
+        }
+      }
+
       await this.restoreActiveDomains(tabId);
+      this.persistTabSession(tabId);
       return true;
     } catch (restoreErr) {
       // Clean up adopted manager state on restore failure without detaching the underlying physical session
@@ -659,6 +921,9 @@ class CDPSessionManager {
       if (this.getTabEpoch(tabId) !== epoch) {
         throw new Error(`Tab ${tabId} detached during domain enable`);
       }
+      if (this.sessions.has(tabId)) {
+        this.persistTabSession(tabId, this.idleDeadlines.get(tabId));
+      }
     } catch (e: any) {
       if (this.getTabEpoch(tabId) === epoch) {
         const currentCount = tabDomains.get(domain) || 0;
@@ -700,6 +965,9 @@ class CDPSessionManager {
       try {
         await this.sendDebuggerCommand(tabId, `${domain}.disable`, {}, 3000);
       } catch {}
+    }
+    if (this.sessions.has(tabId)) {
+      this.persistTabSession(tabId, this.idleDeadlines.get(tabId));
     }
   }
 
@@ -759,11 +1027,13 @@ class CDPSessionManager {
           clearTimeout(this.idleTimers.get(tabId));
           this.idleTimers.delete(tabId);
         }
+        this.clearIdleDetachAlarm(tabId);
         try {
           await chrome.debugger.detach({ tabId });
         } catch {}
         this.sessions.delete(tabId);
         this.domainRefCounts.delete(tabId);
+        this.removePersistedTabSession(tabId);
         return;
       }
 
@@ -794,6 +1064,9 @@ class CDPSessionManager {
       if (this.idleTimers.has(tabId)) {
         clearTimeout(this.idleTimers.get(tabId));
       }
+      const initialIdleDeadline = Date.now() + CDP_IDLE_DETACH_TIMEOUT_MS;
+      this.scheduleIdleDetachAlarm(tabId, initialIdleDeadline);
+      this.persistTabSession(tabId, initialIdleDeadline);
       const idleDetach = async (): Promise<void> => {
         this.idleTimers.delete(tabId);
         await this.serializeTabOp(tabId, async () => {
@@ -803,6 +1076,9 @@ class CDPSessionManager {
             if (this.dialogStates.has(tabId) || activeCmdCount > 0) {
               // Renderer is blocked by a pending JS dialog or active commands are running:
               // re-arm the idle timer instead of detaching out from under the caller.
+              const nextDeadline = Date.now() + CDP_IDLE_DETACH_TIMEOUT_MS;
+              this.scheduleIdleDetachAlarm(tabId, nextDeadline);
+              this.persistTabSession(tabId, nextDeadline);
               const rearm = setTimeout(() => {
                 this.idleTimers.delete(tabId);
                 void idleDetach();
@@ -810,6 +1086,7 @@ class CDPSessionManager {
               this.idleTimers.set(tabId, rearm);
               return;
             }
+            this.clearIdleDetachAlarm(tabId);
             try {
               await chrome.debugger.detach({ tabId });
             } catch (e) {
@@ -821,6 +1098,7 @@ class CDPSessionManager {
               this.dialogStates.delete(tabId);
               this.sessions.delete(tabId);
               this.domainRefCounts.delete(tabId);
+              this.removePersistedTabSession(tabId);
             }
           }
         });
@@ -854,6 +1132,7 @@ class CDPSessionManager {
         clearTimeout(this.idleTimers.get(tabId));
         this.idleTimers.delete(tabId);
       }
+      this.clearIdleDetachAlarm(tabId);
       try {
         await chrome.debugger.detach({ tabId });
       } catch {}
@@ -863,6 +1142,7 @@ class CDPSessionManager {
       this.dialogStates.delete(tabId);
       this.sessions.delete(tabId);
       this.domainRefCounts.delete(tabId);
+      this.removePersistedTabSession(tabId);
     });
   }
 

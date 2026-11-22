@@ -1,6 +1,7 @@
 import { screenshotContextManager } from './screenshot-context';
 
 const CAPTURE_TTL_MS = 5 * 60 * 1000;
+const VALIDITY_STORAGE_KEY = 'browserpaw_screenshot_validity_v1';
 const SCROLL_COMPARISON_TOLERANCE_CSS_PX = 0.25;
 
 export const SCREENSHOT_CAPTURE_VALIDATION_BOUNDARY =
@@ -52,6 +53,127 @@ export interface ScreenshotCoordinateBindingValidation {
 
 const captures = new Map<string, ScreenshotCaptureRecord>();
 const activeCaptureByTab = new Map<number, string>();
+const locallyModifiedTabs = new Set<number>();
+let validityClearGeneration = 0;
+let validityHydrated = false;
+let validityHydratePromise: Promise<void> | null = null;
+
+function getValiditySessionStorage(): chrome.storage.SessionStorageArea | null {
+  if (
+    typeof chrome !== 'undefined' &&
+    typeof chrome.storage?.session?.get === 'function' &&
+    typeof chrome.storage?.session?.set === 'function'
+  ) {
+    return chrome.storage.session;
+  }
+  return null;
+}
+
+function persistValidityState(): void {
+  const storage = getValiditySessionStorage();
+  if (!storage) return;
+  const now = Date.now();
+  const captureEntries: Array<[string, ScreenshotCaptureRecord]> = [];
+  for (const [captureId, record] of captures.entries()) {
+    if (now - record.capturedAt <= CAPTURE_TTL_MS) {
+      captureEntries.push([captureId, record]);
+    }
+  }
+  const activeEntries: Array<[number, string]> = [];
+  for (const [tabId, captureId] of activeCaptureByTab.entries()) {
+    if (captures.has(captureId)) {
+      activeEntries.push([tabId, captureId]);
+    }
+  }
+  void Promise.resolve(
+    storage.set({
+      [VALIDITY_STORAGE_KEY]: {
+        captures: captureEntries,
+        activeCaptureByTab: activeEntries,
+      },
+    }),
+  ).catch(() => {});
+}
+
+async function hydrateValidityFromSessionStorage(): Promise<void> {
+  const storage = getValiditySessionStorage();
+  if (!storage) {
+    validityHydrated = true;
+    return;
+  }
+  const startGeneration = validityClearGeneration;
+  try {
+    const stored = await storage.get(VALIDITY_STORAGE_KEY);
+    if (validityClearGeneration !== startGeneration) return;
+    const payload = stored?.[VALIDITY_STORAGE_KEY];
+    if (payload && typeof payload === 'object') {
+      const now = Date.now();
+      const storedCaptures = Array.isArray((payload as any).captures)
+        ? ((payload as any).captures as Array<[string, ScreenshotCaptureRecord]>)
+        : [];
+      const storedActive = Array.isArray((payload as any).activeCaptureByTab)
+        ? ((payload as any).activeCaptureByTab as Array<[number, string]>)
+        : [];
+      let prunedAny = false;
+      for (const entry of storedCaptures) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const [captureId, record] = entry;
+        if (
+          typeof captureId !== 'string' ||
+          !record ||
+          typeof record !== 'object' ||
+          typeof record.tabId !== 'number' ||
+          typeof record.capturedAt !== 'number'
+        ) {
+          continue;
+        }
+        if (locallyModifiedTabs.has(record.tabId)) continue;
+        if (now - record.capturedAt > CAPTURE_TTL_MS) {
+          prunedAny = true;
+          continue;
+        }
+        if (!captures.has(captureId)) {
+          captures.set(captureId, record);
+        }
+      }
+      for (const entry of storedActive) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const [tabId, captureId] = entry;
+        if (
+          typeof tabId !== 'number' ||
+          typeof captureId !== 'string' ||
+          locallyModifiedTabs.has(tabId)
+        ) {
+          continue;
+        }
+        if (captures.has(captureId) && !activeCaptureByTab.has(tabId)) {
+          activeCaptureByTab.set(tabId, captureId);
+        }
+      }
+      if (prunedAny) {
+        persistValidityState();
+      }
+    }
+    validityHydrated = true;
+  } catch {
+    validityHydrated = true;
+  }
+}
+
+export async function ensureScreenshotValidityHydrated(force = false): Promise<void> {
+  if (force) {
+    validityHydrated = false;
+    validityHydratePromise = null;
+    locallyModifiedTabs.clear();
+  }
+  if (validityHydrated) return;
+  if (!validityHydratePromise) {
+    validityHydratePromise = hydrateValidityFromSessionStorage().finally(() => {
+      validityHydratePromise = null;
+    });
+  }
+  await validityHydratePromise;
+}
 
 export function inPageReadScreenshotState(): ScreenshotPageStateProbe {
   const DOM_REVISION_KEY = '__browserpaw_dom_revision_v1__';
@@ -151,13 +273,18 @@ export function inPageReadScreenshotState(): ScreenshotPageStateProbe {
 
 function pruneCaptures(): void {
   const now = Date.now();
+  let removed = false;
   for (const [captureId, record] of captures) {
     if (now - record.capturedAt > CAPTURE_TTL_MS) {
       captures.delete(captureId);
+      removed = true;
       if (activeCaptureByTab.get(record.tabId) === captureId) {
         activeCaptureByTab.delete(record.tabId);
       }
     }
+  }
+  if (removed) {
+    persistValidityState();
   }
 }
 
@@ -260,6 +387,8 @@ export function createScreenshotCapture(input: {
   };
   captures.set(captureId, record);
   activeCaptureByTab.set(input.tabId, captureId);
+  locallyModifiedTabs.add(input.tabId);
+  persistValidityState();
   return record;
 }
 
@@ -348,6 +477,10 @@ export function validateScreenshotCapture(
 export async function validateScreenshotCoordinateBinding(
   options: ScreenshotCoordinateBindingOptions,
 ): Promise<ScreenshotCoordinateBindingValidation> {
+  await Promise.all([
+    screenshotContextManager.ensureHydrated(),
+    ensureScreenshotValidityHydrated(),
+  ]);
   const captureId = options.captureId?.trim() || undefined;
 
   if (!captureId) {
@@ -402,12 +535,17 @@ export async function validateScreenshotCoordinateBinding(
 
 export function clearScreenshotValidity(tabId?: number): void {
   if (typeof tabId === 'number') {
+    locallyModifiedTabs.add(tabId);
     for (const [captureId, record] of captures) {
       if (record.tabId === tabId) captures.delete(captureId);
     }
     activeCaptureByTab.delete(tabId);
+    persistValidityState();
     return;
   }
+  validityClearGeneration += 1;
+  locallyModifiedTabs.clear();
   captures.clear();
   activeCaptureByTab.clear();
+  persistValidityState();
 }

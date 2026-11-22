@@ -33,6 +33,12 @@ import {
   setAgentCursorNote,
 } from './agent-cursor';
 import { parseUnifiedCoordinate } from '@/utils/coordinate-parser';
+import { screenshotContextManager } from '@/utils/screenshot-context';
+import { screenshotOriginViolation } from '@/utils/screenshot-guard';
+import {
+  ensureScreenshotValidityHydrated,
+  validateScreenshotCoordinateBinding,
+} from '@/utils/screenshot-validity';
 import { sessionTabAffinity } from '@/utils/session-tab-affinity';
 import { startActionNetworkCapture } from '@/utils/action-network-capture';
 import { performPhysicalFill } from './fill-core';
@@ -86,6 +92,8 @@ function dispatchedCountForOutput(type: unknown, output: any): number {
 declare module 'chrome-mcp-shared' {
   interface BatchActionItem {
     frameId?: number;
+    coordinateSpace?: 'viewport' | 'screenshot';
+    captureId?: string;
   }
 }
 
@@ -101,6 +109,8 @@ export interface BatchActionsParams {
   includeDelta?: boolean;
   sessionId?: string;
   sessionContext?: string;
+  coordinateSpace?: 'viewport' | 'screenshot';
+  captureId?: string;
   /** Inline capture of network response triggered during batch execution */
   captureNetwork?: CaptureNetworkOptions;
 }
@@ -400,8 +410,34 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     (typeof item.x === 'number' && typeof item.y === 'number'
                       ? { x: item.x, y: item.y }
                       : undefined);
-
                   const locatorItem = item as LocatorBatchActionItem;
+                  const hasNonCoordLocator = Boolean(
+                    item.ref !== undefined ||
+                    item.index !== undefined ||
+                    item.selector ||
+                    locatorItem.targetText ||
+                    item.text ||
+                    locatorItem.role ||
+                    locatorItem.label,
+                  );
+                  const coordinateOnlyAction = Boolean(rawCoord) && !hasNonCoordLocator;
+                  const actionCoordinateSpace = item.coordinateSpace ?? args.coordinateSpace;
+                  const actionCaptureId = item.captureId ?? args.captureId;
+                  const wantsScreenshotCoord =
+                    actionCoordinateSpace === 'screenshot' || Boolean(actionCaptureId);
+                  if (rawCoord || wantsScreenshotCoord) {
+                    await Promise.all([
+                      screenshotContextManager.ensureHydrated(),
+                      ensureScreenshotValidityHydrated(),
+                    ]);
+                  }
+                  if ((wantsScreenshotCoord || coordinateOnlyAction) && currentTab.url) {
+                    const originErr = screenshotOriginViolation(tabId, currentTab.url, item.type);
+                    if (originErr) {
+                      throw Object.assign(new Error(originErr), { requestDispatched: false });
+                    }
+                  }
+
                   let loc = await resolveTargetLocation(tabId, {
                     ref: item.ref ?? item.index,
                     selector: item.selector,
@@ -412,6 +448,8 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     exact: locatorItem.exact,
                     frameId: item.frameId,
                     coordinate: rawCoord,
+                    coordinateSpace: actionCoordinateSpace,
+                    captureId: actionCaptureId,
                     operation: 'click',
                     taskId: context?.taskId,
                     signal,
@@ -430,6 +468,13 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       ),
                       { locator: loc, requestDispatched: false },
                     );
+                  }
+
+                  if (loc.resolutionPath === 'coordinate' && currentTab.url) {
+                    const originErr = screenshotOriginViolation(tabId, currentTab.url, item.type);
+                    if (originErr) {
+                      throw Object.assign(new Error(originErr), { requestDispatched: false });
+                    }
                   }
 
                   const targetIndex = loc.resolutionPath === 'coordinate' ? undefined : loc.index;
@@ -935,6 +980,38 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                       (typeof item.x === 'number' && typeof item.y === 'number'
                         ? { x: item.x, y: item.y }
                         : undefined);
+                    const scrollCoordinateSpace = item.coordinateSpace ?? args.coordinateSpace;
+                    const scrollCaptureId = item.captureId ?? args.captureId;
+                    const scrollUsesScreenshotSpace =
+                      scrollCoordinateSpace === 'screenshot' || Boolean(scrollCaptureId);
+                    if (rawCoord || scrollUsesScreenshotSpace) {
+                      await Promise.all([
+                        screenshotContextManager.ensureHydrated(),
+                        ensureScreenshotValidityHydrated(),
+                      ]);
+                    }
+                    if (scrollUsesScreenshotSpace) {
+                      const binding = await validateScreenshotCoordinateBinding({
+                        tabId,
+                        captureId: scrollCaptureId,
+                        coordinateSpace: scrollCoordinateSpace,
+                      });
+                      if (binding.error) {
+                        throw Object.assign(new Error(binding.error), {
+                          requestDispatched: false,
+                          scrollGuardViolation: true,
+                        });
+                      }
+                    }
+                    if ((rawCoord || scrollUsesScreenshotSpace) && currentTab.url) {
+                      const originErr = screenshotOriginViolation(tabId, currentTab.url, 'scroll');
+                      if (originErr) {
+                        throw Object.assign(new Error(originErr), {
+                          requestDispatched: false,
+                          scrollGuardViolation: true,
+                        });
+                      }
+                    }
                     const parsedCoord = rawCoord
                       ? parseUnifiedCoordinate(rawCoord, { tabId })
                       : null;
@@ -978,6 +1055,9 @@ export class BatchActionsTool extends BaseBrowserToolExecutor {
                     });
                   } catch (scrollErr) {
                     if (scrollErr instanceof DialogOpenedError) {
+                      throw scrollErr;
+                    }
+                    if ((scrollErr as any)?.scrollGuardViolation) {
                       throw scrollErr;
                     }
                     // An unacknowledged wheel may already have scrolled; fail the

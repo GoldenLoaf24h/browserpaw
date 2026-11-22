@@ -8,22 +8,134 @@
  * panel with a spurious "ping content script failed" log line first.
  */
 
+const CLOUD_METADATA_IPV4_HOSTS = new Set([
+  '169.254.169.254',
+  '169.254.169.253',
+  '169.254.170.2',
+  '169.254.170.23',
+  '169.254.0.2',
+  '100.100.100.200',
+]);
+
+const CLOUD_METADATA_HOSTNAMES = new Set([
+  'instance-data',
+  'instance-data.ec2.internal',
+  'metadata.google.internal',
+  'metadata.goog',
+  'metadata.internal',
+]);
+
+const CLOUD_METADATA_HOSTNAME_SUFFIXES = [
+  '.metadata.google.internal',
+  '.metadata.goog',
+  '.metadata.internal',
+];
+
+function parseIpv4Octets(host: string): number[] | null {
+  const parts = host.split('.');
+  if (parts.length !== 4) return null;
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const value = Number(part);
+    if (!Number.isInteger(value) || value < 0 || value > 255) return null;
+    octets.push(value);
+  }
+  return octets;
+}
+
+function parseIpv6Groups(rawHost: string): number[] | null {
+  const withoutZone = rawHost.split('%')[0];
+  if (!withoutZone.includes(':')) return null;
+  const halves = withoutZone.split('::');
+  if (halves.length > 2) return null;
+
+  const parseSide = (segment: string): number[] | null => {
+    if (!segment) return [];
+    const tokens = segment.split(':');
+    const groups: number[] = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (token.includes('.')) {
+        if (index !== tokens.length - 1) return null;
+        const octets = parseIpv4Octets(token);
+        if (!octets) return null;
+        groups.push((octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/i.test(token)) return null;
+        groups.push(parseInt(token, 16));
+      }
+    }
+    return groups;
+  };
+
+  const left = parseSide(halves[0]);
+  if (!left) return null;
+  if (halves.length === 1) {
+    return left.length === 8 ? left : null;
+  }
+  const right = parseSide(halves[1]);
+  if (!right) return null;
+  const missing = 8 - (left.length + right.length);
+  if (missing < 1) return null;
+  return [...left, ...new Array<number>(missing).fill(0), ...right];
+}
+
+function ipv4FromHighLow(highWord: number, lowWord: number): string {
+  return [(highWord >>> 8) & 0xff, highWord & 0xff, (lowWord >>> 8) & 0xff, lowWord & 0xff].join(
+    '.',
+  );
+}
+
+function isCloudMetadataIpv6(groups: number[]): boolean {
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (
+    g0 === 0xfd00 &&
+    g1 === 0x0ec2 &&
+    g2 === 0 &&
+    g3 === 0 &&
+    g4 === 0 &&
+    g5 === 0 &&
+    g6 === 0 &&
+    g7 === 0x0254
+  ) {
+    return true;
+  }
+  const isIpv4Mapped = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff;
+  const isIpv4Translated =
+    g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0xffff && g5 === 0;
+  const isIpv4Compatible =
+    g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && (g6 !== 0 || g7 > 1);
+  const isNat64 = g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0;
+  if (isIpv4Mapped || isIpv4Translated || isIpv4Compatible || isNat64) {
+    return CLOUD_METADATA_IPV4_HOSTS.has(ipv4FromHighLow(g6, g7));
+  }
+  if (g0 === 0x2002) {
+    return CLOUD_METADATA_IPV4_HOSTS.has(ipv4FromHighLow(g1, g2));
+  }
+  return false;
+}
+
 export function isCloudMetadataUrl(url: string | undefined | null): boolean {
   if (!url) return false;
   try {
-    const u = new URL(url);
-    const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    return (
-      h === '169.254.169.254' ||
-      h === '169.254.169.253' ||
-      h === '100.100.100.200' ||
-      h === '169.254.0.2' ||
-      h === 'instance-data' ||
-      h === 'metadata.google.internal' ||
-      h === 'metadata.internal' ||
-      h.endsWith('.metadata.google.internal') ||
-      h === 'fd00:ec2::254'
-    );
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, '')
+      .replace(/\.+$/, '');
+    if (!host) return false;
+    if (CLOUD_METADATA_IPV4_HOSTS.has(host) || CLOUD_METADATA_HOSTNAMES.has(host)) {
+      return true;
+    }
+    if (CLOUD_METADATA_HOSTNAME_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
+      return true;
+    }
+    const ipv6Groups = parseIpv6Groups(host);
+    if (ipv6Groups) {
+      return isCloudMetadataIpv6(ipv6Groups);
+    }
+    return false;
   } catch {
     return false;
   }

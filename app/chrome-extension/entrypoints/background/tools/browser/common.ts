@@ -240,28 +240,39 @@ class NavigateTool extends BaseBrowserToolExecutor {
         return createErrorResponse('URL parameter is required when refresh is not true');
       }
 
-      // [ACT-02] Strict protocol & pattern guard (inspired by Chrome DevTools MCP)
-      if (/^(chrome-untrusted|chrome-search|devtools):\/\//i.test(url)) {
-        return createErrorResponse(
-          `Access denied: navigation to privileged internal scheme "${url.split(':')[0]}" is blocked for security.`,
-        );
-      }
-
-      if (url.toLowerCase().startsWith('javascript:')) {
-        return createErrorResponse(
-          'Access denied: "javascript:" URLs cannot be executed via chrome_navigate. Use chrome_javascript for script execution.',
-        );
-      }
+      const trimmedUrl = url.trim();
 
       // Guard against popup.html (P1-5: agent code paths must never open popup.html)
-      if (isPopupUrl(url)) {
+      if (isPopupUrl(trimmedUrl)) {
         return createErrorResponse(
           'Access denied: popup.html cannot be opened or navigated to by agent code paths. Popup is reserved exclusively for user manual interaction.',
         );
       }
 
+      if (isCloudMetadataUrl(trimmedUrl)) {
+        return createErrorResponse(restrictedUrlErrorMessage(trimmedUrl));
+      }
+
+      // [ACT-02] Strict protocol & pattern guard (inspired by Chrome DevTools MCP)
+      if (
+        /^(chrome|edge|chrome-untrusted|chrome-search|devtools|chrome-extension):\/\//i.test(
+          trimmedUrl,
+        ) ||
+        /^(view-source|data|blob):/i.test(trimmedUrl)
+      ) {
+        return createErrorResponse(
+          `Access denied: navigation to privileged internal scheme "${trimmedUrl.split(':')[0]}" is blocked for security.`,
+        );
+      }
+
+      if (trimmedUrl.toLowerCase().startsWith('javascript:')) {
+        return createErrorResponse(
+          'Access denied: "javascript:" URLs cannot be executed via chrome_navigate. Use chrome_javascript for script execution.',
+        );
+      }
+
       // Pre-flight check for file:// scheme permissions
-      if (url.startsWith('file://')) {
+      if (trimmedUrl.toLowerCase().startsWith('file://')) {
         try {
           const isAllowed = await chrome.extension.isAllowedFileSchemeAccess();
           if (!isAllowed) {
@@ -846,7 +857,11 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
         .catch(() => {});
     };
     const observer = (tid: number, method: string, params: any, source?: any) => {
-      if (tabSet.has(tid) && method === 'Page.javascriptDialogOpening' && params?.type === 'beforeunload') {
+      if (
+        tabSet.has(tid) &&
+        method === 'Page.javascriptDialogOpening' &&
+        params?.type === 'beforeunload'
+      ) {
         acceptBeforeUnload(tid, source?.sessionId);
       }
     };

@@ -7,6 +7,58 @@ import { tabGroupManager } from './tab-group-manager';
 
 let cdpExecuteLeaseSequence = 0;
 
+interface SpecificTargetLease {
+  refCount: number;
+  attachedByUs: boolean;
+}
+
+const specificTargetLeases = new Map<string, SpecificTargetLease>();
+const specificTargetQueues = new Map<string, Promise<void>>();
+
+async function serializeSpecificTarget<T>(targetId: string, op: () => Promise<T>): Promise<T> {
+  const previous = specificTargetQueues.get(targetId) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  specificTargetQueues.set(targetId, current);
+  try {
+    await previous.catch(() => {});
+    return await op();
+  } finally {
+    release();
+    if (specificTargetQueues.get(targetId) === current) {
+      specificTargetQueues.delete(targetId);
+    }
+  }
+}
+
+async function isTargetManagedBySessionManager(targetId: string): Promise<boolean> {
+  if (typeof chrome === 'undefined' || typeof chrome.debugger?.getTargets !== 'function') {
+    return false;
+  }
+  try {
+    const targets = await chrome.debugger.getTargets();
+    const match = Array.isArray(targets)
+      ? targets.find(
+          (entry) => (entry as any).id === targetId || (entry as any).targetId === targetId,
+        )
+      : undefined;
+    return typeof match?.tabId === 'number' && cdpSessionManager.isAttached(match.tabId);
+  } catch {
+    return false;
+  }
+}
+
+const BLOCKED_CDP_METHODS = new Set([
+  'Browser.close',
+  'Browser.crash',
+  'Browser.crashGpuProcess',
+  'Browser.setDownloadBehavior',
+  'Page.setDownloadBehavior',
+  'Target.disposeBrowserContext',
+]);
+
 export interface CdpExecuteTarget {
   tabId?: number;
   targetId?: string;
@@ -46,8 +98,7 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
     }
 
     const method = args.method.trim();
-    const BLOCKED_METHODS = new Set(['Browser.close', 'Browser.crash', 'Browser.crashGpuProcess']);
-    if (BLOCKED_METHODS.has(method)) {
+    if (BLOCKED_CDP_METHODS.has(method)) {
       return createErrorResponse(
         `Security restriction: Execution of dangerous CDP command "${method}" is blocked`,
       );
@@ -136,8 +187,62 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
     // Execute with timeout and anti-hang guard
     let timeoutTimer: any;
     let isTimedOut = false;
-    let attachedSpecificTarget = false;
+    let specificTargetLeaseHeld = false;
     let standardTabOwner: string | undefined;
+
+    const acquireSpecificTargetLease = async (targetId: string): Promise<void> => {
+      await serializeSpecificTarget(targetId, async () => {
+        const existing = specificTargetLeases.get(targetId);
+        if (existing) {
+          existing.refCount += 1;
+          specificTargetLeaseHeld = true;
+          return;
+        }
+        let attachedByUs = false;
+        if (typeof chrome !== 'undefined' && typeof chrome.debugger?.attach === 'function') {
+          try {
+            await chrome.debugger.attach({ targetId }, '1.3');
+            attachedByUs = true;
+          } catch (attErr: any) {
+            const attMsg = String(attErr?.message || attErr).toLowerCase();
+            if (!attMsg.includes('already attached') && !attMsg.includes('another client')) {
+              console.warn('[CdpExecuteTool] attach target warning:', attErr);
+            }
+          }
+        }
+        specificTargetLeases.set(targetId, { refCount: 1, attachedByUs });
+        specificTargetLeaseHeld = true;
+      });
+    };
+
+    const releaseSpecificTargetLease = async (
+      targetId: string,
+      allowPhysicalDetach: boolean,
+    ): Promise<void> => {
+      if (!specificTargetLeaseHeld) return;
+      specificTargetLeaseHeld = false;
+      await serializeSpecificTarget(targetId, async () => {
+        const lease = specificTargetLeases.get(targetId);
+        if (!lease) return;
+        lease.refCount = Math.max(0, lease.refCount - 1);
+        if (lease.refCount > 0) return;
+        specificTargetLeases.delete(targetId);
+        if (
+          !allowPhysicalDetach ||
+          !lease.attachedByUs ||
+          typeof chrome === 'undefined' ||
+          typeof chrome.debugger?.detach !== 'function'
+        ) {
+          return;
+        }
+        if (await isTargetManagedBySessionManager(targetId)) {
+          return;
+        }
+        try {
+          await chrome.debugger.detach({ targetId });
+        } catch {}
+      });
+    };
 
     try {
       const commandPromise = (async () => {
@@ -152,16 +257,8 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
           }
         }
         // Direct chrome.debugger fallback for out-of-process targetId
-        if (specificTargetId && typeof chrome !== 'undefined' && chrome.debugger?.attach) {
-          try {
-            await chrome.debugger.attach({ targetId: specificTargetId }, '1.3');
-            attachedSpecificTarget = true;
-          } catch (attErr: any) {
-            const attMsg = String(attErr?.message || attErr).toLowerCase();
-            if (!attMsg.includes('already attached') && !attMsg.includes('another client')) {
-              console.warn('[CdpExecuteTool] attach target warning:', attErr);
-            }
-          }
+        if (specificTargetId) {
+          await acquireSpecificTargetLease(specificTargetId);
         }
         return await chrome.debugger.sendCommand(debuggee, method, commandParams);
       })();
@@ -179,15 +276,8 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
               await cdpSessionManager.detach(targetTabId, 'timeout-guard', standardTabOwner);
             } catch {}
           }
-          if (
-            specificTargetId &&
-            args.preserveDebuggerOnTimeout !== true &&
-            typeof chrome !== 'undefined' &&
-            chrome.debugger?.detach
-          ) {
-            try {
-              await chrome.debugger.detach({ targetId: specificTargetId });
-            } catch {}
+          if (specificTargetId && args.preserveDebuggerOnTimeout !== true) {
+            await releaseSpecificTargetLease(specificTargetId, true);
           }
           reject(new Error(`Timed out after ${timeoutMs}ms waiting for CDP command "${method}".`));
         }, timeoutMs);
@@ -232,16 +322,8 @@ export class CdpExecuteTool extends BaseBrowserToolExecutor {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
-      if (
-        attachedSpecificTarget &&
-        (args as any).preserveDebugger !== true &&
-        !isTimedOut &&
-        typeof chrome !== 'undefined' &&
-        chrome.debugger?.detach
-      ) {
-        try {
-          await chrome.debugger.detach({ targetId: specificTargetId });
-        } catch {}
+      if (specificTargetId && specificTargetLeaseHeld && !isTimedOut) {
+        await releaseSpecificTargetLease(specificTargetId, (args as any).preserveDebugger !== true);
       }
     }
   }

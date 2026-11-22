@@ -22,24 +22,118 @@ export interface ScreenshotContext {
 }
 
 const TTL_MS = 5 * 60 * 1000;
+const STORAGE_KEY = 'browserpaw_screenshot_contexts_v1';
 const contexts = new Map<number, ScreenshotContext>();
+const locallyModifiedTabs = new Set<number>();
+let clearGeneration = 0;
+let hydrated = false;
+let hydratePromise: Promise<void> | null = null;
+
+function getSessionStorage(): chrome.storage.SessionStorageArea | null {
+  if (
+    typeof chrome !== 'undefined' &&
+    typeof chrome.storage?.session?.get === 'function' &&
+    typeof chrome.storage?.session?.set === 'function'
+  ) {
+    return chrome.storage.session;
+  }
+  return null;
+}
+
+function persistContexts(): void {
+  const storage = getSessionStorage();
+  if (!storage) return;
+  const now = Date.now();
+  const serialized: Record<string, ScreenshotContext> = {};
+  for (const [tabId, ctx] of contexts.entries()) {
+    if (now - ctx.timestamp <= TTL_MS) {
+      serialized[String(tabId)] = ctx;
+    } else {
+      contexts.delete(tabId);
+    }
+  }
+  void Promise.resolve(storage.set({ [STORAGE_KEY]: serialized })).catch(() => {});
+}
+
+async function hydrateFromSessionStorage(): Promise<void> {
+  const storage = getSessionStorage();
+  if (!storage) {
+    hydrated = true;
+    return;
+  }
+  const startGeneration = clearGeneration;
+  try {
+    const stored = await storage.get(STORAGE_KEY);
+    if (clearGeneration !== startGeneration) return;
+    const rawMap = stored?.[STORAGE_KEY];
+    if (rawMap && typeof rawMap === 'object') {
+      const now = Date.now();
+      let prunedAny = false;
+      for (const [rawTabId, rawCtx] of Object.entries(rawMap as Record<string, unknown>)) {
+        const tabId = Number(rawTabId);
+        if (!Number.isInteger(tabId) || locallyModifiedTabs.has(tabId)) continue;
+        const ctx = rawCtx as ScreenshotContext | null;
+        if (
+          !ctx ||
+          typeof ctx !== 'object' ||
+          typeof ctx.timestamp !== 'number' ||
+          now - ctx.timestamp > TTL_MS
+        ) {
+          prunedAny = true;
+          continue;
+        }
+        contexts.set(tabId, ctx);
+      }
+      if (prunedAny) {
+        persistContexts();
+      }
+    }
+    hydrated = true;
+  } catch {
+    hydrated = true;
+  }
+}
 
 if (typeof chrome !== 'undefined' && chrome.tabs?.onRemoved?.addListener) {
   try {
-    chrome.tabs.onRemoved.addListener((closedTabId: number) => contexts.delete(closedTabId));
+    chrome.tabs.onRemoved.addListener((closedTabId: number) => {
+      locallyModifiedTabs.add(closedTabId);
+      if (contexts.delete(closedTabId)) {
+        persistContexts();
+      }
+    });
   } catch {}
 }
 
 export const screenshotContextManager = {
+  async ensureHydrated(force = false): Promise<void> {
+    if (force) {
+      hydrated = false;
+      hydratePromise = null;
+      locallyModifiedTabs.clear();
+    }
+    if (hydrated) return;
+    if (!hydratePromise) {
+      hydratePromise = hydrateFromSessionStorage().finally(() => {
+        hydratePromise = null;
+      });
+    }
+    await hydratePromise;
+  },
+
   setContext(tabId: number, ctx: Omit<ScreenshotContext, 'timestamp'>) {
+    locallyModifiedTabs.add(tabId);
     contexts.set(tabId, { ...ctx, timestamp: Date.now() });
+    persistContexts();
   },
 
   getContext(tabId: number): ScreenshotContext | undefined {
     const ctx = contexts.get(tabId);
     if (!ctx) return undefined;
     if (Date.now() - ctx.timestamp > TTL_MS) {
+      locallyModifiedTabs.add(tabId);
       contexts.delete(tabId);
+      persistContexts();
       return undefined;
     }
     return ctx;
@@ -51,8 +145,15 @@ export const screenshotContextManager = {
   },
 
   clear(tabId?: number) {
-    if (typeof tabId === 'number') contexts.delete(tabId);
-    else contexts.clear();
+    if (typeof tabId === 'number') {
+      locallyModifiedTabs.add(tabId);
+      contexts.delete(tabId);
+    } else {
+      clearGeneration += 1;
+      locallyModifiedTabs.clear();
+      contexts.clear();
+    }
+    persistContexts();
   },
 };
 

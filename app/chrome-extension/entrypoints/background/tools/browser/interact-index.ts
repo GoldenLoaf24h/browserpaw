@@ -479,6 +479,7 @@ export class InteractIndexTool extends BaseBrowserToolExecutor {
 
         let screenshotCtx: any;
         if (isScreenshotSpace) {
+          await screenshotContextManager.ensureHydrated();
           screenshotCtx = screenshotContextManager.getContext(tabId);
           if (!screenshotCtx) {
             return createErrorResponse(

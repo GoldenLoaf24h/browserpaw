@@ -1,4 +1,8 @@
-import { isCloudMetadataUrl, restrictedUrlErrorMessage } from '@/utils/restricted-url';
+import {
+  isCloudMetadataUrl,
+  isRestrictedChromeUrl,
+  restrictedUrlErrorMessage,
+} from '@/utils/restricted-url';
 import { createErrorResponse, ToolResult } from '@/common/tool-handler';
 import { BaseBrowserToolExecutor } from '../base-browser';
 import { TOOL_NAMES } from 'chrome-mcp-shared';
@@ -80,12 +84,17 @@ class NetworkRequestTool extends BaseBrowserToolExecutor {
   }
 
   async execute(args: NetworkRequestToolParams): Promise<ToolResult> {
-    if (
-      args.url &&
-      (isCloudMetadataUrl(args.url) ||
-        args.url.startsWith('file:') ||
-        args.url.startsWith('file://'))
-    ) {
+    const isBlockedNetworkUrl = (targetUrl: string | undefined | null): boolean => {
+      if (!targetUrl) return false;
+      const trimmedTarget = targetUrl.trim();
+      return (
+        isCloudMetadataUrl(trimmedTarget) ||
+        isRestrictedChromeUrl(trimmedTarget) ||
+        trimmedTarget.toLowerCase().startsWith('file:')
+      );
+    };
+
+    if (isBlockedNetworkUrl(args.url)) {
       return createErrorResponse(restrictedUrlErrorMessage(args.url));
     }
     const {
@@ -142,6 +151,12 @@ class NetworkRequestTool extends BaseBrowserToolExecutor {
                 const filePath = spec.replace(/^file:/i, '');
                 const { base64Data, fileName } = await this.preReadFileData(filePath);
                 items.push([name, `base64:${base64Data}`, filenameHint || fileName || undefined]);
+              } else if (/^(https?:\/\/|url:)/i.test(spec)) {
+                const resolvedSpecUrl = spec.replace(/^url:/i, '');
+                if (isBlockedNetworkUrl(resolvedSpecUrl)) {
+                  return createErrorResponse(restrictedUrlErrorMessage(resolvedSpecUrl));
+                }
+                items.push([...item]);
               } else {
                 items.push([...item]);
               }
@@ -164,6 +179,12 @@ class NetworkRequestTool extends BaseBrowserToolExecutor {
                   base64Data,
                   filename: file.filename || fileName || undefined,
                 });
+              } else if (file.fileUrl) {
+                const resolvedFileUrl = String(file.fileUrl);
+                if (isBlockedNetworkUrl(resolvedFileUrl)) {
+                  return createErrorResponse(restrictedUrlErrorMessage(resolvedFileUrl));
+                }
+                files.push({ ...file });
               } else {
                 files.push({ ...file });
               }
@@ -201,6 +222,11 @@ class NetworkRequestTool extends BaseBrowserToolExecutor {
       );
 
       console.log(`NetworkRequestTool: Response from content script:`, resultFromContentScript);
+
+      const finalUrl = resultFromContentScript?.response?.url;
+      if (typeof finalUrl === 'string' && isBlockedNetworkUrl(finalUrl)) {
+        return createErrorResponse(restrictedUrlErrorMessage(finalUrl));
+      }
 
       return {
         content: [
