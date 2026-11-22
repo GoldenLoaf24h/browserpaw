@@ -1,6 +1,6 @@
 manifest_version: 1
 name: browserpaw
-version: '5.0.0'
+version: '5.0.1'
 description: 'BrowserPaw Chrome browser automation plugin for Hermes Agent, bundling the canonical Agent Skill and a unified browserpaw CLI tool with gateway media delivery.'
 author: GoldenLoaf24h
 license: AGPL-3.0

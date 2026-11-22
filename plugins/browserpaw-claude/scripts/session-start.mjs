@@ -75,7 +75,7 @@ export function buildSessionContext(env = process.env, platform = process.platfo
     lines.push(`BrowserPaw CLI is available at ${cliPath}.`);
   } else {
     lines.push(
-      'BrowserPaw CLI (`browserpaw`) was not found on PATH. Install with `npm install -g browserpaw@5.0.0 && browserpaw setup --no-skill` (or use `npx --yes browserpaw@5.0.0`) and load the Chrome extension.',
+      'BrowserPaw CLI (`browserpaw`) was not found on PATH. Install with `npm install -g browserpaw@5.0.1 && browserpaw setup --no-skill` (or use `npx --yes browserpaw@5.0.1`) and load the Chrome extension.',
     );
   }
 

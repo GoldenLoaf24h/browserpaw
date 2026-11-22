@@ -13,18 +13,18 @@ Agent 阅读标准 Agent Skill 后即可通过认证的本地回环桥接（`com
 需要 **Node.js 22.6+** 与 Windows、macOS 或 Linux 桌面版 Chrome 或 Chromium。先全局安装 CLI 并运行 `setup`（自动注册 Native Messaging 宿主并将基础技能全局安装到 `~/.agents/skills/browserpaw`，Windows 为 `%USERPROFILE%\.agents\skills\browserpaw`），再在 Chrome 或 Chromium 加载扩展：
 
 ```sh
-npm install -g browserpaw@5.0.0
+npm install -g browserpaw@5.0.1
 browserpaw setup
 ```
 
-> **关于 npm 安装时机：** `npm install -g browserpaw@5.0.0` 与 `npx browserpaw@5.0.0` 适用于 `5.0.0` 正式发布到 npm 之后；安装本地发布候选包请使用 `npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup`。
+> **关于 npm 安装时机：** `npm install -g browserpaw@5.0.1` 与 `npx browserpaw@5.0.1` 适用于 `5.0.1` 正式发布到 npm 之后；安装本地发布候选包请使用 `npx --yes --package /path/to/browserpaw-5.0.1.tgz browserpaw setup`。
 
 随后在浏览器打开 `chrome://extensions`（Chromium 为 `chromium://extensions`），开启**开发者模式**，点击**加载已解压的扩展程序**，选择 `setup` 输出的扩展目录（默认 `~/.browserpaw/extension`，Windows 为 `%USERPROFILE%\.browserpaw\extension`），完成后运行 `browserpaw status` 验证连接。
 
 | 安装方式                            | 适用场景                                                      | 命令                                                  |
 | :---------------------------------- | :------------------------------------------------------------ | :---------------------------------------------------- |
-| **全局 Skill + npm CLI** _（首推）_ | Codex、Claude Code、Cursor、Windsurf、DSH 等日常主力使用      | `npm install -g browserpaw@5.0.0 && browserpaw setup` |
-| **`npx` / 离线包 / 项目级 Skill**   | 不全局安装或按工作区安装技能（`./.agents/skills/browserpaw`） | `npx browserpaw@5.0.0 setup --skill-scope project`    |
+| **全局 Skill + npm CLI** _（首推）_ | Codex、Claude Code、Cursor、Windsurf、DSH 等日常主力使用      | `npm install -g browserpaw@5.0.1 && browserpaw setup` |
+| **`npx` / 离线包 / 项目级 Skill**   | 不全局安装或按工作区安装技能（`./.agents/skills/browserpaw`） | `npx browserpaw@5.0.1 setup --skill-scope project`    |
 | **官方客户端插件**                  | 通过宿主内置插件市场安装（只读基础技能 + npm CLI）            | 见下方 [客户端插件](#客户端插件持续同步支持)          |
 
 - **常用安装参数：** `--skill-scope user`（默认）、`--skill-scope project`、`--skill-dir DIR`、`--no-skill` 以及 `--browser chromium`。
@@ -38,9 +38,9 @@ browserpaw setup
 | 客户端               | 插件目录                                                         | 集成能力                                                                                 | 安装方式                                                                                                                                                             |
 | :------------------- | :--------------------------------------------------------------- | :--------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **DeepSeek Harness** | [plugins/browserpaw-dsh](plugins/browserpaw-dsh/README.md)       | 一键安装 `browserpaw` npm 包 + 只读基础技能 + 读取 `~/.browserpaw` 自学习工作流表        | `dsh plugin --profile web add dsh-browserpaw` 后运行 `dsh plugin --profile web exec browserpaw setup --no-skill`                                                     |
-| **Hermes Agent**     | [plugins/browserpaw-hermes](plugins/browserpaw-hermes/README.md) | 只读 `browserpaw:browserpaw` 技能 + 统一 `browserpaw` CLI 工具 + `MEDIA:` 截图路径输出   | `npm i -g browserpaw@5.0.0 && browserpaw setup --no-skill` + `hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw-hermes`                             |
-| **Claude Code**      | [plugins/browserpaw-claude](plugins/browserpaw-claude/README.md) | 只读基础技能 + `SessionStart` 钩子（检测 CLI 并注入 `~/.browserpaw` 自学习工作流上下文） | `npm i -g browserpaw@5.0.0 && browserpaw setup --no-skill` + `claude plugin marketplace add GoldenLoaf24h/browserpaw && claude plugin install browserpaw@browserpaw` |
-| **ChatGPT / Codex**  | [plugins/browserpaw](plugins/browserpaw/README.md)               | Portable Agent Plugins v1.0.0 只读基础技能与图标包（无钩子）                             | `npm i -g browserpaw@5.0.0 && browserpaw setup --no-skill` + `codex plugin marketplace add GoldenLoaf24h/browserpaw && codex plugin add browserpaw@browserpaw`       |
+| **Hermes Agent**     | [plugins/browserpaw-hermes](plugins/browserpaw-hermes/README.md) | 只读 `browserpaw:browserpaw` 技能 + 统一 `browserpaw` CLI 工具 + `MEDIA:` 截图路径输出   | `npm i -g browserpaw@5.0.1 && browserpaw setup --no-skill` + `hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw-hermes`                             |
+| **Claude Code**      | [plugins/browserpaw-claude](plugins/browserpaw-claude/README.md) | 只读基础技能 + `SessionStart` 钩子（检测 CLI 并注入 `~/.browserpaw` 自学习工作流上下文） | `npm i -g browserpaw@5.0.1 && browserpaw setup --no-skill` + `claude plugin marketplace add GoldenLoaf24h/browserpaw && claude plugin install browserpaw@browserpaw` |
+| **ChatGPT / Codex**  | [plugins/browserpaw](plugins/browserpaw/README.md)               | Portable Agent Plugins v1.0.0 只读基础技能与图标包（无钩子）                             | `npm i -g browserpaw@5.0.1 && browserpaw setup --no-skill` + `codex plugin marketplace add GoldenLoaf24h/browserpaw && codex plugin add browserpaw@browserpaw`       |
 
 各宿主插件规范的能力边界与官方依据详见 [插件兼容性与规范边界](docs/development/PLUGIN_COMPATIBILITY.md)。
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-browserpaw",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "DeepSeek Harness bundle for BrowserPaw: installs the browserpaw CLI and registers the canonical BrowserPaw Agent Skill.",
   "type": "module",
   "main": "index.js",
@@ -36,7 +36,7 @@
     "!**/*.test.*"
   ],
   "dependencies": {
-    "browserpaw": "^5.0.0"
+    "browserpaw": "^5.0.1"
   },
   "engines": {
     "dsh": ">=0.2.0-rc.1 <0.3.0-0",

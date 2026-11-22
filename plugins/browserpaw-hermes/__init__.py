@@ -167,7 +167,7 @@ def _make_handler(ctx: Any):
                 if configured_cli
                 else (
                     "browserpaw CLI not found on PATH. Install with "
-                    "`npm install -g browserpaw@5.0.0`, run `browserpaw setup --no-skill`, "
+                    "`npm install -g browserpaw@5.0.1`, run `browserpaw setup --no-skill`, "
                     "and load the Chrome extension."
                 )
             )

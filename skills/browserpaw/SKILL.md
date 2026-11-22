@@ -11,7 +11,7 @@ For browser history, bookmarks, or site storage, use `browserpaw help data` and 
 
 When invoked on demand, the CLI checks npm every 24 hours, installs verified updates under `~/.browserpaw/cli-versions/`, and refreshes the host, bundled recipes, and managed Skills (`BROWSERPAW_NO_AUTO_UPDATE=1` / `BROWSERPAW_NO_UPDATE_CHECK=1` opt out). If auto-update is disabled and stderr reports an update, mention it once after finishing the task before running `browserpaw setup`. Same-major CLI updates (`5.0.x` with extension `>= 5.0.0`) stay compatible without requiring an extension reload; `browserpaw status` reports `extensionUpdateAvailable` or incompatibility for manual updates in `chrome://extensions`. Update plugin-bundled Skills via their Agent's plugin manager.
 
-For an npx-only installation, use `npx --yes browserpaw@5.0.0` in place of `browserpaw` throughout.
+For an npx-only installation, use `npx --yes browserpaw@5.0.1` in place of `browserpaw` throughout.
 
 ## Learned Workflows & Auto-Routing (`~/.browserpaw`)
 

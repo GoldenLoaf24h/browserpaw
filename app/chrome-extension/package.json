@@ -8,7 +8,7 @@
     "directory": "app/chrome-extension"
   },
   "homepage": "https://github.com/GoldenLoaf24h/browserpaw",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "private": true,
   "type": "module",
   "scripts": {

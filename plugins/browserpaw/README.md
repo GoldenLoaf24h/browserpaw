@@ -9,12 +9,12 @@ Portable Agent Plugins v1.0.0 package for **ChatGPT**, **Codex**, and Agent Plug
 
 ## Installation
 
-> **Quick Start alternative:** The recommended default in the root [README](../../README.md) is global skill + npm (`npm install -g browserpaw@5.0.0 && browserpaw setup`) plus loading the Chrome extension, which also auto-syncs learned workflows into `~/.agents/skills/browserpaw/SKILL.md`.
+> **Quick Start alternative:** The recommended default in the root [README](../../README.md) is global skill + npm (`npm install -g browserpaw@5.0.1 && browserpaw setup`) plus loading the Chrome extension, which also auto-syncs learned workflows into `~/.agents/skills/browserpaw/SKILL.md`.
 
 1. Install the BrowserPaw CLI, register the Native Messaging host, and load the Chrome extension:
 
    ```sh
-   npm install -g browserpaw@5.0.0
+   npm install -g browserpaw@5.0.1
    browserpaw setup --no-skill
    ```
 
@@ -31,6 +31,6 @@ Portable Agent Plugins v1.0.0 package for **ChatGPT**, **Codex**, and Agent Plug
 
 ## Upgrading from v4
 
-Remove any legacy `[mcp_servers.browserpaw]` or `[mcp_servers.chrome-mcp]` blocks from `~/.codex/config.toml`, install `browserpaw@5.0.0`, run `browserpaw setup --no-skill`, and load the v5 Chrome extension. See [docs/MIGRATION.md](../../docs/MIGRATION.md).
+Remove any legacy `[mcp_servers.browserpaw]` or `[mcp_servers.chrome-mcp]` blocks from `~/.codex/config.toml`, install `browserpaw@5.0.1`, run `browserpaw setup --no-skill`, and load the v5 Chrome extension. See [docs/MIGRATION.md](../../docs/MIGRATION.md).
 
 Open [the bundled skill](skills/browserpaw/SKILL.md) for the complete Agent workflow.

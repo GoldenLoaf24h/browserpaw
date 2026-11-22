@@ -101,7 +101,7 @@ export function buildRuntimeNote({ bundledCliPath = null, homeDir = '~/.browserp
     );
   } else {
     lines.push(
-      '> **CLI Prerequisite**: Run `browserpaw status` to verify the host and Chrome extension. If `browserpaw` is not on `PATH`, install with `npm install -g browserpaw@5.0.0 && browserpaw setup --no-skill`.',
+      '> **CLI Prerequisite**: Run `browserpaw status` to verify the host and Chrome extension. If `browserpaw` is not on `PATH`, install with `npm install -g browserpaw@5.0.1 && browserpaw setup --no-skill`.',
     );
   }
   return lines.join('\n');

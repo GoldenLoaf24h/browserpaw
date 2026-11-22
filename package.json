@@ -1,6 +1,6 @@
 {
   "name": "browserpaw-workspace",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "BrowserPaw Chrome automation CLI, extension, and Agent Skill",
   "private": true,
   "author": "hangye",

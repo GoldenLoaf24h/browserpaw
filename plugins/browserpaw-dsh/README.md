@@ -1,6 +1,6 @@
 # BrowserPaw Bundle for DeepSeek Harness (`dsh-browserpaw`)
 
-DeepSeek Harness (`dsh`) Cordis bundle for **BrowserPaw v5.0.0**. One install brings in both the `browserpaw` npm CLI package (`dependencies.browserpaw`) and the read-only canonical `browserpaw` Agent Skill inside the DeepSeek Harness profile directory.
+DeepSeek Harness (`dsh`) Cordis bundle for **BrowserPaw v5.0.1**. One install brings in both the `browserpaw` npm CLI package (`dependencies.browserpaw`) and the read-only canonical `browserpaw` Agent Skill inside the DeepSeek Harness profile directory.
 
 ## Why This Layout Works Cleanly
 
@@ -10,12 +10,12 @@ DeepSeek Harness (`dsh`) Cordis bundle for **BrowserPaw v5.0.0**. One install br
 
 ## Installation
 
-> **Quick Start alternative:** For cross-agent setups, the recommended default in the root [README](../../README.md) is global skill + npm (`npm install -g browserpaw@5.0.0 && browserpaw setup`) plus loading the Chrome extension. Use `dsh-browserpaw` when you want a self-contained DeepSeek Harness profile plugin.
+> **Quick Start alternative:** For cross-agent setups, the recommended default in the root [README](../../README.md) is global skill + npm (`npm install -g browserpaw@5.0.1 && browserpaw setup`) plus loading the Chrome extension. Use `dsh-browserpaw` when you want a self-contained DeepSeek Harness profile plugin.
 
 1. Install the bundle into your DeepSeek Harness profile (requires `pnpm` and Node.js `>= 22.6.0`):
 
    ```sh
-   # From npm (after v5.0.0 publication)
+   # From npm (after v5.0.1 publication)
    dsh plugin --profile web add dsh-browserpaw
 
    # Or from a local checkout
@@ -37,9 +37,9 @@ DeepSeek Harness (`dsh`) Cordis bundle for **BrowserPaw v5.0.0**. One install br
 ## Bundle Manifest Declarations
 
 - **`dsh.bundle.patch`** points to `./cordis.patch.yml`, inserting `browserpaw-skill` as a profile bundle layer.
-- **`dependencies.browserpaw`** pins `^5.0.0` so DSH installs the `browserpaw` npm CLI alongside the plugin.
+- **`dependencies.browserpaw`** pins `^5.0.1` so DSH installs the `browserpaw` npm CLI alongside the plugin.
 - **`engines.dsh`** declares `>=0.2.0-rc.1 <0.3.0-0` (no in-box `@deepseek-ai/*` package is listed in `dependencies`, avoiding duplicate Cordis symbol registration).
 
 ## Upgrading from v4 (`dsh-browserpaw` 4.x)
 
-v4's `browserpaw_session` MCP bridge tool and `@deepseek-ai/dsh-mcp-client` integration are retired in v5.0.0. Upgrade `dsh-browserpaw` to `5.0.0`, remove any legacy `127.0.0.1:12306` MCP settings, run `browserpaw setup --no-skill`, and load the v5 Chrome extension. See [docs/MIGRATION.md](../../docs/MIGRATION.md).
+v4's `browserpaw_session` MCP bridge tool and `@deepseek-ai/dsh-mcp-client` integration are retired in v5.0.0. Upgrade `dsh-browserpaw` to `5.0.1`, remove any legacy `127.0.0.1:12306` MCP settings, run `browserpaw setup --no-skill`, and load the v5 Chrome extension. See [docs/MIGRATION.md](../../docs/MIGRATION.md).

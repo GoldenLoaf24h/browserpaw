@@ -1,6 +1,6 @@
 # BrowserPaw Plugin for Hermes Agent
 
-Native Hermes Agent plugin for **BrowserPaw v5.0.0**. It bundles the read-only canonical BrowserPaw Agent Skill (`ctx.register_skill("browserpaw", ...)`) and exposes one unified `browserpaw` tool backed by the local `browserpaw` CLI — with zero MCP configuration, zero bridge tokens, and `MEDIA:<path>` screenshot output formatted for Hermes messaging gateways.
+Native Hermes Agent plugin for **BrowserPaw v5.0.1**. It bundles the read-only canonical BrowserPaw Agent Skill (`ctx.register_skill("browserpaw", ...)`) and exposes one unified `browserpaw` tool backed by the local `browserpaw` CLI — with zero MCP configuration, zero bridge tokens, and `MEDIA:<path>` screenshot output formatted for Hermes messaging gateways.
 
 ## Architecture & Separation
 
@@ -15,7 +15,7 @@ Native Hermes Agent plugin for **BrowserPaw v5.0.0**. It bundles the read-only c
 1. Install the BrowserPaw CLI, register the local Native Messaging host, and load the Chrome extension:
 
    ```sh
-   npm install -g browserpaw@5.0.0
+   npm install -g browserpaw@5.0.1
    browserpaw setup --no-skill
    ```
 
@@ -49,7 +49,7 @@ Native Hermes Agent plugin for **BrowserPaw v5.0.0**. It bundles the read-only c
 
 ## Upgrading from v4 (`browserpaw-hermes` 4.x)
 
-v4's 18 `browserpaw_*` MCP wrappers, `mcp_servers.browserpaw`, and `mcp_allowlist` entries are no longer used in v5.0.0. Remove the legacy `mcp_servers.browserpaw` block and `mcp_allowlist` from `~/.hermes/config.yaml`, install `browserpaw@5.0.0` via npm, run `browserpaw setup --no-skill`, reload the v5 Chrome extension, and replace the installed Hermes plugin with:
+v4's 18 `browserpaw_*` MCP wrappers, `mcp_servers.browserpaw`, and `mcp_allowlist` entries are no longer used in v5.0.0. Remove the legacy `mcp_servers.browserpaw` block and `mcp_allowlist` from `~/.hermes/config.yaml`, install `browserpaw@5.0.1` via npm, run `browserpaw setup --no-skill`, reload the v5 Chrome extension, and replace the installed Hermes plugin with:
 
 ```sh
 hermes plugins install --force --no-enable GoldenLoaf24h/browserpaw/plugins/browserpaw-hermes

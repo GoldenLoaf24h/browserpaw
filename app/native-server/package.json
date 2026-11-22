@@ -1,6 +1,6 @@
 {
   "name": "browserpaw",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Command-line browser automation through the BrowserPaw Chrome extension",
   "author": "hangye",
   "repository": {

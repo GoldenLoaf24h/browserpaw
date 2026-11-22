@@ -1,6 +1,6 @@
 # BrowserPaw Installation Guide
 
-A practical setup guide for human users and AI Agents to install, configure, and verify **BrowserPaw v5.0.0**.
+A practical setup guide for human users and AI Agents to install, configure, and verify **BrowserPaw v5.0.1**.
 
 > **Upgrading from v4.x?** Read [docs/MIGRATION.md](docs/MIGRATION.md) ([Simplified Chinese](docs/MIGRATION.zh-CN.md)) first to remove retired MCP and REPL configurations before installing v5.
 
@@ -25,7 +25,7 @@ Every setup is different. Pick the path in each row that fits your environment:
 
 | Dimension               | Option A: Recommended Quick Start                                                                              | Option B: Temporary / Project Scope                                                               | Option C: Native Client Plugin                                                          |
 | :---------------------- | :------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------- |
-| **1. CLI & Host**       | `npm install -g browserpaw@5.0.0` + `browserpaw setup`                                                         | `npx browserpaw@5.0.0 setup` (or `--package ./browserpaw-5.0.0.tgz`)                              | Same npm CLI (bundled automatically by `dsh-browserpaw` in DeepSeek Harness)            |
+| **1. CLI & Host**       | `npm install -g browserpaw@5.0.1` + `browserpaw setup`                                                         | `npx browserpaw@5.0.1 setup` (or `--package ./browserpaw-5.0.1.tgz`)                              | Same npm CLI (bundled automatically by `dsh-browserpaw` in DeepSeek Harness)            |
 | **2. Base Skill**       | Global Agent Skill at `~/.agents/skills/browserpaw` (`--skill-scope user`, auto-synced with learned workflows) | Project-local `./.agents/skills/browserpaw` (`--skill-scope project`) or custom `--skill-dir DIR` | Read-only base skill inside the host's plugin directory (`browserpaw setup --no-skill`) |
 | **3. Chrome Extension** | Load unpacked from `~/.browserpaw/extension` (printed by `setup`)                                              | Load unpacked from `~/.browserpaw/extension` or `browserpaw-extension.zip`                        | Same unpacked extension from `~/.browserpaw/extension`                                  |
 | **4. Browser Target**   | Google Chrome (default)                                                                                        | Chromium (`--browser chromium`)                                                                   | Chrome or Chromium (`--browser chromium`)                                               |
@@ -51,20 +51,20 @@ This single setup works out of the box across Codex, Claude Code, Cursor, Windsu
 ### 1. Install the CLI and run setup
 
 ```sh
-npm install -g browserpaw@5.0.0
+npm install -g browserpaw@5.0.1
 browserpaw setup
 ```
 
-> **Note on npm availability:** The `npm install -g browserpaw@5.0.0` and `npx browserpaw@5.0.0` commands apply once `5.0.0` is published to npm. For a pre-release tarball or local build, use `npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup`.
+> **Note on npm availability:** The `npm install -g browserpaw@5.0.1` and `npx browserpaw@5.0.1` commands apply once `5.0.1` is published to npm. For a pre-release tarball or local build, use `npx --yes --package /path/to/browserpaw-5.0.1.tgz browserpaw setup`.
 
 Alternative without global install (after npm publication) or from a local release tarball:
 
 ```sh
-# npx without global install (prefix later commands with `npx --yes browserpaw@5.0.0`)
-npx browserpaw@5.0.0 setup
+# npx without global install (prefix later commands with `npx --yes browserpaw@5.0.1`)
+npx browserpaw@5.0.1 setup
 
 # Local candidate tarball
-npx --yes --package /path/to/browserpaw-5.0.0.tgz browserpaw setup
+npx --yes --package /path/to/browserpaw-5.0.1.tgz browserpaw setup
 ```
 
 Useful `setup` flags:
@@ -95,7 +95,7 @@ browserpaw status
 browserpaw doctor
 ```
 
-`browserpaw status` should report `"connected": true` with extension version `5.0.0`. If the host registration needs repair, run `browserpaw doctor --fix`.
+`browserpaw status` should report `"connected": true` with extension version `5.0.1` (or a compatible `5.x` build `>= 5.0.0`). If the host registration needs repair, run `browserpaw doctor --fix`.
 
 ### Upgrade an existing v5 installation
 
@@ -132,7 +132,7 @@ Load the printed `~/.browserpaw/extension` folder in `chrome://extensions`, rest
 ### Hermes Agent
 
 ```sh
-npm install -g browserpaw@5.0.0
+npm install -g browserpaw@5.0.1
 browserpaw setup --no-skill
 hermes plugins install GoldenLoaf24h/browserpaw#plugins/browserpaw-hermes
 hermes plugins enable browserpaw
@@ -143,7 +143,7 @@ If upgrading over an existing `browserpaw` v4 plugin install, pass `--force --no
 ### Claude Code
 
 ```sh
-npm install -g browserpaw@5.0.0
+npm install -g browserpaw@5.0.1
 browserpaw setup --no-skill
 claude plugin marketplace add GoldenLoaf24h/browserpaw
 claude plugin install browserpaw@browserpaw
@@ -154,7 +154,7 @@ Load `~/.browserpaw/extension` in `chrome://extensions`, start a new Claude Code
 ### ChatGPT / Codex (Portable Agent Plugins v1)
 
 ```sh
-npm install -g browserpaw@5.0.0
+npm install -g browserpaw@5.0.1
 browserpaw setup --no-skill
 codex plugin marketplace add GoldenLoaf24h/browserpaw
 codex plugin add browserpaw@browserpaw
@@ -168,7 +168,7 @@ Load `~/.browserpaw/extension` in `chrome://extensions`, and verify with `browse
 pnpm install
 pnpm build
 pnpm --filter browserpaw pack --pack-destination .artifacts
-npx --yes --package .artifacts/browserpaw-5.0.0.tgz browserpaw setup
+npx --yes --package .artifacts/browserpaw-5.0.1.tgz browserpaw setup
 ```
 
 See [docs/development/DEVELOPMENT.md](docs/development/DEVELOPMENT.md) and [docs/QUALITY.md](docs/QUALITY.md) for local verification gates and deployment checks.
