@@ -116,7 +116,7 @@ browserpaw recipe find 搜索
 | `chrome_navigate`                                   | `browserpaw open URL [--task TASK_ID]` / `browserpaw nav back\|forward\|reload`        | 打开网址时若命中已学习站点，返回结果会附带 `matchedRecipes` 提示                |
 | `get_windows_and_tabs`                              | `browserpaw tabs`                                                                      | 列出当前浏览器标签页及对应 ID                                                   |
 | `chrome_switch_tab` / `chrome_close_tabs`           | `browserpaw tab focus TAB_ID` / `browserpaw tab close TAB_ID...`                       | 如需在任务中接管现有标签页，使用 `browserpaw task borrow TAB_ID --task TASK_ID` |
-| `chrome_read_dom` / `chrome_get_web_content`        | `browserpaw observe [--task TASK_ID]` / `browserpaw text` / `browserpaw find QUERY`    | `observe` 返回当前页面可交互元素引用（`r1`、`r2` 等）及 frame 覆盖情况          |
+| `chrome_read_dom` / `chrome_get_web_content`        | `browserpaw observe [--task TASK_ID]` / `browserpaw text` / `browserpaw find QUERY`    | `observe` 返回当前页面可交互元素引用（`e1`、`e2` 等）及 frame 覆盖情况          |
 | `chrome_interact_index` / `chrome_click_element`    | `browserpaw click TARGET` / `browserpaw hover TARGET` / `browserpaw press KEY`         | `TARGET` 支持最新观察到的 ref、CSS 选择器、文本、role 或 label 定位             |
 | `chrome_computer`（坐标 / 拖拽 / 滚动）             | `browserpaw click @X,Y --capture ID` / `browserpaw drag SRC DST` / `browserpaw scroll` | 坐标点击必须携带同一标签页最新 `screenshot` 返回的 `--capture ID`               |
 | `chrome_fill_index` / `chrome_fill_or_select`       | `browserpaw fill TARGET -- VALUE` / `browserpaw select TARGET VALUE`                   | 多行文本或大段内容可使用 `--input FILE`                                         |

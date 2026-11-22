@@ -29,7 +29,7 @@ browserpaw setup
 
 - **常用安装参数：** `--skill-scope user`（默认）、`--skill-scope project`、`--skill-dir DIR`、`--no-skill` 以及 `--browser chromium`。
 - 完整多路径安装说明与 Agent 协助安装指引见 [安装指南（INSTALL.md）](INSTALL.md)。
-- **升级说明：** 每个新版 CLI 仅在 `stderr` 提醒一次。升级 CLI 并重新运行 `browserpaw setup` 即可更新 Native Host 与受管基础 Skill；Chrome MV3 扩展仍需在 `chrome://extensions` 手动更新或重载。[升级指南](INSTALL.md#upgrade-an-existing-v5-installation)
+- **升级说明：** `browserpaw` 在按需调用时（无后台常驻守护进程）每 24 小时最多检查一次 npm 最新稳定版，校验 SHA-512 完整性与 tar 安全边界后自动安装至 `~/.browserpaw/cli-versions/`，并同步刷新受管 Native Host、内置配方与基础 Skill（可通过 `BROWSERPAW_NO_AUTO_UPDATE=1` 或 `BROWSERPAW_NO_UPDATE_CHECK=1` 关闭）。兼容的 `5.x` Chrome MV3 扩展仍为可选并在 `chrome://extensions` 手动更新或重载。[升级指南](INSTALL.md#upgrade-an-existing-v5-installation)
 
 ## 客户端插件（持续同步支持）
 
@@ -62,7 +62,7 @@ browserpaw task finish --task TASK_ID
 
 先运行 `browserpaw status` 确认连接，随后运行 `browserpaw help` 查看命令。多步工作用 `task start` 获取任务 ID，并在后续命令传入 `--task ID`。在现有页面工作时可通过 `tabs` 取得标签页 ID，然后传入 `--tab ID`。观察页面后再用 ref 操作，核实业务结果后运行 `task finish`。
 
-自学习的站点技能与保存的 CLI 工作流统一保存在 `~/.browserpaw`（`skills/`、`recipes/` 与 `learned-index.json`）。可通过 `browserpaw recipe find <关键词>` 检索、`browserpaw recipe show ID` 查看参数、`browserpaw recipe save FILE` 创建候选、`browserpaw recipe patch ID --step INDEX -- ARGS...` 修补单个步骤，并用 `browserpaw recipe validate ID key=value` 校验只读候选后激活。`browserpaw recipe run ID key=value` 可直接执行工作流。候选不会进入自动路由，只有成功激活后才会刷新已安装 `SKILL.md` 的路由表。
+自学习的站点技能与保存的 CLI 工作流统一保存在 `~/.browserpaw`（`skills/`、`recipes/` 与 `learned-index.json`）。受信任的内置只读配方默认可通过 `browserpaw recipe find <关键词>` 或 `browserpaw recipe list` 直接检索（状态为 `bundled`），并在首次执行 `browserpaw recipe run ID key=value...` 时自动完成校验与激活；自定义或修补后的候选工作流可通过 `browserpaw recipe list --all` 查看，使用 `browserpaw recipe save FILE` 创建候选、`browserpaw recipe patch ID --step INDEX -- ARGS...` 修补单个步骤，并用 `browserpaw recipe validate ID` 校验只读候选后激活。未校验的候选不会进入自动路由，只有成功激活后才会刷新已安装 `SKILL.md` 的路由表。
 
 ## 故障排查与维护
 

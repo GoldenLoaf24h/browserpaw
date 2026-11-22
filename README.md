@@ -29,7 +29,7 @@ Open `chrome://extensions` (or `chromium://extensions`), enable **Developer mode
 
 - **Setup flags:** `--skill-scope user` (default), `--skill-scope project`, `--skill-dir DIR`, `--no-skill`, and `--browser chromium`.
 - See the full multi-path [Installation Guide](INSTALL.md) for human and Agent-assisted onboarding.
-- **Upgrades:** Each newer CLI version is announced once on `stderr`. Upgrade the CLI and re-run `browserpaw setup` to refresh the Native Host and managed base Skill; Chrome MV3 extension updates remain manual in `chrome://extensions`. See the [Upgrade guide](INSTALL.md#upgrade-an-existing-v5-installation).
+- **Upgrades:** When invoked on demand (with no background daemon), `browserpaw` checks npm at most once every 24 hours, verifies SHA-512 integrity and tar extraction guards, installs newer stable CLI versions into `~/.browserpaw/cli-versions/`, and automatically refreshes the staged Native Host, bundled recipes, and managed base Skill (`BROWSERPAW_NO_AUTO_UPDATE=1` / `BROWSERPAW_NO_UPDATE_CHECK=1` to opt out). Compatible `5.x` Chrome MV3 extension updates remain optional and manual in `chrome://extensions`. See the [Upgrade guide](INSTALL.md#upgrade-an-existing-v5-installation).
 
 ## Client Plugins
 
@@ -62,7 +62,7 @@ browserpaw task finish --task TASK_ID
 
 Replace `TASK_ID` with the returned task ID. To operate on an existing page, run `browserpaw tabs` and select it with `--tab ID`. Read [command reference](docs/COMMANDS.md) and the [Agent Skill](skills/browserpaw/SKILL.md) for refs, frames, recipes, and receipts.
 
-Self-learned site skills and saved CLI recipes live under `~/.browserpaw` (`skills/`, `recipes/`, and `learned-index.json`). Run `browserpaw recipe find <query>` or `browserpaw recipe list --all` to discover workflows, `browserpaw recipe save FILE` to create a candidate, `browserpaw recipe patch ID --step INDEX -- ARGS...` to repair one step, and `browserpaw recipe validate ID key=value` to verify a read-only candidate before activation. `browserpaw recipe run ID key=value` executes a workflow directly. Candidates remain outside automatic routing, and successful activation refreshes the installed Skill routing table.
+Self-learned site skills and saved CLI recipes live under `~/.browserpaw` (`skills/`, `recipes/`, and `learned-index.json`). Trusted bundled read-only recipes are discoverable directly via `browserpaw recipe find <query>` or `browserpaw recipe list` (status `bundled`) and auto-validate on first `browserpaw recipe run ID key=value...`. For custom or repaired candidates shown in `browserpaw recipe list --all`, use `browserpaw recipe save FILE` to create a candidate, `browserpaw recipe patch ID --step INDEX -- ARGS...` to repair one step, and `browserpaw recipe validate ID` to verify and activate a read-only candidate. Unvalidated candidates remain outside automatic routing, and successful activation refreshes the installed Skill routing table.
 
 ## Troubleshooting & Maintenance
 

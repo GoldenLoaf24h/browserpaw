@@ -1,6 +1,6 @@
 # Privacy Policy for BrowserPaw
 
-**Last Updated**: November 20, 2026
+**Last Updated**: November 22, 2026
 
 BrowserPaw is an open-source browser automation bridge connecting local AI Agents to Chrome via the `browserpaw` CLI, a local Native Messaging host (`com.browserpaw.nativehost`), and a Chrome Manifest V3 extension. BrowserPaw executes locally and does not collect telemetry or operate cloud inference services.
 
@@ -11,9 +11,9 @@ BrowserPaw is an open-source browser automation bridge connecting local AI Agent
 - **Loopback-Only Control Plane**: The Native host binds exclusively to loopback `127.0.0.1` (default port `12307`), validates the `Host` header, rejects browser `Origin` headers, and authenticates CLI requests using the 256-bit secret stored in `$BROWSERPAW_HOME/token` (default `~/.browserpaw/token`, or `%USERPROFILE%\.browserpaw\token` on Windows).
 - **No Tracking Telemetry**: BrowserPaw includes no advertising trackers, analytics SDKs, crash-reporting uploads, or silent background telemetry. Built-in Jev/remote model inference from v4 is removed in v5.0.0.
 - **Version Update Checks**:
-  - **CLI Update Check**: At most once every 24 hours per BrowserPaw home, the CLI queries `https://registry.npmjs.org/browserpaw/latest` (1-second timeout, redirects disabled) to check for a newer stable release. Set `BROWSERPAW_NO_UPDATE_CHECK=1` to disable this check in offline or CI environments.
+  - **CLI Update Check & On-Demand Auto-Update**: At most once every 24 hours per BrowserPaw home (with a 10-minute retry backoff on transient failure), the CLI queries `https://registry.npmjs.org/browserpaw/latest` (2.5-second timeout, redirects disabled) for a newer stable release, and—unless `BROWSERPAW_NO_AUTO_UPDATE=1` is set—downloads and SHA-512-verifies the matching npm `.tgz` tarball into `~/.browserpaw/cli-versions/`. Set `BROWSERPAW_NO_UPDATE_CHECK=1` to disable all CLI update checks and downloads in offline or CI environments.
   - **Extension Update Check**: Opening the extension popup checks `https://api.github.com/repos/GoldenLoaf24h/browserpaw/releases/latest` with sliding TTL and ETag caching (`chrome.storage.local`) so the version badge can link to a newer release.
-- **User- and Agent-Directed Requests**: Browser commands (`open`, `nav`, `fetch`, `downloads`, etc.) only contact destinations instructed by the user or calling Agent. Remote file downloads enforce TCP-time SSRF checks (`safeLookup`) against private, loopback, link-local, and cloud metadata IP ranges.
+- **User- and Agent-Directed Requests**: Outside explicit browser commands and the documented CLI/extension version checks above, BrowserPaw makes no outbound network requests. Browser commands (`open`, `nav`, `fetch`, `downloads`, etc.) only contact destinations instructed by the user or calling Agent, and remote file downloads enforce TCP-time SSRF checks (`safeLookup`) against private, loopback, link-local, and cloud metadata IP ranges.
 - **Caller & AI Host Boundary**: Command receipts, DOM extracts, screenshots, network captures, and inspected browser data are returned to the local CLI caller (`stdout` or local files under `~/.browserpaw`). If your AI Agent or host transmits its conversation context or tool outputs to an external LLM provider, that outbound transfer is governed by your Agent host's configuration and privacy policy.
 
 ---
@@ -22,7 +22,7 @@ BrowserPaw is an open-source browser automation bridge connecting local AI Agent
 
 BrowserPaw stores operational state locally inside `$BROWSERPAW_HOME` (default `~/.browserpaw` on macOS/Linux, `%USERPROFILE%\.browserpaw` on Windows):
 
-- **Bridge & Runtime State**: `token` (mode `0o600`), `host.json` (loopback port and PID), `tasks.json` (task-owned tab/window ledger), `cli-update.json` (update check timestamp), `extension/` (unpacked extension copy), and `out/` (local receipt files, screenshots, traces, and exports, bounded by local retention rules).
+- **Bridge & Runtime State**: `token` (mode `0o600`), `host.json` (loopback port and PID), `tasks.json` (task-owned tab/window ledger), `cli-update.json` (update check state and retry timestamp), `cli-versions/` (managed CLI release cache), `extension/` (unpacked extension copy), and `out/` (local receipt files, screenshots, traces, and exports, bounded by local retention rules).
 - **Learned Workflows (`skills/`, `recipes/`, `learned-index.json`)**: Site skills and recipes learned locally stay on your disk. Skill validation rejects credential-like keys, and URL sanitization scrubs query/fragment secrets before storage.
 - **Secret Redaction & Scoped Data Access**:
   - DOM indexing masks password and payment-card values.
