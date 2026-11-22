@@ -136,7 +136,7 @@ function formatFrontmatterDescription(
 
 function renderLearnedSection(entries: readonly LearnedRoutingEntry[]): string {
   if (!entries.length) return '';
-  const visible = entries.slice(0, 20);
+  const visible = entries.slice(0, 30);
   const rows = visible.map((entry) => {
     const sites = entry.domains.length
       ? entry.domains

@@ -9,6 +9,7 @@ import {
   DOM_EXTRACTION_PROGRAM,
   DOM_EXTRACTION_PROGRAM_ALIAS,
   DOM_EXTRACTION_PROGRAM_HASH,
+  PREVIOUS_PUBLISHED_READ_ONLY_PROGRAMS,
   PUBLISHED_READ_ONLY_PROGRAMS,
   UnsupportedReadOnlyProgramError,
   assertReadOnlyDomConfig,
@@ -65,6 +66,7 @@ interface SkillVersion {
 interface SkillRecord {
   id: string;
   activeVersion?: number;
+  autoUpdatePolicy?: 'disabled' | 'pinned';
   versions: SkillVersion[];
 }
 
@@ -109,6 +111,11 @@ class SkillContractError extends Error {}
 
 function check(schema: JsonObject, value: unknown, label: string): void {
   const result = validator.getValidator(schema)(value);
+  if (!result.valid) throw new SkillContractError(`${label}: ${result.errorMessage}`);
+}
+
+function checkWithDefaults(schema: JsonObject, value: unknown, label: string): void {
+  const result = validator.getDefaultingValidator(schema)(value);
   if (!result.valid) throw new SkillContractError(`${label}: ${result.errorMessage}`);
 }
 
@@ -326,17 +333,52 @@ export class BrowserSkillStore {
   private readonly browser: SkillBrowser;
   private readonly running = new Set<string>();
   private readonly executions = new Map<string, number>();
+  private readonly validating = new Map<
+    string,
+    { version: number; promise: Promise<ReturnType<BrowserSkillStore['summary']>> }
+  >();
   private readonly approvedPrograms = new Set<string>([DOM_EXTRACTION_PROGRAM_HASH]);
+  private readonly publishedPrograms: Readonly<Record<string, string>>;
+  private readonly previousPublishedPrograms: Readonly<Record<string, readonly string[]>>;
+  private readonly bundledDefinitionHashes = new Map<string, string>();
 
-  constructor(options: { root?: string; browser: SkillBrowser }) {
+  constructor(options: {
+    root?: string;
+    browser: SkillBrowser;
+    publishedPrograms?: Readonly<Record<string, string>>;
+    previousPublishedPrograms?: Readonly<Record<string, readonly string[]>>;
+  }) {
     this.root = path.resolve(
       options.root ||
         path.join(process.env.BROWSERPAW_HOME || path.join(os.homedir(), '.browserpaw'), 'skills'),
     );
     this.browser = options.browser;
+    this.publishedPrograms = options.publishedPrograms ?? PUBLISHED_READ_ONLY_PROGRAMS;
+    this.previousPublishedPrograms =
+      options.previousPublishedPrograms ?? PREVIOUS_PUBLISHED_READ_ONLY_PROGRAMS;
     fs.mkdirSync(this.root, { recursive: true });
     if (fs.lstatSync(this.root).isSymbolicLink())
       throw new Error('Skill directory cannot be a symbolic link');
+  }
+
+  private approvedProgramsFor(
+    definition: SkillDefinition,
+    allowVerifiedBuiltin = false,
+  ): ReadonlySet<string> {
+    if (!allowVerifiedBuiltin || definition.source?.type !== 'builtin') {
+      return this.approvedPrograms;
+    }
+    const currentPublished = this.publishedPrograms[definition.id];
+    const previousPublished = this.previousPublishedPrograms[definition.id];
+    if (!currentPublished && (!previousPublished || previousPublished.length === 0)) {
+      return this.approvedPrograms;
+    }
+    const allowed = new Set(this.approvedPrograms);
+    if (currentPublished) allowed.add(currentPublished);
+    if (previousPublished) {
+      for (const digest of previousPublished) allowed.add(digest);
+    }
+    return allowed;
   }
 
   private resolveProgramStep(
@@ -481,7 +523,10 @@ export class BrowserSkillStore {
         );
         if (!version) return [];
         try {
-          this.assertSupportedDefinition(version.definition);
+          this.assertSupportedDefinition(
+            version.definition,
+            this.approvedProgramsFor(version.definition, true),
+          );
           return [this.summary(record, version)];
         } catch {
           return [];
@@ -566,6 +611,53 @@ export class BrowserSkillStore {
         diagnostics: { strategy: 'keyword', reason: 'ambiguous_keywords' } as SkillFindDiagnostic,
       }));
   }
+  private findAutoUpdatableBundledCandidate(
+    record: SkillRecord,
+  ): { version: number; hash: string } | undefined {
+    const bundledHash = this.bundledDefinitionHashes.get(record.id);
+    if (!bundledHash) return undefined;
+    if (record.autoUpdatePolicy === 'disabled' || record.autoUpdatePolicy === 'pinned') {
+      return undefined;
+    }
+    const active = record.versions.find(
+      (item) => item.version === record.activeVersion && item.status === 'active',
+    );
+    if (active) {
+      if (active.hash === bundledHash) return undefined;
+      if (active.definition.source.type !== 'builtin') return undefined;
+      if (
+        record.versions.some(
+          (item) =>
+            item.version > active.version &&
+            (item.status === 'verified' || item.status === 'disabled'),
+        )
+      ) {
+        return undefined;
+      }
+    } else {
+      if (record.versions.some((item) => item.status === 'disabled')) return undefined;
+      if (record.versions.some((item) => item.definition.source.type !== 'builtin')) {
+        return undefined;
+      }
+    }
+    const candidate = [...record.versions]
+      .reverse()
+      .find(
+        (item) =>
+          item.status === 'candidate' &&
+          item.hash === bundledHash &&
+          item.definition.source.type === 'builtin',
+      );
+    if (!candidate) return undefined;
+    if (active && candidate.version <= active.version) return undefined;
+    try {
+      this.assertSupportedDefinition(candidate.definition);
+    } catch {
+      return undefined;
+    }
+    return { version: candidate.version, hash: candidate.hash };
+  }
+
   get(id: string, requestedVersion?: number) {
     const record = this.read(id);
     const version = record.versions.find(
@@ -576,18 +668,26 @@ export class BrowserSkillStore {
           record.versions[record.versions.length - 1]?.version),
     );
     if (!version) throw new Error('No matching verified skill version');
+    const allowVerifiedBuiltin =
+      version.status === 'active' || (version.status === 'verified' && Boolean(version.verifiedAt));
     let executionSupported = true;
     let unsupportedReason: string | undefined;
     try {
-      this.assertSupportedDefinition(version.definition);
+      this.assertSupportedDefinition(
+        version.definition,
+        this.approvedProgramsFor(version.definition, allowVerifiedBuiltin),
+      );
     } catch (error) {
       executionSupported = false;
       unsupportedReason = error instanceof Error ? error.message : String(error);
     }
+    const pendingBundledCandidate =
+      requestedVersion === undefined ? this.findAutoUpdatableBundledCandidate(record) : undefined;
     return {
       ...this.summary(record, version),
       executionSupported,
       ...(unsupportedReason ? { unsupportedReason } : {}),
+      ...(pendingBundledCandidate ? { pendingBundledCandidate } : {}),
       definition: version.definition,
       evidence: version.evidence,
     };
@@ -635,7 +735,7 @@ export class BrowserSkillStore {
           approved.add(digest);
           continue;
         }
-        const publishedHash = PUBLISHED_READ_ONLY_PROGRAMS[definition.id];
+        const publishedHash = this.publishedPrograms[definition.id];
         if (publishedHash !== digest) {
           unsupported(
             `Unsupported bundled skill ${definition.id}: JavaScript is not a locally reviewed published program`,
@@ -647,14 +747,30 @@ export class BrowserSkillStore {
     }
     for (const digest of approved) this.approvedPrograms.add(digest);
 
+    const nextBundledHashes = new Map<string, string>();
     for (const definition of definitions) {
-      const target = this.filename(definition.id);
-      if (
-        !fs.existsSync(target) ||
-        !this.read(definition.id).versions.some((item) => item.hash === hash(definition))
-      ) {
-        await this.propose(definition);
+      const digest = hash(definition);
+      if (definition.source?.type === 'builtin') {
+        nextBundledHashes.set(definition.id, digest);
       }
+      const target = this.filename(definition.id);
+      if (fs.existsSync(target)) {
+        const existing = this.read(definition.id);
+        const active = existing.versions.find(
+          (item) => item.version === existing.activeVersion && item.status === 'active',
+        );
+        const isUserOwned =
+          active?.definition.source.type === 'agent' ||
+          (existing.versions.length > 0 &&
+            existing.versions.every((item) => item.definition.source.type !== 'builtin'));
+        if (isUserOwned) continue;
+        if (existing.versions.some((item) => item.hash === digest)) continue;
+      }
+      await this.propose(definition);
+    }
+    this.bundledDefinitionHashes.clear();
+    for (const [id, digest] of nextBundledHashes) {
+      this.bundledDefinitionHashes.set(id, digest);
     }
   }
 
@@ -710,7 +826,11 @@ export class BrowserSkillStore {
           'Verification requires explicit output and independent observation assertions',
         );
       }
-      check(definition.inputSchema, test.inputs, 'input');
+      const testInputs: JsonObject =
+        test.inputs && typeof test.inputs === 'object' && !Array.isArray(test.inputs)
+          ? structuredClone(test.inputs)
+          : test.inputs;
+      checkWithDefaults(definition.inputSchema, testInputs, 'input');
       validator.getValidator(test.expect);
       const observations = Array.isArray(test.observe) ? test.observe : [test.observe];
       if (observations.length !== verifications.length)
@@ -722,7 +842,7 @@ export class BrowserSkillStore {
           throw new Error('Independent observation must contain a concrete assertion');
         validator.getValidator(observation);
       }
-      assertDomain(expandUrl(definition.startUrl, test.inputs), definition);
+      assertDomain(expandUrl(definition.startUrl, testInputs), definition);
     }
     for (const verification of verifications) {
       if (
@@ -802,11 +922,12 @@ export class BrowserSkillStore {
 
   private async executeVersion(
     version: SkillVersion,
-    inputs: JsonObject,
+    rawInputs: JsonObject,
     callerTaskId?: string,
     observationSchema?: JsonObject | JsonObject[],
     signal?: AbortSignal,
     sessionId?: string,
+    approvedPrograms: ReadonlySet<string> = this.approvedPrograms,
   ): Promise<{ output: unknown; taskId: string }> {
     const checkCancelled = () => {
       if (signal?.aborted)
@@ -817,8 +938,12 @@ export class BrowserSkillStore {
     };
     checkCancelled();
     const def = version.definition;
-    this.assertSupportedDefinition(def);
-    check(def.inputSchema, inputs, 'input');
+    this.assertSupportedDefinition(def, approvedPrograms);
+    const inputs: JsonObject =
+      rawInputs && typeof rawInputs === 'object' && !Array.isArray(rawInputs)
+        ? structuredClone(rawInputs)
+        : rawInputs;
+    checkWithDefaults(def.inputSchema, inputs, 'input');
     if (!outputContract(def.outputSchema)) {
       throw new Error('Skill output contract is no longer valid');
     }
@@ -838,7 +963,7 @@ export class BrowserSkillStore {
         delete args.config;
         delete args.program;
         if (step.tool === 'chrome_javascript') {
-          const program = this.resolveProgramStep(step);
+          const program = this.resolveProgramStep(step, approvedPrograms);
           const runtimeInputs =
             program.config === undefined ? inputs : { ...inputs, config: program.config };
           args.code = `const input = ${JSON.stringify(runtimeInputs)};\n${program.code}`;
@@ -914,6 +1039,14 @@ export class BrowserSkillStore {
   }
 
   async validate(id: string, requestedVersion?: number, signal?: AbortSignal, sessionId?: string) {
+    if (this.executions.has(id)) throw new Error('Skill is already running');
+    const activeValidation = this.validating.get(id);
+    if (activeValidation) {
+      if (requestedVersion !== undefined && requestedVersion !== activeValidation.version) {
+        throw new Error('Skill is already running');
+      }
+      return activeValidation.promise;
+    }
     if (this.running.has(id) || this.executions.has(id))
       throw new Error('Skill is already running');
     const record = this.read(id);
@@ -924,34 +1057,40 @@ export class BrowserSkillStore {
       throw new Error('Select a candidate skill version');
     this.assertSupportedDefinition(version.definition);
     this.running.add(id);
-    try {
-      version.evidence = [];
-      for (const test of version.definition.tests) {
-        const { output, taskId } = await this.executeVersion(
-          version,
-          test.inputs,
-          undefined,
-          test.observe,
-          signal,
-          sessionId,
-        );
-        check(test.expect, output, 'verification output');
-        version.evidence.push({
-          taskId,
-          inputHash: hash(test.inputs),
-          outputHash: hash(output),
-          at: new Date().toISOString(),
-        });
+    const runValidation = (async () => {
+      try {
+        version.evidence = [];
+        for (const test of version.definition.tests) {
+          const { output, taskId } = await this.executeVersion(
+            version,
+            test.inputs,
+            undefined,
+            test.observe,
+            signal,
+            sessionId,
+          );
+          check(test.expect, output, 'verification output');
+          version.evidence.push({
+            taskId,
+            inputHash: hash(test.inputs),
+            outputHash: hash(output),
+            at: new Date().toISOString(),
+          });
+        }
+        for (const old of record.versions) if (old.status === 'active') old.status = 'verified';
+        version.status = 'active';
+        version.verifiedAt = new Date().toISOString();
+        record.activeVersion = version.version;
+        delete record.autoUpdatePolicy;
+        this.write(record);
+        return this.summary(record, version);
+      } finally {
+        this.running.delete(id);
+        this.validating.delete(id);
       }
-      for (const old of record.versions) if (old.status === 'active') old.status = 'verified';
-      version.status = 'active';
-      version.verifiedAt = new Date().toISOString();
-      record.activeVersion = version.version;
-      this.write(record);
-      return this.summary(record, version);
-    } finally {
-      this.running.delete(id);
-    }
+    })();
+    this.validating.set(id, { version: version.version, promise: runValidation });
+    return runValidation;
   }
 
   async run(
@@ -994,14 +1133,23 @@ export class BrowserSkillStore {
       );
     }
 
-    this.assertSupportedDefinition(version.definition);
+    const approved = this.approvedProgramsFor(version.definition, true);
+    this.assertSupportedDefinition(version.definition, approved);
     this.executions.set(id, (this.executions.get(id) || 0) + 1);
     try {
       return {
         id,
         version: version.version,
         hash: version.hash,
-        ...(await this.executeVersion(version, inputs, taskId, undefined, signal, sessionId)),
+        ...(await this.executeVersion(
+          version,
+          inputs,
+          taskId,
+          undefined,
+          signal,
+          sessionId,
+          approved,
+        )),
       };
     } catch (error) {
       if (error instanceof SkillContractError && !error.message.startsWith('input:')) {
@@ -1025,6 +1173,7 @@ export class BrowserSkillStore {
     const version = record.versions.find((item) => item.version === record.activeVersion);
     if (version) version.status = 'disabled';
     record.activeVersion = undefined;
+    record.autoUpdatePolicy = 'disabled';
     this.write(record);
     return { id, status: 'disabled' };
   }
@@ -1037,10 +1186,14 @@ export class BrowserSkillStore {
     );
     if (!target)
       throw new Error('Rollback requires an independently verified, non-disabled version');
-    this.assertSupportedDefinition(target.definition);
+    this.assertSupportedDefinition(
+      target.definition,
+      this.approvedProgramsFor(target.definition, true),
+    );
     for (const old of record.versions) if (old.status === 'active') old.status = 'verified';
     target.status = 'active';
     record.activeVersion = target.version;
+    record.autoUpdatePolicy = 'pinned';
     this.write(record);
     return this.summary(record, target);
   }

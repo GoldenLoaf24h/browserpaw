@@ -18,11 +18,23 @@ type JsonObject = Record<string, any>;
 
 const recipeRoot = path.resolve(__dirname, '../../../skills/browserpaw/assets/recipes');
 const publishedIds = [
+  'bilibili-popular-videos',
+  'bilibili-video-detail',
+  'github-issue-thread',
   'github-releases',
+  'github-repo-readme',
+  'github-repo-search',
   'mdn-search',
   'npm-compare',
+  'reddit-post-read',
+  'reddit-subreddit-posts',
+  'v2ex-node-topics',
+  'v2ex-topic-read',
+  'x-profile-posts',
   'x-search-thread',
   'x-visible-thread',
+  'youtube-search-videos',
+  'youtube-video-read',
 ];
 
 const toolResult = (value: unknown) => ({

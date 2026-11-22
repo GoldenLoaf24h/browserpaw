@@ -56,11 +56,23 @@ try {
     'dist/v5/skill/browserpaw/SKILL.md',
     'dist/v5/skill/browserpaw/references/commands.md',
     'dist/v5/recipes/developer.mozilla.org.md',
+    'dist/v5/recipes/bilibili-popular-videos.json',
+    'dist/v5/recipes/bilibili-video-detail.json',
+    'dist/v5/recipes/github-issue-thread.json',
     'dist/v5/recipes/github-releases.json',
+    'dist/v5/recipes/github-repo-readme.json',
+    'dist/v5/recipes/github-repo-search.json',
     'dist/v5/recipes/mdn-search.json',
     'dist/v5/recipes/npm-compare.json',
+    'dist/v5/recipes/reddit-post-read.json',
+    'dist/v5/recipes/reddit-subreddit-posts.json',
+    'dist/v5/recipes/v2ex-node-topics.json',
+    'dist/v5/recipes/v2ex-topic-read.json',
+    'dist/v5/recipes/x-profile-posts.json',
     'dist/v5/recipes/x-search-thread.json',
     'dist/v5/recipes/x-visible-thread.json',
+    'dist/v5/recipes/youtube-search-videos.json',
+    'dist/v5/recipes/youtube-video-read.json',
   ]) {
     assert.ok(entries.has(file), `npm tarball is missing ${file}`);
   }
@@ -123,6 +135,18 @@ try {
   const found = JSON.parse(execute('recipe', 'find', '推特搜索', '--all', '--json'));
   assert.equal(found.ok, true);
   assert.equal(found.data.matches[0].id, 'x-search-thread');
+  const foundDefault = JSON.parse(execute('recipe', 'find', '推特搜索', '--json'));
+  assert.equal(foundDefault.ok, true);
+  assert.equal(foundDefault.data.matches[0].id, 'x-search-thread');
+  assert.equal(foundDefault.data.matches[0].status, 'bundled');
+  const listedDefault = JSON.parse(execute('recipe', 'list', '--json'));
+  assert.equal(listedDefault.ok, true);
+  assert.ok(listedDefault.data.workflows.length >= 17);
+  assert.ok(
+    listedDefault.data.workflows.some(
+      (workflow) => workflow.id === 'x-search-thread' && workflow.status === 'bundled',
+    ),
+  );
   const shown = JSON.parse(execute('recipe', 'show', 'x-search-thread', '--json'));
   assert.equal(shown.ok, true);
   assert.equal(shown.data.command, 'browserpaw recipe run x-search-thread query=<query>');

@@ -9,6 +9,7 @@ export const GITHUB_REPO_NAME = 'browserpaw';
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
 export const GITHUB_API_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/latest`;
 export const CURRENT_VERSION = '5.0.0';
+export const MIN_COMPATIBLE_EXTENSION_VERSION = '5.0.0';
 export const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour sliding TTL
 export const DEFAULT_MAX_SLIDING_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours maximum sliding window
 
@@ -153,6 +154,19 @@ export function isNewerVersion(remoteVersion: string, currentVersion: string): b
   const current = parseSemver(currentVersion);
   if (!remote || !current) return false;
   return compareSemver(remote.raw, current.raw) > 0;
+}
+
+export function isCompatibleExtensionVersion(
+  extensionVersion: string | null | undefined,
+  cliVersion: string = CURRENT_VERSION,
+  minVersion: string = MIN_COMPATIBLE_EXTENSION_VERSION,
+): boolean {
+  const extension = parseSemver(extensionVersion);
+  const cli = parseSemver(cliVersion);
+  const floor = parseSemver(minVersion);
+  if (!extension || !cli || !floor) return false;
+  if (extension.major !== cli.major) return false;
+  return compareSemver(extension.raw, floor.raw) >= 0;
 }
 
 export interface VersionCacheEntry {

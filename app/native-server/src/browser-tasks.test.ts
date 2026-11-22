@@ -1036,9 +1036,18 @@ describe('BrowserTaskManager', () => {
     'tracks a pending navigation to $pendingUrl (committed=$committed)',
     async ({ pendingUrl, committed }) => {
       let inventoryReads = 0;
+      let afterOpen = false;
       const call = jest.fn<BrowserCall>(async (name, args) => {
         if (name === 'chrome_navigate') return opened(510, String(args.url));
         if (name === 'get_windows_and_tabs') {
+          if (!afterOpen) {
+            return live([
+              {
+                ...tab(510, 'https://pending.example/', true, 'doc-0', 'browser-1'),
+                pendingUrl: null,
+              },
+            ]);
+          }
           inventoryReads++;
           return live([
             inventoryReads < 3
@@ -1074,6 +1083,7 @@ describe('BrowserTaskManager', () => {
       const manager = new BrowserTaskManager({ call, storageDir: testDir('pending-commit') });
       const { task } = await manager.execute({ action: 'start', name: 'Pending document' });
       await manager.execute({ action: 'open', taskId: task!.id, url: 'https://pending.example/' });
+      afterOpen = true;
       inventoryReads = 0;
       jest.useFakeTimers();
       try {
@@ -4659,5 +4669,130 @@ describe('BrowserTaskManager', () => {
     expect(status.task?.pages[0]?.url).toBe(secretPageUrl);
     expect(status.task?.downloads[0]?.url).toBe(secretDownloadUrl);
     expect(status.task?.pendingCreations[0]?.requestedUrl).toBe(secretPendingUrl);
+  });
+
+  it('waits for initial open redirect to canonical URL before binding document identity', async () => {
+    const storageDir = testDir('open-initial-redirect');
+    let inventoryReads = 0;
+    const canonicalUrl =
+      'https://www.reddit.com/r/programming/comments/f9ut5f/the_most_recommended_programming_books_of_alltime/';
+    const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'chrome_navigate') return opened(71, String(args.url));
+      if (name === 'get_windows_and_tabs') {
+        inventoryReads += 1;
+        if (inventoryReads === 1) {
+          return live([
+            {
+              ...tab(
+                71,
+                'https://www.reddit.com/r/programming/comments/f9ut5f/',
+                true,
+                'doc-initial-loading',
+              ),
+              status: 'loading',
+              pendingUrl: canonicalUrl,
+            },
+          ]);
+        }
+        return live([
+          {
+            ...tab(71, canonicalUrl, true, 'doc-canonical-final'),
+            status: 'complete',
+            pendingUrl: null,
+          },
+        ]);
+      }
+      if (name === 'browserpaw_set_owned_viewport') {
+        expect(args.documentId).toBe('doc-canonical-final');
+        return viewport();
+      }
+      if (name === 'chrome_close_tabs') {
+        expect(args.expectedTabs).toEqual([
+          {
+            tabId: 71,
+            documentId: 'doc-canonical-final',
+            browserInstanceId: 'browser-1',
+          },
+        ]);
+        return result({ success: true, closedTabIds: [71] });
+      }
+      throw new Error('unexpected ' + name);
+    });
+
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const { task } = await manager.execute({ action: 'start', name: 'Reddit canonical redirect' });
+    const openedPage = await manager.execute({
+      action: 'open',
+      taskId: task!.id,
+      url: 'https://www.reddit.com/r/programming/comments/f9ut5f/',
+    });
+    expect(openedPage.ok).toBe(true);
+    expect(openedPage.task?.pages[0]).toMatchObject({
+      tabId: 71,
+      url: canonicalUrl,
+      documentId: 'doc-canonical-final',
+    });
+
+    const finished = await manager.execute({ action: 'finish', taskId: task!.id });
+    expect(finished.ok).toBe(true);
+    expect(call.mock.calls.filter(([name]) => name === 'chrome_close_tabs')).toHaveLength(1);
+  });
+
+  it('does not overwrite bound documentId after viewport mismatch and refuses finish close on manual navigation', async () => {
+    const storageDir = testDir('open-no-overwrite-manual-nav');
+    let observedDocId = 'doc-bound-initial';
+    let observedUrl = 'https://www.reddit.com/r/programming/comments/f9ut5f/';
+    const call = jest.fn<BrowserCall>(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'chrome_navigate') return opened(72, String(args.url));
+      if (name === 'get_windows_and_tabs') {
+        return live([
+          {
+            ...tab(72, observedUrl, true, observedDocId),
+            status: 'complete',
+            pendingUrl: null,
+          },
+        ]);
+      }
+      if (name === 'browserpaw_set_owned_viewport') {
+        // Simulate a user manually navigating the managed tab after initial binding
+        observedDocId = 'doc-user-manual-nav';
+        observedUrl = 'https://mail.example.com/inbox';
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: 'Tab 72 document identity does not match',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (name === 'chrome_close_tabs') {
+        throw new Error('finish must not close manually navigated tab');
+      }
+      throw new Error('unexpected ' + name);
+    });
+
+    const manager = new BrowserTaskManager({ call, storageDir });
+    const { task } = await manager.execute({ action: 'start', name: 'Manual nav protection' });
+    const openedPage = await manager.execute({
+      action: 'open',
+      taskId: task!.id,
+      url: 'https://www.reddit.com/r/programming/comments/f9ut5f/',
+    });
+    expect(openedPage.ok).toBe(true);
+    expect(openedPage.task?.pages[0]).toMatchObject({
+      tabId: 72,
+      documentId: 'doc-bound-initial',
+    });
+
+    const finished = await manager.execute({ action: 'finish', taskId: task!.id });
+    expect(finished.ok).toBe(false);
+    expect(finished.status).toBe('unverified');
+    expect(finished.error).toContain('browser/document identity is unverified');
+    expect(call.mock.calls.filter(([name]) => name === 'chrome_close_tabs')).toHaveLength(0);
   });
 });

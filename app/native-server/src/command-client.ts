@@ -11,9 +11,12 @@ import {
   CURRENT_VERSION,
   DEFAULT_SERVER_PORT,
   GITHUB_REPO_URL,
+  MIN_COMPATIBLE_EXTENSION_VERSION,
+  isCompatibleExtensionVersion,
+  isNewerVersion,
 } from 'chrome-mcp-shared';
 import type { ParsedCommand } from 'chrome-mcp-shared';
-import { checkForCliUpdate } from './cli-update';
+import { checkForCliUpdate, maybeDelegateToManagedCli } from './cli-update';
 import { readBridgeToken } from './server/token';
 import { pruneOutput } from './output-retention';
 
@@ -278,7 +281,51 @@ async function readStdin() {
   return text;
 }
 
+async function ensureHostMatchesCliVersion(): Promise<void> {
+  const root = resolve(outputRoot(), '..');
+  const hostInfo: Fields | undefined = await readFile(join(root, 'host.json'), 'utf8')
+    .then((value) => JSON.parse(value) as Fields)
+    .catch(() => undefined);
+  if (typeof hostInfo?.version !== 'string' || !isNewerVersion(CURRENT_VERSION, hostInfo.version)) {
+    return;
+  }
+  const stagedMatches = async (): Promise<boolean> =>
+    readFile(join(root, 'host', 'host-version.txt'), 'utf8')
+      .then((value) => value.trim() === CURRENT_VERSION)
+      .catch(() => false);
+  let readyToRestart = await stagedMatches();
+  if (!readyToRestart) {
+    try {
+      const { syncInstalledHostFromDist } = await import('./cli-setup.js');
+      syncInstalledHostFromDist(root, __dirname, CURRENT_VERSION);
+    } catch {
+      return;
+    }
+    readyToRestart = await stagedMatches();
+  }
+  if (!readyToRestart) return;
+  const restarted = await requestHost('restart', {}, 1500)
+    .then((res) => res.status === 202)
+    .catch(() => false);
+  if (!restarted) return;
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 150));
+    const refreshed: Fields | undefined = await readFile(join(root, 'host.json'), 'utf8')
+      .then((value) => JSON.parse(value) as Fields)
+      .catch(() => undefined);
+    if (refreshed?.version === CURRENT_VERSION) {
+      const ready = await requestHost('status', undefined, 1000)
+        .then((res) => res.ok)
+        .catch(() => false);
+      if (ready) return;
+    }
+  }
+}
+
 export async function runCommands(inputArgs: string[]): Promise<number> {
+  const delegatedCode = await maybeDelegateToManagedCli(inputArgs);
+  if (delegatedCode !== undefined) return delegatedCode;
   const argv = inputArgs.slice();
   if (argv[0] === '--json') {
     argv.shift();
@@ -514,6 +561,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
     if (command.name === 'status') {
       if (command.operands.length)
         return failure(2, 'invalid_arguments', 'Usage: browserpaw status.');
+      await ensureHostMatchesCliVersion();
       const response = await requestHost('status', undefined, 4000);
       if (!response.ok) return failure(3, 'host_unavailable', 'Cannot read the local host status.');
       const data = (await response.json()) as Fields;
@@ -527,11 +575,16 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
           'Could not read extension diagnostics.',
           data,
         );
-      if (data.version !== CURRENT_VERSION || extension?.manifestVersion !== CURRENT_VERSION) {
+      const extensionVersion =
+        typeof extension?.manifestVersion === 'string' ? extension.manifestVersion : undefined;
+      if (
+        data.version !== CURRENT_VERSION ||
+        !isCompatibleExtensionVersion(extensionVersion, CURRENT_VERSION)
+      ) {
         return failure(
           3,
           'version_mismatch',
-          `BrowserPaw requires the ${CURRENT_VERSION} host and extension. Run setup with the matching CLI to update the host and Skill. For a mismatched extension, manually install ${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip and reload it.`,
+          `BrowserPaw ${CURRENT_VERSION} requires host ${CURRENT_VERSION} and a compatible extension (>= ${MIN_COMPATIBLE_EXTENSION_VERSION}, same major). Run setup with the matching CLI to update the host and Skill. For an incompatible extension, manually install ${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip and reload it.`,
           data,
         );
       }
@@ -549,7 +602,7 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
           });
       const localManifest = await readExtensionJson('manifest.json');
       const localBuild =
-        localManifest?.version === CURRENT_VERSION
+        localManifest?.version === extensionVersion
           ? await readExtensionJson('browserpaw-build.json')
           : undefined;
       if (localBuild?.buildId && localBuild.buildId !== extension?.buildId)
@@ -559,7 +612,16 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
           'Reload the installed BrowserPaw extension in chrome://extensions.',
           data,
         );
-      writeReceipt({ ok: true, command: command.name, outcome: 'done', data }, json);
+      const statusData =
+        extensionVersion && isNewerVersion(CURRENT_VERSION, extensionVersion)
+          ? {
+              ...data,
+              extensionUpdateAvailable: true,
+              extensionLatestVersion: CURRENT_VERSION,
+              extensionReleaseAsset: `${GITHUB_REPO_URL}/releases/download/v${CURRENT_VERSION}/browserpaw-extension.zip`,
+            }
+          : data;
+      writeReceipt({ ok: true, command: command.name, outcome: 'done', data: statusData }, json);
       return 0;
     }
     if (command.name === 'upload') {
@@ -576,6 +638,9 @@ export async function runCommands(inputArgs: string[]): Promise<number> {
       else argv[index] = '--out=' + out;
     }
     const input = await inputFor(command);
+    if (!command.options.task && !process.env.BROWSERPAW_TASK) {
+      await ensureHostMatchesCliVersion();
+    }
     process.once('SIGINT', interrupt);
     accepted = true;
     const response = await requestHost(

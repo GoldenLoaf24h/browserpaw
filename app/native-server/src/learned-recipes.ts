@@ -3,6 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseCommand } from 'chrome-mcp-shared';
 import { assertBatchStep } from './command-utils';
+import {
+  DOM_EXTRACTION_PROGRAM_ALIAS,
+  PUBLISHED_READ_ONLY_PROGRAMS,
+  programHash,
+} from './skill-read-program';
 import { syncInstalledSkillRouting, type LearnedRoutingEntry } from './skill-install';
 
 export type RecipeInputType = 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array';
@@ -31,7 +36,7 @@ export interface SavedRecipe {
 export interface LearnedWorkflowSummary {
   id: string;
   kind: 'skill' | 'recipe';
-  status: 'active' | 'candidate';
+  status: 'active' | 'bundled' | 'candidate';
   name: string;
   description: string;
   domains: string[];
@@ -63,6 +68,44 @@ const INPUT_TYPES = new Set<RecipeInputType>([
   'object',
   'array',
 ]);
+const READ_ONLY_SKILL_TOOLS = new Set([
+  'chrome_javascript',
+  'chrome_network_request',
+  'chrome_read_dom',
+  'chrome_get_markdown',
+  'chrome_grep',
+  'chrome_screenshot',
+]);
+
+function isTrustedBundledReadOnlySkill(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const def = raw as {
+    id?: unknown;
+    source?: { type?: unknown };
+    steps?: Array<{ tool?: unknown; args?: Record<string, unknown> }>;
+  };
+  if (typeof def.id !== 'string' || def.source?.type !== 'builtin') return false;
+  if (!Array.isArray(def.steps) || def.steps.length < 1 || def.steps.length > 20) return false;
+  for (const step of def.steps) {
+    if (!step || typeof step !== 'object' || typeof step.tool !== 'string') return false;
+    if (!READ_ONLY_SKILL_TOOLS.has(step.tool)) return false;
+    if (step.tool === 'chrome_javascript') {
+      const args = step.args;
+      if (!args || typeof args !== 'object') return false;
+      const hasProgram = args.program !== undefined;
+      const hasCode = typeof args.code === 'string';
+      if (hasProgram && hasCode) return false;
+      if (hasProgram) {
+        if (args.program !== DOM_EXTRACTION_PROGRAM_ALIAS) return false;
+        continue;
+      }
+      if (!hasCode) return false;
+      const expectedHash = PUBLISHED_READ_ONLY_PROGRAMS[def.id];
+      if (!expectedHash || programHash(args.code as string) !== expectedHash) return false;
+    }
+  }
+  return true;
+}
 const TARGET_ARGUMENTS = new Map<string, readonly number[]>([
   ['text', [0]],
   ['screenshot', [0]],
@@ -81,12 +124,25 @@ const TARGET_ARGUMENTS = new Map<string, readonly number[]>([
 const QUERY_ALIASES: ReadonlyArray<readonly [RegExp, readonly string[]]> = [
   [/推特|推文|twitter/i, ['twitter', 'x', 'x.com', 'twitter.com']],
   [/搜索|查找|搜一下|搜一搜|检索/i, ['search', 'find', 'query']],
-  [/帖子|动态|话题|讨论|串|thread/i, ['posts', 'thread', 'status']],
+  [/帖子|动态|话题|讨论|串|thread/i, ['posts', 'thread', 'status', 'topic']],
   [/版本|发布|发行版|更新日志/i, ['releases', 'release', 'version']],
   [/文档|手册|参考/i, ['docs', 'documentation', 'reference', 'mdn']],
   [/对比|比较/i, ['compare', 'comparison']],
   [/包|依赖|npm/i, ['npm', 'package']],
   [/下载/i, ['download']],
+  [/仓库|代码库|开源|项目/i, ['github', 'repo', 'repository', 'repositories']],
+  [/readme|项目说明|简介/i, ['readme', 'overview', 'repo']],
+  [/议题|工单|issue|pr/i, ['issue', 'issues', 'pr', 'comments']],
+  [/v2ex|v站/i, ['v2ex', 'www.v2ex.com', 'topics']],
+  [/b站|哔哩哔哩|bilibili|bv号/i, ['bilibili', 'www.bilibili.com', 'video', 'bvid']],
+  [/油管|youtube|ytb/i, ['youtube', 'www.youtube.com', 'video']],
+  [/字幕|台词|文稿/i, ['subtitles', 'captions', 'transcript', 'subtitle']],
+  [/视频/i, ['video', 'videos']],
+  [/热门|热榜|趋势|流行/i, ['popular', 'hot', 'trending']],
+  [/红迪|reddit|板块/i, ['reddit', 'www.reddit.com', 'subreddit']],
+  [/评论|回复/i, ['comments', 'replies']],
+  [/主页|资料|用户/i, ['profile', 'user', 'tweets']],
+  [/节点/i, ['node', 'topics']],
 ];
 
 export function browserPawHome(override?: string): string {
@@ -390,9 +446,9 @@ export function resolveBundledRecipesDirectory(homeDir = browserPawHome()): stri
   const candidates = [
     path.join(__dirname, 'recipes'),
     path.join(homeDir, 'host', 'recipes'),
+    path.resolve(__dirname, '..', '..', '..', 'skills', 'browserpaw', 'assets', 'recipes'),
     path.join(__dirname, '..', 'dist', 'v5', 'recipes'),
     path.join(__dirname, '..', 'dist', 'recipes'),
-    path.resolve(__dirname, '..', '..', '..', 'skills', 'browserpaw', 'assets', 'recipes'),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
@@ -409,9 +465,11 @@ function readJsonSafe(filePath: string, maxBytes = 4 * 1024 * 1024): unknown | u
 
 export function loadLearnedWorkflows(
   homeDir = browserPawHome(),
-  options: { includeCandidates?: boolean; bundledDir?: string } = {},
+  options: { includeCandidates?: boolean; includeBundled?: boolean; bundledDir?: string } = {},
 ): LearnedWorkflowSummary[] {
+  const includeBundled = options.includeBundled ?? true;
   const byId = new Map<string, LearnedWorkflowSummary>();
+  const suppressedBundledIds = new Set<string>();
   const recipesDir = recipesDirectory(homeDir);
   if (fs.existsSync(recipesDir) && !fs.lstatSync(recipesDir).isSymbolicLink()) {
     for (const file of fs
@@ -458,6 +516,7 @@ export function loadLearnedWorkflows(
       const record = parsed as {
         id?: string;
         activeVersion?: number;
+        autoUpdatePolicy?: string;
         versions?: Array<{
           version: number;
           status: string;
@@ -468,6 +527,8 @@ export function loadLearnedWorkflows(
             domains?: string[];
             keywords?: string[];
             inputSchema?: unknown;
+            source?: { type?: string };
+            steps?: unknown;
           };
         }>;
       };
@@ -475,11 +536,30 @@ export function loadLearnedWorkflows(
       const active = record.versions.find(
         (item) => item.version === record.activeVersion && item.status === 'active',
       );
+      const hasUserOwnedVersion = record.versions.some(
+        (item) => item.definition?.source?.type && item.definition.source.type !== 'builtin',
+      );
+      const isDisabledByUser =
+        record.autoUpdatePolicy === 'disabled' ||
+        (!active && record.versions.some((item) => item.status === 'disabled'));
+      if (hasUserOwnedVersion || isDisabledByUser) {
+        suppressedBundledIds.add(record.id);
+      }
+      const latestCandidate = [...record.versions]
+        .reverse()
+        .find((item) => item.status === 'candidate');
+      const autoDiscoverableBundled =
+        !active &&
+        includeBundled &&
+        !suppressedBundledIds.has(record.id) &&
+        latestCandidate?.definition &&
+        isTrustedBundledReadOnlySkill(latestCandidate.definition)
+          ? latestCandidate
+          : undefined;
       const chosen =
         active ??
-        (options.includeCandidates
-          ? [...record.versions].reverse().find((item) => item.status === 'candidate')
-          : undefined);
+        autoDiscoverableBundled ??
+        (options.includeCandidates ? latestCandidate : undefined);
       if (!chosen?.definition) continue;
       if (byId.has(record.id) && chosen.status !== 'active') continue;
       const def = chosen.definition;
@@ -487,7 +567,8 @@ export function loadLearnedWorkflows(
       byId.set(record.id, {
         id: record.id,
         kind: 'skill',
-        status: chosen.status === 'active' ? 'active' : 'candidate',
+        status:
+          chosen.status === 'active' ? 'active' : autoDiscoverableBundled ? 'bundled' : 'candidate',
         name: def.name || record.id,
         description: def.description || '',
         domains: Array.isArray(def.domains) ? def.domains : [],
@@ -499,7 +580,7 @@ export function loadLearnedWorkflows(
     }
   }
 
-  if (options.includeCandidates) {
+  if (includeBundled || options.includeCandidates) {
     const bundledDir = options.bundledDir ?? resolveBundledRecipesDirectory(homeDir);
     if (bundledDir && fs.existsSync(bundledDir) && !fs.lstatSync(bundledDir).isSymbolicLink()) {
       for (const file of fs
@@ -518,11 +599,15 @@ export function loadLearnedWorkflows(
           inputSchema?: unknown;
         };
         if (typeof def.id !== 'string' || byId.has(def.id)) continue;
+        if (suppressedBundledIds.has(def.id)) continue;
+        const trustedBundled = isTrustedBundledReadOnlySkill(parsed);
+        if (!trustedBundled && !options.includeCandidates) continue;
+        if (trustedBundled && !includeBundled && !options.includeCandidates) continue;
         const inputs = schemaToInputSpecs(def.inputSchema);
         byId.set(def.id, {
           id: def.id,
           kind: 'skill',
-          status: 'candidate',
+          status: trustedBundled ? 'bundled' : 'candidate',
           name: def.name || def.id,
           description: def.description || '',
           domains: Array.isArray(def.domains) ? def.domains : [],
@@ -535,8 +620,10 @@ export function loadLearnedWorkflows(
     }
   }
 
+  const statusRank = (status: LearnedWorkflowSummary['status']) =>
+    status === 'active' ? 0 : status === 'bundled' ? 1 : 2;
   return [...byId.values()].sort((left, right) => {
-    if (left.status !== right.status) return left.status === 'active' ? -1 : 1;
+    if (left.status !== right.status) return statusRank(left.status) - statusRank(right.status);
     return left.id.localeCompare(right.id);
   });
 }
@@ -754,9 +841,11 @@ export function inspectLearnedWorkflow(
     );
   }
   const active = preferActive
-    ? loadLearnedWorkflows(homeDir, { includeCandidates: false, bundledDir }).find(
-        (item) => item.id === id,
-      )
+    ? loadLearnedWorkflows(homeDir, {
+        includeCandidates: false,
+        includeBundled: false,
+        bundledDir,
+      }).find((item) => item.id === id)
     : undefined;
   const candidatePath = candidateRecipeFilePath(id, homeDir);
   const candidate = active ? undefined : readJsonSafe(candidatePath, 256 * 1024);

@@ -123,7 +123,11 @@ function replaceDirectory(destination: string, prepare: (staging: string) => voi
   }
 }
 
-function installHost(destination: string) {
+function installHost(
+  destination: string,
+  sourceDir: string = __dirname,
+  version: string = CURRENT_VERSION,
+) {
   mkdirSync(destination, { recursive: true, mode: 0o700 });
   const replace = (file: string, bytes: Buffer, mode: number) => {
     const target = join(destination, file);
@@ -137,15 +141,64 @@ function installHost(destination: string) {
     }
   };
   for (const file of files) {
-    const source = join(__dirname, file);
+    const source = join(sourceDir, file);
     replace(file, readFileSync(source), statSync(source).mode & 0o777);
     if (file === 'run_host.sh' && process.platform !== 'win32')
       chmodSync(join(destination, file), 0o755);
   }
   replace('node_path.txt', Buffer.from(process.execPath + '\n'), 0o600);
+  replace('host-version.txt', Buffer.from(version + '\n'), 0o600);
   replaceDirectory(join(destination, 'recipes'), (staging) =>
-    cpSync(join(__dirname, 'recipes'), staging, { recursive: true }),
+    cpSync(join(sourceDir, 'recipes'), staging, { recursive: true }),
   );
+}
+
+export function syncInstalledHostFromDist(
+  root: string,
+  sourceDistDir: string,
+  version: string,
+): boolean {
+  const recordPath = join(root, 'installation.json');
+  const previous: Installation | undefined = readJson(recordPath);
+  if (!previous) return false;
+  for (const file of files) {
+    if (!existsSync(join(sourceDistDir, file))) return false;
+  }
+  if (!existsSync(join(sourceDistDir, 'recipes'))) return false;
+  const { acquireLock, assertNoLinks } = require('./cli-files.cjs');
+  assertNoLinks(root);
+  const unlock = acquireLock(join(root, '.installation.lock'));
+  try {
+    const current: Installation | undefined = readJson(recordPath);
+    if (!current) return false;
+    installHost(join(root, 'host'), sourceDistDir, version);
+    const skillSourceDir = join(sourceDistDir, 'skill', 'browserpaw');
+    const skillPaths = new Set<string>([
+      ...(Array.isArray(current.skillPaths) ? current.skillPaths : []),
+      ...(current.skillPath ? [current.skillPath] : []),
+    ]);
+    if (current.skillMode === 'managed' && existsSync(join(skillSourceDir, 'SKILL.md'))) {
+      for (const candidate of skillPaths) {
+        try {
+          upgradeInstalledSkill(candidate, { sourceDir: skillSourceDir, version });
+        } catch {
+          // Non-fatal: keep existing managed skill copy if a path is unavailable.
+        }
+      }
+    }
+    try {
+      syncLearnedRouting(root, [...skillPaths]);
+    } catch {
+      // Non-fatal: routing will re-sync on the next recipe or setup command.
+    }
+    writeJson(recordPath, {
+      ...current,
+      version,
+    });
+    return true;
+  } finally {
+    unlock();
+  }
 }
 
 export async function manageInstallation(command: ParsedCommand, requestHost: typeof hostRequest) {
@@ -176,6 +229,8 @@ export async function manageInstallation(command: ParsedCommand, requestHost: ty
         'logs',
         'token',
         'host.json',
+        'cli-versions',
+        'cli-update.json',
       ])
         rmSync(join(root, target), { recursive: true, force: true });
     }

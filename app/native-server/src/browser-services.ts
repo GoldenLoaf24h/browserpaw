@@ -2,7 +2,7 @@ import type { CallToolResult } from 'chrome-mcp-shared';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { validator } from './schema-validation';
-import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
+import { CURRENT_VERSION, TOOL_SCHEMAS } from 'chrome-mcp-shared';
 import {
   BrowserTaskManager,
   tryParseCallResult,
@@ -14,15 +14,50 @@ import { BrowserSkillStore, type SkillDefinition } from './browser-skills';
 function resolveBundledRecipesDir(): string {
   const candidates = [
     path.join(__dirname, 'recipes'),
-    path.join(__dirname, '..', 'dist', 'recipes'),
     path.resolve(__dirname, '..', '..', '..', 'skills', 'browserpaw', 'assets', 'recipes'),
+    path.join(__dirname, '..', 'dist', 'v5', 'recipes'),
+    path.join(__dirname, '..', 'dist', 'recipes'),
   ];
   const directory = candidates.find((candidate) => fs.existsSync(candidate));
   if (!directory) throw new Error('Bundled BrowserPaw recipes are missing');
   return directory;
 }
 
-export function createBrowserServices(call: BrowserCall, storageDir?: string) {
+function bundledRecipesVersionMatchesHost(directory: string): boolean {
+  const versionFile = path.join(path.dirname(directory), 'host-version.txt');
+  if (!fs.existsSync(versionFile)) return true;
+  try {
+    const stat = fs.lstatSync(versionFile);
+    if (stat.isSymbolicLink() || !stat.isFile()) return false;
+    return fs.readFileSync(versionFile, 'utf8').trim() === CURRENT_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+function bundledRecipesSignature(directory: string): string {
+  try {
+    if (fs.lstatSync(directory).isSymbolicLink()) return 'symlink';
+    return fs
+      .readdirSync(directory)
+      .filter((item) => /^[a-z][a-z0-9-]*\.json$/.test(item))
+      .sort()
+      .map((name) => {
+        const stat = fs.lstatSync(path.join(directory, name));
+        if (stat.isSymbolicLink()) return `${name}:symlink`;
+        return `${name}:${stat.size}:${stat.mtimeMs}`;
+      })
+      .join('|');
+  } catch {
+    return `unreadable:${Date.now()}`;
+  }
+}
+
+export function createBrowserServices(
+  call: BrowserCall,
+  storageDir?: string,
+  bundledRecipesDir?: string,
+) {
   const tasks = new BrowserTaskManager({ call, storageDir });
   const requireTask = async (
     action: string,
@@ -58,6 +93,7 @@ export function createBrowserServices(call: BrowserCall, storageDir?: string) {
     },
   });
   let ready: Promise<void> | undefined;
+  let readySignature: string | undefined;
 
   async function execute(
     name: string,
@@ -85,10 +121,20 @@ export function createBrowserServices(call: BrowserCall, storageDir?: string) {
         isError: !(value as { ok: boolean }).ok,
       };
     }
-    await (ready ||= skills.loadBundledSkills(resolveBundledRecipesDir()).catch((error) => {
-      ready = undefined;
-      throw error;
-    }));
+    const bundledDir = bundledRecipesDir ?? resolveBundledRecipesDir();
+    const signature = `${bundledDir}|${bundledRecipesSignature(bundledDir)}`;
+    const versionMatches = bundledRecipesVersionMatchesHost(bundledDir);
+    if (!ready || (versionMatches && readySignature !== signature)) {
+      if (versionMatches) {
+        readySignature = signature;
+        ready = skills.loadBundledSkills(bundledDir).catch((error) => {
+          ready = undefined;
+          readySignature = undefined;
+          throw error;
+        });
+      }
+    }
+    if (ready) await ready;
     const id = typeof args.id === 'string' ? args.id : '';
     const version = typeof args.version === 'number' ? args.version : undefined;
     try {

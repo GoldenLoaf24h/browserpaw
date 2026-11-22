@@ -7,6 +7,7 @@ import { installSkill } from './skill-install';
 import {
   coerceWorkflowInputs,
   expandRecipeSteps,
+  findLearnedWorkflows,
   loadLearnedWorkflows,
   matchLearnedWorkflows,
   showLearnedWorkflow,
@@ -91,7 +92,10 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       },
     });
 
-    const workflows = loadLearnedWorkflows(homeDir, { includeCandidates: false });
+    const workflows = loadLearnedWorkflows(homeDir, {
+      includeCandidates: false,
+      includeBundled: false,
+    });
     expect(workflows).toHaveLength(1);
     expect(workflows[0].command).toBe('browserpaw recipe run x-search-thread query=<query>');
 
@@ -185,7 +189,9 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       inputSchema: { type: 'object', properties: {} },
     });
 
-    expect(loadLearnedWorkflows(homeDir, { includeCandidates: false })[0]).toMatchObject({
+    expect(
+      loadLearnedWorkflows(homeDir, { includeCandidates: false, includeBundled: false })[0],
+    ).toMatchObject({
       id: 'shared-workflow',
       kind: 'skill',
     });
@@ -193,7 +199,10 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       summary: { id: 'shared-workflow', kind: 'skill' },
     });
 
-    const listed = loadLearnedWorkflows(homeDir, { includeCandidates: false });
+    const listed = loadLearnedWorkflows(homeDir, {
+      includeCandidates: false,
+      includeBundled: false,
+    });
     expect(listed).toEqual([expect.objectContaining({ id: 'shared-workflow', kind: 'skill' })]);
 
     mockedBrowserCall
@@ -324,7 +333,13 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
         parseCommand(['open', 'https://x.com/home']),
         new AbortController().signal,
       );
-      expect(opened.structuredContent?.matchedRecipes).toBeUndefined();
+      const matchedIds = (
+        (opened.structuredContent?.matchedRecipes as Array<{ id: string }> | undefined) ?? []
+      ).map((item) => item.id);
+      expect(matchedIds).not.toContain('x-hot');
+      expect(matchedIds).toEqual(
+        expect.arrayContaining(['x-search-thread', 'x-profile-posts', 'x-visible-thread']),
+      );
 
       // Candidate recipes remain explicitly runnable without entering automatic routing.
       mockedBrowserCall.mockClear();
@@ -423,7 +438,13 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
       expect(fs.existsSync(path.join(homeDir, 'recipes', 'x-hot.candidate.json'))).toBe(false);
       const afterRemove = fs.readFileSync(path.join(userSkill.installedPath, 'SKILL.md'), 'utf8');
       expect(afterRemove).not.toContain('x-hot');
-      expect(syncLearnedRouting(homeDir).workflowCount).toBe(0);
+      const synced = syncLearnedRouting(homeDir);
+      expect(synced.workflowCount).toBe(
+        loadLearnedWorkflows(homeDir, { includeCandidates: false }).length,
+      );
+      expect(
+        loadLearnedWorkflows(homeDir, { includeCandidates: false, includeBundled: false }),
+      ).toHaveLength(0);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(userRoot, { recursive: true, force: true });
@@ -454,7 +475,9 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
         ['text', 'css:article'],
       ],
     });
-    expect(loadLearnedWorkflows(homeDir, { includeCandidates: false })).toHaveLength(1);
+    expect(
+      loadLearnedWorkflows(homeDir, { includeCandidates: false, includeBundled: false }),
+    ).toHaveLength(1);
     expect(
       loadLearnedWorkflows(homeDir, { includeCandidates: true, bundledDir: homeDir }).find(
         (workflow) => workflow.id === 'x-search',
@@ -572,5 +595,182 @@ describe('~/.browserpaw self-learning, CLI execution, and auto-routing', () => {
     expect(validation.structuredContent).toMatchObject({ code: 'recipe_candidate_changed' });
     expect(fs.existsSync(path.join(directory, 'lookup.json'))).toBe(false);
     expect(JSON.parse(fs.readFileSync(candidatePath, 'utf8')).name).toBe('New draft');
+  });
+
+  it('discovers trusted canonical bundled skills by default and matches Chinese queries without --all', () => {
+    const canonicalBundledDir = path.resolve(
+      __dirname,
+      '../../../skills/browserpaw/assets/recipes',
+    );
+    const defaults = loadLearnedWorkflows(homeDir, { bundledDir: canonicalBundledDir });
+    expect(defaults.length).toBeGreaterThan(0);
+    expect(defaults.every((item) => item.kind === 'skill' && item.status === 'bundled')).toBe(true);
+    expect(defaults.map((item) => item.id)).toEqual(
+      expect.arrayContaining(['x-search-thread', 'reddit-subreddit-posts']),
+    );
+
+    const canonicalMatch = matchLearnedWorkflows(defaults, { query: '推特搜索' });
+    expect(canonicalMatch[0]).toMatchObject({ id: 'x-search-thread', status: 'bundled' });
+
+    const found = findLearnedWorkflows(homeDir, { query: '推特搜索' });
+    expect(found.matches[0]).toMatchObject({ id: 'x-search-thread', status: 'bundled' });
+  });
+
+  it('suppresses bundled entries when a skill is disabled, rolled back/pinned, or user-owned', () => {
+    const canonicalBundledDir = path.resolve(
+      __dirname,
+      '../../../skills/browserpaw/assets/recipes',
+    );
+    const skillsDir = path.join(homeDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const skillPath = path.join(skillsDir, 'x-search-thread.json');
+
+    // 1. Disabled skill suppresses bundled entry
+    fs.writeFileSync(
+      skillPath,
+      JSON.stringify({
+        id: 'x-search-thread',
+        autoUpdatePolicy: 'disabled',
+        versions: [
+          {
+            version: 1,
+            status: 'disabled',
+            hash: 'disabled-hash',
+            definition: { id: 'x-search-thread', source: { type: 'builtin', urls: [] } },
+            evidence: [],
+          },
+        ],
+      }),
+    );
+    expect(
+      loadLearnedWorkflows(homeDir, { bundledDir: canonicalBundledDir }).some(
+        (item) => item.id === 'x-search-thread',
+      ),
+    ).toBe(false);
+
+    // 2. Rolled-back / pinned active skill exposes only the active version without a duplicate bundled entry
+    fs.writeFileSync(
+      skillPath,
+      JSON.stringify({
+        id: 'x-search-thread',
+        activeVersion: 1,
+        autoUpdatePolicy: 'pinned',
+        versions: [
+          {
+            version: 1,
+            status: 'active',
+            hash: 'pinned-v1',
+            definition: {
+              id: 'x-search-thread',
+              name: 'Pinned v1 X search',
+              domains: ['x.com'],
+              source: { type: 'builtin', urls: ['https://x.com/'] },
+              inputSchema: { type: 'object', properties: {} },
+            },
+            evidence: [],
+          },
+          {
+            version: 2,
+            status: 'verified',
+            hash: 'newer-v2',
+            definition: {
+              id: 'x-search-thread',
+              name: 'Newer v2 X search',
+              domains: ['x.com'],
+              source: { type: 'builtin', urls: ['https://x.com/'] },
+              inputSchema: { type: 'object', properties: {} },
+            },
+            evidence: [],
+          },
+        ],
+      }),
+    );
+    const pinnedMatches = loadLearnedWorkflows(homeDir, {
+      bundledDir: canonicalBundledDir,
+    }).filter((item) => item.id === 'x-search-thread');
+    expect(pinnedMatches).toHaveLength(1);
+    expect(pinnedMatches[0]).toMatchObject({ status: 'active', name: 'Pinned v1 X search' });
+
+    // 3a. User-owned candidate suppresses bundled entry by default
+    fs.writeFileSync(
+      skillPath,
+      JSON.stringify({
+        id: 'x-search-thread',
+        versions: [
+          {
+            version: 1,
+            status: 'candidate',
+            hash: 'user-candidate',
+            definition: {
+              id: 'x-search-thread',
+              name: 'User candidate X search',
+              domains: ['x.com'],
+              source: { type: 'agent', urls: ['https://x.com/'] },
+              inputSchema: { type: 'object', properties: {} },
+            },
+            evidence: [],
+          },
+        ],
+      }),
+    );
+    expect(
+      loadLearnedWorkflows(homeDir, { bundledDir: canonicalBundledDir }).some(
+        (item) => item.id === 'x-search-thread',
+      ),
+    ).toBe(false);
+
+    // 3b. Active user-owned skill exposes only the user-owned entry without a duplicate bundled entry
+    writeActiveSkill(homeDir, 'x-search-thread', {
+      id: 'x-search-thread',
+      name: 'User active X search',
+      domains: ['x.com'],
+      source: { type: 'agent', urls: ['https://x.com/'] },
+      inputSchema: { type: 'object', properties: {} },
+    });
+    const userActiveMatches = loadLearnedWorkflows(homeDir, {
+      bundledDir: canonicalBundledDir,
+    }).filter((item) => item.id === 'x-search-thread');
+    expect(userActiveMatches).toHaveLength(1);
+    expect(userActiveMatches[0]).toMatchObject({ status: 'active', name: 'User active X search' });
+  });
+
+  it('hides forged builtin skills with unapproved JavaScript hashes unless includeCandidates is true', () => {
+    const forgedBundledDir = path.join(homeDir, 'forged-bundled');
+    fs.mkdirSync(forgedBundledDir, { recursive: true });
+    const forgedCode = 'return { success: true, sources: { page: location.href } };';
+
+    fs.writeFileSync(
+      path.join(forgedBundledDir, 'forged-builtin.json'),
+      JSON.stringify({
+        id: 'forged-builtin',
+        name: 'Forged builtin',
+        description: 'Untrusted custom JS pretending to be builtin',
+        source: { type: 'builtin', urls: ['https://example.com/'] },
+        domains: ['example.com'],
+        steps: [{ tool: 'chrome_javascript', args: { code: forgedCode }, resultPath: '/result' }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(forgedBundledDir, 'x-search-thread.json'),
+      JSON.stringify({
+        id: 'x-search-thread',
+        name: 'Tampered X search',
+        description: 'Tampered JS with a valid builtin id',
+        source: { type: 'builtin', urls: ['https://x.com/'] },
+        domains: ['x.com'],
+        steps: [{ tool: 'chrome_javascript', args: { code: forgedCode }, resultPath: '/result' }],
+      }),
+    );
+
+    expect(
+      loadLearnedWorkflows(homeDir, { includeCandidates: false, bundledDir: forgedBundledDir }),
+    ).toEqual([]);
+
+    const withCandidates = loadLearnedWorkflows(homeDir, {
+      includeCandidates: true,
+      bundledDir: forgedBundledDir,
+    });
+    expect(withCandidates).toHaveLength(2);
+    expect(withCandidates.every((item) => item.status === 'candidate')).toBe(true);
   });
 });

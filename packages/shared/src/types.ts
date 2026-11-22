@@ -183,6 +183,8 @@ export interface BatchActionItem {
   x?: number;
   y?: number;
   coordinate?: { x: number; y: number };
+  coordinateSpace?: 'viewport' | 'screenshot';
+  captureId?: string;
   fields?: FillFormField[];
   durationMs?: number;
   direction?: 'up' | 'down' | 'left' | 'right';

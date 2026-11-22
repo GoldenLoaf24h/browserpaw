@@ -75,11 +75,23 @@ export function copyCliClientFiles(srcDir: string, destDir: string): void {
 export function assertRequiredRecipeFiles(canonicalDir: string): void {
   const required = [
     'developer.mozilla.org.md',
-    'mdn-search.json',
+    'bilibili-popular-videos.json',
+    'bilibili-video-detail.json',
+    'github-issue-thread.json',
     'github-releases.json',
+    'github-repo-readme.json',
+    'github-repo-search.json',
+    'mdn-search.json',
     'npm-compare.json',
+    'reddit-post-read.json',
+    'reddit-subreddit-posts.json',
+    'v2ex-node-topics.json',
+    'v2ex-topic-read.json',
+    'x-profile-posts.json',
     'x-search-thread.json',
     'x-visible-thread.json',
+    'youtube-search-videos.json',
+    'youtube-video-read.json',
   ];
   for (const filename of required) {
     const filePath = path.join(canonicalDir, filename);

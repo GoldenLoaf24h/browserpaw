@@ -522,4 +522,140 @@ describe('verified browser skills', () => {
     expect(runResult.hash).toBe(activeHash);
     expect((runResult as any).definitionHash).toBeUndefined();
   });
+
+  it('applies Ajv schema defaults in executeVersion before expanding startUrl and does not self-disable', async () => {
+    const bundledDir = path.join(root, 'bundled');
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const recipePath = path.resolve(
+      __dirname,
+      '../../../skills/browserpaw/assets/recipes/reddit-subreddit-posts.json',
+    );
+    fs.copyFileSync(recipePath, path.join(bundledDir, 'reddit-subreddit-posts.json'));
+
+    const openedUrls: string[] = [];
+    const jsInputs: Array<Record<string, unknown>> = [];
+    let lastSubreddit = '';
+
+    browser.open = jest.fn(async (_taskId, url) => {
+      openedUrls.push(url);
+      return { tabId: 201 };
+    });
+    browser.call = jest.fn(async (_taskId, tool, args) => {
+      if (tool === 'chrome_read_dom') {
+        return result({ treeString: `r/${lastSubreddit} Reddit` });
+      }
+      const inputLine = String(args.code).split('\n')[0];
+      const parsed = JSON.parse(inputLine.slice('const input = '.length, -1)) as Record<
+        string,
+        unknown
+      >;
+      jsInputs.push(parsed);
+      const subreddit = String(parsed.subreddit);
+      const sort = String(parsed.sort);
+      lastSubreddit = subreddit;
+      return result({
+        result: {
+          success: true,
+          status: 'ok',
+          subreddit,
+          sort,
+          posts: [
+            {
+              id: 'post-1',
+              title: `Post in ${subreddit}`,
+              author: 'alice',
+              score: 12,
+              commentsCount: 3,
+              url: `https://www.reddit.com/r/${subreddit}/comments/post-1/title/`,
+              externalUrl: '',
+              createdUtc: 1700000000,
+            },
+          ],
+          sources: {
+            api: `https://www.reddit.com/r/${subreddit}/${sort}.json`,
+            page: `https://www.reddit.com/r/${subreddit}/${sort}/`,
+          },
+        },
+      });
+    });
+
+    await store.loadBundledSkills(bundledDir);
+    await store.validate('reddit-subreddit-posts');
+
+    const runResult = await store.run('reddit-subreddit-posts', { subreddit: 'typescript' });
+    expect(openedUrls.at(-1)).toBe('https://www.reddit.com/r/typescript/hot/');
+    expect(jsInputs.at(-1)).toEqual({ subreddit: 'typescript', sort: 'hot', limit: 8 });
+    expect(runResult.output).toMatchObject({
+      success: true,
+      status: 'ok',
+      subreddit: 'typescript',
+      sort: 'hot',
+    });
+    expect(store.get('reddit-subreddit-posts').status).toBe('active');
+  });
+
+  it('deduplicates concurrent validate calls for the same skill version and rejects conflicting validation or execution', async () => {
+    await store.propose(definition());
+
+    const baseCall = jest.mocked(browser.call).getMockImplementation()!;
+    let releaseFirstCall!: () => void;
+    let notifyEntered!: () => void;
+    const firstCallEntered = new Promise<void>((resolve) => {
+      notifyEntered = resolve;
+    });
+    const firstCallGate = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    let gateUsed = false;
+
+    browser.call = jest.fn(async (taskId, tool, args, sessionId, signal) => {
+      if (!gateUsed && tool === 'chrome_javascript') {
+        gateUsed = true;
+        notifyEntered();
+        await firstCallGate;
+      }
+      return baseCall(taskId, tool, args, sessionId, signal);
+    });
+
+    const validationA = store.validate('example-search');
+    await firstCallEntered;
+    const validationB = store.validate('example-search', 1);
+
+    await expect(store.validate('example-search', 2)).rejects.toThrow(/already running/i);
+
+    releaseFirstCall();
+    const [summaryA, summaryB] = await Promise.all([validationA, validationB]);
+    expect(summaryA).toEqual(summaryB);
+    expect(summaryA.status).toBe('active');
+    expect(browser.start).toHaveBeenCalledTimes(2);
+
+    // While an active skill execution is in-flight, validate rejects cleanly
+    const next = definition();
+    next.description = 'second candidate';
+    await store.propose(next);
+
+    let releaseRun!: () => void;
+    let notifyRunEntered!: () => void;
+    const runEntered = new Promise<void>((resolve) => {
+      notifyRunEntered = resolve;
+    });
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+
+    browser.call = jest.fn(async (taskId, tool, args, sessionId, signal) => {
+      if (tool === 'chrome_javascript') {
+        notifyRunEntered();
+        await runGate;
+      }
+      return baseCall(taskId, tool, args, sessionId, signal);
+    });
+
+    const inFlightRun = store.run('example-search', { query: 'alpha' });
+    await runEntered;
+    await expect(store.validate('example-search', 2)).rejects.toThrow(/already running/i);
+
+    releaseRun();
+    await expect(inFlightRun).resolves.toMatchObject({ id: 'example-search', version: 1 });
+  });
 });

@@ -152,11 +152,23 @@ describe('QUAL-01: build script fail-fast verification', () => {
       const canonicalDir = path.resolve(__dirname, '../../../../skills/browserpaw/assets/recipes');
       const distRecipesDir = path.join(tmpDir, 'dist', 'recipes');
       const expected = [
-        'mdn-search.json',
+        'bilibili-popular-videos.json',
+        'bilibili-video-detail.json',
+        'github-issue-thread.json',
         'github-releases.json',
+        'github-repo-readme.json',
+        'github-repo-search.json',
+        'mdn-search.json',
         'npm-compare.json',
+        'reddit-post-read.json',
+        'reddit-subreddit-posts.json',
+        'v2ex-node-topics.json',
+        'v2ex-topic-read.json',
+        'x-profile-posts.json',
         'x-search-thread.json',
         'x-visible-thread.json',
+        'youtube-search-videos.json',
+        'youtube-video-read.json',
       ];
 
       try {
@@ -182,11 +194,23 @@ describe('QUAL-01: build script fail-fast verification', () => {
         expect(() => assertRequiredRecipeFiles(tmpDir)).toThrow(/required bundled recipe/i);
         for (const filename of [
           'developer.mozilla.org.md',
-          'mdn-search.json',
+          'bilibili-popular-videos.json',
+          'bilibili-video-detail.json',
+          'github-issue-thread.json',
           'github-releases.json',
+          'github-repo-readme.json',
+          'github-repo-search.json',
+          'mdn-search.json',
           'npm-compare.json',
+          'reddit-post-read.json',
+          'reddit-subreddit-posts.json',
+          'v2ex-node-topics.json',
+          'v2ex-topic-read.json',
+          'x-profile-posts.json',
           'x-search-thread.json',
           'x-visible-thread.json',
+          'youtube-search-videos.json',
+          'youtube-video-read.json',
         ]) {
           fs.writeFileSync(path.join(tmpDir, filename), '{}');
         }

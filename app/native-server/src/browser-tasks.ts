@@ -1216,8 +1216,18 @@ export class BrowserTaskManager {
         task: BrowserTaskInventory;
       };
       try {
-        const inventory = await this.readInventory(sessionId);
-        const observed = inventory.tabs.find((tab) => tab.tabId === tabId);
+        let inventory = await this.readInventory(sessionId);
+        let observed = inventory.tabs.find((tab) => tab.tabId === tabId);
+        if (this.isInitialOpenNavigationPending(observed)) {
+          inventory = await this.waitForInitialOpenNavigation(
+            tabId,
+            inventory,
+            sessionId,
+            () => this.requireTask(taskId).status === 'cancelled',
+            signal,
+          );
+          observed = inventory.tabs.find((tab) => tab.tabId === tabId);
+        }
         if (!observed) {
           throw new Error(`Created tab ${tabId} was not observed in browser inventory`);
         }
@@ -2025,6 +2035,60 @@ export class BrowserTaskManager {
         task: taskInventory(task),
       };
     });
+  }
+
+  private isInitialOpenNavigationPending(
+    observed: BrowserInventory['tabs'][number] | undefined,
+  ): boolean {
+    return Boolean(
+      observed &&
+      observed.isAgentManaged === true &&
+      observed.status?.toLowerCase() === 'loading' &&
+      typeof observed.pendingUrl === 'string' &&
+      observed.pendingUrl.length > 0,
+    );
+  }
+
+  private async waitForInitialOpenNavigation(
+    tabId: number,
+    initial: BrowserInventory,
+    sessionId: string | undefined,
+    isCancelled: () => boolean,
+    signal?: AbortSignal,
+  ): Promise<BrowserInventory> {
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (signal?.aborted) controller.abort();
+    const deadline = Date.now() + DELAYED_NAVIGATION_TIMEOUT_MS;
+    let inventory = initial;
+    try {
+      while (!isCancelled() && !controller.signal.aborted) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return inventory;
+        await this.waitForDelayedNavigationPoll(
+          Math.min(DELAYED_NAVIGATION_POLL_MS, remaining),
+          controller.signal,
+        );
+        if (isCancelled() || controller.signal.aborted) return inventory;
+        const read = await this.readInventoryBeforeDeadline(sessionId, controller.signal, deadline);
+        if (read.kind === 'stopped') return inventory;
+        if (read.kind === 'error') throw read.error;
+        inventory = read.inventory;
+        const observed = inventory.tabs.find((candidate) => candidate.tabId === tabId);
+        if (
+          !observed ||
+          inventory.browserInstanceId !== initial.browserInstanceId ||
+          observed.browserInstanceId !== initial.browserInstanceId ||
+          !this.isInitialOpenNavigationPending(observed)
+        ) {
+          return inventory;
+        }
+      }
+      return inventory;
+    } finally {
+      signal?.removeEventListener('abort', forwardAbort);
+    }
   }
 
   private isDelayedNavigationLoading(inventory: BrowserInventory, page: TaskPage): boolean {

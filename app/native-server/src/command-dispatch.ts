@@ -582,9 +582,41 @@ export async function dispatchCommand(
         };
       }
       if (inspected.summary.kind === 'skill') {
-        const skillResult = await run('chrome_skill', { action: 'get', id: first });
-        const skillMeta = tryParseCallResult(skillResult);
-        if ((skillMeta?.status ?? inspected.summary.status) === 'candidate') {
+        let skillResult = await run('chrome_skill', { action: 'get', id: first });
+        let skillMeta = tryParseCallResult(skillResult);
+        const pending = skillMeta?.pendingBundledCandidate as
+          { version?: number; hash?: string } | undefined;
+        if (!failed(skillResult) && typeof pending?.version === 'number') {
+          const validated = await run('chrome_skill', {
+            action: 'validate',
+            id: first,
+            version: pending.version,
+          });
+          if (!failed(validated)) {
+            syncLearnedRouting(homeDir);
+            skillResult = await run('chrome_skill', { action: 'get', id: first });
+            skillMeta = tryParseCallResult(skillResult);
+          } else {
+            const validatedMeta = tryParseCallResult(validated);
+            const validatedStatus = validatedMeta?.status;
+            const validatedOutcome = validatedMeta?.outcome;
+            const mustStop =
+              signal.aborted ||
+              validatedStatus === 'cancelled' ||
+              validatedStatus === 'unknown' ||
+              validatedOutcome === 'unknown' ||
+              validatedMeta?.code === 'extension_disconnected';
+            const canFallbackToActive =
+              !mustStop &&
+              skillMeta?.status === 'active' &&
+              skillMeta?.executionSupported !== false;
+            if (!canFallbackToActive) {
+              return validated;
+            }
+          }
+        }
+        const effectiveStatus = skillMeta?.status ?? inspected.summary.status;
+        if (effectiveStatus === 'candidate' || effectiveStatus === 'bundled') {
           return {
             content: [],
             structuredContent: {
