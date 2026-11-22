@@ -8,7 +8,6 @@ Welcome to the **BrowserPaw** release archive. This directory contains individua
 
 | Version        | Status         | Release Notes                    | Description                                                         |
 | :------------- | :------------- | :------------------------------- | :------------------------------------------------------------------ |
-| **v5.0.1** | Local candidate | [v5.0.1.md](./v5.0.1.md) | On-demand CLI auto-update, 17 built-in read-only recipes, URL/CDP/MV3 hardening, DOM hot-path modularization, and AGPL license alignment |
 | **v4.2.0** | Local preparation | [v4.2.0.md](./v4.2.0.md) | Nine-tool MCP default, exact discovery, CLI receipts and historical cleanup |
 | **Unreleased** | In Development | [unreleased.md](./unreleased.md) | Queued features, documentation governance, and quality gates        |
 | **v3.3.0**     | Local Draft    | [v3.3.0.md](./v3.3.0.md)         | Third-party download coexistence, tab signature guards & compliance |
@@ -21,6 +20,7 @@ The following versions correspond to git tags recorded in repository history:
 
 | Tag          | Date       | Release Record           | Summary                                                                                                                   |
 | :----------- | :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------------------ |
+| **`v5.0.1`** | 2026-11-22 | [v5.0.1.md](./v5.0.1.md) | On-demand CLI auto-update, 17 built-in read-only recipes, URL/CDP/MV3 hardening, DOM hot-path modularization, and AGPL license alignment |
 | **`v5.0.0`** | 2026-11-21 | [v5.0.0.md](./v5.0.0.md) | CLI-first BrowserPaw, Native loopback host, Chrome MV3 connector and unified Agent Skills/plugins                         |
 | **`v4.1.2`** | 2026-11-02 | [v4.1.2.md](./v4.1.2.md) | Interaction scope parity, delayed page recovery and expected-page restrictions                                            |
 | **`v4.1.1`** | 2026-11-02 | [v4.1.1.md](./v4.1.1.md) | Explicit interaction outcomes, form step boundaries and observation scope parity                                          |
