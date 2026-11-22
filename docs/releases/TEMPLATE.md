@@ -6,6 +6,8 @@
 
 ## Overview
 
+> ⚠️ **Upgrading from BrowserPaw v4.x? (For Users and AI Agents):** BrowserPaw v5 replaces the v4.x MCP server (`127.0.0.1:12306/mcp`), persistent REPL, and `chrome_*` MCP wrappers with the `browserpaw` CLI and standard Agent Skill. Before using v<VERSION>, read the [Migration Guide](../MIGRATION.md) ([Simplified Chinese](../MIGRATION.zh-CN.md)) or ask your AI Agent to read `docs/MIGRATION.md` (or `docs/MIGRATION.zh-CN.md`) and migrate your configuration automatically.
+
 <Factual description of what is delivered in this version, why it was made, and who is affected.>
 
 ## Changes

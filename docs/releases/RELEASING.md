@@ -5,6 +5,7 @@ This is the release procedure. [TEMPLATE.md](./TEMPLATE.md) owns the body format
 ## Format and evidence
 
 - Use the exact GitHub title `BrowserPaw vX.Y.Z` and H1 `# BrowserPaw vX.Y.Z`, including a prerelease suffix when applicable. Put the summary under Overview.
+- Keep the leading v4.x migration callout at the top of `## Overview` for v5.x releases, directing users upgrading from BrowserPaw v4.x to ask their AI Agent to read `docs/MIGRATION.md` (or `docs/MIGRATION.zh-CN.md`) and run the migration.
 - Keep one English note at `docs/releases/vX.Y.Z.md`. Its Tag must match the filename and title. Target identifies the release branch; Date is the release date in ISO format.
 - Use the template's six sections once, in order. Record breaking changes, migration instructions, compatibility, tests, CI, loaded runtime checks and exclusions explicitly. Use "None" or "Not tested: reason" when accurate.
 - GitHub owns draft/published status; do not duplicate a mutable status in the version note.
