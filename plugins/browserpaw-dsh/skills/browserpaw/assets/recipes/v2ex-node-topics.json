@@ -1,0 +1,334 @@
+{
+  "id": "v2ex-node-topics",
+  "name": "V2EX hot or node topics reader",
+  "description": "Read V2EX hot topics, latest topics, or topics in a specific node via V2EX's same-origin public JSON API.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.v2ex.com/api/topics/hot.json",
+      "https://www.v2ex.com/api/topics/show.json?node_name=python"
+    ]
+  },
+  "domains": [
+    "www.v2ex.com",
+    "v2ex.com"
+  ],
+  "keywords": [
+    "v2ex",
+    "v站",
+    "hot",
+    "latest",
+    "node",
+    "topics",
+    "forum",
+    "社区",
+    "热门",
+    "节点",
+    "V2EX节点",
+    "V2EX热门",
+    "V2EX话题"
+  ],
+  "startUrl": "https://www.v2ex.com/api/topics/hot.json",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "node": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "default": "hot"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 10
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "node": {
+            "type": "string",
+            "minLength": 1
+          },
+          "topics": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://(?:www\\.)?v2ex\\.com/t/\\d+"
+                },
+                "node": {
+                  "type": "string"
+                },
+                "nodeTitle": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "replies": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "created": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "excerpt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "url",
+                "node",
+                "nodeTitle",
+                "author",
+                "replies",
+                "created",
+                "excerpt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://(?:www\\.)?v2ex\\.com/api/topics/"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:www\\.)?v2ex\\.com/"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "node",
+          "topics",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "node": {
+            "type": "string",
+            "minLength": 1
+          },
+          "topics": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://(?:www\\.)?v2ex\\.com/api/topics/"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:www\\.)?v2ex\\.com/"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "node",
+          "topics",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const node = String(input.node || 'hot').trim() || 'hot';\nconst limit = Math.max(1, Math.min(Number(input.limit) || 10, 20));\nconst lower = node.toLowerCase();\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:www\\.)?v2ex\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', node, message: 'V2EX page origin is not ready', source: 'https://www.v2ex.com/' };\n}\nconst endpoint = lower === 'hot'\n  ? new URL('/api/topics/hot.json', origin)\n  : lower === 'latest'\n    ? new URL('/api/topics/latest.json', origin)\n    : new URL('/api/topics/show.json?node_name=' + encodeURIComponent(node), origin);\nconst pageUrl = lower === 'hot' || lower === 'latest'\n  ? new URL('/', origin)\n  : new URL('/go/' + encodeURIComponent(node), origin);\nlet response;\ntry {\n  response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\n} catch (error) {\n  return { success: false, status: 'fetch_error', node, message: String(error && error.message || error), source: endpoint.href };\n}\nif (response.status === 403) {\n  return { success: false, status: 'requires_auth', node, requiresLogin: true, httpStatus: 403, message: 'V2EX node requires authentication or is restricted', source: response.url || endpoint.href };\n}\nif (response.status === 429) {\n  return { success: false, status: 'rate_limited', node, httpStatus: 429, source: response.url || endpoint.href };\n}\nif (response.status === 404) {\n  return { success: false, status: 'not_found', node, httpStatus: 404, source: response.url || endpoint.href };\n}\nif (!response.ok) {\n  return { success: false, status: 'http_error', node, httpStatus: response.status, source: response.url || endpoint.href };\n}\nlet data;\ntry {\n  data = await response.json();\n} catch {\n  return { success: false, status: 'invalid_json', node, source: response.url || endpoint.href };\n}\nif (!Array.isArray(data)) {\n  return { success: false, status: 'schema_changed', node, source: response.url || endpoint.href };\n}\nif (data.length === 0) {\n  return {\n    success: true,\n    status: 'empty',\n    node,\n    topics: [],\n    sources: { api: response.url || endpoint.href, page: pageUrl.href }\n  };\n}\nconst topics = data\n  .map(item => {\n    const id = Math.floor(Number(item && item.id) || 0);\n    const title = String((item && item.title) || '').trim();\n    const url = String((item && item.url) || (id > 0 ? 'https://www.v2ex.com/t/' + id : '')).trim();\n    return {\n      id,\n      title,\n      url,\n      node: String((item && item.node && item.node.name) || '').trim(),\n      nodeTitle: String((item && item.node && item.node.title) || '').trim(),\n      author: String((item && item.member && item.member.username) || '').trim(),\n      replies: Math.max(0, Math.floor(Number(item && item.replies) || 0)),\n      created: Math.max(0, Math.floor(Number(item && item.created) || 0)),\n      excerpt: String((item && item.content) || '').replace(/\\s+/g, ' ').trim().slice(0, 300)\n    };\n  })\n  .filter(item => item.id > 0 && item.title && /^https:\\/\\/(?:www\\.)?v2ex\\.com\\/t\\/\\d+/.test(item.url))\n  .slice(0, limit);\nif (!topics.length) {\n  return { success: false, status: 'schema_changed', node, source: response.url || endpoint.href };\n}\nreturn {\n  success: true,\n  status: 'ok',\n  node,\n  topics,\n  sources: { api: response.url || endpoint.href, page: pageUrl.href }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_network_request",
+    "args": {
+      "url": "https://www.v2ex.com/api/topics/hot.json",
+      "method": "GET",
+      "timeout": 30000
+    },
+    "resultPath": "/response/body"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "node": "python",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "node": {
+            "const": "python"
+          },
+          "topics": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "node",
+          "topics",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ]
+        }
+      }
+    },
+    {
+      "inputs": {
+        "node": "programmer",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "node": {
+            "const": "programmer"
+          },
+          "topics": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "node",
+          "topics",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ]
+        }
+      }
+    }
+  ]
+}

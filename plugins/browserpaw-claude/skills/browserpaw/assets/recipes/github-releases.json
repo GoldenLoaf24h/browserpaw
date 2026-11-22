@@ -11,7 +11,7 @@
     ]
   },
   "domains": ["github.com"],
-  "keywords": ["github", "releases", "changelog", "versions"],
+  "keywords": ["github", "releases", "changelog", "versions", "GitHub发布", "版本发布", "更新日志"],
   "startUrl": "https://github.com/{{owner}}/{{repo}}/releases",
   "inputSchema": {
     "type": "object",
@@ -35,66 +35,107 @@
     "additionalProperties": false
   },
   "outputSchema": {
-    "type": "object",
-    "properties": {
-      "success": {
-        "const": true
-      },
-      "status": {
-        "const": "ok"
-      },
-      "repository": {
-        "type": "string",
-        "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
-      },
-      "releases": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 10,
-        "items": {
-          "type": "object",
-          "properties": {
-            "title": {
-              "type": "string",
-              "minLength": 1
-            },
-            "url": {
-              "type": "string",
-              "pattern": "^https://github\\.com/.+/releases/tag/"
-            },
-            "updated": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "required": ["title", "url", "updated"],
-          "additionalProperties": false
-        }
-      },
-      "sources": {
+    "oneOf": [
+      {
         "type": "object",
         "properties": {
-          "atom": {
-            "type": "string",
-            "pattern": "^https://github\\.com/.+/releases\\.atom$"
+          "success": {
+            "const": true
           },
-          "page": {
+          "status": {
+            "const": "ok"
+          },
+          "repository": {
             "type": "string",
-            "pattern": "^https://github\\.com/.+/releases(?:\\?.*)?$"
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "releases": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://github\\.com/.+/releases/tag/"
+                },
+                "updated": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["title", "url", "updated"],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "atom": {
+                "type": "string",
+                "pattern": "^https://github\\.com/.+/releases\\.atom$"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://github\\.com/.+/releases(?:\\?.*)?$"
+              }
+            },
+            "required": ["atom", "page"],
+            "additionalProperties": false
           }
         },
-        "required": ["atom", "page"],
+        "required": ["success", "status", "repository", "releases", "sources"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "releases": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "atom": {
+                "type": "string",
+                "pattern": "^https://github\\.com/.+/releases\\.atom$"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://github\\.com/.+/releases(?:\\?.*)?$"
+              }
+            },
+            "required": ["atom", "page"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["success", "status", "repository", "releases", "sources"],
         "additionalProperties": false
       }
-    },
-    "required": ["success", "status", "repository", "releases", "sources"],
-    "additionalProperties": false
+    ]
   },
   "steps": [
     {
       "tool": "chrome_javascript",
       "args": {
-        "code": "const owner = String(input.owner || '').trim();\nconst repo = String(input.repo || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst feed = new URL('/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/releases.atom', location.origin);\nconst response = await fetch(feed.href, { credentials: 'include' });\nif (!response.ok) return { success: false, status: 'http_error', repository: owner + '/' + repo, httpStatus: response.status, source: response.url };\nconst finalPath = new URL(response.url).pathname.split('/').filter(Boolean);\nconst repository = finalPath.length === 3 && finalPath[2] === 'releases.atom' ? decodeURIComponent(finalPath[0]) + '/' + decodeURIComponent(finalPath[1]) : owner + '/' + repo;\nconst xml = new DOMParser().parseFromString(await response.text(), 'application/xml');\nif (xml.querySelector('parsererror')) return { success: false, status: 'invalid_feed', repository, source: response.url };\nconst releases = Array.from(xml.querySelectorAll('entry'))\n  .slice(0, limit)\n  .map(entry => ({\n    title: String(entry.querySelector('title') && entry.querySelector('title').textContent || '').trim(),\n    url: String(entry.querySelector('link') && entry.querySelector('link').getAttribute('href') || ''),\n    updated: String(entry.querySelector('updated') && entry.querySelector('updated').textContent || '').trim()\n  }))\n  .filter(item => item.title && /^https:\\/\\/github\\.com\\/.+\\/releases\\/tag\\//.test(item.url) && item.updated);\nif (!releases.length) return { success: false, status: 'empty', repository, source: response.url };\nreturn {\n  success: true,\n  status: 'ok',\n  repository,\n  releases,\n  sources: { atom: response.url, page: new URL('/' + encodeURIComponent(repository.split('/')[0]) + '/' + encodeURIComponent(repository.split('/')[1]) + '/releases', location.origin).href }\n};"
+        "code": "const owner = String(input.owner || '').trim();\nconst repo = String(input.repo || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst baseRepo = owner + '/' + repo;\nconst fallbackPage = 'https://github.com/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/releases';\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/github\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', repository: baseRepo, message: 'GitHub page origin is not ready', source: fallbackPage };\n}\nconst feed = new URL('/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/releases.atom', origin);\nlet response;\ntry {\n  response = await fetch(feed.href, { credentials: 'include' });\n} catch (error) {\n  return { success: false, status: 'fetch_error', repository: baseRepo, message: String(error && error.message || error), source: feed.href };\n}\nif (response.status === 404) {\n  return { success: false, status: 'not_found', repository: baseRepo, httpStatus: 404, source: response.url || feed.href };\n}\nif (response.status === 401) {\n  return { success: false, status: 'requires_auth', repository: baseRepo, requiresLogin: true, httpStatus: 401, source: response.url || feed.href };\n}\nif (response.status === 403 || response.status === 429) {\n  const remaining = response.headers && typeof response.headers.get === 'function' ? response.headers.get('x-ratelimit-remaining') : null;\n  const reset = response.headers && typeof response.headers.get === 'function' ? response.headers.get('x-ratelimit-reset') : null;\n  const retryAfter = response.headers && typeof response.headers.get === 'function' ? response.headers.get('retry-after') : null;\n  const isRateLimited = response.status === 429 || remaining === '0' || Boolean(retryAfter);\n  if (isRateLimited) {\n    return {\n      success: false,\n      status: 'rate_limited',\n      repository: baseRepo,\n      httpStatus: response.status,\n      ...(reset ? { rateLimitReset: reset } : {}),\n      source: response.url || feed.href\n    };\n  }\n  return { success: false, status: 'requires_auth', repository: baseRepo, requiresLogin: true, httpStatus: 403, source: response.url || feed.href };\n}\nif (!response.ok) return { success: false, status: 'http_error', repository: baseRepo, httpStatus: response.status, source: response.url || feed.href };\nconst atomUrl = response.url || feed.href;\nconst finalPath = new URL(atomUrl).pathname.split('/').filter(Boolean);\nconst repository = finalPath.length === 3 && finalPath[2] === 'releases.atom' ? decodeURIComponent(finalPath[0]) + '/' + decodeURIComponent(finalPath[1]) : baseRepo;\nconst pageUrl = new URL('/' + encodeURIComponent(repository.split('/')[0]) + '/' + encodeURIComponent(repository.split('/')[1]) + '/releases', origin).href;\nconst xml = new DOMParser().parseFromString(await response.text(), 'application/xml');\nif (xml.querySelector('parsererror')) return { success: false, status: 'invalid_feed', repository, source: atomUrl };\nconst entries = Array.from(xml.querySelectorAll('entry'));\nif (!entries.length) {\n  return {\n    success: true,\n    status: 'empty',\n    repository,\n    releases: [],\n    sources: { atom: atomUrl, page: pageUrl }\n  };\n}\nconst releases = entries\n  .map(entry => ({\n    title: String(entry.querySelector('title') && entry.querySelector('title').textContent || '').trim(),\n    url: String(entry.querySelector('link') && entry.querySelector('link').getAttribute('href') || ''),\n    updated: String(entry.querySelector('updated') && entry.querySelector('updated').textContent || '').trim()\n  }))\n  .filter(item => item.title && /^https:\\/\\/github\\.com\\/.+\\/releases\\/tag\\//.test(item.url) && item.updated)\n  .slice(0, limit);\nif (!releases.length) return { success: false, status: 'schema_changed', repository, source: atomUrl };\nreturn {\n  success: true,\n  status: 'ok',\n  repository,\n  releases,\n  sources: { atom: atomUrl, page: pageUrl }\n};"
       },
       "resultPath": "/result"
     }

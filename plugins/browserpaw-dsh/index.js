@@ -8,7 +8,7 @@ const SKILL_NAME = 'browserpaw';
 const DEFAULT_DESCRIPTION =
   "Control the user's Chrome or Chromium through the BrowserPaw CLI and run learned site workflows stored in ~/.browserpaw.";
 const MAX_INDEX_BYTES = 1024 * 1024;
-const MAX_ROUTING_ROWS = 20;
+const MAX_ROUTING_ROWS = 30;
 
 export const name = 'browserpaw-skill';
 export const inject = ['skills'];
@@ -40,7 +40,10 @@ export function readLearnedWorkflows(homeDir = resolveBrowserPawHome()) {
     if (!parsed || !Array.isArray(parsed.workflows)) return [];
     return parsed.workflows
       .filter(
-        (item) => item && typeof item.id === 'string' && (!item.status || item.status === 'active'),
+        (item) =>
+          item &&
+          typeof item.id === 'string' &&
+          (!item.status || item.status === 'active' || item.status === 'bundled'),
       )
       .slice(0, MAX_ROUTING_ROWS)
       .map((item) => ({

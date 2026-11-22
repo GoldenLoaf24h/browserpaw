@@ -10,7 +10,7 @@
     ]
   },
   "domains": ["developer.mozilla.org"],
-  "keywords": ["mdn", "documentation", "web api", "search"],
+  "keywords": ["mdn", "documentation", "web api", "search", "MDN搜索", "前端文档", "Web文档"],
   "startUrl": "https://developer.mozilla.org/en-US/search?q={{query}}",
   "inputSchema": {
     "type": "object",
@@ -31,69 +31,114 @@
     "additionalProperties": false
   },
   "outputSchema": {
-    "type": "object",
-    "properties": {
-      "success": {
-        "const": true
-      },
-      "status": {
-        "const": "ok"
-      },
-      "query": {
-        "type": "string",
-        "minLength": 1
-      },
-      "documents": {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 10,
-        "items": {
-          "type": "object",
-          "properties": {
-            "title": {
-              "type": "string",
-              "minLength": 1
-            },
-            "url": {
-              "type": "string",
-              "pattern": "^https://developer\\.mozilla\\.org/[a-z]{2}(?:-[A-Z]{2})?/docs/"
-            },
-            "summary": {
-              "type": "string"
-            }
-          },
-          "required": ["title", "url", "summary"],
-          "additionalProperties": false
-        }
-      },
-      "sources": {
+    "oneOf": [
+      {
         "type": "object",
         "properties": {
-          "api": {
-            "type": "string",
-            "pattern": "^https://developer\\.mozilla\\.org/api/v1/search"
+          "success": {
+            "const": true
           },
-          "page": {
+          "status": {
+            "const": "ok"
+          },
+          "query": {
             "type": "string",
-            "pattern": "^https://developer\\.mozilla\\.org/"
+            "minLength": 1
+          },
+          "documents": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://developer\\.mozilla\\.org/[a-z]{2}(?:-[A-Z]{2})?/docs/"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": ["title", "url", "summary"],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://developer\\.mozilla\\.org/api/v1/search"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://developer\\.mozilla\\.org/"
+              }
+            },
+            "required": ["api", "page"],
+            "additionalProperties": false
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
           }
         },
-        "required": ["api", "page"],
+        "required": ["success", "status", "query", "documents", "sources", "total"],
         "additionalProperties": false
       },
-      "total": {
-        "type": "integer",
-        "minimum": 0
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "documents": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://developer\\.mozilla\\.org/api/v1/search"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://developer\\.mozilla\\.org/"
+              }
+            },
+            "required": ["api", "page"],
+            "additionalProperties": false
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["success", "status", "query", "documents", "sources", "total"],
+        "additionalProperties": false
       }
-    },
-    "required": ["success", "status", "query", "documents", "sources", "total"],
-    "additionalProperties": false
+    ]
   },
   "steps": [
     {
       "tool": "chrome_javascript",
       "args": {
-        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst endpoint = new URL('/api/v1/search', location.origin);\nendpoint.searchParams.set('q', query);\nendpoint.searchParams.set('locale', 'en-US');\nconst response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\nif (!response.ok) return { success: false, status: 'http_error', query, httpStatus: response.status, source: response.url };\nconst data = await response.json();\nconst documents = (Array.isArray(data.documents) ? data.documents : [])\n  .filter(item => item && typeof item.mdn_url === 'string' && item.mdn_url.startsWith('/'))\n  .slice(0, limit)\n  .map(item => ({\n    title: String(item.title || '').replace(/<[^>]*>/g, ''),\n    url: new URL(item.mdn_url, location.origin).href,\n    summary: String(item.summary || '').replace(/<[^>]*>/g, '')\n  }));\nif (!documents.length) return { success: false, status: 'empty', query, source: endpoint.href };\nreturn {\n  success: true,\n  status: 'ok',\n  query,\n  documents,\n  sources: { api: response.url, page: location.href },\n  total: Number(data.metadata && data.metadata.total && data.metadata.total.value || documents.length)\n};"
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst fallbackPage = 'https://developer.mozilla.org/en-US/search?q=' + encodeURIComponent(query);\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/developer\\.mozilla\\.org$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', query, message: 'MDN page origin is not ready', source: fallbackPage };\n}\nconst endpoint = new URL('/api/v1/search', origin);\nendpoint.searchParams.set('q', query);\nendpoint.searchParams.set('locale', 'en-US');\nconst pageUrl = typeof location.href === 'string' && location.href.startsWith(origin) ? location.href : fallbackPage;\nlet response;\ntry {\n  response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\n} catch (error) {\n  return { success: false, status: 'fetch_error', query, message: String(error && error.message || error), source: endpoint.href };\n}\nif (response.status === 429) {\n  return { success: false, status: 'rate_limited', query, httpStatus: 429, source: response.url || endpoint.href };\n}\nif (!response.ok) return { success: false, status: 'http_error', query, httpStatus: response.status, source: response.url || endpoint.href };\nlet data;\ntry {\n  data = await response.json();\n} catch {\n  return { success: false, status: 'invalid_json', query, source: response.url || endpoint.href };\n}\nif (!data || typeof data !== 'object') {\n  return { success: false, status: 'schema_changed', query, source: response.url || endpoint.href };\n}\nconst documents = (Array.isArray(data.documents) ? data.documents : [])\n  .filter(item => item && typeof item.mdn_url === 'string' && item.mdn_url.startsWith('/'))\n  .map(item => ({\n    title: String(item.title || '').replace(/<[^>]*>/g, '').trim(),\n    url: new URL(item.mdn_url, origin).href,\n    summary: String(item.summary || '').replace(/<[^>]*>/g, '').trim()\n  }))\n  .filter(item => item.title && /^https:\\/\\/developer\\.mozilla\\.org\\/[a-z]{2}(?:-[A-Z]{2})?\\/docs\\//.test(item.url))\n  .slice(0, limit);\nif (!documents.length) {\n  return {\n    success: true,\n    status: 'empty',\n    query,\n    documents: [],\n    sources: { api: response.url || endpoint.href, page: pageUrl },\n    total: 0\n  };\n}\nreturn {\n  success: true,\n  status: 'ok',\n  query,\n  documents,\n  sources: { api: response.url || endpoint.href, page: pageUrl },\n  total: Math.max(documents.length, Math.floor(Number(data.metadata && data.metadata.total && data.metadata.total.value) || documents.length))\n};"
       },
       "resultPath": "/result"
     }

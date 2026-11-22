@@ -1,0 +1,313 @@
+{
+  "id": "github-issue-thread",
+  "name": "GitHub issue or PR thread reader",
+  "description": "Read a public GitHub issue or pull request discussion and its bounded comments via the official GitHub REST API.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://github.com/react/react/issues/1",
+      "https://api.github.com/repos/react/react/issues/1",
+      "https://api.github.com/repos/react/react/issues/1/comments",
+      "https://docs.github.com/en/rest/issues/issues#get-an-issue"
+    ]
+  },
+  "domains": [
+    "github.com",
+    "api.github.com"
+  ],
+  "keywords": [
+    "github",
+    "issue",
+    "issues",
+    "pr",
+    "pull request",
+    "comments",
+    "discussion",
+    "议题",
+    "讨论"
+  ],
+  "startUrl": "https://github.com/{{owner}}/{{repo}}/issues/{{number}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "owner": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+      },
+      "repo": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]{1,100}$"
+      },
+      "number": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000000
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 30,
+        "default": 15
+      }
+    },
+    "required": [
+      "owner",
+      "repo",
+      "number"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "issue": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string"
+          },
+          "isPullRequest": {
+            "type": "boolean"
+          },
+          "author": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://github\\.com/.+/(?:issues|pull)/\\d+"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "body": {
+            "type": "string"
+          },
+          "commentsCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "state",
+          "isPullRequest",
+          "author",
+          "url",
+          "createdAt",
+          "updatedAt",
+          "labels",
+          "body",
+          "commentsCount"
+        ],
+        "additionalProperties": false
+      },
+      "comments": {
+        "type": "array",
+        "maxItems": 30,
+        "items": {
+          "type": "object",
+          "properties": {
+            "author": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/"
+            },
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "author",
+            "createdAt",
+            "url",
+            "body"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "type": "string",
+            "pattern": "^https://api\\.github\\.com/(?:repos|repositories)/"
+          },
+          "commentsApi": {
+            "type": "string",
+            "pattern": "^https://api\\.github\\.com/(?:repos|repositories)/"
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://github\\.com/"
+          }
+        },
+        "required": [
+          "api",
+          "commentsApi",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "issue",
+      "comments",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const owner = String(input.owner || '').trim();\nconst repo = String(input.repo || '').trim();\nconst number = Math.max(1, Math.floor(Number(input.number) || 0));\nconst limit = Math.max(1, Math.min(Number(input.limit) || 15, 30));\nconst basePath = '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo) + '/issues/' + number;\nconst issueUrl = new URL(basePath, 'https://api.github.com').href;\nconst commentsUrl = new URL(basePath + '/comments?per_page=' + limit, 'https://api.github.com').href;\nconst [issueRes, commentsRes] = await Promise.all([\n  fetch(issueUrl, { credentials: 'omit', headers: { Accept: 'application/vnd.github+json' } }),\n  fetch(commentsUrl, { credentials: 'omit', headers: { Accept: 'application/vnd.github+json' } })\n]);\nconst classifyAccessError = async (res, fallbackUrl) => {\n  const remaining = res.headers && typeof res.headers.get === 'function' ? res.headers.get('x-ratelimit-remaining') : null;\n  const reset = res.headers && typeof res.headers.get === 'function' ? res.headers.get('x-ratelimit-reset') : null;\n  const retryAfter = res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;\n  let message = '';\n  try {\n    const payload = await res.json();\n    if (payload && typeof payload.message === 'string') message = payload.message.trim().slice(0, 300);\n  } catch {}\n  const limited = res.status === 429 || remaining === '0' || Boolean(retryAfter) || /rate limit|secondary rate/i.test(message);\n  return Object.assign(\n    { success: false, status: limited ? 'rate_limited' : 'forbidden', repository: owner + '/' + repo, number, httpStatus: res.status, source: res.url || fallbackUrl },\n    reset ? { rateLimitReset: reset } : null,\n    retryAfter ? { retryAfter } : null,\n    message ? { message } : null\n  );\n};\nif (issueRes.status === 403 || issueRes.status === 429) {\n  return await classifyAccessError(issueRes, issueUrl);\n}\nif (commentsRes.status === 403 || commentsRes.status === 429) {\n  return await classifyAccessError(commentsRes, commentsUrl);\n}\nif (issueRes.status === 404) {\n  return { success: false, status: 'not_found', repository: owner + '/' + repo, number, httpStatus: 404, source: issueRes.url || issueUrl };\n}\nif (!issueRes.ok) {\n  return { success: false, status: 'http_error', repository: owner + '/' + repo, number, httpStatus: issueRes.status, source: issueRes.url || issueUrl };\n}\nif (!commentsRes.ok) {\n  return { success: false, status: 'http_error', repository: owner + '/' + repo, number, httpStatus: commentsRes.status, source: commentsRes.url || commentsUrl };\n}\nlet issueData;\nlet commentsData;\ntry {\n  issueData = await issueRes.json();\n  commentsData = await commentsRes.json();\n} catch {\n  return { success: false, status: 'invalid_json', repository: owner + '/' + repo, number, source: issueRes.url || issueUrl };\n}\nconst title = String((issueData && issueData.title) || '').trim();\nconst page = String((issueData && issueData.html_url) || '').trim();\nif (!title || !/^https:\\/\\/github\\.com\\/.+\\/(?:issues|pull)\\/\\d+/.test(page) || !Array.isArray(commentsData)) {\n  return { success: false, status: 'schema_changed', repository: owner + '/' + repo, number, source: issueRes.url || issueUrl };\n}\nconst comments = commentsData.slice(0, limit).map(comment => ({\n  author: String((comment && comment.user && comment.user.login) || '').trim(),\n  createdAt: String((comment && comment.created_at) || '').trim(),\n  url: String((comment && comment.html_url) || page).trim(),\n  body: String((comment && comment.body) || '').trim().slice(0, 2000)\n}));\nreturn {\n  success: true,\n  status: 'ok',\n  issue: {\n    number: Math.max(1, Math.floor(Number(issueData.number) || number)),\n    title,\n    state: String(issueData.state || '').trim(),\n    isPullRequest: Boolean(issueData.pull_request),\n    author: String((issueData.user && issueData.user.login) || '').trim(),\n    url: page,\n    createdAt: String(issueData.created_at || '').trim(),\n    updatedAt: String(issueData.updated_at || '').trim(),\n    labels: Array.isArray(issueData.labels) ? issueData.labels.map(label => typeof label === 'string' ? label : String((label && label.name) || '')).filter(Boolean).slice(0, 15) : [],\n    body: String(issueData.body || '').trim().slice(0, 6000),\n    commentsCount: Math.max(comments.length, Math.floor(Number(issueData.comments) || 0))\n  },\n  comments,\n  sources: {\n    api: issueRes.url || issueUrl,\n    commentsApi: commentsRes.url || commentsUrl,\n    page\n  }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "owner": "react",
+        "repo": "react",
+        "number": 1,
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "issue": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "const": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "number",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "commentsApi",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "issue",
+          "comments",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "(?:#1[\\s\\S]*/react/react|/react/react[\\s\\S]*#1)"
+      }
+    },
+    {
+      "inputs": {
+        "owner": "microsoft",
+        "repo": "vscode",
+        "number": 1,
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "issue": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "const": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "number",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "commentsApi",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "issue",
+          "comments",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "(?:#1[\\s\\S]*/microsoft/vscode|/microsoft/vscode[\\s\\S]*#1)"
+      }
+    }
+  ]
+}

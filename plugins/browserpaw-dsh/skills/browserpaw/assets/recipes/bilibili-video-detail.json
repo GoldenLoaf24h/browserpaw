@@ -1,0 +1,395 @@
+{
+  "id": "bilibili-video-detail",
+  "name": "Bilibili video detail reader",
+  "description": "Read a Bilibili video's title, uploader, description, stats, part list, and subtitle metadata via Bilibili's web-interface API inside Chrome.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.bilibili.com/video/BV1xx411c7mD",
+      "https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD"
+    ]
+  },
+  "domains": [
+    "www.bilibili.com",
+    "m.bilibili.com",
+    "bilibili.com",
+    "api.bilibili.com"
+  ],
+  "keywords": [
+    "bilibili",
+    "b站",
+    "哔哩哔哩",
+    "video",
+    "bvid",
+    "detail",
+    "subtitle",
+    "视频",
+    "详情",
+    "字幕",
+    "B站视频详情",
+    "哔哩哔哩视频",
+    "BV号"
+  ],
+  "startUrl": "https://www.bilibili.com/video/{{bvid}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "bvid": {
+        "type": "string",
+        "pattern": "^BV[0-9A-Za-z]{6,20}$"
+      }
+    },
+    "required": [
+      "bvid"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "video": {
+        "type": "object",
+        "properties": {
+          "bvid": {
+            "type": "string",
+            "pattern": "^BV[0-9A-Za-z]+$"
+          },
+          "aid": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://www\\.bilibili\\.com/video/BV[0-9A-Za-z]+$"
+          },
+          "author": {
+            "type": "string"
+          },
+          "authorMid": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "category": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "publishedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "views": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "likes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "coins": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "favorites": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "shares": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "danmaku": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "replies": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "views",
+              "likes",
+              "coins",
+              "favorites",
+              "shares",
+              "danmaku",
+              "replies"
+            ],
+            "additionalProperties": false
+          },
+          "parts": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "cid": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "title": {
+                  "type": "string"
+                },
+                "durationSeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "page",
+                "cid",
+                "title",
+                "durationSeconds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "subtitles": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "lang": {
+                  "type": "string"
+                },
+                "langDoc": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "lang",
+                "langDoc",
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "bvid",
+          "aid",
+          "title",
+          "url",
+          "author",
+          "authorMid",
+          "category",
+          "description",
+          "durationSeconds",
+          "publishedAt",
+          "stats",
+          "parts",
+          "subtitles"
+        ],
+        "additionalProperties": false
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^https://api\\.bilibili\\.com/x/web-interface/view\\?"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://www\\.bilibili\\.com/video/BV[0-9A-Za-z]+$"
+          }
+        },
+        "required": [
+          "api",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "video",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const rawBvid = String(input.bvid || '').trim();\nconst bvidMatch = rawBvid.match(/BV[0-9A-Za-z]{6,20}/);\nconst bvid = bvidMatch ? bvidMatch[0] : rawBvid;\nif (!/^BV[0-9A-Za-z]{6,20}$/.test(bvid)) {\n  return { success: false, status: 'invalid_input', bvid: rawBvid, message: 'Invalid Bilibili BV id', source: 'https://www.bilibili.com/' };\n}\nconst pageUrl = 'https://www.bilibili.com/video/' + bvid;\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:www\\.|m\\.)?bilibili\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', bvid, message: 'Bilibili page origin is not ready', source: pageUrl };\n}\nconst endpoint = new URL('/x/web-interface/view', 'https://api.bilibili.com');\nendpoint.searchParams.set('bvid', bvid);\nconst readInitialStateFallback = () => {\n  const state = (typeof globalThis !== 'undefined' && globalThis.__INITIAL_STATE__) || null;\n  if (state && state.videoData && typeof state.videoData.bvid === 'string' && state.videoData.bvid.toLowerCase() === bvid.toLowerCase() && String(state.videoData.title || '').trim()) {\n    return state.videoData;\n  }\n  return null;\n};\nlet data = null;\nlet apiSource = endpoint.href;\nlet response;\ntry {\n  response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\n  apiSource = response.url || endpoint.href;\n} catch (error) {\n  const fallback = readInitialStateFallback();\n  if (fallback) {\n    data = fallback;\n    apiSource = null;\n  } else {\n    return { success: false, status: 'fetch_error', bvid, message: String(error && error.message || error), source: apiSource };\n  }\n}\nif (!data) {\n  if (response.status === 404) {\n    return { success: false, status: 'not_found', bvid, httpStatus: 404, source: apiSource };\n  }\n  if (response.status === 403) {\n    const fallback = readInitialStateFallback();\n    if (fallback) {\n      data = fallback;\n      apiSource = null;\n    } else {\n      return { success: false, status: 'requires_auth', bvid, requiresLogin: true, httpStatus: 403, source: apiSource };\n    }\n  } else if (response.status === 412 || response.status === 429) {\n    const fallback = readInitialStateFallback();\n    if (fallback) {\n      data = fallback;\n      apiSource = null;\n    } else {\n      return { success: false, status: 'rate_limited', bvid, httpStatus: response.status, message: 'Bilibili risk control or rate limit triggered', source: apiSource };\n    }\n  } else if (!response.ok) {\n    const fallback = readInitialStateFallback();\n    if (fallback) {\n      data = fallback;\n      apiSource = null;\n    } else {\n      return { success: false, status: 'http_error', bvid, httpStatus: response.status, source: apiSource };\n    }\n  }\n}\nif (!data) {\n  let payload;\n  try {\n    payload = await response.json();\n  } catch {\n    const fallback = readInitialStateFallback();\n    if (fallback) {\n      data = fallback;\n      apiSource = null;\n    } else {\n      return { success: false, status: 'invalid_json', bvid, source: apiSource };\n    }\n  }\n  if (!data) {\n    if (!payload || typeof payload !== 'object') {\n      const fallback = readInitialStateFallback();\n      if (fallback) {\n        data = fallback;\n        apiSource = null;\n      } else {\n        return { success: false, status: 'invalid_json', bvid, source: apiSource };\n      }\n    } else if (payload.code === -404 || payload.code === 62002 || payload.code === 62004) {\n      return { success: false, status: 'not_found', bvid, code: payload.code, message: String(payload.message || ''), source: apiSource };\n    } else if (payload.code === -101 || payload.code === -403) {\n      const fallback = readInitialStateFallback();\n      if (fallback) {\n        data = fallback;\n        apiSource = null;\n      } else {\n        return { success: false, status: 'requires_auth', bvid, requiresLogin: true, code: payload.code, message: String(payload.message || 'Bilibili requires authentication'), source: apiSource };\n      }\n    } else if (payload.code === -352 || payload.code === -412) {\n      const fallback = readInitialStateFallback();\n      if (fallback) {\n        data = fallback;\n        apiSource = null;\n      } else {\n        return { success: false, status: 'rate_limited', bvid, code: payload.code, message: String(payload.message || 'Bilibili risk control triggered'), source: apiSource };\n      }\n    } else if (payload.code !== 0 || !payload.data || typeof payload.data !== 'object') {\n      const fallback = readInitialStateFallback();\n      if (fallback) {\n        data = fallback;\n        apiSource = null;\n      } else {\n        return { success: false, status: 'schema_changed', bvid, code: payload.code, message: String(payload.message || ''), source: apiSource };\n      }\n    } else {\n      data = payload.data;\n    }\n  }\n}\nconst resolvedBvid = String(data.bvid || bvid).trim();\nconst title = String(data.title || '').trim();\nif (!/^BV[0-9A-Za-z]+$/.test(resolvedBvid) || !title) {\n  return { success: false, status: 'schema_changed', bvid, source: apiSource || pageUrl };\n}\nconst stat = data.stat || {};\nconst parts = Array.isArray(data.pages) ? data.pages.slice(0, 30).map((part, idx) => ({\n  page: Math.max(1, Math.floor(Number(part && part.page) || idx + 1)),\n  cid: Math.max(0, Math.floor(Number(part && part.cid) || 0)),\n  title: String((part && part.part) || '').trim(),\n  durationSeconds: Math.max(0, Math.floor(Number(part && part.duration) || 0))\n})) : [];\nconst rawSubs = data.subtitle && Array.isArray(data.subtitle.list) ? data.subtitle.list : [];\nconst subtitles = rawSubs.slice(0, 10).map(sub => {\n  const rawUrl = String((sub && sub.subtitle_url) || '').trim();\n  const normalizedUrl = rawUrl.startsWith('//') ? 'https:' + rawUrl : rawUrl;\n  return {\n    lang: String((sub && sub.lan) || '').trim(),\n    langDoc: String((sub && sub.lan_doc) || '').trim(),\n    url: normalizedUrl\n  };\n}).filter(sub => sub.lang || sub.url);\nreturn {\n  success: true,\n  status: 'ok',\n  video: {\n    bvid: resolvedBvid,\n    aid: Math.max(0, Math.floor(Number(data.aid) || 0)),\n    title,\n    url: 'https://www.bilibili.com/video/' + resolvedBvid,\n    author: String((data.owner && data.owner.name) || '').trim(),\n    authorMid: Math.max(0, Math.floor(Number(data.owner && data.owner.mid) || 0)),\n    category: String(data.tname || '').trim(),\n    description: String(data.desc || '').trim().slice(0, 3000),\n    durationSeconds: Math.max(0, Math.floor(Number(data.duration) || 0)),\n    publishedAt: Math.max(0, Math.floor(Number(data.pubdate) || 0)),\n    stats: {\n      views: Math.max(0, Math.floor(Number(stat.view) || 0)),\n      likes: Math.max(0, Math.floor(Number(stat.like) || 0)),\n      coins: Math.max(0, Math.floor(Number(stat.coin) || 0)),\n      favorites: Math.max(0, Math.floor(Number(stat.favorite) || 0)),\n      shares: Math.max(0, Math.floor(Number(stat.share) || 0)),\n      danmaku: Math.max(0, Math.floor(Number(stat.danmaku) || 0)),\n      replies: Math.max(0, Math.floor(Number(stat.reply) || 0))\n    },\n    parts,\n    subtitles\n  },\n  sources: {\n    api: apiSource,\n    page: 'https://www.bilibili.com/video/' + resolvedBvid\n  }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_network_request",
+    "args": {
+      "url": "https://api.bilibili.com/x/web-interface/view?bvid={{bvid}}",
+      "method": "GET",
+      "timeout": 30000
+    },
+    "resultPath": "/response/body"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "bvid": "BV1xx411c7mD"
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "video": {
+            "type": "object",
+            "properties": {
+              "bvid": {
+                "const": "BV1xx411c7mD"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "bvid",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "video",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "const": 0
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "bvid": {
+                "const": "BV1xx411c7mD"
+              }
+            },
+            "required": [
+              "bvid"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "data"
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "bvid": "BV1GJ411x7h7"
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "video": {
+            "type": "object",
+            "properties": {
+              "bvid": {
+                "const": "BV1GJ411x7h7"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "bvid",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "video",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "const": 0
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "bvid": {
+                "const": "BV1GJ411x7h7"
+              }
+            },
+            "required": [
+              "bvid"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "data"
+        ]
+      }
+    }
+  ]
+}

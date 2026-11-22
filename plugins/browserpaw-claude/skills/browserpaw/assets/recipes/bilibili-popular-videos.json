@@ -1,0 +1,364 @@
+{
+  "id": "bilibili-popular-videos",
+  "name": "Bilibili popular videos reader",
+  "description": "Read Bilibili's trending popular videos via Bilibili's web-interface API inside Chrome with browser cookies and Referer.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.bilibili.com/v/popular/all",
+      "https://api.bilibili.com/x/web-interface/popular?ps=10&pn=1"
+    ]
+  },
+  "domains": [
+    "www.bilibili.com",
+    "m.bilibili.com",
+    "bilibili.com",
+    "api.bilibili.com"
+  ],
+  "keywords": [
+    "bilibili",
+    "b站",
+    "哔哩哔哩",
+    "popular",
+    "trending",
+    "hot",
+    "videos",
+    "热门",
+    "热榜",
+    "视频",
+    "B站热门",
+    "哔哩哔哩热门",
+    "B站视频"
+  ],
+  "startUrl": "https://www.bilibili.com/v/popular/all",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 10
+      },
+      "page": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 1
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "properties": {
+                "bvid": {
+                  "type": "string",
+                  "pattern": "^BV[0-9A-Za-z]+$"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://www\\.bilibili\\.com/video/BV[0-9A-Za-z]+$"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "durationSeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "views": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "likes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "danmaku": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "publishedAt": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "bvid",
+                "title",
+                "url",
+                "author",
+                "category",
+                "durationSeconds",
+                "views",
+                "likes",
+                "danmaku",
+                "publishedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^https://api\\.bilibili\\.com/x/web-interface/popular\\?"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://www\\.bilibili\\.com/"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "page",
+          "videos",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^https://api\\.bilibili\\.com/x/web-interface/popular\\?"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://www\\.bilibili\\.com/"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "page",
+          "videos",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const limit = Math.max(1, Math.min(Number(input.limit) || 10, 20));\nconst page = Math.max(1, Math.min(Math.floor(Number(input.page) || 1), 10));\nconst pageUrl = 'https://www.bilibili.com/v/popular/all';\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:www\\.|m\\.)?bilibili\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', page, message: 'Bilibili page origin is not ready', source: pageUrl };\n}\nconst endpoint = new URL('/x/web-interface/popular', 'https://api.bilibili.com');\nendpoint.searchParams.set('ps', String(limit));\nendpoint.searchParams.set('pn', String(page));\nconst mapApiVideos = list => {\n  const out = [];\n  const seen = new Set();\n  for (const item of list) {\n    const bvid = String((item && item.bvid) || '').trim();\n    const title = String((item && item.title) || '').trim();\n    if (!/^BV[0-9A-Za-z]+$/.test(bvid) || !title || seen.has(bvid)) continue;\n    seen.add(bvid);\n    const stat = (item && item.stat) || {};\n    out.push({\n      bvid,\n      title,\n      url: 'https://www.bilibili.com/video/' + bvid,\n      author: String((item && item.owner && item.owner.name) || '').trim(),\n      category: String((item && item.tname) || '').trim(),\n      durationSeconds: Math.max(0, Math.floor(Number(item && item.duration) || 0)),\n      views: Math.max(0, Math.floor(Number(stat.view) || 0)),\n      likes: Math.max(0, Math.floor(Number(stat.like) || 0)),\n      danmaku: Math.max(0, Math.floor(Number(stat.danmaku) || 0)),\n      publishedAt: Math.max(0, Math.floor(Number(item && item.pubdate) || 0))\n    });\n    if (out.length >= limit) break;\n  }\n  return out;\n};\nconst readFallbackVideos = () => {\n  if (page !== 1) return [];\n  const root = typeof globalThis !== 'undefined' ? globalThis : {};\n  const state = root.__INITIAL_STATE__;\n  if (state && typeof state === 'object') {\n    const candidates = [state.popularList, state.list, state.rankList, state.videoList];\n    for (const list of candidates) {\n      if (Array.isArray(list) && list.length > 0) {\n        const mapped = mapApiVideos(list);\n        if (mapped.length > 0) return mapped;\n      }\n    }\n  }\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return [];\n  const isHidden = el => Boolean(el && (el.hidden === true || (typeof el.hasAttribute === 'function' && el.hasAttribute('hidden')) || (typeof el.getAttribute === 'function' && el.getAttribute('aria-hidden') === 'true')));\n  const out = [];\n  const seen = new Set();\n  const cards = Array.from(document.querySelectorAll('.video-card, .rank-item, .popular-video-card'));\n  const nodes = cards.length > 0 ? cards : Array.from(document.querySelectorAll('a[href*=\"/video/BV\"]'));\n  for (const node of nodes) {\n    if (isHidden(node)) continue;\n    const link = node.matches && node.matches('a[href]') ? node : (typeof node.querySelector === 'function' ? node.querySelector('a[href*=\"/video/BV\"]') : null);\n    const href = link && typeof link.getAttribute === 'function' ? String(link.getAttribute('href') || '') : '';\n    const m = href.match(/\\/video\\/(BV[0-9A-Za-z]+)/);\n    const bvid = m ? m[1] : '';\n    if (!bvid || seen.has(bvid)) continue;\n    const titleEl = typeof node.querySelector === 'function' ? node.querySelector('.video-name, .title, h3, [title]') : null;\n    const title = String((titleEl && ((typeof titleEl.getAttribute === 'function' && titleEl.getAttribute('title')) || titleEl.innerText || titleEl.textContent)) || (link && ((typeof link.getAttribute === 'function' && link.getAttribute('title')) || link.innerText || link.textContent)) || '').trim();\n    if (!title) continue;\n    const authorEl = typeof node.querySelector === 'function' ? node.querySelector('.up-name__text, .up-name, .author') : null;\n    seen.add(bvid);\n    out.push({\n      bvid,\n      title,\n      url: 'https://www.bilibili.com/video/' + bvid,\n      author: authorEl ? String(authorEl.innerText || authorEl.textContent || '').trim() : '',\n      category: '',\n      durationSeconds: 0,\n      views: 0,\n      likes: 0,\n      danmaku: 0,\n      publishedAt: 0\n    });\n    if (out.length >= limit) break;\n  }\n  return out;\n};\nconst tryFallback = () => {\n  const videos = readFallbackVideos();\n  if (!videos.length) return null;\n  return {\n    success: true,\n    status: 'ok',\n    page,\n    videos,\n    sources: { api: null, page: pageUrl }\n  };\n};\nlet response;\ntry {\n  response = await fetch(endpoint.href, { credentials: 'include', headers: { Accept: 'application/json' } });\n} catch (error) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'fetch_error', page, message: String(error && error.message || error), source: endpoint.href };\n}\nif (response.status === 403) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'requires_auth', page, requiresLogin: true, httpStatus: 403, source: response.url || endpoint.href };\n}\nif (response.status === 412 || response.status === 429) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'rate_limited', page, httpStatus: response.status, source: response.url || endpoint.href };\n}\nif (!response.ok) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'http_error', page, httpStatus: response.status, source: response.url || endpoint.href };\n}\nlet payload;\ntry {\n  payload = await response.json();\n} catch {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'invalid_json', page, source: response.url || endpoint.href };\n}\nif (!payload || typeof payload !== 'object') {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'schema_changed', page, source: response.url || endpoint.href };\n}\nif (payload.code === -101 || payload.code === -403) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'requires_auth', page, requiresLogin: true, code: payload.code, message: String(payload.message || 'Bilibili requires authentication'), source: response.url || endpoint.href };\n}\nif (payload.code === -352 || payload.code === -412) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'rate_limited', page, code: payload.code, message: String(payload.message || 'Bilibili risk control triggered'), source: response.url || endpoint.href };\n}\nif (payload.code !== 0 || !payload.data || !Array.isArray(payload.data.list)) {\n  const fb = tryFallback();\n  if (fb) return fb;\n  return { success: false, status: 'schema_changed', page, code: payload.code, message: String(payload.message || ''), source: response.url || endpoint.href };\n}\nif (payload.data.list.length === 0) {\n  return { success: true, status: 'empty', page, videos: [], sources: { api: response.url || endpoint.href, page: pageUrl } };\n}\nconst videos = mapApiVideos(payload.data.list);\nif (!videos.length) {\n  return { success: false, status: 'schema_changed', page, source: response.url || endpoint.href };\n}\nreturn {\n  success: true,\n  status: 'ok',\n  page,\n  videos,\n  sources: { api: response.url || endpoint.href, page: pageUrl }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_network_request",
+    "args": {
+      "url": "https://api.bilibili.com/x/web-interface/popular?ps=1&pn=1",
+      "method": "GET",
+      "timeout": 30000
+    },
+    "resultPath": "/response/body"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "limit": 3,
+        "page": 1
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "page": {
+            "const": 1
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "page",
+          "videos",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "const": 0
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "list": {
+                "type": "array",
+                "minItems": 1
+              }
+            },
+            "required": [
+              "list"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "data"
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "limit": 5,
+        "page": 2
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "page": {
+            "const": 2
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "page",
+          "videos",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "const": 0
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "list": {
+                "type": "array",
+                "minItems": 1
+              }
+            },
+            "required": [
+              "list"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "data"
+        ]
+      }
+    }
+  ]
+}

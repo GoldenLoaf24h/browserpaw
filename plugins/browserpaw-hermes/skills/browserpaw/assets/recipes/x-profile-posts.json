@@ -1,0 +1,332 @@
+{
+  "id": "x-profile-posts",
+  "name": "X profile and visible posts reader",
+  "description": "Read an X account's visible profile summary and bounded recent posts in Chrome; detects login walls and loading timeouts cleanly without fabricating posts.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://x.com/github",
+      "https://x.com/reactjs"
+    ]
+  },
+  "domains": [
+    "x.com",
+    "twitter.com"
+  ],
+  "keywords": [
+    "x",
+    "twitter",
+    "profile",
+    "tweets",
+    "user",
+    "posts",
+    "timeline",
+    "主页",
+    "推特主页",
+    "推特博主",
+    "用户推文",
+    "X主页"
+  ],
+  "startUrl": "https://x.com/{{username}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "username": {
+        "type": "string",
+        "description": "X username without leading @",
+        "pattern": "^[A-Za-z0-9_]{1,15}$"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 8
+      }
+    },
+    "required": [
+      "username"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "coverage": {
+            "const": "visible_only"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "username": {
+                "type": "string",
+                "minLength": 1
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/[A-Za-z0-9_]{1,15}$"
+              }
+            },
+            "required": [
+              "username",
+              "displayName",
+              "bio",
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "author": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://(?:x|twitter)\\.com/.+/status/\\d+"
+                },
+                "publishedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "author",
+                "url",
+                "publishedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "coverage",
+          "profile",
+          "posts",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "coverage": {
+            "const": "visible_only"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "username": {
+                "type": "string",
+                "minLength": 1
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/[A-Za-z0-9_]{1,15}$"
+              }
+            },
+            "required": [
+              "username",
+              "displayName",
+              "bio",
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://(?:x|twitter)\\.com/"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "coverage",
+          "profile",
+          "posts",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const username = String(input.username || '').trim().replace(/^@/, '');\nconst limit = Math.max(1, Math.min(Number(input.limit) || 8, 20));\nconst canonicalPageUrl = 'https://x.com/' + encodeURIComponent(username);\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:mobile\\.)?(?:x|twitter)\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', requiresLogin: false, message: 'X profile page origin is not ready', username, source: canonicalPageUrl };\n}\nconst canonicalOrigin = origin.replace(/^https:\\/\\/mobile\\./i, 'https://');\nconst source = new URL('/' + encodeURIComponent(username), 'https://x.com');\nconst loginPath = /^\\/(?:i\\/flow\\/login|login)(?:\\/|$)/.test(String(location.pathname || ''));\nconst isVisible = element => {\n  if (!element || !element.getBoundingClientRect) return false;\n  if (element.hidden === true) return false;\n  if (typeof element.getAttribute === 'function') {\n    if (element.getAttribute('aria-hidden') === 'true') return false;\n    const hiddenAttr = element.getAttribute('hidden');\n    if (hiddenAttr !== null && hiddenAttr !== undefined) return false;\n  }\n  if (element.style && (element.style.display === 'none' || element.style.visibility === 'hidden')) return false;\n  const rect = element.getBoundingClientRect();\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  return Boolean(rect) && rect.width > 0 && rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));\n};\nconst isArticleVisible = element => {\n  if (!element) return false;\n  if (element.hidden === true) return false;\n  if (typeof element.getAttribute === 'function') {\n    if (element.getAttribute('aria-hidden') === 'true') return false;\n    const hiddenAttr = element.getAttribute('hidden');\n    if (hiddenAttr !== null && hiddenAttr !== undefined) return false;\n  }\n  if (element.style && (element.style.display === 'none' || element.style.visibility === 'hidden')) return false;\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;\n  if (typeof element.getBoundingClientRect === 'function') {\n    const rect = element.getBoundingClientRect();\n    if (!rect || rect.width <= 0 || rect.height <= 0) return false;\n  }\n  return true;\n};\nconst hasVisibleLoginForm = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return false;\n  return Array.from(document.querySelectorAll('form')).some(form =>\n    isVisible(form) && Array.from(form.querySelectorAll('input[autocomplete=\"username\"], input[name=\"text\"], input[type=\"password\"]')).some(isVisible)\n  );\n};\nconst hasEmptyProfileState = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelector !== 'function') return false;\n  const el = document.querySelector('main [data-testid=\"emptyState\"]') || document.querySelector('[data-testid=\"emptyState\"]');\n  if (!isVisible(el)) return false;\n  const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  return text.includes(\"hasn't posted\") || text.includes(\"haven't posted\") || text.includes('还没有发帖') || text.includes('尚未发布');\n};\nconst hasMissingAccount = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelector !== 'function') return false;\n  const el = document.querySelector('main [data-testid=\"emptyState\"]') || document.querySelector('[data-testid=\"emptyState\"]');\n  if (!isVisible(el)) return false;\n  const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  return text.includes(\"account doesn't exist\") || text.includes('此账号不存在') || text.includes('account suspended');\n};\nconst queryArticles = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return [];\n  const primary = Array.from(document.querySelectorAll('article[data-testid=\"tweet\"]'));\n  return primary.length ? primary : Array.from(document.querySelectorAll('article'));\n};\nconst isInsideQuote = (article, el) => {\n  if (!el || typeof el.closest !== 'function') return false;\n  const quoteWrap = el.closest('div[role=\"link\"], [data-testid=\"quoteTweet\"], [data-testid=\"card.wrapper\"]');\n  if (quoteWrap && quoteWrap !== article && (typeof article.contains !== 'function' || article.contains(quoteWrap))) return true;\n  const nestedArticle = el.closest('article');\n  return Boolean(nestedArticle && nestedArticle !== article);\n};\nconst isPromoted = article => {\n  if (!article) return false;\n  if (typeof article.closest === 'function' && article.closest('[data-testid=\"placementTracking\"]')) return true;\n  if (typeof article.querySelector === 'function') {\n    if (article.querySelector('[data-testid=\"placementTracking\"]')) return true;\n    const social = article.querySelector('[data-testid=\"socialContext\"], [data-testid=\"SocialContext\"]');\n    if (social && !isInsideQuote(article, social)) {\n      const sText = String(social.innerText || social.textContent || '').trim();\n      if (/\\b(?:promoted|sponsored|ad)\\b|推广|广告/i.test(sText)) return true;\n    }\n  }\n  if (typeof article.querySelectorAll === 'function') {\n    const spans = Array.from(article.querySelectorAll('span'));\n    if (spans.some(sp => {\n      if (typeof sp.closest === 'function' && sp.closest('[data-testid=\"tweetText\"], [data-testid=\"User-Name\"]')) return false;\n      if (isInsideQuote(article, sp)) return false;\n      const t = String(sp.innerText || sp.textContent || '').trim();\n      return /^(?:Ad|Promoted|Sponsored|广告|推广)$/i.test(t);\n    })) return true;\n  }\n  return false;\n};\nconst isRepost = (article, statusAuthor) => {\n  const social = article && typeof article.querySelector === 'function'\n    ? article.querySelector('[data-testid=\"socialContext\"], [data-testid=\"SocialContext\"]')\n    : null;\n  if (social && !isInsideQuote(article, social)) {\n    const sText = String(social.innerText || social.textContent || '').trim();\n    if (/\\b(?:reposted|retweeted)\\b|转推|转帖/i.test(sText)) return true;\n    if (/\\bpinned\\b|置顶/i.test(sText)) return Boolean(statusAuthor && statusAuthor.toLowerCase() !== username.toLowerCase());\n  }\n  return Boolean(statusAuthor && statusAuthor.toLowerCase() !== username.toLowerCase());\n};\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nlet articles = [];\nlet loginForm = false;\nlet emptyState = false;\nlet missingAccount = false;\nfor (let attempt = 0; attempt < 40; attempt += 1) {\n  if (loginPath) break;\n  articles = queryArticles().filter(article => isArticleVisible(article) && !isPromoted(article));\n  if (articles.length) break;\n  loginForm = hasVisibleLoginForm();\n  if (loginForm) break;\n  missingAccount = hasMissingAccount();\n  if (missingAccount) break;\n  emptyState = hasEmptyProfileState();\n  if (emptyState) break;\n  if (attempt < 39) await sleep(250);\n}\nif (loginPath || loginForm) {\n  return { success: false, status: 'requires_auth', requiresLogin: true, message: 'X requires authentication to read this profile', username, source: source.href };\n}\nif (missingAccount) {\n  return { success: false, status: 'not_found', requiresLogin: false, message: 'X account does not exist or is suspended', username, source: source.href };\n}\nconst nameEl = typeof document !== 'undefined' && document && typeof document.querySelector === 'function' ? document.querySelector('[data-testid=\"UserName\"]') : null;\nconst bioEl = typeof document !== 'undefined' && document && typeof document.querySelector === 'function' ? document.querySelector('[data-testid=\"UserDescription\"]') : null;\nconst displayName = String((nameEl && (nameEl.innerText || nameEl.textContent)) || '').split('\\n').map(v => v.trim()).find(Boolean) || username;\nconst bio = String((bioEl && (bioEl.innerText || bioEl.textContent)) || '').trim().slice(0, 600);\nconst profile = { username, displayName, bio, url: source.href };\nif (emptyState) {\n  return { success: true, status: 'empty', coverage: 'visible_only', profile, posts: [], sources: { page: source.href } };\n}\nif (!articles.length) {\n  return { success: false, status: 'loading_timeout', requiresLogin: false, message: 'X profile posts did not become visible within 10 seconds', username, source: source.href };\n}\nconst mainStatusLink = article => {\n  const links = typeof article.querySelectorAll === 'function' ? Array.from(article.querySelectorAll('a:has(time)')) : [];\n  const candidates = links.filter(link => !isInsideQuote(article, link));\n  const pool = candidates.length ? candidates : links;\n  return pool.find(link => {\n    const href = link.getAttribute('href') || '';\n    try {\n      return /^\\/[^/]+\\/status\\/\\d+$/.test(new URL(href, canonicalOrigin).pathname);\n    } catch {\n      return false;\n    }\n  });\n};\nconst firstPrimaryEl = (article, selector) => {\n  const list = typeof article.querySelectorAll === 'function' ? Array.from(article.querySelectorAll(selector)) : [];\n  if (list.length) return list.find(el => !isInsideQuote(article, el)) || null;\n  const single = typeof article.querySelector === 'function' ? article.querySelector(selector) : null;\n  return single && !isInsideQuote(article, single) ? single : null;\n};\nconst posts = articles.map(article => {\n  const statusLink = mainStatusLink(article);\n  const href = statusLink ? statusLink.getAttribute('href') || '' : '';\n  const statusUrl = href ? new URL(href, canonicalOrigin).href : '';\n  const statusAuthorMatch = statusUrl ? new URL(statusUrl).pathname.match(/^\\/([^/]+)\\/status\\/\\d+$/) : null;\n  const statusAuthor = statusAuthorMatch ? statusAuthorMatch[1] : '';\n  if (isRepost(article, statusAuthor)) return null;\n  const textEl = firstPrimaryEl(article, '[data-testid=\"tweetText\"]');\n  const text = String((textEl && (textEl.innerText || textEl.textContent)) || '').trim();\n  const userEl = firstPrimaryEl(article, '[data-testid=\"User-Name\"]');\n  const nameBlock = String((userEl && (userEl.innerText || userEl.textContent)) || '').trim();\n  const author = nameBlock.split('\\n').map(part => part.trim()).find(Boolean) || (statusAuthor ? '@' + statusAuthor : '');\n  const time = statusLink && typeof statusLink.querySelector === 'function' ? statusLink.querySelector('time') : null;\n  return {\n    text,\n    author,\n    url: statusUrl,\n    publishedAt: time ? String(time.getAttribute('datetime') || '') : ''\n  };\n}).filter(post => post && post.text && post.url).slice(0, limit);\nif (!posts.length) {\n  return { success: false, status: 'unreadable', requiresLogin: false, message: 'Visible X profile articles did not expose readable text and status links', username, source: source.href };\n}\nreturn { success: true, status: 'ok', coverage: 'visible_only', profile, posts, sources: { page: source.href } };",
+        "timeoutMs": 20000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 240
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "username": "github",
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "coverage": {
+            "const": "visible_only"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "username": {
+                "const": "github"
+              }
+            },
+            "required": [
+              "username"
+            ]
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "coverage",
+          "profile",
+          "posts",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "github|GitHub|Posts|Log in|Sign in"
+      }
+    },
+    {
+      "inputs": {
+        "username": "reactjs",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "coverage": {
+            "const": "visible_only"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "username": {
+                "const": "reactjs"
+              }
+            },
+            "required": [
+              "username"
+            ]
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "coverage",
+          "profile",
+          "posts",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "react|React|Posts|Log in|Sign in"
+      }
+    }
+  ]
+}

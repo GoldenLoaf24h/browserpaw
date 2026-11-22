@@ -1,0 +1,349 @@
+{
+  "id": "youtube-video-read",
+  "name": "YouTube video metadata and subtitles reader",
+  "description": "Read a YouTube video's metadata and optional caption transcript directly from the watch page's player data and same-origin timedtext endpoint.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ&format=json"
+    ]
+  },
+  "domains": [
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtube.com",
+    "youtu.be"
+  ],
+  "keywords": [
+    "youtube",
+    "油管",
+    "video",
+    "subtitles",
+    "captions",
+    "transcript",
+    "视频",
+    "字幕",
+    "详情",
+    "油管视频",
+    "YouTube字幕",
+    "看视频信息"
+  ],
+  "startUrl": "https://www.youtube.com/watch?v={{videoId}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "videoId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{11}$"
+      },
+      "includeSubtitles": {
+        "type": "boolean",
+        "default": true
+      },
+      "lang": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9,_-]{1,64}$",
+        "default": "zh-Hans,zh,en"
+      },
+      "maxSubtitleChars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 10000,
+        "default": 8000
+      }
+    },
+    "required": [
+      "videoId"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "video": {
+        "type": "object",
+        "properties": {
+          "videoId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{11}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://www\\.youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}$"
+          },
+          "author": {
+            "type": "string"
+          },
+          "channelId": {
+            "type": "string"
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "viewCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "publishDate": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "videoId",
+          "title",
+          "url",
+          "author",
+          "channelId",
+          "durationSeconds",
+          "viewCount",
+          "publishDate",
+          "description"
+        ],
+        "additionalProperties": false
+      },
+      "captionTracks": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "properties": {
+            "languageCode": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "languageCode",
+            "name",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "subtitle": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "languageCode": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "languageCode",
+              "kind",
+              "text",
+              "truncated"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "pattern": "^https://www\\.youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}$"
+          },
+          "subtitles": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^https://www\\.youtube\\.com/"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "page",
+          "subtitles"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "video",
+      "captionTracks",
+      "subtitle",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const videoId = String(input.videoId || '').trim();\nconst includeSubtitles = input.includeSubtitles !== false;\nconst preferredLangs = String(input.lang || 'zh-Hans,zh,en').split(',').map(v => v.trim().toLowerCase()).filter(Boolean);\nconst maxSubtitleChars = Math.max(500, Math.min(Number(input.maxSubtitleChars) || 8000, 10000));\nconst pageUrl = 'https://www.youtube.com/watch?v=' + videoId;\nconst currentOrigin = typeof location !== 'undefined' && typeof location.origin === 'string' ? location.origin : '';\nconst currentHref = typeof location !== 'undefined' && typeof location.href === 'string' ? location.href : pageUrl;\nconst currentPath = typeof location !== 'undefined' && typeof location.pathname === 'string' ? location.pathname : '';\nif (/^https:\\/\\/consent\\.youtube\\.com$/i.test(currentOrigin)) {\n  return { success: false, status: 'consent_required', videoId, message: 'YouTube consent wall requires user acceptance', source: currentHref };\n}\nif (!/^https:\\/\\/(?:www\\.|m\\.)?youtube\\.com$/i.test(currentOrigin)) {\n  return { success: false, status: 'page_not_ready', videoId, message: 'YouTube page origin is not ready', source: pageUrl };\n}\nif (/^\\/sorry(?:\\/|$)/i.test(currentPath)) {\n  return { success: false, status: 'bot_check', videoId, requiresLogin: true, message: 'YouTube requested bot verification', source: currentHref };\n}\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nconst getPlayerEl = id => {\n  if (typeof document === 'undefined' || !document) return null;\n  if (typeof document.getElementById === 'function') {\n    const byId = document.getElementById(id);\n    if (byId) return byId;\n  }\n  if (typeof document.querySelector === 'function') {\n    return document.querySelector('#' + id);\n  }\n  return null;\n};\nconst readPlayer = () => {\n  const root = typeof globalThis !== 'undefined' ? globalThis : {};\n  const candidates = [];\n  for (const playerId of ['movie_player', 'shorts-player']) {\n    const player = getPlayerEl(playerId);\n    if (player && typeof player.getPlayerResponse === 'function') {\n      try {\n        const live = player.getPlayerResponse();\n        if (live && typeof live === 'object') candidates.push(live);\n      } catch {}\n    }\n  }\n  if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {\n    const flexy = document.querySelector('ytd-watch-flexy');\n    if (flexy && flexy.playerData && typeof flexy.playerData === 'object') candidates.push(flexy.playerData);\n  }\n  if (root.ytInitialPlayerResponse && typeof root.ytInitialPlayerResponse === 'object') {\n    candidates.push(root.ytInitialPlayerResponse);\n  }\n  const exact = candidates.find(c => c.videoDetails && c.videoDetails.videoId === videoId);\n  if (exact) return exact;\n  return candidates.find(c => (!c.videoDetails || !c.videoDetails.videoId) && c.playabilityStatus) || null;\n};\nconst detectWall = () => {\n  if (typeof document === 'undefined' || !document) return null;\n  if (typeof document.querySelector === 'function') {\n    const consentEl = document.querySelector('form[action*=\"consent.youtube.com\"], ytd-consent-bump-v2-lightbox, tp-yt-paper-dialog[aria-label*=\"consent\" i], #consent-bump');\n    if (consentEl && !consentEl.hidden && consentEl.getAttribute?.('aria-hidden') !== 'true') {\n      return { success: false, status: 'consent_required', videoId, message: 'YouTube consent wall is blocking video playback', source: currentHref };\n    }\n  }\n  const bodyText = String((document.body && (document.body.innerText || document.body.textContent)) || '').trim();\n  if (/sign in to confirm you(?:'|\\u2019)?re not a bot/i.test(bodyText)) {\n    return { success: false, status: 'bot_check', videoId, requiresLogin: true, message: 'YouTube requested bot verification', source: currentHref };\n  }\n  if (/before you continue to youtube/i.test(bodyText)) {\n    return { success: false, status: 'consent_required', videoId, message: 'YouTube consent wall is blocking video playback', source: currentHref };\n  }\n  return null;\n};\nlet playerResponse = null;\nlet wallError = null;\nfor (let attempt = 0; attempt < 20; attempt += 1) {\n  const candidate = readPlayer();\n  if (candidate && (candidate.videoDetails || candidate.playabilityStatus)) {\n    playerResponse = candidate;\n    break;\n  }\n  wallError = detectWall();\n  if (wallError) break;\n  if (attempt < 19) await sleep(200);\n}\nif (wallError) {\n  return wallError;\n}\nif (!playerResponse) {\n  return { success: false, status: 'loading_timeout', videoId, message: 'YouTube player response did not become available', source: pageUrl };\n}\nconst playability = playerResponse.playabilityStatus || {};\nconst playStatus = String(playability.status || '').trim();\nconst playReason = String(playability.reason || '').trim();\nif (playStatus === 'LOGIN_REQUIRED') {\n  if (/not a bot/i.test(playReason)) {\n    return { success: false, status: 'bot_check', videoId, requiresLogin: true, message: playReason, source: pageUrl };\n  }\n  return { success: false, status: 'requires_auth', videoId, requiresLogin: true, message: playReason || 'YouTube requires authentication', source: pageUrl };\n}\nif (playStatus === 'AGE_CHECK_REQUIRED') {\n  return { success: false, status: 'age_restricted', videoId, requiresLogin: true, message: playReason || 'YouTube requires age verification', source: pageUrl };\n}\nif (playStatus === 'CONTENT_CHECK_REQUIRED') {\n  return { success: false, status: 'content_check_required', videoId, message: playReason || 'YouTube requires content warning confirmation', source: pageUrl };\n}\nif (playStatus === 'ERROR' || playStatus === 'UNPLAYABLE' || playStatus === 'LIVE_STREAM_OFFLINE') {\n  return { success: false, status: 'unavailable', videoId, playabilityStatus: playStatus, message: playReason || 'YouTube video is unavailable', source: pageUrl };\n}\nconst details = playerResponse.videoDetails || {};\nconst title = String(details.title || '').trim();\nif (!title) {\n  if (playStatus && playStatus !== 'OK') {\n    return { success: false, status: 'unavailable', videoId, playabilityStatus: playStatus, message: playReason || 'YouTube video is unavailable', source: pageUrl };\n  }\n  return { success: false, status: 'schema_changed', videoId, source: pageUrl };\n}\nconst microformat = (playerResponse.microformat && playerResponse.microformat.playerMicroformatRenderer) || {};\nconst rawTracks = (playerResponse.captions && playerResponse.captions.playerCaptionsTracklistRenderer && Array.isArray(playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks)) ? playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks : [];\nconst captionTracks = rawTracks.slice(0, 20).map(track => ({\n  languageCode: String((track && track.languageCode) || '').trim(),\n  name: String((track && track.name && (track.name.simpleText || (Array.isArray(track.name.runs) && track.name.runs.map(r => r.text).join('')))) || '').trim(),\n  kind: String((track && track.kind) || 'standard').trim()\n}));\nlet subtitle = null;\nlet subtitleSource = null;\nif (includeSubtitles && rawTracks.length > 0) {\n  let selected = null;\n  for (const pref of preferredLangs) {\n    selected = rawTracks.find(t => String((t && t.languageCode) || '').toLowerCase() === pref && (!t.kind || t.kind !== 'asr'))\n      || rawTracks.find(t => String((t && t.languageCode) || '').toLowerCase() === pref)\n      || rawTracks.find(t => String((t && t.languageCode) || '').toLowerCase().startsWith(pref + '-'));\n    if (selected) break;\n  }\n  if (!selected) selected = rawTracks[0];\n  if (selected && typeof selected.baseUrl === 'string' && selected.baseUrl) {\n    try {\n      const trackUrl = new URL(selected.baseUrl, currentOrigin);\n      if (/^https:\\/\\/(?:www\\.|m\\.)?youtube\\.com$/i.test(trackUrl.origin)) {\n        trackUrl.searchParams.set('fmt', 'json3');\n        const subRes = await fetch(trackUrl.href, { credentials: 'include' });\n        if (subRes.ok) {\n          const subData = await subRes.json();\n          const events = Array.isArray(subData && subData.events) ? subData.events : [];\n          const lines = [];\n          for (const ev of events) {\n            const segs = Array.isArray(ev && ev.segs) ? ev.segs : [];\n            const line = segs.map(s => String((s && s.utf8) || '')).join('').replace(/\\s+/g, ' ').trim();\n            if (line) lines.push(line);\n          }\n          const joined = lines.join('\\n').trim();\n          if (joined) {\n            const truncated = joined.length > maxSubtitleChars;\n            subtitle = {\n              languageCode: String(selected.languageCode || ''),\n              kind: String(selected.kind || 'standard'),\n              text: truncated ? joined.slice(0, maxSubtitleChars) : joined,\n              truncated\n            };\n            subtitleSource = subRes.url || trackUrl.href;\n          }\n        }\n      }\n    } catch {\n      // Keep metadata output even when optional timedtext fetch fails.\n    }\n  }\n}\nreturn {\n  success: true,\n  status: 'ok',\n  video: {\n    videoId: String(details.videoId || videoId),\n    title,\n    url: pageUrl,\n    author: String(details.author || '').trim(),\n    channelId: String(details.channelId || '').trim(),\n    durationSeconds: Math.max(0, Math.floor(Number(details.lengthSeconds) || 0)),\n    viewCount: Math.max(0, Math.floor(Number(details.viewCount) || 0)),\n    publishDate: String(microformat.publishDate || '').trim(),\n    description: String(details.shortDescription || '').trim().slice(0, 3000)\n  },\n  captionTracks,\n  subtitle,\n  sources: {\n    page: pageUrl,\n    subtitles: subtitleSource\n  }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_network_request",
+    "args": {
+      "url": "https://www.youtube.com/oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D{{videoId}}&format=json",
+      "method": "GET",
+      "timeout": 30000
+    },
+    "resultPath": "/response/body"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "videoId": "dQw4w9WgXcQ",
+        "includeSubtitles": false
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "video": {
+            "type": "object",
+            "properties": {
+              "videoId": {
+                "const": "dQw4w9WgXcQ"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "videoId",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "video",
+          "captionTracks",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "author_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "title",
+          "author_name"
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "videoId": "jNQXAC9IVRw",
+        "includeSubtitles": false
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "video": {
+            "type": "object",
+            "properties": {
+              "videoId": {
+                "const": "jNQXAC9IVRw"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "videoId",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "video",
+          "captionTracks",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "author_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "title",
+          "author_name"
+        ]
+      }
+    }
+  ]
+}

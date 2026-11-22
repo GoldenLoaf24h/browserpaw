@@ -1,0 +1,313 @@
+{
+  "id": "github-repo-search",
+  "name": "GitHub repository search",
+  "description": "Search public GitHub repositories via the official GitHub Search API and return source-linked repository metadata.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://github.com/search?q=react&type=repositories",
+      "https://api.github.com/search/repositories?q=react&per_page=3",
+      "https://docs.github.com/en/rest/search/search#search-repositories"
+    ]
+  },
+  "domains": [
+    "github.com",
+    "api.github.com"
+  ],
+  "keywords": [
+    "github",
+    "repo",
+    "repository",
+    "repositories",
+    "search",
+    "open source",
+    "开源",
+    "仓库搜索",
+    "github搜索"
+  ],
+  "startUrl": "https://github.com/search?q={{query}}&type=repositories",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 5
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repositories": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "owner": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]+$"
+                },
+                "repo": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]+$"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "language": {
+                  "type": "string"
+                },
+                "stars": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "forks": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "topics": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "owner",
+                "repo",
+                "url",
+                "description",
+                "language",
+                "stars",
+                "forks",
+                "updatedAt",
+                "topics"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://api\\.github\\.com/search/repositories\\?"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://github\\.com/search\\?"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "repositories",
+          "total",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repositories": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "total": {
+            "const": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "pattern": "^https://api\\.github\\.com/search/repositories\\?"
+              },
+              "page": {
+                "type": "string",
+                "pattern": "^https://github\\.com/search\\?"
+              }
+            },
+            "required": [
+              "api",
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "repositories",
+          "total",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 10));\nconst endpoint = new URL('/search/repositories', 'https://api.github.com');\nendpoint.searchParams.set('q', query);\nendpoint.searchParams.set('per_page', String(limit));\nconst pageUrl = new URL('/search', 'https://github.com');\npageUrl.searchParams.set('q', query);\npageUrl.searchParams.set('type', 'repositories');\nconst response = await fetch(endpoint.href, { credentials: 'omit', headers: { Accept: 'application/vnd.github+json' } });\nif (response.status === 403 || response.status === 429) {\n  const remaining = response.headers && typeof response.headers.get === 'function' ? response.headers.get('x-ratelimit-remaining') : null;\n  const reset = response.headers && typeof response.headers.get === 'function' ? response.headers.get('x-ratelimit-reset') : null;\n  const retryAfter = response.headers && typeof response.headers.get === 'function' ? response.headers.get('retry-after') : null;\n  let message = '';\n  try {\n    const payload = await response.json();\n    if (payload && typeof payload.message === 'string') message = payload.message.trim().slice(0, 300);\n  } catch {}\n  const limited = response.status === 429 || remaining === '0' || Boolean(retryAfter) || /rate limit|secondary rate/i.test(message);\n  return Object.assign(\n    { success: false, status: limited ? 'rate_limited' : 'forbidden', query, httpStatus: response.status, source: response.url || endpoint.href },\n    reset ? { rateLimitReset: reset } : null,\n    retryAfter ? { retryAfter } : null,\n    message ? { message } : null\n  );\n}\nif (!response.ok) {\n  return { success: false, status: 'http_error', query, httpStatus: response.status, source: response.url || endpoint.href };\n}\nlet data;\ntry {\n  data = await response.json();\n} catch {\n  return { success: false, status: 'invalid_json', query, source: response.url || endpoint.href };\n}\nif (!data || typeof data !== 'object' || !Array.isArray(data.items) || typeof data.total_count !== 'number') {\n  return { success: false, status: 'schema_changed', query, source: response.url || endpoint.href };\n}\nif (data.items.length === 0) {\n  return {\n    success: true,\n    status: 'empty',\n    query,\n    repositories: [],\n    total: 0,\n    sources: { api: response.url || endpoint.href, page: pageUrl.href }\n  };\n}\nconst repositories = data.items\n  .slice(0, limit)\n  .map(item => {\n    const fullName = String((item && item.full_name) || '').trim();\n    const slash = fullName.indexOf('/');\n    const owner = String((item && item.owner && item.owner.login) || (slash > 0 ? fullName.slice(0, slash) : '')).trim();\n    const repo = String((item && item.name) || (slash > 0 ? fullName.slice(slash + 1) : '')).trim();\n    const url = String((item && item.html_url) || (owner && repo ? 'https://github.com/' + owner + '/' + repo : '')).trim();\n    const stars = Number(item && item.stargazers_count);\n    const forks = Number(item && item.forks_count);\n    return {\n      owner,\n      repo,\n      url,\n      description: String((item && item.description) || '').trim().slice(0, 500),\n      language: String((item && item.language) || '').trim(),\n      stars: Number.isFinite(stars) && stars >= 0 ? Math.floor(stars) : 0,\n      forks: Number.isFinite(forks) && forks >= 0 ? Math.floor(forks) : 0,\n      updatedAt: String((item && item.updated_at) || '').trim(),\n      topics: Array.isArray(item && item.topics) ? item.topics.filter(t => typeof t === 'string').slice(0, 10) : []\n    };\n  })\n  .filter(item => /^[A-Za-z0-9._-]+$/.test(item.owner) && /^[A-Za-z0-9._-]+$/.test(item.repo) && /^https:\\/\\/github\\.com\\/[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+$/.test(item.url));\nif (!repositories.length) {\n  return { success: false, status: 'schema_changed', query, source: response.url || endpoint.href };\n}\nreturn {\n  success: true,\n  status: 'ok',\n  query,\n  repositories,\n  total: Math.max(repositories.length, Math.floor(data.total_count)),\n  sources: { api: response.url || endpoint.href, page: pageUrl.href }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "query": "react",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "const": "react"
+          },
+          "repositories": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "repositories",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "react/react|q=react"
+      }
+    },
+    {
+      "inputs": {
+        "query": "typescript",
+        "limit": 2
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "const": "typescript"
+          },
+          "repositories": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "repositories",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "TypeScript|typescript"
+      }
+    }
+  ]
+}

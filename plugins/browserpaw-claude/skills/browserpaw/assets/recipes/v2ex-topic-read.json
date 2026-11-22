@@ -1,0 +1,325 @@
+{
+  "id": "v2ex-topic-read",
+  "name": "V2EX topic and replies reader",
+  "description": "Read a V2EX topic and its first-page replies (page=1 only; replies beyond page 1 are not paginated) via V2EX's same-origin public JSON API.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.v2ex.com/api/topics/show.json?id=1",
+      "https://www.v2ex.com/api/replies/show.json?topic_id=1&page=1"
+    ]
+  },
+  "domains": [
+    "www.v2ex.com",
+    "v2ex.com"
+  ],
+  "keywords": [
+    "v2ex",
+    "v站",
+    "topic",
+    "thread",
+    "replies",
+    "discussion",
+    "帖子",
+    "回复",
+    "详情",
+    "V2EX帖子",
+    "V2EX回复",
+    "V2EX主题"
+  ],
+  "startUrl": "https://www.v2ex.com/api/topics/show.json?id={{topicId}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "topicId": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100000000
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 30,
+        "default": 15
+      }
+    },
+    "required": [
+      "topicId"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "coverage": {
+        "const": "first_page_only"
+      },
+      "topic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://(?:www\\.)?v2ex\\.com/t/\\d+"
+          },
+          "node": {
+            "type": "string"
+          },
+          "nodeTitle": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "repliesCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "url",
+          "node",
+          "nodeTitle",
+          "author",
+          "repliesCount",
+          "created",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "replies": {
+        "type": "array",
+        "maxItems": 30,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "author": {
+              "type": "string"
+            },
+            "created": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "author",
+            "created",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "type": "string",
+            "pattern": "^https://(?:www\\.)?v2ex\\.com/api/topics/show\\.json"
+          },
+          "repliesApi": {
+            "type": "string",
+            "pattern": "^https://(?:www\\.)?v2ex\\.com/api/replies/show\\.json"
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://(?:www\\.)?v2ex\\.com/t/\\d+"
+          }
+        },
+        "required": [
+          "api",
+          "repliesApi",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "coverage",
+      "topic",
+      "replies",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const topicId = Math.max(1, Math.floor(Number(input.topicId) || 0));\nconst limit = Math.max(1, Math.min(Number(input.limit) || 15, 30));\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:www\\.)?v2ex\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', topicId, message: 'V2EX page origin is not ready', source: 'https://www.v2ex.com/t/' + topicId };\n}\nconst topicUrl = new URL('/api/topics/show.json?id=' + topicId, origin).href;\nconst repliesUrl = new URL('/api/replies/show.json?topic_id=' + topicId + '&page=1', origin).href;\nlet topicRes;\nlet repliesRes;\ntry {\n  [topicRes, repliesRes] = await Promise.all([\n    fetch(topicUrl, { credentials: 'include', headers: { Accept: 'application/json' } }),\n    fetch(repliesUrl, { credentials: 'include', headers: { Accept: 'application/json' } })\n  ]);\n} catch (error) {\n  return { success: false, status: 'fetch_error', topicId, message: String(error && error.message || error), source: topicUrl };\n}\nif (topicRes.status === 403 || repliesRes.status === 403) {\n  const blocked = topicRes.status === 403 ? topicRes : repliesRes;\n  return { success: false, status: 'requires_auth', topicId, requiresLogin: true, httpStatus: 403, message: 'V2EX topic requires authentication or is restricted', source: blocked.url || topicUrl };\n}\nif (topicRes.status === 429 || repliesRes.status === 429) {\n  const limited = topicRes.status === 429 ? topicRes : repliesRes;\n  return { success: false, status: 'rate_limited', topicId, httpStatus: 429, source: limited.url || topicUrl };\n}\nif (topicRes.status === 404 || repliesRes.status === 404) {\n  const missing = topicRes.status === 404 ? topicRes : repliesRes;\n  return { success: false, status: 'not_found', topicId, httpStatus: 404, source: missing.url || topicUrl };\n}\nif (!topicRes.ok) {\n  return { success: false, status: 'http_error', topicId, httpStatus: topicRes.status, source: topicRes.url || topicUrl };\n}\nif (!repliesRes.ok) {\n  return { success: false, status: 'http_error', topicId, httpStatus: repliesRes.status, source: repliesRes.url || repliesUrl };\n}\nlet topicList;\nlet replyList;\ntry {\n  topicList = await topicRes.json();\n  replyList = await repliesRes.json();\n} catch {\n  return { success: false, status: 'invalid_json', topicId, source: topicRes.url || topicUrl };\n}\nif (!Array.isArray(topicList) || !Array.isArray(replyList)) {\n  return { success: false, status: 'schema_changed', topicId, source: topicRes.url || topicUrl };\n}\nif (topicList.length === 0) {\n  return { success: false, status: 'not_found', topicId, source: topicRes.url || topicUrl };\n}\nconst item = topicList[0];\nconst id = Math.floor(Number(item && item.id) || 0);\nconst title = String((item && item.title) || '').trim();\nconst page = String((item && item.url) || (id > 0 ? 'https://www.v2ex.com/t/' + id : '')).trim();\nif (!id || !title || !/^https:\\/\\/(?:www\\.)?v2ex\\.com\\/t\\/\\d+/.test(page)) {\n  return { success: false, status: 'schema_changed', topicId, source: topicRes.url || topicUrl };\n}\nconst replies = replyList\n  .map(reply => ({\n    id: Math.floor(Number(reply && reply.id) || 0),\n    author: String((reply && reply.member && reply.member.username) || '').trim(),\n    created: Math.max(0, Math.floor(Number(reply && reply.created) || 0)),\n    content: String((reply && reply.content) || '').trim().slice(0, 1500)\n  }))\n  .filter(reply => reply.id > 0)\n  .slice(0, limit);\nreturn {\n  success: true,\n  status: 'ok',\n  coverage: 'first_page_only',\n  topic: {\n    id,\n    title,\n    url: page,\n    node: String((item && item.node && item.node.name) || '').trim(),\n    nodeTitle: String((item && item.node && item.node.title) || '').trim(),\n    author: String((item && item.member && item.member.username) || '').trim(),\n    repliesCount: Math.max(replies.length, Math.floor(Number(item && item.replies) || 0)),\n    created: Math.max(0, Math.floor(Number(item && item.created) || 0)),\n    content: String((item && item.content) || '').trim().slice(0, 6000)\n  },\n  replies,\n  sources: {\n    api: topicRes.url || topicUrl,\n    repliesApi: repliesRes.url || repliesUrl,\n    page\n  }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_network_request",
+    "args": {
+      "url": "https://www.v2ex.com/api/topics/show.json?id={{topicId}}",
+      "method": "GET",
+      "timeout": 30000
+    },
+    "resultPath": "/response/body"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "topicId": 1,
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "topic": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "repliesApi",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "topic",
+          "replies",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "const": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ]
+        }
+      }
+    },
+    {
+      "inputs": {
+        "topicId": 2,
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "topic": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": 2
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "repliesApi",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "topic",
+          "replies",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "const": 2
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ]
+        }
+      }
+    }
+  ]
+}

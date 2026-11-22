@@ -1,0 +1,306 @@
+{
+  "id": "github-repo-readme",
+  "name": "GitHub repository and README reader",
+  "description": "Read a public GitHub repository's metadata and README markdown via the official GitHub REST API.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://github.com/react/react",
+      "https://api.github.com/repos/react/react",
+      "https://api.github.com/repos/react/react/readme",
+      "https://docs.github.com/en/rest/repos/repos#get-a-repository"
+    ]
+  },
+  "domains": [
+    "github.com",
+    "api.github.com"
+  ],
+  "keywords": [
+    "github",
+    "repo",
+    "repository",
+    "readme",
+    "overview",
+    "project",
+    "仓库",
+    "项目说明"
+  ],
+  "startUrl": "https://github.com/{{owner}}/{{repo}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "owner": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+      },
+      "repo": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]{1,100}$"
+      },
+      "maxReadmeChars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 20000,
+        "default": 8000
+      }
+    },
+    "required": [
+      "owner",
+      "repo"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "repository": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "repo": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+          },
+          "description": {
+            "type": "string"
+          },
+          "defaultBranch": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "stars": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "forks": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "openIssues": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "license": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "topics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "url",
+          "description",
+          "defaultBranch",
+          "language",
+          "stars",
+          "forks",
+          "openIssues",
+          "license",
+          "topics",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "readme": {
+        "type": "string"
+      },
+      "readmeTruncated": {
+        "type": "boolean"
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "type": "string",
+            "pattern": "^https://api\\.github\\.com/(?:repos|repositories)/"
+          },
+          "readme": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^https://api\\.github\\.com/(?:repos|repositories)/"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://github\\.com/"
+          }
+        },
+        "required": [
+          "api",
+          "readme",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "repository",
+      "readme",
+      "readmeTruncated",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const owner = String(input.owner || '').trim();\nconst repo = String(input.repo || '').trim();\nconst maxReadmeChars = Math.max(500, Math.min(Number(input.maxReadmeChars) || 8000, 20000));\nconst repoPath = '/repos/' + encodeURIComponent(owner) + '/' + encodeURIComponent(repo);\nconst repoUrl = new URL(repoPath, 'https://api.github.com').href;\nconst readmeUrl = new URL(repoPath + '/readme', 'https://api.github.com').href;\nconst [repoRes, readmeRes] = await Promise.all([\n  fetch(repoUrl, { credentials: 'omit', headers: { Accept: 'application/vnd.github+json' } }),\n  fetch(readmeUrl, { credentials: 'omit', headers: { Accept: 'application/vnd.github.raw+json' } })\n]);\nconst classifyAccessError = async (res, fallbackUrl) => {\n  const remaining = res.headers && typeof res.headers.get === 'function' ? res.headers.get('x-ratelimit-remaining') : null;\n  const reset = res.headers && typeof res.headers.get === 'function' ? res.headers.get('x-ratelimit-reset') : null;\n  const retryAfter = res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;\n  let message = '';\n  try {\n    const payload = await res.json();\n    if (payload && typeof payload.message === 'string') message = payload.message.trim().slice(0, 300);\n  } catch {}\n  const limited = res.status === 429 || remaining === '0' || Boolean(retryAfter) || /rate limit|secondary rate/i.test(message);\n  return Object.assign(\n    { success: false, status: limited ? 'rate_limited' : 'forbidden', repository: owner + '/' + repo, httpStatus: res.status, source: res.url || fallbackUrl },\n    reset ? { rateLimitReset: reset } : null,\n    retryAfter ? { retryAfter } : null,\n    message ? { message } : null\n  );\n};\nif (repoRes.status === 403 || repoRes.status === 429) {\n  return await classifyAccessError(repoRes, repoUrl);\n}\nif (readmeRes.status === 403 || readmeRes.status === 429) {\n  return await classifyAccessError(readmeRes, readmeUrl);\n}\nif (repoRes.status === 404) {\n  return { success: false, status: 'not_found', repository: owner + '/' + repo, httpStatus: 404, source: repoRes.url || repoUrl };\n}\nif (!repoRes.ok) {\n  return { success: false, status: 'http_error', repository: owner + '/' + repo, httpStatus: repoRes.status, source: repoRes.url || repoUrl };\n}\nlet meta;\ntry {\n  meta = await repoRes.json();\n} catch {\n  return { success: false, status: 'invalid_json', repository: owner + '/' + repo, source: repoRes.url || repoUrl };\n}\nconst fullName = String((meta && meta.full_name) || '').trim();\nconst slash = fullName.indexOf('/');\nconst resolvedOwner = String((meta && meta.owner && meta.owner.login) || (slash > 0 ? fullName.slice(0, slash) : '')).trim();\nconst resolvedRepo = String((meta && meta.name) || (slash > 0 ? fullName.slice(slash + 1) : '')).trim();\nconst page = String((meta && meta.html_url) || (resolvedOwner && resolvedRepo ? 'https://github.com/' + resolvedOwner + '/' + resolvedRepo : '')).trim();\nif (!/^[A-Za-z0-9._-]+$/.test(resolvedOwner) || !/^[A-Za-z0-9._-]+$/.test(resolvedRepo) || !/^https:\\/\\/github\\.com\\/[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+$/.test(page)) {\n  return { success: false, status: 'schema_changed', repository: owner + '/' + repo, source: repoRes.url || repoUrl };\n}\nlet rawReadme = '';\nlet readmeSource = null;\nif (readmeRes.ok) {\n  rawReadme = String(await readmeRes.text() || '');\n  readmeSource = readmeRes.url || readmeUrl;\n} else if (readmeRes.status !== 404) {\n  return { success: false, status: 'http_error', repository: resolvedOwner + '/' + resolvedRepo, httpStatus: readmeRes.status, source: readmeRes.url || readmeUrl };\n}\nconst readmeTruncated = rawReadme.length > maxReadmeChars;\nconst readme = readmeTruncated ? rawReadme.slice(0, maxReadmeChars) : rawReadme;\nconst license = meta && meta.license && typeof meta.license.spdx_id === 'string' && meta.license.spdx_id !== 'NOASSERTION'\n  ? meta.license.spdx_id\n  : meta && meta.license && typeof meta.license.name === 'string'\n    ? meta.license.name\n    : null;\nreturn {\n  success: true,\n  status: 'ok',\n  repository: {\n    owner: resolvedOwner,\n    repo: resolvedRepo,\n    url: page,\n    description: String((meta && meta.description) || '').trim().slice(0, 1000),\n    defaultBranch: String((meta && meta.default_branch) || '').trim(),\n    language: String((meta && meta.language) || '').trim(),\n    stars: Math.max(0, Math.floor(Number(meta && meta.stargazers_count) || 0)),\n    forks: Math.max(0, Math.floor(Number(meta && meta.forks_count) || 0)),\n    openIssues: Math.max(0, Math.floor(Number(meta && meta.open_issues_count) || 0)),\n    license,\n    topics: Array.isArray(meta && meta.topics) ? meta.topics.filter(t => typeof t === 'string').slice(0, 15) : [],\n    updatedAt: String((meta && meta.updated_at) || '').trim()\n  },\n  readme,\n  readmeTruncated,\n  sources: {\n    api: repoRes.url || repoUrl,\n    readme: readmeSource,\n    page\n  }\n};",
+        "timeoutMs": 30000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "owner": "react",
+        "repo": "react",
+        "maxReadmeChars": 4000
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "repository": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "const": "react"
+              },
+              "repo": {
+                "const": "react"
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ]
+          },
+          "readme": {
+            "type": "string",
+            "minLength": 20
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "repository",
+          "readme",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "/react/react"
+      }
+    },
+    {
+      "inputs": {
+        "owner": "microsoft",
+        "repo": "vscode",
+        "maxReadmeChars": 4000
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "repository": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "const": "microsoft"
+              },
+              "repo": {
+                "const": "vscode"
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ]
+          },
+          "readme": {
+            "type": "string",
+            "minLength": 20
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "api",
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "repository",
+          "readme",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "/microsoft/vscode"
+      }
+    }
+  ]
+}

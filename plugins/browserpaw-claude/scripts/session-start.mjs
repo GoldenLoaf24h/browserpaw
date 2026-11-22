@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MAX_INDEX_BYTES = 1024 * 1024;
-const MAX_WORKFLOWS = 20;
+const MAX_WORKFLOWS = 30;
 
 export function resolveBrowserPawHome(env = process.env) {
   return path.resolve(env.BROWSERPAW_HOME || path.join(os.homedir(), '.browserpaw'));
@@ -46,7 +46,10 @@ export function readLearnedWorkflows(homeDir = resolveBrowserPawHome()) {
     if (!parsed || !Array.isArray(parsed.workflows)) return [];
     return parsed.workflows
       .filter(
-        (item) => item && typeof item.id === 'string' && (!item.status || item.status === 'active'),
+        (item) =>
+          item &&
+          typeof item.id === 'string' &&
+          (!item.status || item.status === 'active' || item.status === 'bundled'),
       )
       .slice(0, MAX_WORKFLOWS)
       .map((item) => ({

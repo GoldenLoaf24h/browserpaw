@@ -17,7 +17,12 @@
     "x",
     "twitter",
     "search",
-    "posts"
+    "posts",
+    "推特",
+    "推文",
+    "推特搜索",
+    "搜索推文",
+    "X搜索"
   ],
   "startUrl": "https://x.com/search?q={{query}}&src=typed_query&f=live",
   "inputSchema": {
@@ -50,6 +55,9 @@
           },
           "status": {
             "const": "ok"
+          },
+          "coverage": {
+            "const": "visible_only"
           },
           "query": {
             "type": "string",
@@ -118,6 +126,9 @@
           "status": {
             "const": "empty"
           },
+          "coverage": {
+            "const": "visible_only"
+          },
           "query": {
             "type": "string",
             "minLength": 1
@@ -149,45 +160,6 @@
           "sources"
         ],
         "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "success": {
-            "const": false
-          },
-          "status": {
-            "enum": [
-              "requires_auth",
-              "loading_timeout",
-              "unreadable"
-            ]
-          },
-          "requiresLogin": {
-            "type": "boolean"
-          },
-          "message": {
-            "type": "string",
-            "minLength": 1
-          },
-          "query": {
-            "type": "string",
-            "minLength": 1
-          },
-          "source": {
-            "type": "string",
-            "pattern": "^https://(?:x|twitter)\\.com/"
-          }
-        },
-        "required": [
-          "success",
-          "status",
-          "requiresLogin",
-          "message",
-          "query",
-          "source"
-        ],
-        "additionalProperties": false
       }
     ]
   },
@@ -195,7 +167,7 @@
     {
       "tool": "chrome_javascript",
       "args": {
-        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 8, 20));\nconst source = new URL('/search', location.origin);\nsource.searchParams.set('q', query);\nsource.searchParams.set('src', 'typed_query');\nsource.searchParams.set('f', 'live');\nconst loginPath = /^\\/(?:i\\/flow\\/login|login)(?:\\/|$)/.test(location.pathname);\nconst isVisible = element => {\n  if (!element || !element.getBoundingClientRect) return false;\n  if (element.hidden || (typeof element.getAttribute === 'function' && element.getAttribute('aria-hidden') === 'true')) return false;\n  const rect = element.getBoundingClientRect();\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  return rect.width > 0 && rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));\n};\nconst hasVisibleLoginForm = () => Array.from(document.querySelectorAll('form')).some(form =>\n  isVisible(form) && Array.from(form.querySelectorAll('input[autocomplete=\"username\"], input[name=\"text\"], input[type=\"password\"]')).some(isVisible)\n);\nconst hasExplicitEmptyState = () => {\n  if (typeof document.querySelector !== 'function') return false;\n  const element = document.querySelector('main [data-testid=\"emptyState\"]');\n  if (!isVisible(element)) return false;\n  const normalizeQuotes = value => value.replace(/[“”]/g, '\"').replace(/[‘’]/g, \"'\");\n  const text = normalizeQuotes(String(element.innerText || element.textContent || '')).replace(/\\s+/g, ' ').trim().toLowerCase();\n  const normalizedQuery = normalizeQuotes(query).replace(/\\s+/g, ' ').trim().toLowerCase();\n  return !!normalizedQuery && (\n    text.includes(`no results for \"${normalizedQuery}\"`) ||\n    text.includes(`no results for '${normalizedQuery}'`) ||\n    text.includes(`没有关于\"${normalizedQuery}\"的结果`) ||\n    text.includes(`没有关于'${normalizedQuery}'的结果`)\n  );\n};\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nlet articles = [];\nlet loginForm = false;\nlet emptyState = false;\nfor (let attempt = 0; attempt < 40; attempt += 1) {\n  if (loginPath) break;\n  articles = Array.from(document.querySelectorAll('article'));\n  if (articles.length) break;\n  loginForm = hasVisibleLoginForm();\n  if (loginForm) break;\n  emptyState = hasExplicitEmptyState();\n  if (emptyState) break;\n  if (attempt < 39) await sleep(250);\n}\nif (loginPath || loginForm) {\n  return {\n    success: false,\n    status: 'requires_auth',\n    requiresLogin: true,\n    message: 'X requires authentication to read this search timeline',\n    query,\n    source: source.href\n  };\n}\nif (emptyState) {\n  return { success: true, status: 'empty', query, posts: [], sources: { page: source.href } };\n}\nif (!articles.length) {\n  return { success: false, status: 'loading_timeout', requiresLogin: false, message: 'X search articles did not become visible within 10 seconds', query, source: source.href };\n}\nconst mainStatusLink = article => Array.from(article.querySelectorAll('a:has(time)')).find(link => {\n  const href = link.getAttribute('href') || '';\n  try {\n    return /^\\/[^/]+\\/status\\/\\d+$/.test(new URL(href, location.origin).pathname);\n  } catch {\n    return false;\n  }\n});\nconst posts = articles.slice(0, limit).map(article => {\n  const text = String(article.querySelector('[data-testid=\"tweetText\"]') && article.querySelector('[data-testid=\"tweetText\"]').innerText || '').trim();\n  const nameBlock = String(article.querySelector('[data-testid=\"User-Name\"]') && article.querySelector('[data-testid=\"User-Name\"]').innerText || '').trim();\n  const author = nameBlock.split('\\n').map(part => part.trim()).find(Boolean) || '';\n  const statusLink = mainStatusLink(article);\n  const href = statusLink ? statusLink.getAttribute('href') || '' : '';\n  const time = statusLink ? statusLink.querySelector('time') : null;\n  return {\n    text,\n    author,\n    url: href ? new URL(href, location.origin).href : '',\n    publishedAt: time ? String(time.getAttribute('datetime') || '') : ''\n  };\n}).filter(post => post.text && post.url);\nif (!posts.length) {\n  return { success: false, status: 'unreadable', requiresLogin: false, message: 'Visible X articles did not expose readable text and main status links', query, source: source.href };\n}\nreturn { success: true, status: 'ok', query, posts, sources: { page: source.href } };",
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 8, 20));\nconst fallbackSource = new URL('/search', 'https://x.com');\nfallbackSource.searchParams.set('q', query);\nfallbackSource.searchParams.set('src', 'typed_query');\nfallbackSource.searchParams.set('f', 'live');\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:mobile\\.)?(?:x|twitter)\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return {\n    success: false,\n    status: 'page_not_ready',\n    requiresLogin: false,\n    message: 'X search page origin is not ready',\n    query,\n    source: fallbackSource.href\n  };\n}\nconst canonicalOrigin = origin.replace(/^https:\\/\\/mobile\\./i, 'https://');\nconst source = new URL('/search', canonicalOrigin);\nsource.searchParams.set('q', query);\nsource.searchParams.set('src', 'typed_query');\nsource.searchParams.set('f', 'live');\nconst loginPath = /^\\/(?:i\\/flow\\/login|login)(?:\\/|$)/.test(String(location.pathname || ''));\nconst isVisible = element => {\n  if (!element || !element.getBoundingClientRect) return false;\n  if (element.hidden === true) return false;\n  if (typeof element.getAttribute === 'function') {\n    if (element.getAttribute('aria-hidden') === 'true') return false;\n    const hiddenAttr = element.getAttribute('hidden');\n    if (hiddenAttr !== null && hiddenAttr !== undefined) return false;\n  }\n  if (element.style && (element.style.display === 'none' || element.style.visibility === 'hidden')) return false;\n  const rect = element.getBoundingClientRect();\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  return Boolean(rect) && rect.width > 0 && rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'));\n};\nconst isArticleVisible = element => {\n  if (!element) return false;\n  if (element.hidden === true) return false;\n  if (typeof element.getAttribute === 'function') {\n    if (element.getAttribute('aria-hidden') === 'true') return false;\n    const hiddenAttr = element.getAttribute('hidden');\n    if (hiddenAttr !== null && hiddenAttr !== undefined) return false;\n  }\n  if (element.style && (element.style.display === 'none' || element.style.visibility === 'hidden')) return false;\n  const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;\n  if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;\n  if (typeof element.getBoundingClientRect === 'function') {\n    const rect = element.getBoundingClientRect();\n    if (!rect || rect.width <= 0 || rect.height <= 0) return false;\n  }\n  return true;\n};\nconst hasVisibleLoginForm = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return false;\n  return Array.from(document.querySelectorAll('form')).some(form =>\n    isVisible(form) && Array.from(form.querySelectorAll('input[autocomplete=\"username\"], input[name=\"text\"], input[type=\"password\"]')).some(isVisible)\n  );\n};\nconst hasExplicitEmptyState = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelector !== 'function') return false;\n  const element = document.querySelector('main [data-testid=\"emptyState\"]') || document.querySelector('[data-testid=\"emptyState\"]');\n  if (!isVisible(element)) return false;\n  const normalizeQuotes = value => value.replace(/[“”]/g, '\"').replace(/[‘’]/g, \"'\");\n  const text = normalizeQuotes(String(element.innerText || element.textContent || '')).replace(/\\s+/g, ' ').trim().toLowerCase();\n  const normalizedQuery = normalizeQuotes(query).replace(/\\s+/g, ' ').trim().toLowerCase();\n  if (!normalizedQuery) return false;\n  const escaped = normalizedQuery.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  const boundaryRe = new RegExp('no results for (?:[\"' + \"'\" + ']' + escaped + '[\"' + \"'\" + ']|' + escaped + '(?=$|[^a-z0-9_]))');\n  return (\n    boundaryRe.test(text) ||\n    text.includes('没有关于\"' + normalizedQuery + '\"的结果') ||\n    text.includes(\"没有关于'\" + normalizedQuery + \"'的结果\") ||\n    text.includes('沒有關於\"' + normalizedQuery + '\"的結果') ||\n    text.includes(\"沒有關於'\" + normalizedQuery + \"'的結果\")\n  );\n};\nconst queryArticles = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return [];\n  const primary = Array.from(document.querySelectorAll('article[data-testid=\"tweet\"]'));\n  return primary.length ? primary : Array.from(document.querySelectorAll('article'));\n};\nconst isInsideQuote = (article, el) => {\n  if (!el || typeof el.closest !== 'function') return false;\n  const quoteWrap = el.closest('div[role=\"link\"], [data-testid=\"quoteTweet\"], [data-testid=\"card.wrapper\"]');\n  if (quoteWrap && quoteWrap !== article && (typeof article.contains !== 'function' || article.contains(quoteWrap))) return true;\n  const nestedArticle = el.closest('article');\n  return Boolean(nestedArticle && nestedArticle !== article);\n};\nconst isPromoted = article => {\n  if (!article) return false;\n  if (typeof article.closest === 'function' && article.closest('[data-testid=\"placementTracking\"]')) return true;\n  if (typeof article.querySelector === 'function') {\n    if (article.querySelector('[data-testid=\"placementTracking\"]')) return true;\n    const social = article.querySelector('[data-testid=\"socialContext\"], [data-testid=\"SocialContext\"]');\n    if (social && !isInsideQuote(article, social)) {\n      const sText = String(social.innerText || social.textContent || '').trim();\n      if (/\\b(?:promoted|sponsored|ad)\\b|推广|广告/i.test(sText)) return true;\n    }\n  }\n  if (typeof article.querySelectorAll === 'function') {\n    const spans = Array.from(article.querySelectorAll('span'));\n    if (spans.some(sp => {\n      if (typeof sp.closest === 'function' && sp.closest('[data-testid=\"tweetText\"], [data-testid=\"User-Name\"]')) return false;\n      if (isInsideQuote(article, sp)) return false;\n      const t = String(sp.innerText || sp.textContent || '').trim();\n      return /^(?:Ad|Promoted|Sponsored|广告|推广)$/i.test(t);\n    })) return true;\n  }\n  return false;\n};\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nlet articles = [];\nlet loginForm = false;\nlet emptyState = false;\nfor (let attempt = 0; attempt < 40; attempt += 1) {\n  if (loginPath) break;\n  articles = queryArticles().filter(article => isArticleVisible(article) && !isPromoted(article));\n  if (articles.length) break;\n  loginForm = hasVisibleLoginForm();\n  if (loginForm) break;\n  emptyState = hasExplicitEmptyState();\n  if (emptyState) break;\n  if (attempt < 39) await sleep(250);\n}\nif (loginPath || loginForm) {\n  return {\n    success: false,\n    status: 'requires_auth',\n    requiresLogin: true,\n    message: 'X requires authentication to read this search timeline',\n    query,\n    source: source.href\n  };\n}\nif (emptyState) {\n  return { success: true, status: 'empty', query, posts: [], sources: { page: source.href } };\n}\nif (!articles.length) {\n  return { success: false, status: 'loading_timeout', requiresLogin: false, message: 'X search articles did not become visible within 10 seconds', query, source: source.href };\n}\nconst mainStatusLink = article => {\n  const links = typeof article.querySelectorAll === 'function' ? Array.from(article.querySelectorAll('a:has(time)')) : [];\n  const candidates = links.filter(link => !isInsideQuote(article, link));\n  const pool = candidates.length ? candidates : links;\n  return pool.find(link => {\n    const href = link.getAttribute('href') || '';\n    try {\n      return /^\\/[^/]+\\/status\\/\\d+$/.test(new URL(href, canonicalOrigin).pathname);\n    } catch {\n      return false;\n    }\n  });\n};\nconst firstPrimaryEl = (article, selector) => {\n  const list = typeof article.querySelectorAll === 'function' ? Array.from(article.querySelectorAll(selector)) : [];\n  if (list.length) return list.find(el => !isInsideQuote(article, el)) || null;\n  const single = typeof article.querySelector === 'function' ? article.querySelector(selector) : null;\n  return single && !isInsideQuote(article, single) ? single : null;\n};\nconst posts = articles.map(article => {\n  const textEl = firstPrimaryEl(article, '[data-testid=\"tweetText\"]');\n  const text = String((textEl && (textEl.innerText || textEl.textContent)) || '').trim();\n  const userEl = firstPrimaryEl(article, '[data-testid=\"User-Name\"]');\n  const nameBlock = String((userEl && (userEl.innerText || userEl.textContent)) || '').trim();\n  const statusLink = mainStatusLink(article);\n  const href = statusLink ? statusLink.getAttribute('href') || '' : '';\n  const statusUrl = href ? new URL(href, canonicalOrigin).href : '';\n  const statusAuthorMatch = statusUrl ? new URL(statusUrl).pathname.match(/^\\/([^/]+)\\/status\\/\\d+$/) : null;\n  const handlePart = nameBlock.split('\\n').map(part => part.trim()).find(part => /^@[A-Za-z0-9_]{1,15}$/.test(part));\n  const handleInline = !handlePart ? (nameBlock.match(/@[A-Za-z0-9_]{1,15}/) || [])[0] : '';\n  const author = handlePart || handleInline || (statusAuthorMatch ? '@' + statusAuthorMatch[1] : '') || nameBlock.split('\\n').map(part => part.trim()).find(Boolean) || '';\n  const time = statusLink && typeof statusLink.querySelector === 'function' ? statusLink.querySelector('time') : null;\n  return {\n    text,\n    author,\n    url: statusUrl,\n    publishedAt: time ? String(time.getAttribute('datetime') || '') : ''\n  };\n}).filter(post => post.text && post.url).slice(0, limit);\nif (!posts.length) {\n  return { success: false, status: 'unreadable', requiresLogin: false, message: 'Visible X articles did not expose readable text and main status links', query, source: source.href };\n}\nreturn { success: true, status: 'ok', coverage: 'visible_only', query, posts, sources: { page: source.href } };",
         "timeoutMs": 20000
       },
       "resultPath": "/result"

@@ -1,0 +1,279 @@
+{
+  "id": "youtube-search-videos",
+  "name": "YouTube video search",
+  "description": "Search YouTube videos on youtube.com/results using ytInitialData with visible video card DOM fallback.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://www.youtube.com/results?search_query=typescript+tutorial",
+      "https://www.youtube.com/results?search_query=javascript+async"
+    ]
+  },
+  "domains": [
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtube.com"
+  ],
+  "keywords": [
+    "youtube",
+    "油管",
+    "search",
+    "video",
+    "videos",
+    "视频搜索",
+    "搜索",
+    "油管搜索",
+    "YouTube搜索",
+    "油管视频"
+  ],
+  "startUrl": "https://www.youtube.com/results?search_query={{query}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 15,
+        "default": 5
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 15,
+            "items": {
+              "type": "object",
+              "properties": {
+                "videoId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{11}$"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://www\\.youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}$"
+                },
+                "channel": {
+                  "type": "string"
+                },
+                "viewsText": {
+                  "type": "string"
+                },
+                "publishedText": {
+                  "type": "string"
+                },
+                "durationText": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "videoId",
+                "title",
+                "url",
+                "channel",
+                "viewsText",
+                "publishedText",
+                "durationText"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://www\\.youtube\\.com/results\\?"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "videos",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "empty"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0
+          },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "pattern": "^https://www\\.youtube\\.com/results\\?"
+              }
+            },
+            "required": [
+              "page"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "videos",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const query = String(input.query || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 5, 15));\nconst sourceUrl = new URL('/results', 'https://www.youtube.com');\nsourceUrl.searchParams.set('search_query', query);\nconst currentOrigin = typeof location !== 'undefined' && typeof location.origin === 'string' ? location.origin : '';\nconst currentHref = typeof location !== 'undefined' && typeof location.href === 'string' ? location.href : sourceUrl.href;\nconst currentPath = typeof location !== 'undefined' && typeof location.pathname === 'string' ? location.pathname : '';\nif (/^https:\\/\\/consent\\.youtube\\.com$/i.test(currentOrigin)) {\n  return { success: false, status: 'consent_required', query, message: 'YouTube consent wall requires user acceptance', source: currentHref };\n}\nif (!/^https:\\/\\/(?:www\\.|m\\.)?youtube\\.com$/i.test(currentOrigin)) {\n  return { success: false, status: 'page_not_ready', query, message: 'YouTube page origin is not ready', source: sourceUrl.href };\n}\nif (/^\\/sorry(?:\\/|$)/i.test(currentPath)) {\n  return { success: false, status: 'bot_check', query, requiresLogin: true, message: 'YouTube requested bot verification', source: currentHref };\n}\nconst sleep = ms => new Promise(resolve => setTimeout(resolve, ms));\nconst norm = value => String(value || '').trim().replace(/\\s+/g, ' ').toLowerCase();\nconst readText = node => {\n  if (!node) return '';\n  if (typeof node === 'string') return node.trim();\n  if (typeof node.simpleText === 'string') return node.simpleText.trim();\n  if (typeof node.content === 'string') return node.content.trim();\n  if (Array.isArray(node.runs)) return node.runs.map(r => String((r && r.text) || '')).join('').trim();\n  return '';\n};\nconst looksLikeMetricOrTime = text => /\\b(?:views?|watching|ago|streamed|premiered|live|scheduled)\\b|观看|次|正在观看|前|直播|首播|预告/i.test(text);\nconst extractVideoIdFromUrl = href => {\n  const raw = String(href || '').trim();\n  if (!raw) return '';\n  try {\n    const u = new URL(raw, 'https://www.youtube.com');\n    const v = u.searchParams.get('v') || '';\n    if (/^[A-Za-z0-9_-]{11}$/.test(v)) return v;\n    const sm = u.pathname.match(/^\\/shorts\\/([A-Za-z0-9_-]{11})(?:\\/|$)/);\n    if (sm) return sm[1];\n  } catch {}\n  return '';\n};\nconst isHiddenOrAd = el => {\n  if (!el || typeof el !== 'object') return false;\n  if (el.hidden === true) return true;\n  if (typeof el.hasAttribute === 'function' && el.hasAttribute('hidden')) return true;\n  if (typeof el.getAttribute === 'function' && el.getAttribute('aria-hidden') === 'true') return true;\n  if (typeof el.closest === 'function') {\n    try {\n      if (el.closest('[hidden], [aria-hidden=\"true\"], ytd-page-manager > [hidden], ytd-ad-slot-renderer, ytd-promoted-sparkles-web-renderer, ytd-in-feed-ad-layout-renderer')) return true;\n    } catch {}\n  }\n  if (typeof getComputedStyle === 'function') {\n    try {\n      const style = getComputedStyle(el);\n      if (style && (style.display === 'none' || style.visibility === 'hidden')) return true;\n    } catch {}\n  }\n  return false;\n};\nconst hasChannelEndpoint = part => {\n  const runs = part && part.text && Array.isArray(part.text.commandRuns) ? part.text.commandRuns : [];\n  for (const run of runs) {\n    const cmd = run && run.onTap && run.onTap.innertubeCommand;\n    const url = String((cmd && cmd.commandMetadata && cmd.commandMetadata.webCommandMetadata && cmd.commandMetadata.webCommandMetadata.url) || '').trim();\n    const browseId = String((cmd && cmd.browseEndpoint && cmd.browseEndpoint.browseId) || '').trim();\n    if (/^\\/(?:@|channel\\/|c\\/|user\\/)/.test(url) || /^UC/.test(browseId)) return true;\n  }\n  return false;\n};\nconst extractLockupVideo = lockup => {\n  if (!lockup || typeof lockup !== 'object') return null;\n  if (lockup.contentType && lockup.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO' && lockup.contentType !== 'LOCKUP_CONTENT_TYPE_SHORTS') return null;\n  const videoId = String(lockup.contentId || '').trim();\n  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;\n  const metaVm = lockup.metadata && lockup.metadata.lockupMetadataViewModel;\n  const title = readText(metaVm && metaVm.title);\n  if (!title) return null;\n  const rows = (metaVm && metaVm.metadata && metaVm.metadata.contentMetadataViewModel && Array.isArray(metaVm.metadata.contentMetadataViewModel.metadataRows)) ? metaVm.metadata.contentMetadataViewModel.metadataRows : [];\n  let channel = '';\n  const avatarA11y = String((metaVm && metaVm.image && metaVm.image.decoratedAvatarViewModel && metaVm.image.decoratedAvatarViewModel.a11yLabel) || '').trim();\n  const a11yChannel = avatarA11y ? avatarA11y.replace(/^.*?(?:Go to channel|前往频道)[：:\\s]+/i, '').trim() : '';\n  const rowTexts = [];\n  for (const row of rows) {\n    if (!row || row.isSpacerRow) continue;\n    const extType = row.lockupContentMetadataRowExtension && row.lockupContentMetadataRowExtension.contentType;\n    if (extType && extType !== 'METADATA_ROW_CONTENT_TYPE_BYLINE') continue;\n    const parts = Array.isArray(row.metadataParts) ? row.metadataParts : [];\n    const currentRow = [];\n    for (const part of parts) {\n      if (!part || typeof part !== 'object') continue;\n      const stackText = readText(part.avatarStack && part.avatarStack.avatarStackViewModel && part.avatarStack.avatarStackViewModel.text);\n      if (stackText) {\n        if (!channel) channel = stackText;\n        continue;\n      }\n      const partText = readText(part.text);\n      if (!partText) continue;\n      if (hasChannelEndpoint(part) && !channel) {\n        channel = partText;\n        continue;\n      }\n      currentRow.push(partText);\n    }\n    if (currentRow.length > 0) rowTexts.push(currentRow);\n    if (rowTexts.length >= 3) break;\n  }\n  if (!channel && a11yChannel) channel = a11yChannel;\n  const filteredRows = rowTexts.map(r => r.filter(t => t !== channel)).filter(r => r.length > 0);\n  if (!channel && filteredRows.length >= 2 && filteredRows[0].length === 1 && !looksLikeMetricOrTime(filteredRows[0][0])) {\n    channel = filteredRows[0][0];\n    filteredRows.shift();\n  }\n  const stats = filteredRows.flat();\n  if (!channel && stats.length >= 3 && !looksLikeMetricOrTime(stats[0])) {\n    channel = stats.shift();\n  }\n  const viewsText = stats[0] || '';\n  const publishedText = stats[1] || '';\n  let durationText = '';\n  const overlays = (lockup.contentImage && lockup.contentImage.thumbnailViewModel && Array.isArray(lockup.contentImage.thumbnailViewModel.overlays)) ? lockup.contentImage.thumbnailViewModel.overlays : [];\n  for (const overlay of overlays) {\n    const badges = overlay && overlay.thumbnailBottomOverlayViewModel && Array.isArray(overlay.thumbnailBottomOverlayViewModel.badges) ? overlay.thumbnailBottomOverlayViewModel.badges : [];\n    for (const badge of badges) {\n      const text = String((badge && badge.thumbnailBadgeViewModel && badge.thumbnailBadgeViewModel.text) || '').trim();\n      if (text) {\n        durationText = text;\n        break;\n      }\n    }\n    if (durationText) break;\n  }\n  return {\n    videoId,\n    title,\n    url: 'https://www.youtube.com/watch?v=' + videoId,\n    channel,\n    viewsText,\n    publishedText,\n    durationText: durationText || (lockup.contentType === 'LOCKUP_CONTENT_TYPE_SHORTS' ? 'SHORTS' : '')\n  };\n};\nconst extractShortsLockup = s => {\n  if (!s || typeof s !== 'object') return null;\n  const nav = s.onTap && s.onTap.innertubeCommand;\n  const videoId = String((nav && nav.reelWatchEndpoint && nav.reelWatchEndpoint.videoId) || extractVideoIdFromUrl(nav && nav.commandMetadata && nav.commandMetadata.webCommandMetadata && nav.commandMetadata.webCommandMetadata.url) || '').trim();\n  const title = readText(s.overlayMetadata && s.overlayMetadata.primaryText) || readText(s.accessibilityText);\n  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || !title) return null;\n  return {\n    videoId,\n    title,\n    url: 'https://www.youtube.com/watch?v=' + videoId,\n    channel: '',\n    viewsText: readText(s.overlayMetadata && s.overlayMetadata.secondaryText),\n    publishedText: '',\n    durationText: 'SHORTS'\n  };\n};\nconst inspectInitialData = data => {\n  if (!data || typeof data !== 'object') return { matched: false, mismatched: false };\n  const targetNorm = norm(query);\n  const candidateQueries = [];\n  const topbar = data.topbar;\n  const desktopSearch = topbar && topbar.desktopTopbarRenderer && topbar.desktopTopbarRenderer.searchbox && topbar.desktopTopbarRenderer.searchbox.fusionSearchboxRenderer && topbar.desktopTopbarRenderer.searchbox.fusionSearchboxRenderer.searchEndpoint;\n  if (desktopSearch) {\n    if (desktopSearch.searchEndpoint && typeof desktopSearch.searchEndpoint.query === 'string' && desktopSearch.searchEndpoint.query.trim()) candidateQueries.push(desktopSearch.searchEndpoint.query);\n    if (typeof desktopSearch.query === 'string' && desktopSearch.query.trim()) candidateQueries.push(desktopSearch.query);\n  }\n  const mobileSearch = topbar && topbar.mobileTopbarRenderer && topbar.mobileTopbarRenderer.searchbox && topbar.mobileTopbarRenderer.searchbox.searchboxRenderer && topbar.mobileTopbarRenderer.searchbox.searchboxRenderer.endpoint && topbar.mobileTopbarRenderer.searchbox.searchboxRenderer.endpoint.searchEndpoint;\n  if (mobileSearch && typeof mobileSearch.query === 'string' && mobileSearch.query.trim()) candidateQueries.push(mobileSearch.query);\n  const candidateUrls = [];\n  if (typeof data.currentUrl === 'string' && data.currentUrl) candidateUrls.push(data.currentUrl);\n  if (typeof data.url === 'string' && data.url) candidateUrls.push(data.url);\n  if (data.responseContext && typeof data.responseContext.url === 'string' && data.responseContext.url) candidateUrls.push(data.responseContext.url);\n  const stp = data.responseContext && Array.isArray(data.responseContext.serviceTrackingParams) ? data.responseContext.serviceTrackingParams : [];\n  for (const svc of stp) {\n    const params = svc && Array.isArray(svc.params) ? svc.params : [];\n    for (const p of params) {\n      if (!p || typeof p.value !== 'string' || !p.value.trim()) continue;\n      if (p.key === 'search_query' || p.key === 'q') candidateQueries.push(p.value);\n      if (p.key === 'url') candidateUrls.push(p.value);\n    }\n  }\n  let matched = false;\n  for (const cq of candidateQueries) {\n    if (norm(cq) !== targetNorm) return { matched: false, mismatched: true };\n    matched = true;\n  }\n  for (const cu of candidateUrls) {\n    try {\n      const parsed = new URL(cu, 'https://www.youtube.com');\n      if (parsed.pathname !== '/results') return { matched: false, mismatched: true };\n      const uq = parsed.searchParams.get('search_query');\n      if (uq !== null) {\n        if (norm(uq) !== targetNorm) return { matched: false, mismatched: true };\n        matched = true;\n      }\n    } catch {}\n  }\n  return { matched, mismatched: false };\n};\nconst fromData = data => {\n  if (!data || typeof data !== 'object') return null;\n  const sections = data.contents && data.contents.twoColumnSearchResultsRenderer && data.contents.twoColumnSearchResultsRenderer.primaryContents && data.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer && data.contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents;\n  if (!Array.isArray(sections)) return null;\n  const found = [];\n  const seen = new Set();\n  let hasNoResults = false;\n  const isAdEntry = e => Boolean(e && (e.adSlotRenderer || e.promotedSparklesWebRenderer || e.inFeedAdLayoutRenderer || e.searchPyvRenderer || (e.richItemRenderer && e.richItemRenderer.content && (e.richItemRenderer.content.adSlotRenderer || e.richItemRenderer.content.promotedSparklesWebRenderer || e.richItemRenderer.content.inFeedAdLayoutRenderer))));\n  for (const section of sections) {\n    const items = section && section.itemSectionRenderer && Array.isArray(section.itemSectionRenderer.contents) ? section.itemSectionRenderer.contents : [];\n    for (const entry of items) {\n      if (!entry || isAdEntry(entry)) continue;\n      if (entry.backgroundPromoRenderer) hasNoResults = true;\n      const v = entry.videoRenderer;\n      if (v) {\n        const videoId = String(v.videoId || '').trim();\n        const title = readText(v.title);\n        if (/^[A-Za-z0-9_-]{11}$/.test(videoId) && title && !seen.has(videoId)) {\n          seen.add(videoId);\n          found.push({\n            videoId,\n            title,\n            url: 'https://www.youtube.com/watch?v=' + videoId,\n            channel: readText(v.ownerText) || readText(v.longBylineText) || readText(v.shortBylineText),\n            viewsText: readText(v.shortViewCountText) || readText(v.viewCountText),\n            publishedText: readText(v.publishedTimeText),\n            durationText: readText(v.lengthText)\n          });\n          if (found.length >= limit) break;\n          continue;\n        }\n      }\n      const lockupVideo = extractLockupVideo(entry.lockupViewModel || (entry.richItemRenderer && entry.richItemRenderer.content && entry.richItemRenderer.content.lockupViewModel));\n      if (lockupVideo && !seen.has(lockupVideo.videoId)) {\n        seen.add(lockupVideo.videoId);\n        found.push(lockupVideo);\n        if (found.length >= limit) break;\n        continue;\n      }\n      const reelItems = entry.reelShelfRenderer && Array.isArray(entry.reelShelfRenderer.items) ? entry.reelShelfRenderer.items : (entry.gridShelfViewModel && Array.isArray(entry.gridShelfViewModel.contents) ? entry.gridShelfViewModel.contents : []);\n      for (const rItem of reelItems) {\n        const sLockup = extractShortsLockup(rItem && (rItem.shortsLockupViewModel || rItem));\n        if (sLockup && !seen.has(sLockup.videoId)) {\n          seen.add(sLockup.videoId);\n          found.push(sLockup);\n          if (found.length >= limit) break;\n          continue;\n        }\n        const reel = rItem && rItem.reelItemRenderer;\n        if (reel) {\n          const rId = String(reel.videoId || '').trim();\n          const rTitle = readText(reel.headline);\n          if (/^[A-Za-z0-9_-]{11}$/.test(rId) && rTitle && !seen.has(rId)) {\n            seen.add(rId);\n            found.push({\n              videoId: rId,\n              title: rTitle,\n              url: 'https://www.youtube.com/watch?v=' + rId,\n              channel: '',\n              viewsText: readText(reel.viewCountText),\n              publishedText: '',\n              durationText: 'SHORTS'\n            });\n            if (found.length >= limit) break;\n          }\n        }\n      }\n      if (found.length >= limit) break;\n    }\n    if (found.length >= limit) break;\n  }\n  return { videos: found, hasNoResults };\n};\nconst fromDom = () => {\n  if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return [];\n  const out = [];\n  const seen = new Set();\n  const legacyCards = Array.from(document.querySelectorAll('ytd-video-renderer'));\n  for (const card of legacyCards) {\n    if (isHiddenOrAd(card)) continue;\n    const link = card.querySelector('a#video-title');\n    if (!link) continue;\n    const href = String(link.getAttribute('href') || '');\n    const videoId = extractVideoIdFromUrl(href);\n    if (!videoId || seen.has(videoId)) continue;\n    const title = String(link.getAttribute('title') || link.innerText || link.textContent || '').trim();\n    if (!title) continue;\n    const channelEl = card.querySelector('#channel-name a, ytd-channel-name a');\n    const metaSpans = Array.from(card.querySelectorAll('#metadata-line span')).map(el => String(el.innerText || el.textContent || '').trim()).filter(Boolean);\n    const durationEl = card.querySelector('ytd-thumbnail-overlay-time-status-renderer span, badge-shape .badge-shape-wiz__text');\n    seen.add(videoId);\n    out.push({\n      videoId,\n      title,\n      url: 'https://www.youtube.com/watch?v=' + videoId,\n      channel: channelEl ? String(channelEl.innerText || channelEl.textContent || '').trim() : '',\n      viewsText: metaSpans[0] || '',\n      publishedText: metaSpans[1] || '',\n      durationText: durationEl ? String(durationEl.innerText || durationEl.textContent || '').trim() : (href.includes('/shorts/') ? 'SHORTS' : '')\n    });\n    if (out.length >= limit) return out;\n  }\n  const lockupCards = Array.from(document.querySelectorAll('yt-lockup-view-model'));\n  for (const card of lockupCards) {\n    if (isHiddenOrAd(card)) continue;\n    if (card.querySelector('a[href*=\"/playlist?list=\"]')) continue;\n    const titleLink = card.querySelector('h3 a[href*=\"/watch?v=\"], h3 a[href*=\"/shorts/\"], a[href*=\"/watch?v=\"][title], a[href*=\"/shorts/\"][title]');\n    if (!titleLink) continue;\n    const href = String(titleLink.getAttribute('href') || '');\n    const videoId = extractVideoIdFromUrl(href);\n    if (!videoId || seen.has(videoId)) continue;\n    const title = String(titleLink.getAttribute('title') || titleLink.innerText || titleLink.textContent || '').trim();\n    if (!title) continue;\n    const channelEl = card.querySelector('a[href^=\"/@\"], a[href^=\"/channel/\"], a[href^=\"/c/\"], a[href^=\"/user/\"]');\n    let channel = channelEl ? String(channelEl.innerText || channelEl.textContent || '').trim() : '';\n    const durationEl = card.querySelector('yt-thumbnail-badge-view-model .yt-badge-shape__text, badge-shape .yt-badge-shape__text, badge-shape .badge-shape-wiz__text');\n    const metaRowEls = Array.from(card.querySelectorAll('.yt-content-metadata-view-model__metadata-row'));\n    const rowTextLists = metaRowEls.map(row => String(row.innerText || row.textContent || '').split(/[•·\\n]/).map(s => s.trim()).filter(Boolean)).filter(r => r.length > 0);\n    if (!channel && rowTextLists.length >= 2 && rowTextLists[0].length === 1 && !looksLikeMetricOrTime(rowTextLists[0][0])) {\n      channel = rowTextLists[0][0];\n    }\n    const statParts = rowTextLists.flat().filter(s => s !== channel);\n    if (!channel && statParts.length >= 3 && !looksLikeMetricOrTime(statParts[0])) {\n      channel = statParts.shift();\n    }\n    seen.add(videoId);\n    out.push({\n      videoId,\n      title,\n      url: 'https://www.youtube.com/watch?v=' + videoId,\n      channel,\n      viewsText: statParts[0] || '',\n      publishedText: statParts[1] || '',\n      durationText: durationEl ? String(durationEl.innerText || durationEl.textContent || '').trim() : (href.includes('/shorts/') ? 'SHORTS' : '')\n    });\n    if (out.length >= limit) return out;\n  }\n  const shortsCards = Array.from(document.querySelectorAll('ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2'));\n  for (const card of shortsCards) {\n    if (isHiddenOrAd(card)) continue;\n    const link = card.querySelector('a[href*=\"/shorts/\"], a[href*=\"/watch?v=\"]');\n    if (!link) continue;\n    const href = String(link.getAttribute('href') || '');\n    const videoId = extractVideoIdFromUrl(href);\n    if (!videoId || seen.has(videoId)) continue;\n    const titleEl = card.querySelector('.shortsLockupViewModelHostMetadataTitle, h3, [title]');\n    const title = String((titleEl && (titleEl.getAttribute && titleEl.getAttribute('title') || titleEl.innerText || titleEl.textContent)) || link.getAttribute('title') || link.innerText || '').trim();\n    if (!title) continue;\n    const viewsEl = card.querySelector('.shortsLockupViewModelHostMetadataSubhead');\n    seen.add(videoId);\n    out.push({\n      videoId,\n      title,\n      url: 'https://www.youtube.com/watch?v=' + videoId,\n      channel: '',\n      viewsText: viewsEl ? String(viewsEl.innerText || viewsEl.textContent || '').trim() : '',\n      publishedText: '',\n      durationText: 'SHORTS'\n    });\n    if (out.length >= limit) break;\n  }\n  return out;\n};\nconst detectWall = () => {\n  if (typeof document === 'undefined' || !document) return null;\n  if (typeof document.querySelector === 'function') {\n    const consentEl = document.querySelector('form[action*=\"consent.youtube.com\"], ytd-consent-bump-v2-lightbox, tp-yt-paper-dialog[aria-label*=\"consent\" i], #consent-bump');\n    if (consentEl && !isHiddenOrAd(consentEl)) {\n      return { success: false, status: 'consent_required', query, message: 'YouTube consent wall is blocking search results', source: currentHref };\n    }\n  }\n  const bodyText = String((document.body && (document.body.innerText || document.body.textContent)) || '').trim();\n  if (/sign in to confirm you(?:'|\\u2019)?re not a bot/i.test(bodyText) || /unusual traffic from your computer network/i.test(bodyText)) {\n    return { success: false, status: 'bot_check', query, requiresLogin: true, message: 'YouTube requested bot verification', source: currentHref };\n  }\n  if (/before you continue to youtube/i.test(bodyText)) {\n    return { success: false, status: 'consent_required', query, message: 'YouTube consent wall is blocking search results', source: currentHref };\n  }\n  return null;\n};\nlet videos = [];\nlet empty = false;\nlet wallError = null;\nfor (let attempt = 0; attempt < 25; attempt += 1) {\n  const domVideos = fromDom();\n  const searchEl = typeof document !== 'undefined' && document && typeof document.querySelector === 'function' ? document.querySelector('ytd-search:not([hidden])') : null;\n  const liveSearchData = searchEl && searchEl.data && typeof searchEl.data === 'object' ? fromData(searchEl.data) : null;\n  const root = typeof globalThis !== 'undefined' ? globalThis : {};\n  const initState = inspectInitialData(root.ytInitialData);\n  const initial = !initState.mismatched ? fromData(root.ytInitialData) : null;\n  if (liveSearchData && liveSearchData.videos.length > 0) {\n    videos = liveSearchData.videos;\n    break;\n  }\n  if (initState.matched && initial && initial.videos.length > 0) {\n    videos = initial.videos;\n    break;\n  }\n  if (domVideos.length > 0) {\n    videos = domVideos;\n    break;\n  }\n  if (!initState.mismatched && initial && initial.videos.length > 0) {\n    videos = initial.videos;\n    break;\n  }\n  if ((liveSearchData && liveSearchData.hasNoResults) || (initial && initial.hasNoResults)) {\n    empty = true;\n    break;\n  }\n  wallError = detectWall();\n  if (wallError) break;\n  if (attempt < 24) await sleep(200);\n}\nif (wallError) {\n  return wallError;\n}\nif (empty) {\n  return { success: true, status: 'empty', query, videos: [], sources: { page: sourceUrl.href } };\n}\nif (!videos.length) {\n  return { success: false, status: 'loading_timeout', query, message: 'YouTube search results did not become visible', source: sourceUrl.href };\n}\nreturn {\n  success: true,\n  status: 'ok',\n  query,\n  videos,\n  sources: { page: sourceUrl.href }\n};",
+        "timeoutMs": 20000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "query": "typescript tutorial",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "const": "typescript tutorial"
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "videos",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "TypeScript|typescript|YouTube"
+      }
+    },
+    {
+      "inputs": {
+        "query": "javascript async",
+        "limit": 3
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "status": {
+            "const": "ok"
+          },
+          "query": {
+            "const": "javascript async"
+          },
+          "videos": {
+            "type": "array",
+            "minItems": 1
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "status",
+          "query",
+          "videos",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "JavaScript|javascript|async|YouTube"
+      }
+    }
+  ]
+}

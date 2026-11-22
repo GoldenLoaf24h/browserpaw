@@ -1,0 +1,289 @@
+{
+  "id": "reddit-post-read",
+  "name": "Reddit post and comments reader",
+  "description": "Read a Reddit post and its top comments using Chrome's session via same-origin JSON with visible DOM fallback.",
+  "source": {
+    "type": "builtin",
+    "urls": [
+      "https://old.reddit.com/r/programming/comments/f9ut5f/",
+      "https://old.reddit.com/r/programming/comments/226xun/"
+    ]
+  },
+  "domains": [
+    "www.reddit.com",
+    "reddit.com",
+    "old.reddit.com"
+  ],
+  "keywords": [
+    "reddit",
+    "红迪",
+    "post",
+    "thread",
+    "comments",
+    "discussion",
+    "帖子",
+    "评论",
+    "详情",
+    "红迪帖子",
+    "Reddit评论",
+    "读帖"
+  ],
+  "startUrl": "https://old.reddit.com/r/{{subreddit}}/comments/{{postId}}/",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "subreddit": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_]{2,50}$"
+      },
+      "postId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9]{1,16}$"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 25,
+        "default": 15
+      }
+    },
+    "required": [
+      "subreddit",
+      "postId"
+    ],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "success": {
+        "const": true
+      },
+      "status": {
+        "const": "ok"
+      },
+      "post": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subreddit": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "author": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "commentsCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://(?:(?:www|old|sh|new)\\.)?reddit\\.com/r/"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subreddit",
+          "title",
+          "author",
+          "score",
+          "commentsCount",
+          "url",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "comments": {
+        "type": "array",
+        "maxItems": 25,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "author": {
+              "type": "string"
+            },
+            "score": {
+              "type": "integer"
+            },
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "author",
+            "score",
+            "body"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "sources": {
+        "type": "object",
+        "properties": {
+          "api": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^https://(?:(?:www|old|sh|new)\\.)?reddit\\.com/"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page": {
+            "type": "string",
+            "pattern": "^https://(?:(?:www|old|sh|new)\\.)?reddit\\.com/"
+          }
+        },
+        "required": [
+          "api",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "success",
+      "status",
+      "post",
+      "comments",
+      "sources"
+    ],
+    "additionalProperties": false
+  },
+  "steps": [
+    {
+      "tool": "chrome_javascript",
+      "args": {
+        "code": "const subreddit = String(input.subreddit || '').trim();\nconst postId = String(input.postId || '').trim();\nconst limit = Math.max(1, Math.min(Number(input.limit) || 15, 25));\nconst fallbackUrl = 'https://old.reddit.com/r/' + encodeURIComponent(subreddit) + '/comments/' + encodeURIComponent(postId) + '/';\nconst origin = typeof location !== 'undefined' && typeof location.origin === 'string' && /^https:\\/\\/(?:(?:www|old|new|sh)\\.)?reddit\\.com$/i.test(location.origin) ? location.origin : '';\nif (!origin) {\n  return { success: false, status: 'page_not_ready', subreddit, postId, message: 'Reddit page origin is not ready', source: fallbackUrl };\n}\nconst pageUrl = new URL('/r/' + encodeURIComponent(subreddit) + '/comments/' + encodeURIComponent(postId) + '/', origin).href;\nconst fetchLimit = Math.min(500, Math.max(limit * 4, 100));\nconst jsonUrl = new URL('/r/' + encodeURIComponent(subreddit) + '/comments/' + encodeURIComponent(postId) + '.json?limit=' + fetchLimit + '&raw_json=1', origin).href;\nlet blockedStatus = null;\ntry {\n  const response = await fetch(jsonUrl, { credentials: 'include', headers: { Accept: 'application/json' } });\n  if (response.status === 429) {\n    blockedStatus = { success: false, status: 'rate_limited', subreddit, postId, httpStatus: 429, source: response.url || jsonUrl };\n  } else if (response.status === 404) {\n    return { success: false, status: 'not_found', subreddit, postId, httpStatus: 404, source: response.url || jsonUrl };\n  } else if (response.status === 401) {\n    blockedStatus = { success: false, status: 'requires_auth', subreddit, postId, requiresLogin: true, httpStatus: 401, source: response.url || jsonUrl };\n  } else if (response.status === 403) {\n    let reason = '';\n    try {\n      const errBody = await response.json();\n      reason = String((errBody && (errBody.reason || errBody.message)) || '').toLowerCase();\n    } catch {}\n    if (reason.includes('quarantin') || reason.includes('over18')) {\n      blockedStatus = { success: false, status: 'over18_or_quarantined', subreddit, postId, httpStatus: 403, message: 'Reddit post is quarantined or requires 18+ confirmation', source: response.url || jsonUrl };\n    } else if (reason.includes('private')) {\n      blockedStatus = { success: false, status: 'requires_auth', subreddit, postId, requiresLogin: true, httpStatus: 403, message: 'Reddit community is private or requires authentication', source: response.url || jsonUrl };\n    } else {\n      blockedStatus = { success: false, status: 'blocked', subreddit, postId, httpStatus: 403, message: 'Reddit returned HTTP 403 for this post', source: response.url || jsonUrl };\n    }\n  } else if (response.ok) {\n    const data = await response.json();\n    if (data && !Array.isArray(data) && (String(data.reason || '').toLowerCase().includes('quarantin') || String(data.reason || '').toLowerCase().includes('over18'))) {\n      blockedStatus = { success: false, status: 'over18_or_quarantined', subreddit, postId, message: 'Reddit post is quarantined or requires 18+ confirmation', source: response.url || jsonUrl };\n    }\n    if (Array.isArray(data) && data.length >= 2) {\n      const postEntry = data[0] && data[0].data && Array.isArray(data[0].data.children) ? data[0].data.children[0] : null;\n      const d = postEntry && postEntry.data;\n      if (d && d.title) {\n        const permalink = String(d.permalink || '').trim();\n        const rawComments = data[1] && data[1].data && Array.isArray(data[1].data.children) ? data[1].data.children : [];\n        const comments = rawComments\n          .filter(c => c && c.kind === 't1' && c.data && typeof c.data.body === 'string' && c.data.body.trim())\n          .slice(0, limit)\n          .map(c => ({\n            id: String(c.data.id || '').trim(),\n            author: String(c.data.author || '').trim(),\n            score: Math.floor(Number(c.data.score) || 0),\n            body: String(c.data.body || '').trim().slice(0, 1500)\n          }));\n        return {\n          success: true,\n          status: 'ok',\n          post: {\n            id: String(d.id || postId).trim(),\n            subreddit: String(d.subreddit || subreddit).trim(),\n            title: String(d.title || '').trim(),\n            author: String(d.author || '').trim(),\n            score: Math.floor(Number(d.score) || 0),\n            commentsCount: Math.max(comments.length, Math.floor(Number(d.num_comments) || 0)),\n            url: permalink ? new URL(permalink, 'https://www.reddit.com').href : pageUrl,\n            body: String(d.selftext || '').trim().slice(0, 6000)\n          },\n          comments,\n          sources: { api: response.url || jsonUrl, page: permalink ? new URL(permalink, 'https://www.reddit.com').href : pageUrl }\n        };\n      }\n    }\n  }\n} catch {\n  // Fall back to visible DOM below.\n}\nif (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {\n  const postEl = document.querySelector('shreddit-post');\n  if (postEl) {\n    const title = String(postEl.getAttribute('post-title') || '').trim();\n    const permalink = String(postEl.getAttribute('permalink') || '').trim();\n    const bodyEl = postEl.querySelector('[slot=\"text-body\"], div[id$=\"-post-rtjson-content\"]');\n    if (title) {\n      const commentEls = typeof document.querySelectorAll === 'function' ? Array.from(document.querySelectorAll('shreddit-comment')) : [];\n      const comments = commentEls.map(el => {\n        const commentBody = el.querySelector('[slot=\"comment\"], div[id$=\"-post-rtjson-content\"]');\n        return {\n          id: String(el.getAttribute('thingid') || '').replace(/^t1_/, '').trim(),\n          author: String(el.getAttribute('author') || '').trim(),\n          score: Math.floor(Number(el.getAttribute('score')) || 0),\n          body: String((commentBody && (commentBody.innerText || commentBody.textContent)) || '').trim().slice(0, 1500)\n        };\n      }).filter(c => c.body && (c.id || c.author)).slice(0, limit);\n      const resolvedUrl = permalink ? new URL(permalink, origin).href : pageUrl;\n      return {\n        success: true,\n        status: 'ok',\n        post: {\n          id: String(postEl.getAttribute('id') || postId).replace(/^t3_/, '').trim(),\n          subreddit: String(postEl.getAttribute('subreddit-prefixed-name') || subreddit).replace(/^r\\//, '').trim(),\n          title,\n          author: String(postEl.getAttribute('author') || '').trim(),\n          score: Math.floor(Number(postEl.getAttribute('score')) || 0),\n          commentsCount: Math.max(comments.length, Math.floor(Number(postEl.getAttribute('comment-count')) || 0)),\n          url: resolvedUrl,\n          body: String((bodyEl && (bodyEl.innerText || bodyEl.textContent)) || '').trim().slice(0, 6000)\n        },\n        comments,\n        sources: { api: null, page: location.href || resolvedUrl }\n      };\n    }\n  }\n  const oldPostEl = document.querySelector('#siteTable .thing.link, .thing.link');\n  if (oldPostEl) {\n    const titleEl = oldPostEl.querySelector('a.title');\n    const title = String((titleEl && (titleEl.innerText || titleEl.textContent)) || '').trim();\n    const permalink = String(oldPostEl.getAttribute('data-permalink') || '').trim();\n    const bodyEl = oldPostEl.querySelector('.expando .usertext-body .md, .usertext-body .md');\n    if (title) {\n      const topCommentEls = typeof document.querySelectorAll === 'function' ? Array.from(document.querySelectorAll('.commentarea > .sitetable > .thing.comment')) : [];\n      const oldCommentEls = topCommentEls.length ? topCommentEls : (typeof document.querySelectorAll === 'function' ? Array.from(document.querySelectorAll('.commentarea .thing.comment')) : []);\n      const comments = oldCommentEls.map(el => {\n        const scoreEl = el.querySelector(':scope > .entry .score.unvoted') || el.querySelector('.entry .score.unvoted');\n        const rawScore = scoreEl ? (scoreEl.getAttribute('title') || scoreEl.textContent || '') : '';\n        const scoreMatch = String(rawScore).match(/-?\\d+/);\n        const commentBody = el.querySelector(':scope > .entry .usertext-body .md') || el.querySelector('.entry .usertext-body .md');\n        return {\n          id: String(el.getAttribute('data-fullname') || '').replace(/^t1_/, '').trim(),\n          author: String(el.getAttribute('data-author') || '').trim(),\n          score: scoreMatch ? Math.floor(Number(scoreMatch[0]) || 0) : 0,\n          body: String((commentBody && (commentBody.innerText || commentBody.textContent)) || '').trim().slice(0, 1500)\n        };\n      }).filter(c => c.body && (c.id || c.author)).slice(0, limit);\n      const resolvedUrl = permalink ? new URL(permalink, origin).href : pageUrl;\n      return {\n        success: true,\n        status: 'ok',\n        post: {\n          id: String(oldPostEl.getAttribute('data-fullname') || postId).replace(/^t3_/, '').trim(),\n          subreddit: String(oldPostEl.getAttribute('data-subreddit') || subreddit).replace(/^r\\//, '').trim(),\n          title,\n          author: String(oldPostEl.getAttribute('data-author') || '').trim(),\n          score: Math.floor(Number(oldPostEl.getAttribute('data-score')) || 0),\n          commentsCount: Math.max(comments.length, Math.floor(Number(oldPostEl.getAttribute('data-comments-count')) || 0)),\n          url: resolvedUrl,\n          body: String((bodyEl && (bodyEl.innerText || bodyEl.textContent)) || '').trim().slice(0, 6000)\n        },\n        comments,\n        sources: { api: null, page: location.href || resolvedUrl }\n      };\n    }\n  }\n}\nconst pathname = String(location.pathname || '');\nif (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {\n  if (/^\\/over18(?:\\/|$)/i.test(pathname) || document.querySelector('form[action*=\"/over18\"], shreddit-over18-interstitial, [data-testid=\"nsfw-interstitial\"], button[name=\"over18\"]')) {\n    return { success: false, status: 'over18_or_quarantined', subreddit, postId, message: 'Reddit requires NSFW (18+) confirmation for this post', source: location.href || pageUrl };\n  }\n  if (document.querySelector('.quarantine-notice, form[action*=\"/quarantine\"], [data-testid=\"quarantine-interstitial\"]')) {\n    return { success: false, status: 'over18_or_quarantined', subreddit, postId, message: 'This Reddit community is quarantined', source: location.href || pageUrl };\n  }\n}\nif (blockedStatus) return blockedStatus;\nif (/^\\/login(?:\\/|$)/i.test(pathname) || (typeof document !== 'undefined' && document && typeof document.querySelector === 'function' && document.querySelector('form[action*=\"/login\"], input[name=\"username\"]'))) {\n  return { success: false, status: 'requires_auth', subreddit, postId, requiresLogin: true, message: 'Reddit requires authentication for this post', source: location.href || pageUrl };\n}\nreturn { success: false, status: 'blocked', subreddit, postId, message: 'Reddit post was not readable via JSON API or visible DOM', source: location.href || pageUrl };",
+        "timeoutMs": 25000
+      },
+      "resultPath": "/result"
+    }
+  ],
+  "verification": {
+    "tool": "chrome_read_dom",
+    "args": {
+      "format": "compact",
+      "selector": "main, [role=\"main\"]",
+      "activeViewportOnly": false,
+      "limit": 80,
+      "maxTextLength": 220
+    },
+    "resultPath": "/treeString"
+  },
+  "tests": [
+    {
+      "inputs": {
+        "subreddit": "programming",
+        "postId": "f9ut5f",
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "post": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "f9ut5f"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "post",
+          "comments",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "programming|comments|Reddit"
+      }
+    },
+    {
+      "inputs": {
+        "subreddit": "programming",
+        "postId": "226xun",
+        "limit": 5
+      },
+      "expect": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "post": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "226xun"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "sources": {
+            "type": "object",
+            "required": [
+              "page"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "post",
+          "comments",
+          "sources"
+        ]
+      },
+      "observe": {
+        "type": "string",
+        "pattern": "programming|comments|Reddit"
+      }
+    }
+  ]
+}
